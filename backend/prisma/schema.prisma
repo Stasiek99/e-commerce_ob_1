@@ -1,0 +1,311 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum ShipmentStatus {
+  LABEL_PENDING
+  LABEL_GENERATED
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  RETURNED
+}
+
+enum CarrierCode {
+  INPOST
+  DHL
+  GLS
+}
+
+// ─── User & Auth ─────────────────────────────────────────────────────────────
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  passwordHash    String?
+  role            Role     @default(CUSTOMER)
+  firstName       String?
+  lastName        String?
+  phone           String?
+  googleId        String?  @unique
+  isEmailVerified Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  addresses     Address[]
+  orders        Order[]
+  refreshTokens RefreshToken[]
+  carts         Cart[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("refresh_tokens")
+}
+
+model Address {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isDefault  Boolean  @default(false)
+  firstName  String
+  lastName   String
+  company    String?
+  street     String
+  city       String
+  postalCode String
+  country    String   @default("PL")
+  phone      String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  orders Order[]
+
+  @@map("addresses")
+}
+
+// ─── Catalog ─────────────────────────────────────────────────────────────────
+
+model Category {
+  id          String     @id @default(uuid())
+  name        String
+  slug        String     @unique
+  description String?
+  imageUrl    String?
+  parentId    String?
+  parent      Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryTree")
+  products    Product[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@map("categories")
+}
+
+model Product {
+  id               String   @id @default(uuid())
+  name             String
+  slug             String   @unique
+  description      String?
+  shortDescription String?
+  categoryId       String
+  category         Category @relation(fields: [categoryId], references: [id])
+  brand            String?
+  isActive         Boolean  @default(true)
+  isFeatured       Boolean  @default(false)
+  scentFamily      String?
+  notes            String[]
+  gender           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  variants ProductVariant[]
+  images   ProductImage[]
+
+  @@map("products")
+}
+
+model ProductVariant {
+  id                   String   @id @default(uuid())
+  productId            String
+  product              Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku                  String   @unique
+  volume               Int?
+  weight               Int?
+  label                String
+  priceInCents         Int
+  compareAtPriceInCents Int?
+  stock                Int      @default(0)
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  orderItems OrderItem[]
+  cartItems  CartItem[]
+
+  @@map("product_variants")
+}
+
+model ProductImage {
+  id          String   @id @default(uuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url         String
+  storagePath String
+  altText     String?
+  sortOrder   Int      @default(0)
+  isPrimary   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@map("product_images")
+}
+
+// ─── Cart ─────────────────────────────────────────────────────────────────────
+
+model Cart {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items CartItem[]
+
+  @@index([sessionId])
+  @@map("carts")
+}
+
+model CartItem {
+  id               String         @id @default(uuid())
+  cartId           String
+  cart             Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productVariantId String
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id])
+  quantity         Int
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([cartId, productVariantId])
+  @@map("cart_items")
+}
+
+// ─── Orders ──────────────────────────────────────────────────────────────────
+
+model Order {
+  id                 String      @id @default(uuid())
+  orderNumber        String      @unique
+  userId             String?
+  user               User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  status             OrderStatus @default(PENDING_PAYMENT)
+  addressId          String?
+  shippingAddress    Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
+
+  snapshotFirstName  String
+  snapshotLastName   String
+  snapshotCompany    String?
+  snapshotStreet     String
+  snapshotCity       String
+  snapshotPostalCode String
+  snapshotCountry    String
+  snapshotPhone      String
+  snapshotEmail      String
+
+  itemsTotalInCents   Int
+  shippingCostInCents Int
+  discountInCents     Int         @default(0)
+  totalInCents        Int
+
+  carrierCode      CarrierCode
+  inpostLockerCode String?
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    OrderItem[]
+  payment  Payment?
+  shipment Shipment?
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id               String         @id @default(uuid())
+  orderId          String
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productVariantId String
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id])
+
+  snapshotName  String
+  snapshotSku   String
+  snapshotPrice Int
+  quantity      Int
+
+  @@map("order_items")
+}
+
+// ─── Payments ────────────────────────────────────────────────────────────────
+
+model Payment {
+  id           String        @id @default(uuid())
+  orderId      String        @unique
+  order        Order         @relation(fields: [orderId], references: [id])
+  status       PaymentStatus @default(PENDING)
+  provider     String        @default("przelewy24")
+  p24SessionId String?       @unique
+  p24OrderId   String?
+  p24Token     String?
+  amountInCents Int
+  currency     String        @default("PLN")
+  paidAt       DateTime?
+  failureReason String?
+  rawWebhookPayload Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@map("payments")
+}
+
+// ─── Shipping ────────────────────────────────────────────────────────────────
+
+model Shipment {
+  id               String         @id @default(uuid())
+  orderId          String         @unique
+  order            Order          @relation(fields: [orderId], references: [id])
+  status           ShipmentStatus @default(LABEL_PENDING)
+  carrierCode      CarrierCode
+  trackingNumber   String?
+  labelUrl         String?
+  waybillNumber    String?
+  shipmentId       String?
+  targetLockerCode String?
+  dispatchNumber   String?
+  shippedAt        DateTime?
+  deliveredAt      DateTime?
+  estimatedDelivery DateTime?
+  rawCarrierResponse Json?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@map("shipments")
+}
