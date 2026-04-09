@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fragrance Store — Mockup</title>
+<style>
+  :root {
+    --color-primary: #1a1a1a;
+    --color-secondary: #6b6b6b;
+    --color-accent: #c9a96e;
+    --color-surface: #ffffff;
+    --color-border: #e5e5e5;
+    --color-error: #dc2626;
+    --color-success: #16a34a;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.08);
+    --shadow-md: 0 4px 12px rgba(0,0,0,.10);
+    --max-width: 1280px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fafafa; color: var(--color-primary); font-size: 14px; }
+  a { text-decoration: none; color: inherit; }
+
+  /* ── NAV PILL ─────────────────────────────────────────── */
+  .page-nav { display: flex; gap: 8px; justify-content: center; padding: 20px 16px 0; flex-wrap: wrap; }
+  .page-nav a { padding: 6px 16px; border-radius: 20px; border: 1px solid var(--color-border); background: white; font-size: 12px; cursor: pointer; transition: all .15s; }
+  .page-nav a:hover { border-color: var(--color-primary); }
+  .page-nav a.active { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+  .page-title { text-align: center; font-size: 11px; color: var(--color-secondary); padding: 6px; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 8px; }
+
+  /* ── SCREEN WRAPPER ──────────────────────────────────── */
+  .screen { display: none; max-width: var(--max-width); margin: 0 auto; }
+  .screen.active { display: block; }
+
+  /* ══════════════════════════════════════════════════════
+     HEADER
+  ══════════════════════════════════════════════════════ */
+  header {
+    position: sticky; top: 0; z-index: 100;
+    background: white; border-bottom: 1px solid var(--color-border);
+    height: 64px; display: flex; align-items: center;
+  }
+  .header-inner {
+    max-width: var(--max-width); margin: 0 auto; padding: 0 24px;
+    display: flex; align-items: center; gap: 32px; width: 100%;
+  }
+  .logo { display: flex; flex-direction: column; line-height: 1; }
+  .logo-main { font-size: 18px; font-weight: 700; color: var(--color-primary); }
+  .logo-sub { font-size: 11px; color: var(--color-accent); text-transform: uppercase; letter-spacing: .1em; }
+  nav { display: flex; gap: 24px; margin-left: 16px; }
+  nav a { font-size: 14px; color: var(--color-secondary); transition: color .15s; }
+  nav a:hover { color: var(--color-primary); }
+  .header-actions { margin-left: auto; display: flex; align-items: center; gap: 20px; }
+  .header-actions a { font-size: 14px; color: var(--color-secondary); transition: color .15s; }
+  .header-actions a:hover { color: var(--color-primary); }
+  .cart-btn { position: relative; }
+  .cart-badge {
+    position: absolute; top: -8px; right: -10px;
+    background: var(--color-accent); color: white;
+    border-radius: 50%; width: 18px; height: 18px;
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ══════════════════════════════════════════════════════
+     FOOTER
+  ══════════════════════════════════════════════════════ */
+  footer {
+    background: var(--color-primary); color: rgba(255,255,255,.7);
+    padding: 40px 24px 24px;
+  }
+  .footer-inner { max-width: var(--max-width); margin: 0 auto; display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; flex-wrap: wrap; gap: 24px; }
+  .footer-logo { font-size: 18px; font-weight: 700; color: white; }
+  .footer-tagline { font-size: 12px; margin-top: 4px; color: rgba(255,255,255,.5); }
+  .footer-links { display: flex; gap: 24px; }
+  .footer-links a { font-size: 13px; color: rgba(255,255,255,.6); transition: color .15s; }
+  .footer-links a:hover { color: white; }
+  .footer-copy { max-width: var(--max-width); margin: 0 auto; border-top: 1px solid rgba(255,255,255,.1); padding-top: 20px; font-size: 12px; }
+
+  /* ══════════════════════════════════════════════════════
+     HERO / HOME
+  ══════════════════════════════════════════════════════ */
+  .hero { text-align: center; padding: 96px 16px; }
+  .hero h1 { font-size: 42px; font-weight: 700; margin-bottom: 16px; line-height: 1.15; }
+  .hero p { font-size: 18px; color: var(--color-secondary); margin-bottom: 32px; }
+  .btn-primary {
+    display: inline-block; background: var(--color-primary); color: white;
+    padding: 14px 32px; border-radius: var(--radius-md); font-weight: 500;
+    transition: opacity .15s; cursor: pointer; border: none; font-size: 14px;
+  }
+  .btn-primary:hover { opacity: .85; }
+
+  /* ══════════════════════════════════════════════════════
+     PRODUCT GRID
+  ══════════════════════════════════════════════════════ */
+  .page { padding: 40px 24px; }
+  .page h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 24px;
+  }
+  .card {
+    background: white; border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); overflow: hidden;
+    transition: box-shadow .15s; display: block;
+  }
+  .card:hover { box-shadow: var(--shadow-md); }
+  .card-img {
+    width: 100%; aspect-ratio: 1; object-fit: cover;
+    background: linear-gradient(135deg, #f5efe6, #ede0cf);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--color-accent); font-size: 48px;
+  }
+  .card-body { padding: 16px; }
+  .card-body h3 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .card-brand { font-size: 12px; color: var(--color-secondary); margin-bottom: 8px; }
+  .card-price { font-size: 14px; font-weight: 600; color: var(--color-accent); }
+
+  /* ══════════════════════════════════════════════════════
+     PRODUCT DETAIL
+  ══════════════════════════════════════════════════════ */
+  .detail {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 48px; padding: 48px 24px;
+  }
+  .detail-gallery {
+    background: linear-gradient(135deg, #f5efe6, #ede0cf);
+    border-radius: var(--radius-lg); aspect-ratio: 1;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 96px;
+  }
+  .detail-brand {
+    font-size: 12px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--color-accent); margin-bottom: 8px;
+  }
+  .detail h1 { font-size: 28px; font-weight: 700; margin-bottom: 16px; }
+  .detail-desc { color: var(--color-secondary); line-height: 1.6; margin-bottom: 24px; }
+  .variants { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+  .variant-btn {
+    border: 1px solid var(--color-border); background: none;
+    border-radius: var(--radius-sm); padding: 8px 16px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 13px; cursor: pointer; transition: all .15s;
+  }
+  .variant-btn:hover { border-color: var(--color-primary); }
+  .variant-btn.selected { border-color: var(--color-primary); background: var(--color-primary); color: white; }
+  .variant-btn span { font-size: 11px; opacity: .75; }
+  .btn-add {
+    width: 100%; background: var(--color-primary); color: white;
+    border: none; padding: 16px; border-radius: var(--radius-md);
+    font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity .15s;
+  }
+  .btn-add:hover { opacity: .85; }
+
+  /* ══════════════════════════════════════════════════════
+     CART
+  ══════════════════════════════════════════════════════ */
+  .cart-layout { display: grid; grid-template-columns: 1fr 320px; gap: 32px; padding: 40px 24px; }
+  .cart-items h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
+  .cart-item {
+    display: flex; align-items: center; gap: 16px;
+    padding: 16px 0; border-bottom: 1px solid var(--color-border);
+  }
+  .cart-thumb {
+    width: 72px; height: 72px; border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, #f5efe6, #ede0cf);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; flex-shrink: 0;
+  }
+  .cart-item-info { flex: 1; }
+  .cart-item-info a { font-size: 15px; font-weight: 500; }
+  .cart-item-variant { font-size: 12px; color: var(--color-secondary); margin-top: 2px; }
+  .cart-item-sku { font-size: 11px; color: #aaa; margin-top: 1px; }
+  .qty-ctrl { display: flex; align-items: center; gap: 8px; }
+  .qty-btn { width: 28px; height: 28px; border: 1px solid var(--color-border); background: none; cursor: pointer; border-radius: var(--radius-sm); font-size: 16px; }
+  .qty-val { width: 28px; text-align: center; font-weight: 500; }
+  .item-price { font-weight: 600; min-width: 80px; text-align: right; }
+  .remove-btn { background: none; border: none; cursor: pointer; color: #aaa; font-size: 16px; padding: 4px 8px; }
+  .remove-btn:hover { color: var(--color-error); }
+  .cart-summary {
+    background: white; border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); padding: 24px; align-self: start;
+    position: sticky; top: 80px;
+  }
+  .cart-summary h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .summary-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 10px; }
+  .summary-row.final { font-size: 16px; font-weight: 700; border-top: 1px solid var(--color-border); padding-top: 12px; margin-top: 4px; }
+  .btn-checkout { display: block; width: 100%; background: var(--color-primary); color: white; border: none; padding: 14px; border-radius: var(--radius-md); font-size: 14px; font-weight: 600; cursor: pointer; text-align: center; margin-top: 16px; transition: opacity .15s; }
+  .btn-checkout:hover { opacity: .85; }
+
+  /* ══════════════════════════════════════════════════════
+     CHECKOUT
+  ══════════════════════════════════════════════════════ */
+  .checkout-page { padding: 40px 24px; }
+  .checkout-page h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
+  .steps { display: flex; gap: 8px; margin-bottom: 32px; }
+  .step { flex: 1; text-align: center; padding: 10px; background: var(--color-border); color: var(--color-secondary); font-size: 13px; border-radius: var(--radius-sm); }
+  .step.active { background: var(--color-primary); color: white; font-weight: 600; }
+  .step.done { background: #d1fae5; color: #065f46; }
+  .form-card {
+    background: white; border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); padding: 32px;
+    max-width: 640px; margin: 0 auto;
+  }
+  .form-card h2 { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .field label { font-size: 13px; font-weight: 500; }
+  .field input, .field select {
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    padding: 10px 12px; font-size: 14px; outline: none;
+  }
+  .field input:focus, .field select:focus { border-color: var(--color-primary); }
+  .carrier-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+  .carrier-option {
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    padding: 16px; cursor: pointer; display: flex; align-items: center; gap: 12px; transition: all .15s;
+  }
+  .carrier-option:hover { border-color: var(--color-primary); }
+  .carrier-option.selected { border-color: var(--color-primary); background: #f0f0f0; }
+  .carrier-icon { font-size: 24px; width: 40px; text-align: center; }
+  .carrier-name { font-weight: 500; font-size: 14px; }
+  .carrier-desc { font-size: 12px; color: var(--color-secondary); }
+  .carrier-price { margin-left: auto; font-weight: 600; color: var(--color-accent); }
+  .total-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 10px; }
+  .total-row.final { font-size: 18px; font-weight: 700; border-top: 2px solid var(--color-primary); padding-top: 12px; margin-top: 6px; }
+  .btn-next { width: 100%; background: var(--color-primary); color: white; border: none; padding: 14px; border-radius: var(--radius-md); font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: opacity .15s; }
+  .btn-next:hover { opacity: .85; }
+
+  /* ══════════════════════════════════════════════════════
+     AUTH
+  ══════════════════════════════════════════════════════ */
+  .auth-page { display: flex; justify-content: center; padding: 64px 16px; }
+  .auth-card {
+    width: 100%; max-width: 400px;
+    background: white; border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg); padding: 40px;
+  }
+  .auth-card h1 { font-size: 24px; font-weight: 700; margin-bottom: 28px; }
+  .btn-submit {
+    width: 100%; background: var(--color-primary); color: white;
+    border: none; padding: 12px; border-radius: var(--radius-md);
+    font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 4px;
+    transition: opacity .15s;
+  }
+  .btn-submit:hover { opacity: .85; }
+  .auth-divider { text-align: center; margin: 20px 0; position: relative; color: var(--color-secondary); font-size: 13px; }
+  .auth-divider::before { content: ''; position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: var(--color-border); }
+  .auth-divider span { background: white; position: relative; padding: 0 12px; }
+  .btn-google { width: 100%; background: none; border: 1px solid var(--color-border); padding: 12px; border-radius: var(--radius-md); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background .15s; }
+  .btn-google:hover { background: #f5f5f5; }
+  .auth-link { text-align: center; margin-top: 20px; font-size: 13px; color: var(--color-secondary); }
+  .auth-link a { color: var(--color-primary); font-weight: 500; border-bottom: 1px solid currentColor; }
+
+  /* ══════════════════════════════════════════════════════
+     TOAST
+  ══════════════════════════════════════════════════════ */
+  .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    padding: 12px 20px; border-radius: var(--radius-md); font-size: 14px;
+    cursor: pointer; box-shadow: var(--shadow-md); max-width: 360px;
+    animation: slideIn .2s ease;
+  }
+  .toast--success { background: var(--color-success); color: white; }
+  .toast--error { background: var(--color-error); color: white; }
+  .toast--info { background: var(--color-primary); color: white; }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<!-- ── PAGE NAVIGATION ──────────────────────────────────── -->
+<div class="page-nav">
+  <a onclick="show('home')" id="btn-home" class="active">🏠 Home</a>
+  <a onclick="show('products')" id="btn-products">📦 Produkty</a>
+  <a onclick="show('detail')" id="btn-detail">🔍 Produkt</a>
+  <a onclick="show('cart')" id="btn-cart">🛒 Koszyk</a>
+  <a onclick="show('checkout')" id="btn-checkout">💳 Checkout</a>
+  <a onclick="show('login')" id="btn-login">🔐 Logowanie</a>
+  <a onclick="show('register')" id="btn-register">✏️ Rejestracja</a>
+</div>
+<div class="page-title">Fragrance Store — Visual Mockup (actual design tokens from source)</div>
+
+<!-- ══════════════════════════════════════════════════════
+     SHARED HEADER
+════════════════════════════════════════════════════════ -->
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <span class="logo-main">Fragrance</span>
+      <span class="logo-sub">Store</span>
+    </div>
+    <nav>
+      <a href="#">Perfumy</a>
+      <a href="#">Dyfuzory</a>
+    </nav>
+    <div class="header-actions">
+      <a href="#">Zaloguj się</a>
+      <a href="#">Moje konto</a>
+      <a href="#" class="cart-btn">
+        🛒
+        <span class="cart-badge">3</span>
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════
+     HOME PAGE
+════════════════════════════════════════════════════════ -->
+<div class="screen active" id="screen-home">
+  <div class="hero">
+    <h1>Odkryj świat wyjątkowych<br>zapachów</h1>
+    <p>Ekskluzywne perfumy i dyfuzory do Twojego domu</p>
+    <a class="btn-primary" onclick="show('products')">Przeglądaj kolekcję</a>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     PRODUCT LIST
+════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-products">
+  <div class="page">
+    <h1>Produkty</h1>
+    <div class="grid">
+      <a class="card" onclick="show('detail')">
+        <div class="card-img">🌸</div>
+        <div class="card-body">
+          <h3>Rose Élégante</h3>
+          <p class="card-brand">Maison Parfum</p>
+          <p class="card-price">od 249,99 zł</p>
+        </div>
+      </a>
+      <a class="card" onclick="show('detail')">
+        <div class="card-img">🌿</div>
+        <div class="card-body">
+          <h3>Forest Oud</h3>
+          <p class="card-brand">Black Series</p>
+          <p class="card-price">od 319,00 zł</p>
+        </div>
+      </a>
+      <a class="card" onclick="show('detail')">
+        <div class="card-img">🍊</div>
+        <div class="card-body">
+          <h3>Citrus Bloom</h3>
+          <p class="card-brand">Fresh Collection</p>
+          <p class="card-price">od 189,00 zł</p>
+        </div>
+      </a>
+      <a class="card" onclick="show('detail')">
+        <div class="card-img">🌊</div>
+        <div class="card-body">
+          <h3>Aqua Marina</h3>
+          <p class="card-brand">Ocean Blue</p>
+          <p class="card-price">od 229,99 zł</p>
+        </div>
+      </a>
+      <a class="card" onclick="show('detail')">
+        <div class="card-img">🪵</div>
+        <div class="card-body">
+          <h3>Cedarwood Noir</h3>
+          <p class="card-brand">Maison Parfum</p>
+          <p class="card-price">od 299,00 zł</p>
+        </div>
+      </a>
+      <a class="card" onclick="show('detail')">
+        <div class="card-img">🌹</div>
+        <div class="card-body">
+          <h3>Velvet Rose</h3>
+          <p class="card-brand">Premium Scents</p>
+          <p class="card-price">od 279,00 zł</p>
+        </div>
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     PRODUCT DETAIL
+════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-detail">
+  <div class="detail">
+    <div class="detail-gallery">🌸</div>
+    <div class="detail-info">
+      <p class="detail-brand">Maison Parfum</p>
+      <h1>Rose Élégante</h1>
+      <p class="detail-desc">
+        Ekskluzywne perfumy o głębokiej, zmysłowej nucie różanej z akcentami
+        drzewnego piżma i ambry. Stworzone dla kobiet i mężczyzn, którzy cenią
+        sobie luksus i wyrafinowanie.
+      </p>
+      <div class="variants">
+        <button class="variant-btn selected">50 ml<span>249,99 zł</span></button>
+        <button class="variant-btn">100 ml<span>389,99 zł</span></button>
+        <button class="variant-btn">200 ml<span>599,00 zł</span></button>
+      </div>
+      <button class="btn-add" onclick="show('cart')">Dodaj do koszyka</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     CART
+════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-cart">
+  <div class="cart-layout">
+    <div class="cart-items">
+      <h1>Koszyk</h1>
+      <div class="cart-item">
+        <div class="cart-thumb">🌸</div>
+        <div class="cart-item-info">
+          <a href="#">Rose Élégante</a>
+          <div class="cart-item-variant">50 ml · Maison Parfum</div>
+          <div class="cart-item-sku">SKU: ROSE-50ML</div>
+        </div>
+        <div class="qty-ctrl">
+          <button class="qty-btn">−</button>
+          <span class="qty-val">1</span>
+          <button class="qty-btn">+</button>
+        </div>
+        <div class="item-price">249,99 zł</div>
+        <button class="remove-btn">✕</button>
+      </div>
+      <div class="cart-item">
+        <div class="cart-thumb">🌿</div>
+        <div class="cart-item-info">
+          <a href="#">Forest Oud</a>
+          <div class="cart-item-variant">100 ml · Black Series</div>
+          <div class="cart-item-sku">SKU: FOUD-100ML</div>
+        </div>
+        <div class="qty-ctrl">
+          <button class="qty-btn">−</button>
+          <span class="qty-val">2</span>
+          <button class="qty-btn">+</button>
+        </div>
+        <div class="item-price">638,00 zł</div>
+        <button class="remove-btn">✕</button>
+      </div>
+    </div>
+    <div class="cart-summary">
+      <h2>Podsumowanie</h2>
+      <div class="summary-row"><span>Produkty (3)</span><span>887,99 zł</span></div>
+      <div class="summary-row"><span>Wysyłka</span><span>—</span></div>
+      <div class="summary-row final"><span>Razem</span><span>887,99 zł</span></div>
+      <a class="btn-checkout" onclick="show('checkout')">Przejdź do kasy</a>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     CHECKOUT
+════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-checkout">
+  <div class="checkout-page">
+    <h1>Zamówienie</h1>
+    <div class="steps">
+      <div class="step done">✓ Adres</div>
+      <div class="step active">Dostawa</div>
+      <div class="step">Podsumowanie</div>
+    </div>
+    <div class="form-card">
+      <h2>Wybierz sposób dostawy</h2>
+      <div class="carrier-options">
+        <div class="carrier-option selected">
+          <div class="carrier-icon">📦</div>
+          <div>
+            <div class="carrier-name">InPost Paczkomat</div>
+            <div class="carrier-desc">Odbiór w paczkomacie · 1–2 dni robocze</div>
+          </div>
+          <div class="carrier-price">9,99 zł</div>
+        </div>
+        <div class="carrier-option">
+          <div class="carrier-icon">🚚</div>
+          <div>
+            <div class="carrier-name">DHL Kurier</div>
+            <div class="carrier-desc">Dostawa do drzwi · 1–2 dni robocze</div>
+          </div>
+          <div class="carrier-price">14,99 zł</div>
+        </div>
+        <div class="carrier-option">
+          <div class="carrier-icon">🟢</div>
+          <div>
+            <div class="carrier-name">GLS Kurier</div>
+            <div class="carrier-desc">Dostawa do drzwi · 2–3 dni robocze</div>
+          </div>
+          <div class="carrier-price">12,99 zł</div>
+        </div>
+      </div>
+      <div class="total-row"><span>Produkty (3)</span><span>887,99 zł</span></div>
+      <div class="total-row"><span>Wysyłka</span><span>9,99 zł</span></div>
+      <div class="total-row final"><span>Razem</span><span>897,98 zł</span></div>
+      <button class="btn-next">Przejdź do płatności →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     LOGIN
+════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-login">
+  <div class="auth-page">
+    <div class="auth-card">
+      <h1>Zaloguj się</h1>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" placeholder="jan@example.com">
+      </div>
+      <div class="field">
+        <label>Hasło</label>
+        <input type="password" placeholder="••••••••">
+      </div>
+      <button class="btn-submit">Zaloguj się</button>
+      <div class="auth-divider"><span>lub</span></div>
+      <button class="btn-google">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/><path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
+        Zaloguj przez Google
+      </button>
+      <p class="auth-link">Nie masz konta? <a onclick="show('register')">Zarejestruj się</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     REGISTER
+════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-register">
+  <div class="auth-page">
+    <div class="auth-card">
+      <h1>Utwórz konto</h1>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="field"><label>Imię</label><input type="text" placeholder="Jan"></div>
+        <div class="field"><label>Nazwisko</label><input type="text" placeholder="Kowalski"></div>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" placeholder="jan@example.com">
+      </div>
+      <div class="field">
+        <label>Hasło</label>
+        <input type="password" placeholder="Minimum 8 znaków">
+      </div>
+      <button class="btn-submit">Zarejestruj się</button>
+      <div class="auth-divider"><span>lub</span></div>
+      <button class="btn-google">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/><path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
+        Zarejestruj przez Google
+      </button>
+      <p class="auth-link">Masz już konto? <a onclick="show('login')">Zaloguj się</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     FOOTER
+════════════════════════════════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="footer-logo">Fragrance Store</div>
+      <div class="footer-tagline">Ekskluzywne zapachy dla wymagających</div>
+    </div>
+    <div class="footer-links">
+      <a href="#">O nas</a>
+      <a href="#">Kontakt</a>
+      <a href="#">Regulamin</a>
+      <a href="#">Polityka prywatności</a>
+    </div>
+  </div>
+  <div class="footer-copy">© 2026 Fragrance Store. Wszelkie prawa zastrzeżone.</div>
+</footer>
+
+<!-- ══════════════════════════════════════════════════════
+     TOAST DEMO
+════════════════════════════════════════════════════════ -->
+<div class="toast-container">
+  <div class="toast toast--success">✓ Produkt dodany do koszyka</div>
+</div>
+
+<script>
+  function show(page) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.page-nav a').forEach(a => a.classList.remove('active'));
+    document.getElementById('screen-' + page).classList.add('active');
+    document.getElementById('btn-' + page).classList.add('active');
+    window.scrollTo(0, 0);
+  }
+  document.querySelectorAll('.variant-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      this.closest('.variants').querySelectorAll('.variant-btn').forEach(b => b.classList.remove('selected'));
+      this.classList.add('selected');
+    });
+  });
+  document.querySelectorAll('.carrier-option').forEach(opt => {
+    opt.addEventListener('click', function() {
+      this.closest('.carrier-options').querySelectorAll('.carrier-option').forEach(o => o.classList.remove('selected'));
+      this.classList.add('selected');
+    });
+  });
+  setTimeout(() => {
+    document.querySelector('.toast-container').innerHTML = '';
+  }, 3000);
+</script>
+</body>
+</html>
