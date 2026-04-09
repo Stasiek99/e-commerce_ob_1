@@ -20,6 +20,7 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
+import { Throttle } from '@nestjs/throttler';
 
 const REFRESH_COOKIE = 'refresh_token';
 const COOKIE_OPTIONS = {
@@ -39,6 +40,7 @@ export class AuthController {
   ) {}
 
   @Public()
+  @Throttle({ default: { ttl: 60000, limit: 3 } })  // 3 registrations per minute
   @Post('register')
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const { accessToken, refreshToken } = await this.authService.register(dto);
@@ -47,6 +49,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { ttl: 60000, limit: 5 } })  // 5 login attempts per minute
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {

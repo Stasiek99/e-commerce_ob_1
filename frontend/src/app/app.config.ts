@@ -10,6 +10,7 @@ import {
   withFetch,
 } from '@angular/common/http';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
+import { NG_EVENT_PLUGINS } from '@taiga-ui/event-plugins';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
@@ -23,5 +24,6 @@ export const appConfig: ApplicationConfig = {
       withInterceptors([authInterceptor, errorInterceptor]),
     ),
     provideAnimationsAsync(),
+    NG_EVENT_PLUGINS,
   ],
 };

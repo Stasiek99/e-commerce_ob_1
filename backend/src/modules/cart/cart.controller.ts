@@ -7,15 +7,15 @@ import {
   Param,
   Patch,
   Post,
-  Req,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
 import { CartService } from './cart.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { User } from '@prisma/client';
+import { AddToCartDto } from './dto/add-to-cart.dto';
+import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 
 @Controller('cart')
 @UseGuards(JwtAuthGuard)
@@ -36,13 +36,13 @@ export class CartController {
   addItem(
     @CurrentUser() user: User | undefined,
     @Headers('x-session-id') sessionId: string,
-    @Body() body: { productVariantId: string; quantity: number },
+    @Body() dto: AddToCartDto,
   ) {
     return this.cartService.addItem(
       user?.id,
       sessionId,
-      body.productVariantId,
-      body.quantity,
+      dto.productVariantId,
+      dto.quantity,
     );
   }
 
@@ -52,9 +52,9 @@ export class CartController {
     @CurrentUser() user: User | undefined,
     @Headers('x-session-id') sessionId: string,
     @Param('variantId') variantId: string,
-    @Body() body: { quantity: number },
+    @Body() dto: UpdateCartItemDto,
   ) {
-    return this.cartService.updateItem(user?.id, sessionId, variantId, body.quantity);
+    return this.cartService.updateItem(user?.id, sessionId, variantId, dto.quantity);
   }
 
   @Public()

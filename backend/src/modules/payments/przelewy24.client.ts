@@ -211,6 +211,39 @@ export class Przelewy24Client {
     );
   }
 
+  verifyWebhookSignature(body: {
+    merchantId: number;
+    posId: number;
+    sessionId: string;
+    amount: number;
+    originAmount: number;
+    currency: string;
+    orderId: number;
+    methodId: number;
+    statement: string;
+    sign: string;
+  }): boolean {
+    if (this.mockEnabled) {
+      this.logger.log('[MOCK] Skipping webhook signature verification');
+      return true;
+    }
+
+    const expected = this.generateSignature({
+      merchantId: body.merchantId,
+      posId: body.posId,
+      sessionId: body.sessionId,
+      amount: body.amount,
+      originAmount: body.originAmount,
+      currency: body.currency,
+      orderId: body.orderId,
+      methodId: body.methodId,
+      statement: body.statement,
+      crc: this.crc,
+    });
+
+    return expected === body.sign;
+  }
+
   private generateSignature(data: Record<string, unknown>): string {
     const json = JSON.stringify(data);
     return createHash('sha384').update(json).digest('hex');

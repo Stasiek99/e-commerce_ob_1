@@ -9,13 +9,15 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { OrderStatus, Role, User } from '@prisma/client';
+import { Role, User } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { Public } from '../auth/decorators/public.decorator';
+import { CreateOrderDto } from './dto/create-order.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -26,10 +28,10 @@ export class OrdersController {
   createOrder(
     @CurrentUser() user: User | undefined,
     @Headers('x-session-id') sessionId: string,
-    @Body() body: any,
+    @Body() dto: CreateOrderDto,
   ) {
-    const userEmail = user?.email ?? body.guestEmail;
-    return this.ordersService.createFromCart(user?.id, sessionId, userEmail, body);
+    const userEmail = user?.email ?? dto.guestEmail;
+    return this.ordersService.createFromCart(user?.id, sessionId, userEmail!, dto);
   }
 
   @Get()
@@ -46,13 +48,16 @@ export class OrdersController {
 
   @Get('admin/all')
   @Roles(Role.ADMIN)
-  getAllOrders(@Query() query: any) {
+  getAllOrders(@Query() query: AdminOrdersQueryDto) {
     return this.ordersService.findAllAdmin(query);
   }
 
   @Patch('admin/:id/status')
   @Roles(Role.ADMIN)
-  updateStatus(@Param('id') id: string, @Body('status') status: OrderStatus) {
-    return this.ordersService.updateStatus(id, status);
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderStatusDto,
+  ) {
+    return this.ordersService.updateStatus(id, dto.status);
   }
 }

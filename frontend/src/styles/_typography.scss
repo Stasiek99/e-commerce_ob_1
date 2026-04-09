@@ -1,0 +1,51 @@
+// ── Typography scale ─────────────────────────────────────────────────────
+@use 'design-tokens' as *;
+
+h1, .h1 {
+  font-size: $font-size-h1;
+  font-weight: $font-weight-bold;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+h2, .h2 {
+  font-size: $font-size-h2;
+  font-weight: $font-weight-semibold;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+h3, .h3 {
+  font-size: $font-size-h3;
+  font-weight: $font-weight-semibold;
+  line-height: 1.4;
+}
+
+.subhead {
+  font-size: $font-size-subhead;
+  font-weight: $font-weight-medium;
+  line-height: 1.5;
+}
+
+.body {
+  font-size: $font-size-body;
+  font-weight: $font-weight-regular;
+  line-height: 1.6;
+}
+
+.caption {
+  font-size: $font-size-caption;
+  font-weight: $font-weight-regular;
+  line-height: 1.5;
+  color: $color-secondary;
+}
+
+.price {
+  font-family: 'Courier New', monospace;
+  font-weight: $font-weight-semibold;
+  min-width: 4.5ch;
+}
+
+p, li, td {
+  max-width: 65ch;
+}

@@ -12,6 +12,8 @@ import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -27,9 +29,9 @@ export class UsersController {
   @Patch('me')
   async updateMe(
     @CurrentUser() user: User,
-    @Body() body: { firstName?: string; lastName?: string; phone?: string },
+    @Body() dto: UpdateProfileDto,
   ) {
-    const updated = await this.usersService.update(user.id, body);
+    const updated = await this.usersService.update(user.id, dto);
     const { passwordHash, ...result } = updated;
     return result;
   }
@@ -40,17 +42,17 @@ export class UsersController {
   }
 
   @Post('me/addresses')
-  createAddress(@CurrentUser() user: User, @Body() body: any) {
-    return this.usersService.createAddress(user.id, body);
+  createAddress(@CurrentUser() user: User, @Body() dto: CreateAddressDto) {
+    return this.usersService.createAddress(user.id, dto);
   }
 
   @Patch('me/addresses/:id')
   updateAddress(
     @CurrentUser() user: User,
     @Param('id') addressId: string,
-    @Body() body: any,
+    @Body() dto: UpdateAddressDto,
   ) {
-    return this.usersService.updateAddress(user.id, addressId, body);
+    return this.usersService.updateAddress(user.id, addressId, dto);
   }
 
   @Delete('me/addresses/:id')

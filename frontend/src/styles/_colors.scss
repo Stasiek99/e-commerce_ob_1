@@ -1,0 +1,11 @@
+// ── Color utility classes ────────────────────────────────────────────────
+
+.text-primary { color: var(--color-primary); }
+.text-secondary { color: var(--color-secondary); }
+.text-accent { color: var(--color-accent); }
+.text-error { color: var(--color-error); }
+.text-success { color: var(--color-success); }
+
+.bg-surface { background-color: var(--color-surface); }
+.bg-primary { background-color: var(--color-primary); }
+.bg-accent { background-color: var(--color-accent); }

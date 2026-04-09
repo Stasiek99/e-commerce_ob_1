@@ -1,0 +1,26 @@
+// ── Hover & interactive states ───────────────────────────────────────────
+@use 'design-tokens' as *;
+
+// Button interactions
+button,
+[tuiButton] {
+  transition: opacity 0.15s ease, transform 0.1s ease;
+
+  &:hover {
+    opacity: 0.9;
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+// Focus state (accessibility)
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid $color-accent;
+  outline-offset: 2px;
+}
