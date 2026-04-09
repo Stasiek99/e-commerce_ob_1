@@ -1,0 +1,351 @@
+================================================================================
+DESIGN RISK ANALYSIS - FRAGRANCE E-COMMERCE
+Complete system for robust, production-ready UI patterns
+================================================================================
+
+PROJECT: Chogan-style fragrance e-commerce (Angular 18 + NestJS)
+ANALYSIS DATE: 2026-04-09
+ANALYST: Claude Code (Design Risk Assessment)
+
+================================================================================
+DELIVERABLES
+================================================================================
+
+1. DESIGN_RISK_ANALYSIS.md (88 KB)
+   13 risk-aware best practices with explicit failure modes and mitigation
+   - Each practice: Risk -> Mitigation -> Angular implementation -> Test criteria
+   - Summary table: All 13 practices at a glance
+   - Production-ready code examples (TypeScript + SCSS)
+
+2. DESIGN_IMPLEMENTATION_CHECKLIST.md (20 KB)
+   Phase-by-phase implementation guide
+   - Design, Implementation, Testing phases for each practice
+   - 5-week priority roadmap
+   - Tools and resources reference
+
+3. DESIGN_EDGE_CASE_RECIPES.md (36 KB)
+   6 copy-paste ready component implementations
+   - ProductCard: Handles 120+ char names, image errors, stock states
+   - Modal: Focus trap, keyboard navigation, accessibility
+   - FormField: Inline validation, aria-describedby, counters
+   - SearchInput: Debounce, loading, suggestions, no-results
+   - ImageLoader: CDN optimization, WebP fallback, responsive srcset
+   - PriceDisplay: Localization, currency formatting, layout stability
+
+4. DESIGN_GUIDELINES_INDEX.md (Quick start guide)
+   Roadmap connecting all 3 documents
+   - 5-minute quickstart
+   - Implementation timeline
+   - Risk severity map
+   - Testing playbook
+
+================================================================================
+13 BEST PRACTICES (SUMMARY)
+================================================================================
+
+1. RESPONSIVE PRODUCT GRID
+   Risk: Single column on 320px; 1000s products bloat DOM
+   Solution: CSS auto-fit grid + lazy loading + IntersectionObserver
+
+2. TEXT TRUNCATION
+   Risk: Screen readers read full text; text overflows on mobile
+   Solution: Line-clamp CSS + title attribute + aria-label
+
+3. IMAGE ASPECT RATIO & LAZY LOADING
+   Risk: Images shift layout on load (CLS); missing images crash layout
+   Solution: aspect-ratio CSS + error handler + loading="lazy"
+
+4. KEYBOARD NAVIGATION & FOCUS MANAGEMENT
+   Risk: Focus trapped in modal; no visible focus indicator
+   Solution: Focus trap in ngAfterViewInit; visible 2px outline
+
+5. OUT-OF-STOCK STATE MANAGEMENT
+   Risk: Race condition adds out-of-stock item to cart; stale data
+   Solution: Real-time stock re-verification before add-to-cart
+
+6. COLOR CONTRAST & DARK MODE
+   Risk: Gold #d4af37 on white fails WCAG; colorblind users miss info
+   Solution: 7:1 contrast ratio; dark mode support; color + icon + text
+
+7. CUMULATIVE LAYOUT SHIFT (CLS) PREVENTION
+   Risk: Images, toasts, fonts cause unexpected layout shifts
+   Solution: aspect-ratio locks; fixed-position toasts; skeleton loaders
+
+8. MOBILE LANDSCAPE ORIENTATION
+   Risk: Sidebar crushes content on landscape; keyboard hides viewport
+   Solution: Auto-hide sidebar; max-height on content; orientation detection
+
+9. PRICE DISPLAY & CURRENCY LOCALIZATION
+   Risk: Price width shift (99 -> 999 PLN); Polish formatting (comma)
+   Solution: min-width reservation; tabular-nums; currency code visible
+
+10. FORM VALIDATION & ERROR MESSAGES
+    Risk: Errors hidden; no aria-describedby link; required attr missing
+    Solution: Inline errors + aria-describedby + aria-invalid
+
+11. PAGINATION & VIRTUAL SCROLLING
+    Risk: 10k products in DOM kills browser; infinite scroll unbounded memory
+    Solution: CDK VirtualScroll; limit 20 items per page; trackBy function
+
+12. SEARCH & FILTER PERFORMANCE
+    Risk: Search jank on keystroke; filter state lost on navigation
+    Solution: Debounce 500ms; loading indicator; URL param state preservation
+
+13. PERFORMANCE BUDGETING & CORE WEB VITALS
+    Risk: Bundle bloat, undetected performance regression, mobile ignored
+    Solution: Lighthouse CI/CD; performance budgets; RUM monitoring
+
+================================================================================
+KEY METRICS & TARGETS
+================================================================================
+
+CORE WEB VITALS (Google's signal for ranking)
+- LCP (Largest Contentful Paint): < 2.5 seconds
+- FID (First Input Delay) / INP: < 100 milliseconds
+- CLS (Cumulative Layout Shift): < 0.1 (strict: < 0.05)
+- TTFB (Time to First Byte): < 600 milliseconds
+
+ACCESSIBILITY (WCAG 2.1)
+- Text/background contrast: 7:1 (AAA) minimum
+- Focus indicator: 3:1 contrast, 3px outline
+- Keyboard navigation: 100% interactive elements reachable via Tab
+- Screen reader: All images labeled, forms labeled, focus announced
+
+BUNDLE SIZE
+- Main chunk (gzipped): < 200 KB
+- Growth per PR: < 5 KB max
+- Images per page: < 500 KB total
+
+PERFORMANCE (Real devices, Slow 3G)
+- iPhone SE (375px): Lighthouse Performance > 85
+- Motorola G7 (360px): Lighthouse Performance > 75
+- iPad (600px): Lighthouse Performance > 90
+- Desktop (1440px): Lighthouse Performance > 95
+
+================================================================================
+TESTING PLAYBOOK
+================================================================================
+
+BEFORE EVERY PR:
+- Lighthouse (desktop + mobile) > 90 Performance score
+- Test at 320px, 375px, 768px, 1440px viewports
+- Tab through all interactive elements; focus visible everywhere
+- Check Network tab for > 500ms blocking resources
+- Run WCAG contrast checker on all text/buttons
+
+WEEKLY:
+- Monitor production RUM: LCP, FID, CLS from real users
+- Test on iPhone SE (375px) and Motorola G7 (360px)
+- Measure bundle size; watch for regressions
+- Test with NVDA (Windows) or VoiceOver (Mac)
+
+MONTHLY:
+- Comprehensive WCAG 2.1 AA audit
+- Landscape orientation testing (812x375px)
+- Test color contrast with accessibility scanner
+- Review error logs for a11y issues
+
+================================================================================
+IMPLEMENTATION ROADMAP
+================================================================================
+
+WEEK 1 (Foundation):
+- Design system setup (CSS variables, design tokens)
+- Create component library structure
+- Set up Lighthouse CI/CD budgeting
+- PRACTICES: #1 (Grid), #3 (Images), #13 (Budgets)
+
+WEEK 2-3 (Accessibility):
+- Implement keyboard navigation & focus management
+- Set up color contrast audit
+- Add ARIA labels and descriptions
+- PRACTICES: #4 (Keyboard), #6 (Contrast), #10 (Validation)
+
+WEEK 4-5 (Responsiveness & UX):
+- Text truncation with safe fallbacks
+- CLS prevention (aspect-ratio, skeleton loaders)
+- Landscape orientation support
+- Out-of-stock state management
+- PRACTICES: #2 (Truncation), #5 (Stock), #7 (CLS), #8 (Landscape)
+
+WEEK 6 (Performance):
+- Price display with localization
+- Search & filter optimization
+- Pagination / virtual scrolling
+- PRACTICES: #9 (Pricing), #11 (Pagination), #12 (Search)
+
+WEEK 7+ (Continuous):
+- Web Vitals monitoring in production
+- Bundle size tracking
+- Performance regression detection
+- Real User Metrics analysis
+
+================================================================================
+WHAT CAN GO WRONG (RISK SEVERITY MAP)
+================================================================================
+
+HIGH SEVERITY (Fix ASAP):
+- Grid layout breaks on 320px (affects mobile users)
+- Image load causes CLS > 0.1 (ranking penalty)
+- Out-of-stock race condition (business impact)
+- 10k products kill performance (usability collapse)
+- Bundle bloat causes LCP > 3s (99th percentile users abandon)
+
+MEDIUM SEVERITY (Plan in sprint):
+- Product name overflows (UX broken)
+- Text contrast fails WCAG AA (accessibility lawsuit risk)
+- Focus trap broken in modal (keyboard users stuck)
+- Form errors not announced (screen reader users confused)
+- Landscape mode breaks layout (tablet users stuck)
+
+LOW SEVERITY (Polish after MVP):
+- Price width shifts on update (minor jank)
+- Currency code not visible (users guess format)
+- Suggestion list dismissed incorrectly (UX polish)
+
+================================================================================
+TOOLS & COMMANDS
+================================================================================
+
+Lighthouse (Performance Budgets):
+  npm install -g @lhci/cli@latest
+  lhci autorun --config=lighthouse.config.js
+
+Web Vitals (Production Monitoring):
+  npm install web-vitals
+  // Import getCLS, getFID, getLCP, getTTFB
+
+Accessibility Testing:
+  Windows: NVDA (free) => https://www.nvaccess.org/
+  Mac: VoiceOver (built-in) => Cmd + F5
+  Chrome: axe DevTools => https://chrome.google.com/webstore
+
+DevTools Performance Profiling:
+  CPU Throttling: Performance > Settings > 6x slowdown
+  Network: Network tab > Slow 3G
+  Responsive: Ctrl + Shift + M (mobile emulation)
+
+Bundle Size Analysis:
+  npm install -g webpack-bundle-analyzer
+  ng build --stats-json
+  webpack-bundle-analyzer dist/stats.json
+
+================================================================================
+COPY-PASTE READY COMPONENTS
+================================================================================
+
+All 6 components available in DESIGN_EDGE_CASE_RECIPES.md:
+
+1. ProductCardComponent
+   Use for: Grid items with images, names, prices, stock
+   Handles: Truncation, image errors, out-of-stock
+   Copy from: DESIGN_EDGE_CASE_RECIPES.md (Section 1)
+
+2. ModalComponent
+   Use for: Dialogs, overlays, filters
+   Handles: Focus trap, keyboard navigation, accessibility
+   Copy from: DESIGN_EDGE_CASE_RECIPES.md (Section 2)
+
+3. FormFieldComponent
+   Use for: All form inputs, validations
+   Handles: Inline errors, aria-describedby, counters
+   Copy from: DESIGN_EDGE_CASE_RECIPES.md (Section 3)
+
+4. SearchInputComponent
+   Use for: Product search, autocomplete
+   Handles: Debounce, loading, suggestions, no-results
+   Copy from: DESIGN_EDGE_CASE_RECIPES.md (Section 4)
+
+5. ImageLoaderService
+   Use for: CDN image optimization, responsive sizes
+   Handles: WebP fallback, quality optimization, preloading
+   Copy from: DESIGN_EDGE_CASE_RECIPES.md (Section 5)
+
+6. PriceDisplayComponent
+   Use for: All product prices, currency display
+   Handles: Localization, formatting, layout stability
+   Copy from: DESIGN_EDGE_CASE_RECIPES.md (Section 6)
+
+================================================================================
+COMMON PITFALLS & SOLUTIONS
+================================================================================
+
+PITFALL 1: "Works on my desktop"
+SOLUTION: Test on real phones (iPhone SE, Motorola G7) before PR
+MEASURE: Lighthouse mobile Performance > 85
+
+PITFALL 2: "Image loads fine in DevTools"
+SOLUTION: Measure CLS with network throttling (Slow 3G)
+MEASURE: CLS < 0.1 with images loading
+
+PITFALL 3: "Color looks good to me"
+SOLUTION: Test with WCAG contrast checker + color blindness filters
+MEASURE: 7:1 contrast ratio on all text
+
+PITFALL 4: "Nobody uses screen readers"
+SOLUTION: Test with NVDA (Windows) or VoiceOver (Mac) weekly
+MEASURE: All images have alt text, forms have labels
+
+PITFALL 5: "Bundle size isn't a big deal"
+SOLUTION: Set budgets in CI/CD; fail if > 5 KB added per PR
+MEASURE: Monitor bundle growth; tree-shake unused code
+
+PITFALL 6: "Keyboard users are rare"
+SOLUTION: Test Tab-only navigation; focus visible everywhere
+MEASURE: No element unreachable via Tab; focus contrast > 3:1
+
+PITFALL 7: "We'll fix performance later"
+SOLUTION: Enforce Lighthouse CI/CD; can't merge if budget exceeded
+MEASURE: LCP < 2.5s, CLS < 0.1 on every build
+
+================================================================================
+FILES INCLUDED IN DELIVERY
+================================================================================
+
+/e-commerce_ob_1/
+├── DESIGN_RISK_ANALYSIS.md (88 KB)
+│   13 practices, each with Risk, Mitigation, Code, Tests
+├── DESIGN_IMPLEMENTATION_CHECKLIST.md (20 KB)
+│   Design/Implementation/Testing phases, timeline, tools
+├── DESIGN_EDGE_CASE_RECIPES.md (36 KB)
+│   6 copy-paste components, fully commented
+├── DESIGN_GUIDELINES_INDEX.md
+│   Quick navigation + risk map + playbook
+├── DESIGN_SUMMARY.txt (this file)
+│   Executive overview
+
+TOTAL: ~4,900 lines, 165 KB of production-ready guidance
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. READ (15 min):
+   DESIGN_GUIDELINES_INDEX.md for overview
+   Section 1 of DESIGN_RISK_ANALYSIS.md for depth
+
+2. PLAN (30 min):
+   Review DESIGN_IMPLEMENTATION_CHECKLIST.md
+   Estimate effort for Phase 0 (Design System Setup)
+   Update project roadmap
+
+3. IMPLEMENT (Week 1):
+   Copy ProductCardComponent from DESIGN_EDGE_CASE_RECIPES.md
+   Adapt to your Product model
+   Test against criteria in DESIGN_RISK_ANALYSIS.md #1-3
+
+4. TRACK (Ongoing):
+   Use DESIGN_IMPLEMENTATION_CHECKLIST.md as sprint task list
+   Append edge cases to CLOUDE.md as you find them
+   Monitor Lighthouse score; enforce budgets in CI/CD
+
+5. MONITOR (Production):
+   Set up Web Vitals monitoring (RUM)
+   Create alerts: LCP > 3s, CLS > 0.1
+   Monthly accessibility audit
+   Bundle size tracking per PR
+
+================================================================================
+This system is designed for production-grade e-commerce at scale.
+Good luck! Questions? Review DESIGN_GUIDELINES_INDEX.md for roadmap.
+================================================================================
