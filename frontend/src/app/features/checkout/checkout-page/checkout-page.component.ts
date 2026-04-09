@@ -1,12 +1,14 @@
 import { Component, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
+
+const TERMS_VERSION = '1.0';
 const enum CarrierCode { INPOST = 'INPOST', DHL = 'DHL', GLS = 'GLS' }
 
 type CheckoutStep = 'address' | 'carrier' | 'summary';
@@ -20,7 +22,7 @@ const CARRIERS = [
 @Component({
   selector: 'app-checkout-page',
   standalone: true,
-  imports: [ReactiveFormsModule, PricePipe],
+  imports: [ReactiveFormsModule, PricePipe, RouterLink],
   template: `
     <div class="checkout">
       <h1>Zamówienie</h1>
@@ -168,9 +170,23 @@ const CARRIERS = [
             </div>
           </div>
 
+          <div class="consent-row">
+            <label class="consent-label">
+              <input
+                type="checkbox"
+                [checked]="termsAccepted()"
+                (change)="termsAccepted.set($any($event.target).checked)"
+                class="consent-checkbox" />
+              <span>
+                Akceptuję <a routerLink="/legal/terms" target="_blank">regulamin sklepu</a>
+                i&nbsp;<a routerLink="/legal/privacy" target="_blank">politykę prywatności</a>. *
+              </span>
+            </label>
+          </div>
+
           <div class="btn-row">
             <button (click)="step.set('carrier')" class="btn-back">← Wróć</button>
-            <button (click)="placeOrder()" [disabled]="placing()" class="btn-pay">
+            <button (click)="placeOrder()" [disabled]="placing() || !termsAccepted()" class="btn-pay">
               {{ placing() ? 'Przekierowanie...' : 'Przejdź do płatności →' }}
             </button>
           </div>
@@ -213,6 +229,11 @@ const CARRIERS = [
     .summary-total { padding-top: 16px; }
     .total-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
     .total-row--final { font-size: 18px; font-weight: 700; margin-top: 12px; padding-top: 12px; border-top: 2px solid var(--color-primary); }
+    .consent-row { margin: 20px 0 8px; }
+    .consent-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+    .consent-checkbox { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary); }
+    .consent-label span { font-size: 13px; line-height: 1.5; color: #444; }
+    .consent-label a { color: var(--color-primary); text-decoration: underline; }
   `],
 })
 export class CheckoutPageComponent {
@@ -228,6 +249,7 @@ export class CheckoutPageComponent {
   readonly selectedCarrier = signal<(typeof CARRIERS)[0] | null>(null);
   readonly lockerCode = signal<string | null>(null);
   readonly placing = signal(false);
+  readonly termsAccepted = signal(false);
 
   readonly carriers = CARRIERS;
 
@@ -280,6 +302,8 @@ export class CheckoutPageComponent {
       carrierCode: carrier.code,
       inpostLockerCode: this.lockerCode() ?? undefined,
       guestEmail: a.guestEmail || undefined,
+      termsVersion: TERMS_VERSION,
+      termsAcceptedAt: new Date().toISOString(),
     };
 
     this.http

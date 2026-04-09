@@ -1,23 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { Przelewy24Client } from './przelewy24.client';
 import { OrderStatus, PaymentStatus } from '@prisma/client';
-
-interface P24WebhookBody {
-  merchantId: number;
-  posId: number;
-  sessionId: string;
-  amount: number;
-  originAmount: number;
-  currency: string;
-  orderId: number;
-  methodId: number;
-  statement: string;
-  sign: string;
-}
+import { WebhookPayloadDto } from './dto/webhook-payload.dto';
 
 @Injectable()
 export class PaymentsService {
@@ -62,12 +54,21 @@ export class PaymentsService {
     return { paymentUrl: this.p24.getPaymentUrl(token) };
   }
 
-  async handleWebhook(body: P24WebhookBody) {
+  async handleWebhook(body: WebhookPayloadDto) {
     this.logger.log(`P24 webhook received: session=${body.sessionId}`);
 
+    // 1. Verify signature BEFORE any DB access
+    if (!this.p24.verifyWebhookSignature(body)) {
+      this.logger.error(
+        `Invalid webhook signature for session ${body.sessionId}`,
+      );
+      throw new ForbiddenException('Invalid webhook signature');
+    }
+
+    // 2. Look up payment
     const payment = await this.prisma.payment.findUnique({
       where: { p24SessionId: body.sessionId },
-      include: { order: true },
+      include: { order: { include: { items: true } } },
     });
 
     if (!payment) {
@@ -75,13 +76,34 @@ export class PaymentsService {
       return;
     }
 
-    await this.p24.verifyTransaction({
-      sessionId: body.sessionId,
-      orderId: body.orderId,
-      amount: body.amount,
-      currency: body.currency,
-    });
+    // 3. Idempotency — skip if already completed
+    if (payment.status === PaymentStatus.COMPLETED) {
+      this.logger.log(
+        `Payment already completed for session ${body.sessionId}, skipping`,
+      );
+      return;
+    }
 
+    // 4. Verify transaction with P24
+    try {
+      await this.p24.verifyTransaction({
+        sessionId: body.sessionId,
+        orderId: body.orderId,
+        amount: body.amount,
+        currency: body.currency,
+      });
+    } catch (err) {
+      this.logger.error(
+        `P24 verification failed for session ${body.sessionId}`,
+        err,
+      );
+
+      // Payment failed — restore stock and mark as failed
+      await this.handlePaymentFailure(payment.id, payment.orderId, payment.order.items);
+      return;
+    }
+
+    // 5. Confirm payment + update order in a single transaction
     await this.prisma.$transaction([
       this.prisma.payment.update({
         where: { id: payment.id },
@@ -98,7 +120,7 @@ export class PaymentsService {
       }),
     ]);
 
-    // Fire-and-forget email
+    // 6. Send confirmation email (fire-and-forget with logging)
     this.emailService
       .sendPaymentConfirmed({
         to: payment.order.snapshotEmail,
@@ -114,5 +136,42 @@ export class PaymentsService {
       where: { orderId },
       select: { status: true, paidAt: true },
     });
+  }
+
+  /**
+   * Handles payment failure: marks payment as FAILED, cancels order,
+   * and restores stock for all order items.
+   */
+  private async handlePaymentFailure(
+    paymentId: string,
+    orderId: string,
+    orderItems: Array<{ productVariantId: string; quantity: number }>,
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.FAILED,
+          failureReason: 'P24 verification failed',
+        },
+      });
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: OrderStatus.CANCELLED },
+      });
+
+      // Restore stock for each item
+      for (const item of orderItems) {
+        await tx.productVariant.update({
+          where: { id: item.productVariantId },
+          data: { stock: { increment: item.quantity } },
+        });
+      }
+    });
+
+    this.logger.log(
+      `Payment failed for order ${orderId} — stock restored, order cancelled`,
+    );
   }
 }

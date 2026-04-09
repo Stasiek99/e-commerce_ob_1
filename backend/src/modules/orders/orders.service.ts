@@ -55,6 +55,8 @@ export class OrdersService {
       carrierCode: CarrierCode;
       inpostLockerCode?: string;
       notes?: string;
+      termsVersion?: string;
+      termsAcceptedAt?: string;
     },
   ) {
     const cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -90,10 +92,12 @@ export class OrdersService {
     const itemsTotalInCents = cart.totalInCents;
     const totalInCents = itemsTotalInCents + shippingCostInCents;
 
-    const orderNumber = await this.generateOrderNumber();
-
+    // Use the transaction for everything: stock decrement, order creation, cart clearing
     const order = await this.prisma.$transaction(async (tx) => {
-      // Validate and lock stock
+      // Generate order number using raw SQL to avoid race conditions
+      const orderNumber = await this.generateOrderNumber(tx);
+
+      // Validate and decrement stock
       for (const item of cart.items) {
         const variant = await tx.productVariant.findUnique({
           where: { id: item.productVariantId },
@@ -131,6 +135,8 @@ export class OrdersService {
           shippingCostInCents,
           totalInCents,
           notes: dto.notes,
+          termsVersion: dto.termsVersion,
+          termsAcceptedAt: dto.termsAcceptedAt ? new Date(dto.termsAcceptedAt) : undefined,
           items: {
             create: cart.items.map((item: CartItem) => ({
               productVariantId: item.productVariantId,
@@ -143,16 +149,18 @@ export class OrdersService {
         },
       });
 
+      // Clear cart inside the transaction so it rolls back if payment init fails
+      const cartRecord = await tx.cart.findFirst({
+        where: userId ? { userId } : { sessionId },
+      });
+      if (cartRecord) {
+        await tx.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
+      }
+
       return newOrder;
     });
 
-    // Clear cart after successful order
-    const cartRecord = await this.prisma.cart.findFirst({
-      where: userId ? { userId } : { sessionId },
-    });
-    if (cartRecord) await this.cartService.clearCart(cartRecord.id);
-
-    // Initiate payment
+    // Initiate payment (outside transaction — P24 API call)
     const { paymentUrl } = await this.paymentsService.initiatePayment(order.id);
 
     // Send confirmation email (fire-and-forget)
@@ -215,11 +223,25 @@ export class OrdersService {
     return this.prisma.order.update({ where: { id }, data: { status } });
   }
 
-  private async generateOrderNumber(): Promise<string> {
+  /**
+   * Generate a unique order number using a PostgreSQL sequence.
+   * This is race-condition-safe — each call gets a unique incrementing value.
+   */
+  private async generateOrderNumber(
+    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
+  ): Promise<string> {
     const year = new Date().getFullYear();
-    const count = await this.prisma.order.count({
-      where: { createdAt: { gte: new Date(`${year}-01-01`) } },
-    });
-    return `ORD-${year}-${String(count + 1).padStart(6, '0')}`;
+
+    // Create sequence if it doesn't exist (idempotent)
+    await tx.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+    );
+
+    const result: Array<{ nextval: bigint }> = await tx.$queryRawUnsafe(
+      `SELECT nextval('order_number_seq_${year}')`,
+    );
+
+    const seq = Number(result[0].nextval);
+    return `ORD-${year}-${String(seq).padStart(6, '0')}`;
   }
 }

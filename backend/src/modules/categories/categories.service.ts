@@ -23,13 +23,36 @@ export class CategoriesService {
     return category;
   }
 
-  create(data: Prisma.CategoryCreateInput) {
-    return this.prisma.category.create({ data });
+  create(data: {
+    name: string;
+    slug: string;
+    description?: string;
+    imageUrl?: string;
+    parentId?: string;
+  }) {
+    const { parentId, ...rest } = data;
+    return this.prisma.category.create({
+      data: {
+        ...rest,
+        ...(parentId && { parent: { connect: { id: parentId } } }),
+      },
+    });
   }
 
-  async update(id: string, data: Prisma.CategoryUpdateInput) {
+  async update(id: string, data: {
+    name?: string;
+    slug?: string;
+    description?: string;
+    imageUrl?: string;
+    parentId?: string;
+  }) {
     await this.findById(id);
-    return this.prisma.category.update({ where: { id }, data });
+    const { parentId, ...rest } = data;
+    const prismaData: Prisma.CategoryUpdateInput = { ...rest };
+    if (parentId !== undefined) {
+      prismaData.parent = parentId ? { connect: { id: parentId } } : { disconnect: true };
+    }
+    return this.prisma.category.update({ where: { id }, data: prismaData });
   }
 
   async remove(id: string) {

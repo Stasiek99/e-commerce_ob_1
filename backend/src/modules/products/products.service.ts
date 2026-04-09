@@ -83,13 +83,46 @@ export class ProductsService {
     return product;
   }
 
-  create(data: Prisma.ProductCreateInput) {
-    return this.prisma.product.create({ data, include: PRODUCT_INCLUDE });
+  create(data: {
+    name: string;
+    slug: string;
+    categoryId: string;
+    description?: string;
+    shortDescription?: string;
+    brand?: string;
+    isActive?: boolean;
+    isFeatured?: boolean;
+    scentFamily?: string;
+    notes?: string[];
+    gender?: string;
+  }) {
+    const { categoryId, ...rest } = data;
+    return this.prisma.product.create({
+      data: { ...rest, category: { connect: { id: categoryId } } },
+      include: PRODUCT_INCLUDE,
+    });
   }
 
-  async update(id: string, data: Prisma.ProductUpdateInput) {
+  async update(id: string, data: {
+    name?: string;
+    slug?: string;
+    categoryId?: string;
+    description?: string;
+    shortDescription?: string;
+    brand?: string;
+    isActive?: boolean;
+    isFeatured?: boolean;
+    scentFamily?: string;
+    notes?: string[];
+    gender?: string;
+  }) {
     await this.ensureExists(id);
-    return this.prisma.product.update({ where: { id }, data, include: PRODUCT_INCLUDE });
+    const { categoryId, ...rest } = data;
+    const prismaData: Prisma.ProductUpdateInput = { ...rest };
+    if (categoryId) {
+      prismaData.category = { connect: { id: categoryId } };
+    }
+    return this.prisma.product.update({ where: { id }, data: prismaData, include: PRODUCT_INCLUDE });
   }
 
   async remove(id: string) {
@@ -100,13 +133,31 @@ export class ProductsService {
     });
   }
 
-  createVariant(productId: string, data: Prisma.ProductVariantCreateWithoutProductInput) {
+  createVariant(productId: string, data: {
+    sku: string;
+    label: string;
+    priceInCents: number;
+    volume?: number;
+    weight?: number;
+    compareAtPriceInCents?: number;
+    stock?: number;
+    isActive?: boolean;
+  }) {
     return this.prisma.productVariant.create({
       data: { ...data, product: { connect: { id: productId } } },
     });
   }
 
-  updateVariant(variantId: string, data: Prisma.ProductVariantUpdateInput) {
+  updateVariant(variantId: string, data: {
+    sku?: string;
+    label?: string;
+    priceInCents?: number;
+    volume?: number;
+    weight?: number;
+    compareAtPriceInCents?: number;
+    stock?: number;
+    isActive?: boolean;
+  }) {
     return this.prisma.productVariant.update({ where: { id: variantId }, data });
   }
 

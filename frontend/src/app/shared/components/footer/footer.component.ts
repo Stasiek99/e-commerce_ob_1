@@ -17,6 +17,11 @@ import { RouterLink } from '@angular/router';
           <a routerLink="/category/dyfuzory">Dyfuzory</a>
           <a routerLink="/account">Moje konto</a>
         </nav>
+        <nav class="footer__legal">
+          <a routerLink="/legal/terms">Regulamin</a>
+          <a routerLink="/legal/privacy">Polityka prywatności</a>
+          <a routerLink="/legal/withdrawal">Prawo odstąpienia</a>
+        </nav>
         <p class="footer__copy">&copy; {{ year }} Fragrance Store. Wszelkie prawa zastrzeżone.</p>
       </div>
     </footer>
@@ -37,7 +42,10 @@ import { RouterLink } from '@angular/router';
     .footer__nav { display: flex; gap: 24px; margin: 24px 0; }
     .footer__nav a { font-size: 14px; color: rgba(255,255,255,0.7); transition: color 0.15s; }
     .footer__nav a:hover { color: white; }
-    .footer__copy { font-size: 12px; margin-top: 32px; }
+    .footer__legal { display: flex; gap: 20px; margin-bottom: 16px; }
+    .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.55); transition: color 0.15s; }
+    .footer__legal a:hover { color: white; }
+    .footer__copy { font-size: 12px; margin-top: 16px; }
   `],
 })
 export class FooterComponent {

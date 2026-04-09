@@ -19,6 +19,13 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Public } from '../auth/decorators/public.decorator';
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  ProductQueryDto,
+  CreateVariantDto,
+  UpdateVariantDto,
+} from './dto/product.dto';
 
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,7 +37,7 @@ export class ProductsController {
 
   @Public()
   @Get()
-  findAll(@Query() query: any) {
+  findAll(@Query() query: ProductQueryDto) {
     return this.productsService.findAll(query);
   }
 
@@ -42,14 +49,14 @@ export class ProductsController {
 
   @Post()
   @Roles(Role.ADMIN)
-  create(@Body() body: any) {
-    return this.productsService.create(body);
+  create(@Body() dto: CreateProductDto) {
+    return this.productsService.create(dto);
   }
 
   @Patch(':id')
   @Roles(Role.ADMIN)
-  update(@Param('id') id: string, @Body() body: any) {
-    return this.productsService.update(id, body);
+  update(@Param('id') id: string, @Body() dto: UpdateProductDto) {
+    return this.productsService.update(id, dto);
   }
 
   @Delete(':id')
@@ -60,14 +67,14 @@ export class ProductsController {
 
   @Post(':id/variants')
   @Roles(Role.ADMIN)
-  createVariant(@Param('id') id: string, @Body() body: any) {
-    return this.productsService.createVariant(id, body);
+  createVariant(@Param('id') id: string, @Body() dto: CreateVariantDto) {
+    return this.productsService.createVariant(id, dto);
   }
 
   @Patch(':id/variants/:variantId')
   @Roles(Role.ADMIN)
-  updateVariant(@Param('variantId') variantId: string, @Body() body: any) {
-    return this.productsService.updateVariant(variantId, body);
+  updateVariant(@Param('variantId') variantId: string, @Body() dto: UpdateVariantDto) {
+    return this.productsService.updateVariant(variantId, dto);
   }
 
   @Post(':id/images')
