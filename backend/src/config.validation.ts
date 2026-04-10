@@ -50,6 +50,12 @@ export const envValidationSchema = Joi.object({
   PORT: Joi.number().default(3000),
   FRONTEND_URL: Joi.string().default('http://localhost:4200'),
 
+  // ── Sentry (optional — SDK is a no-op when SENTRY_DSN is empty) ──
+  SENTRY_DSN: Joi.string().uri().allow('').optional(),
+  SENTRY_RELEASE: Joi.string().optional(),
+  SENTRY_TRACES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
+  SENTRY_PROFILES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
+
   // ── Admin ──
   ADMIN_DEFAULT_EMAIL: Joi.string().email().optional(),
   ADMIN_DEFAULT_PASSWORD: Joi.string().optional(),

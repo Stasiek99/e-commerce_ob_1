@@ -18,7 +18,14 @@
       "Bash(pnpm --filter frontend add @angular/cdk@20 @angular/build@20)",
       "Bash(pnpm --filter frontend remove @ng-web-apis/universal)",
       "Bash(node scripts/generate-sitemap.mjs)",
-      "Bash(pnpm build:*)"
+      "Bash(pnpm build:*)",
+      "WebFetch(domain:docs.sentry.io)",
+      "Bash(ls e:/repos/e-commerce_ob_1/.env*)",
+      "Bash(pnpm --filter backend add @sentry/nestjs @sentry/profiling-node)",
+      "Bash(pnpm --filter frontend add @sentry/angular)",
+      "Bash(pnpm build:backend)",
+      "Bash(pnpm build:frontend)",
+      "Bash(pnpm --filter backend build)"
     ]
   }
 }

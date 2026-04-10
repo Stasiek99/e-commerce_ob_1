@@ -163,7 +163,8 @@ export class ShippingService {
         trackingNumber,
         trackingUrl,
       })
-      .catch(() => {});
+      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
+      .catch(() => undefined);
 
     return shipment;
   }

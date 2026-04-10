@@ -176,7 +176,8 @@ export class OrdersService {
         })),
         totalInCents,
       })
-      .catch(() => {});
+      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
+      .catch(() => undefined);
 
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
   }

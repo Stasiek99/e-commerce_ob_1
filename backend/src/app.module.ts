@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { HealthController } from './health.controller';
 import { envValidationSchema } from './config.validation';
 import { PrismaModule } from './modules/prisma/prisma.module';
@@ -19,6 +20,7 @@ import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
+    SentryModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: envValidationSchema,
@@ -44,6 +46,7 @@ import { AdminModule } from './modules/admin/admin.module';
   ],
   controllers: [HealthController],
   providers: [
+    { provide: APP_FILTER, useClass: SentryGlobalFilter },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })

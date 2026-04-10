@@ -128,7 +128,8 @@ export class PaymentsService {
         firstName: payment.order.snapshotFirstName,
         totalInCents: payment.order.totalInCents,
       })
-      .catch((err) => this.logger.error('Failed to send payment email', err));
+      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
+      .catch(() => undefined);
   }
 
   async getPaymentStatus(orderId: string) {

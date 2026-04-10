@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import { Resend } from 'resend';
 import { orderConfirmationTemplate } from './templates/order-confirmation.template';
 import { paymentConfirmedTemplate } from './templates/payment-confirmed.template';
 import { shippingNotificationTemplate } from './templates/shipping-notification.template';
+
+type EmailKind =
+  | 'order_confirmation'
+  | 'payment_confirmed'
+  | 'shipping_notification';
 
 @Injectable()
 export class EmailService {
@@ -28,7 +34,9 @@ export class EmailService {
     totalInCents: number;
   }) {
     const { subject, html } = orderConfirmationTemplate(data);
-    return this.send(data.to, subject, html);
+    return this.send('order_confirmation', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+    });
   }
 
   async sendPaymentConfirmed(data: {
@@ -38,7 +46,9 @@ export class EmailService {
     totalInCents: number;
   }) {
     const { subject, html } = paymentConfirmedTemplate(data);
-    return this.send(data.to, subject, html);
+    return this.send('payment_confirmed', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+    });
   }
 
   async sendShippingNotification(data: {
@@ -50,10 +60,19 @@ export class EmailService {
     trackingUrl?: string;
   }) {
     const { subject, html } = shippingNotificationTemplate(data);
-    return this.send(data.to, subject, html);
+    return this.send('shipping_notification', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      carrier: data.carrier,
+    });
   }
 
-  private async send(to: string, subject: string, html: string) {
+  private async send(
+    kind: EmailKind,
+    to: string,
+    subject: string,
+    html: string,
+    context: Record<string, string>,
+  ) {
     try {
       const result = await this.resend.emails.send({
         from: this.from,
@@ -61,10 +80,31 @@ export class EmailService {
         subject,
         html,
       });
+
+      // Resend's SDK returns { data, error } on validation/API errors
+      // instead of throwing, so we must branch on result.error explicitly.
+      if (result.error) {
+        throw new Error(
+          `Resend API error: ${result.error.name} — ${result.error.message}`,
+        );
+      }
+
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return result;
     } catch (error) {
-      this.logger.error(`Failed to send email to ${to}`, error);
+      this.logger.error(
+        `Failed to send ${kind} email to ${to}: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      Sentry.withScope((scope) => {
+        scope.setTag('email.kind', kind);
+        scope.setContext('email', {
+          to,
+          subject,
+          ...context,
+        });
+        Sentry.captureException(error);
+      });
       throw error;
     }
   }
