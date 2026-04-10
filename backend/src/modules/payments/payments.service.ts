@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -128,7 +129,10 @@ export class PaymentsService {
         firstName: payment.order.snapshotFirstName,
         totalInCents: payment.order.totalInCents,
       })
-      .catch((err) => this.logger.error('Failed to send payment email', err));
+      .catch((err) => {
+        this.logger.error('Failed to send payment email', err);
+        Sentry.captureException(err);
+      });
   }
 
   async getPaymentStatus(orderId: string) {
