@@ -34,7 +34,11 @@
       "Bash(sed -n '113,120p' e:/repos/e-commerce_ob_1/backend/node_modules/stripe/cjs/stripe.core.d.ts)",
       "Bash(sed -n '330,345p' e:/repos/e-commerce_ob_1/backend/node_modules/stripe/cjs/stripe.core.d.ts)",
       "Bash(pnpm --filter backend add stripe@^18)",
-      "Bash(pnpm test:*)"
+      "Bash(pnpm test:*)",
+      "Bash(ls e:/repos/e-commerce_ob_1/backend/*.json e:/repos/e-commerce_ob_1/railway* e:/repos/e-commerce_ob_1/nixpacks* e:/repos/e-commerce_ob_1/Procfile)",
+      "WebFetch(domain:docs.railway.com)",
+      "Bash(pnpm --filter backend exec prisma generate)",
+      "Bash(ls e:/repos/e-commerce_ob_1/backend/*.ts)"
     ]
   }
 }

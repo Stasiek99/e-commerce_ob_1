@@ -82,10 +82,10 @@ Everything in this phase MUST be done before the first real order.
 
 ### 1C. Deployment (Days 4-5)
 
-- [ ] Railway backend — build command, start command, env vars, `prisma migrate deploy`
+- [x] Railway backend — build command, start command, env vars, `prisma migrate deploy`
 - [ ] Vercel frontend — prerendered build, `environment.prod.ts` API URL updated
 - [ ] Supabase — RLS on product-images bucket, verify connection limits
-- [ ] Production env vars — P24_SANDBOX=true, Resend domain verification (SPF/DKIM)
+- [ ] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
 - [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
 
 ### 1D. Smoke Testing (Days 6-7)

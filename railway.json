@@ -1,0 +1,23 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "pnpm --filter backend exec prisma generate && pnpm --filter backend build",
+    "watchPatterns": [
+      "backend/**",
+      "packages/shared-types/**",
+      "pnpm-lock.yaml",
+      "package.json",
+      "railway.json"
+    ]
+  },
+  "deploy": {
+    "startCommand": "node backend/dist/main",
+    "preDeployCommand": [
+      "pnpm --filter backend exec prisma migrate deploy"
+    ],
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
