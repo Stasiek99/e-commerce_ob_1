@@ -32,7 +32,7 @@ import { RouterLink } from '@angular/router';
         <h2>3. Odbiorcy danych</h2>
         <p>Twoje dane mogą być przekazywane następującym kategoriom podmiotów:</p>
         <ul>
-          <li>Operatorzy płatności — PayPro SA (Przelewy24), w zakresie niezbędnym do realizacji płatności.</li>
+          <li>Operatorzy płatności — Stripe Payments Europe Ltd., w zakresie niezbędnym do realizacji płatności.</li>
           <li>Przewoźnicy — InPost, DHL, GLS, w zakresie niezbędnym do dostarczenia przesyłki.</li>
           <li>Dostawcy usług IT — Supabase Inc. (hosting bazy danych), Resend Inc. (wysyłka e-mail) — jako podmioty przetwarzające na podstawie umów powierzenia.</li>
           <li>Organy państwowe — wyłącznie na żądanie uprawnionego organu i w zakresie wymaganym przez prawo.</li>

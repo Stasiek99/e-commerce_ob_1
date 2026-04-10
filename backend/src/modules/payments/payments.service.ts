@@ -1,15 +1,10 @@
-import {
-  ForbiddenException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { v4 as uuidv4 } from 'uuid';
+import { OrderStatus, PaymentStatus } from '@prisma/client';
+import type Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
-import { Przelewy24Client } from './przelewy24.client';
-import { OrderStatus, PaymentStatus } from '@prisma/client';
-import { WebhookPayloadDto } from './dto/webhook-payload.dto';
+import { StripeClient } from './stripe.client';
 
 @Injectable()
 export class PaymentsService {
@@ -17,7 +12,7 @@ export class PaymentsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly p24: Przelewy24Client,
+    private readonly stripeClient: StripeClient,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
   ) {}
@@ -28,90 +23,118 @@ export class PaymentsService {
       include: { items: true },
     });
 
-    const sessionId = uuidv4();
+    const currency = this.configService.get<string>('STRIPE_CURRENCY', 'pln');
+    const successUrl = this.configService.getOrThrow<string>('STRIPE_SUCCESS_URL');
+    const cancelUrl = this.configService.getOrThrow<string>('STRIPE_CANCEL_URL');
 
-    const { token } = await this.p24.registerTransaction({
-      sessionId,
-      amount: order.totalInCents,
-      currency: 'PLN',
-      description: `Zamówienie #${order.orderNumber}`,
-      email: order.snapshotEmail,
-      client: `${order.snapshotFirstName} ${order.snapshotLastName}`,
-      urlReturn: `${this.configService.get('P24_RETURN_URL')}?orderId=${orderId}`,
-      urlNotify: this.configService.getOrThrow('P24_NOTIFY_URL'),
+    const lineItems = order.items.map((item) => ({
+      name: item.snapshotName,
+      description: item.snapshotSku,
+      unitAmount: item.snapshotPrice,
+      quantity: item.quantity,
+    }));
+
+    if (order.shippingCostInCents > 0) {
+      lineItems.push({
+        name: 'Dostawa',
+        description: order.carrierCode,
+        unitAmount: order.shippingCostInCents,
+        quantity: 1,
+      });
+    }
+
+    const session = await this.stripeClient.createCheckoutSession({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      customerEmail: order.snapshotEmail,
+      currency,
+      lineItems,
+      successUrl,
+      cancelUrl,
     });
 
     await this.prisma.payment.create({
       data: {
         orderId,
-        p24SessionId: sessionId,
-        p24Token: token,
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : (session.payment_intent?.id ?? null),
         amountInCents: order.totalInCents,
-        currency: 'PLN',
+        currency: currency.toUpperCase(),
+        provider: 'stripe',
       },
     });
 
-    return { paymentUrl: this.p24.getPaymentUrl(token) };
-  }
-
-  async handleWebhook(body: WebhookPayloadDto) {
-    this.logger.log(`P24 webhook received: session=${body.sessionId}`);
-
-    // 1. Verify signature BEFORE any DB access
-    if (!this.p24.verifyWebhookSignature(body)) {
-      this.logger.error(
-        `Invalid webhook signature for session ${body.sessionId}`,
-      );
-      throw new ForbiddenException('Invalid webhook signature');
+    if (!session.url) {
+      throw new Error('Stripe Checkout Session missing redirect URL');
     }
 
-    // 2. Look up payment
+    return { paymentUrl: session.url };
+  }
+
+  /**
+   * Handles a Stripe webhook event whose signature has already been verified
+   * by the controller. Dispatches on event type and updates the matching
+   * payment record idempotently.
+   */
+  async handleWebhookEvent(event: Stripe.Event) {
+    this.logger.log(`Stripe webhook received: type=${event.type} id=${event.id}`);
+
+    switch (event.type) {
+      case 'checkout.session.completed':
+      case 'checkout.session.async_payment_succeeded':
+        await this.markSessionPaid(event.data.object as Stripe.Checkout.Session);
+        break;
+
+      case 'checkout.session.expired':
+      case 'checkout.session.async_payment_failed':
+        await this.markSessionFailed(
+          event.data.object as Stripe.Checkout.Session,
+          event.type,
+        );
+        break;
+
+      default:
+        // Stripe sends ~100 event types. We only react to the ones we care
+        // about; everything else is ACKed with 200 so Stripe doesn't retry.
+        this.logger.debug(`Ignoring Stripe event: ${event.type}`);
+    }
+  }
+
+  private async markSessionPaid(session: Stripe.Checkout.Session) {
     const payment = await this.prisma.payment.findUnique({
-      where: { p24SessionId: body.sessionId },
+      where: { stripeCheckoutSessionId: session.id },
       include: { order: { include: { items: true } } },
     });
 
     if (!payment) {
-      this.logger.warn(`No payment found for session ${body.sessionId}`);
+      this.logger.warn(`No payment found for Stripe session ${session.id}`);
       return;
     }
 
-    // 3. Idempotency — skip if already completed
+    // Idempotency — skip if already completed
     if (payment.status === PaymentStatus.COMPLETED) {
       this.logger.log(
-        `Payment already completed for session ${body.sessionId}, skipping`,
+        `Payment already completed for session ${session.id}, skipping`,
       );
       return;
     }
 
-    // 4. Verify transaction with P24
-    try {
-      await this.p24.verifyTransaction({
-        sessionId: body.sessionId,
-        orderId: body.orderId,
-        amount: body.amount,
-        currency: body.currency,
-      });
-    } catch (err) {
-      this.logger.error(
-        `P24 verification failed for session ${body.sessionId}`,
-        err,
-      );
+    const paymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : (session.payment_intent?.id ?? null);
 
-      // Payment failed — restore stock and mark as failed
-      await this.handlePaymentFailure(payment.id, payment.orderId, payment.order.items);
-      return;
-    }
-
-    // 5. Confirm payment + update order in a single transaction
     await this.prisma.$transaction([
       this.prisma.payment.update({
         where: { id: payment.id },
         data: {
           status: PaymentStatus.COMPLETED,
-          p24OrderId: String(body.orderId),
+          stripePaymentIntentId: paymentIntentId,
           paidAt: new Date(),
-          rawWebhookPayload: body as any,
+          rawWebhookPayload: session as unknown as object,
         },
       }),
       this.prisma.order.update({
@@ -120,7 +143,10 @@ export class PaymentsService {
       }),
     ]);
 
-    // 6. Send confirmation email (fire-and-forget with logging)
+    this.logger.log(
+      `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
+    );
+
     this.emailService
       .sendPaymentConfirmed({
         to: payment.order.snapshotEmail,
@@ -130,6 +156,33 @@ export class PaymentsService {
       })
       // Fire-and-forget: EmailService.send already logs + reports to Sentry.
       .catch(() => undefined);
+  }
+
+  private async markSessionFailed(
+    session: Stripe.Checkout.Session,
+    reasonType: string,
+  ) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { stripeCheckoutSessionId: session.id },
+      include: { order: { include: { items: true } } },
+    });
+
+    if (!payment) {
+      this.logger.warn(`No payment found for Stripe session ${session.id}`);
+      return;
+    }
+
+    if (payment.status === PaymentStatus.COMPLETED) {
+      // Already paid — ignore stray expired/failed event.
+      return;
+    }
+
+    await this.handlePaymentFailure(
+      payment.id,
+      payment.orderId,
+      payment.order.items,
+      `Stripe event: ${reasonType}`,
+    );
   }
 
   async getPaymentStatus(orderId: string) {
@@ -147,13 +200,14 @@ export class PaymentsService {
     paymentId: string,
     orderId: string,
     orderItems: Array<{ productVariantId: string; quantity: number }>,
+    failureReason: string,
   ) {
     await this.prisma.$transaction(async (tx) => {
       await tx.payment.update({
         where: { id: paymentId },
         data: {
           status: PaymentStatus.FAILED,
-          failureReason: 'P24 verification failed',
+          failureReason,
         },
       });
 
@@ -162,7 +216,6 @@ export class PaymentsService {
         data: { status: OrderStatus.CANCELLED },
       });
 
-      // Restore stock for each item
       for (const item of orderItems) {
         await tx.productVariant.update({
           where: { id: item.productVariantId },
@@ -172,7 +225,7 @@ export class PaymentsService {
     });
 
     this.logger.log(
-      `Payment failed for order ${orderId} — stock restored, order cancelled`,
+      `Payment failed for order ${orderId} — stock restored, order cancelled (${failureReason})`,
     );
   }
 }

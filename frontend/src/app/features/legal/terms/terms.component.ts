@@ -33,7 +33,7 @@ import { RouterLink } from '@angular/router';
       <section>
         <h2>§4. Ceny i płatności</h2>
         <p>Wszystkie ceny podane w Sklepie są cenami brutto (zawierają podatek VAT) wyrażonymi w złotych polskich (PLN).</p>
-        <p>Sklep obsługuje płatności elektroniczne za pośrednictwem serwisu <strong>Przelewy24</strong> (PayPro SA). Dostępne metody płatności obejmują karty płatnicze, przelewy bankowe oraz BLIK.</p>
+        <p>Sklep obsługuje płatności elektroniczne za pośrednictwem serwisu <strong>Stripe</strong> (Stripe Payments Europe Ltd.). Dostępne metody płatności obejmują karty płatnicze, BLIK, Przelewy24 oraz Apple Pay / Google Pay.</p>
         <p>Zamówienie jest realizowane po zaksięgowaniu wpłaty.</p>
       </section>
 

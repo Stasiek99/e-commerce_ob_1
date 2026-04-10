@@ -270,21 +270,20 @@ model OrderItem {
 // ─── Payments ────────────────────────────────────────────────────────────────
 
 model Payment {
-  id           String        @id @default(uuid())
-  orderId      String        @unique
-  order        Order         @relation(fields: [orderId], references: [id])
-  status       PaymentStatus @default(PENDING)
-  provider     String        @default("przelewy24")
-  p24SessionId String?       @unique
-  p24OrderId   String?
-  p24Token     String?
-  amountInCents Int
-  currency     String        @default("PLN")
-  paidAt       DateTime?
-  failureReason String?
-  rawWebhookPayload Json?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id                       String        @id @default(uuid())
+  orderId                  String        @unique
+  order                    Order         @relation(fields: [orderId], references: [id])
+  status                   PaymentStatus @default(PENDING)
+  provider                 String        @default("stripe")
+  stripeCheckoutSessionId  String?       @unique
+  stripePaymentIntentId    String?       @unique
+  amountInCents            Int
+  currency                 String        @default("PLN")
+  paidAt                   DateTime?
+  failureReason            String?
+  rawWebhookPayload        Json?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
 
   @@map("payments")
 }

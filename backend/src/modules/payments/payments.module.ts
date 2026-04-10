@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
-import { Przelewy24Client } from './przelewy24.client';
+import { StripeClient } from './stripe.client';
 import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [EmailModule],
-  providers: [PaymentsService, Przelewy24Client],
+  providers: [PaymentsService, StripeClient],
   controllers: [PaymentsController],
   exports: [PaymentsService],
 })

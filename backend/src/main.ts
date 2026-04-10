@@ -10,7 +10,11 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    // Required for Stripe webhook signature verification — Nest exposes
+    // the untouched buffer as `req.rawBody` on routes that opt in.
+    rawBody: true,
+  });
 
   app.use(helmet());
   app.use(cookieParser());

@@ -25,7 +25,16 @@
       "Bash(pnpm --filter frontend add @sentry/angular)",
       "Bash(pnpm build:backend)",
       "Bash(pnpm build:frontend)",
-      "Bash(pnpm --filter backend build)"
+      "Bash(pnpm --filter backend build)",
+      "Bash(pnpm --filter backend add stripe)",
+      "Bash(pnpm --filter backend remove axios)",
+      "Bash(pnpm --filter backend add axios)",
+      "Bash(pnpm prisma:*)",
+      "Bash(find e:/repos/e-commerce_ob_1/node_modules/.pnpm/stripe*/node_modules/stripe/types -maxdepth 2 -name \"*.d.ts\")",
+      "Bash(sed -n '113,120p' e:/repos/e-commerce_ob_1/backend/node_modules/stripe/cjs/stripe.core.d.ts)",
+      "Bash(sed -n '330,345p' e:/repos/e-commerce_ob_1/backend/node_modules/stripe/cjs/stripe.core.d.ts)",
+      "Bash(pnpm --filter backend add stripe@^18)",
+      "Bash(pnpm test:*)"
     ]
   }
 }
