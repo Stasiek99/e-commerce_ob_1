@@ -11,7 +11,12 @@
       "Bash(curl -X POST http://localhost:3000/orders -H 'Content-Type: application/json' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1YjM4MzIxZS1jODliLTQzOTMtOWMyYy1lMWViOGY3MDM0NDkiLCJlbWFpbCI6InRlc3R1c2VyQGV4YW1wbGUuY29tIiwicm9sZSI6IkNVU1RPTUVSIiwiaWF0IjoxNzc1NzI0NjU1LCJleHAiOjE3NzU3MjU1NTV9.nq2U_s6SUumVzol1x4tStJvkAVZCr6I8nWuslq4QnyQ' -d '{\"addressId\":\"placeholder\"}')",
       "Bash(curl -s http://localhost:3000/products)",
       "Bash(curl -X POST http://localhost:3000/products -H 'Content-Type: application/json' -d '{:*)",
-      "Bash(pkill -f \"nest start\")"
+      "Bash(pkill -f \"nest start\")",
+      "Bash(npx ng:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm --filter frontend add @angular/cdk@20 @angular/build@20)",
+      "Bash(pnpm --filter frontend remove @ng-web-apis/universal)"
     ]
   }
 }
