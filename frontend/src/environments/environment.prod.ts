@@ -1,7 +1,7 @@
 export const environment = {
   production: true,
-  apiUrl: 'https://your-backend.railway.app',
+  apiUrl: 'https://backend-production-c004.up.railway.app',
   sentryDsn: '',
   sentryTracesSampleRate: 0.1,
-  sentryTracePropagationTargets: [/^https:\/\/your-backend\.railway\.app/],
+  sentryTracePropagationTargets: [/^https:\/\/backend-production-c004\.up\.railway\.app/],
 };
