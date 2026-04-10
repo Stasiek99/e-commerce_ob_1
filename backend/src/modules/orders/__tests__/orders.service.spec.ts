@@ -1,0 +1,408 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { CarrierCode, OrderStatus } from '@prisma/client';
+import { OrdersService } from '../orders.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CartService } from '../../cart/cart.service';
+import { PaymentsService } from '../../payments/payments.service';
+import { EmailService } from '../../email/email.service';
+
+describe('OrdersService', () => {
+  let service: OrdersService;
+  let prisma: jest.Mocked<PrismaService>;
+  let cartService: jest.Mocked<CartService>;
+  let paymentsService: jest.Mocked<PaymentsService>;
+
+  const mockAddress = {
+    firstName: 'Jan',
+    lastName: 'Kowalski',
+    street: 'ul. Marszałkowska 1',
+    city: 'Warszawa',
+    postalCode: '00-001',
+    phone: '+48123456789',
+  };
+
+  const mockCartItems = [
+    {
+      productVariantId: 'pv-1',
+      quantity: 2,
+      productName: 'Dior Sauvage',
+      variantLabel: '100ml',
+      priceInCents: 34900,
+      sku: 'DS-100',
+      stock: 10,
+      imageUrl: null,
+      slug: 'dior-sauvage',
+    },
+    {
+      productVariantId: 'pv-2',
+      quantity: 1,
+      productName: 'Chanel No 5',
+      variantLabel: '50ml',
+      priceInCents: 44900,
+      sku: 'CN5-50',
+      stock: 5,
+      imageUrl: null,
+      slug: 'chanel-no-5',
+    },
+  ];
+
+  const mockCart = {
+    id: 'cart-1',
+    items: mockCartItems,
+    totalInCents: 2 * 34900 + 44900, // 114700
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        {
+          provide: PrismaService,
+          useValue: {
+            address: { findFirst: jest.fn() },
+            order: { create: jest.fn(), findMany: jest.fn() },
+            cart: { findFirst: jest.fn() },
+            cartItem: { deleteMany: jest.fn() },
+            productVariant: { findUnique: jest.fn(), update: jest.fn() },
+            $transaction: jest.fn(),
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn(),
+          },
+        },
+        {
+          provide: CartService,
+          useValue: {
+            getOrCreate: jest.fn(),
+          },
+        },
+        {
+          provide: PaymentsService,
+          useValue: {
+            initiatePayment: jest.fn(),
+          },
+        },
+        {
+          provide: EmailService,
+          useValue: {
+            sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+      ],
+    }).compile();
+
+    service = module.get(OrdersService);
+    prisma = module.get(PrismaService);
+    cartService = module.get(CartService);
+    paymentsService = module.get(PaymentsService);
+  });
+
+  describe('createFromCart', () => {
+    it('should throw if cart is empty', async () => {
+      cartService.getOrCreate.mockResolvedValue({ id: 'cart-1', items: [], totalInCents: 0 } as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw if InPost selected without locker code', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          // no inpostLockerCode
+        }),
+      ).rejects.toThrow('InPost locker code is required');
+    });
+
+    it('should throw if neither addressId nor newAddress is provided', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow('Address is required');
+    });
+
+    it('should calculate correct totals with shipping', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      const createdOrder = {
+        id: 'order-1',
+        orderNumber: 'ORD-2026-000001',
+        totalInCents: mockCart.totalInCents + 1999, // DHL = 19.99
+      };
+
+      // Capture the order data passed to tx.order.create
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return createdOrder;
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({
+        paymentUrl: 'https://mock.p24/pay',
+      });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      // itemsTotalInCents = 114700 (2*34900 + 44900)
+      expect(capturedOrderData.itemsTotalInCents).toBe(114700);
+      // shippingCostInCents = 1999 (DHL)
+      expect(capturedOrderData.shippingCostInCents).toBe(1999);
+      // totalInCents = 114700 + 1999 = 116699
+      expect(capturedOrderData.totalInCents).toBe(116699);
+    });
+
+    it('should decrement stock for each item during order creation', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      const stockUpdates: Array<{ id: string; decrement: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn().mockImplementation((args: any) => {
+              stockUpdates.push({
+                id: args.where.id,
+                decrement: args.data.stock.decrement,
+              });
+            }),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(stockUpdates).toEqual([
+        { id: 'pv-1', decrement: 2 },
+        { id: 'pv-2', decrement: 1 },
+      ]);
+    });
+
+    it('should throw if stock is insufficient', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 1 }), // only 1 in stock but need 2
+            update: jest.fn(),
+          },
+          order: { create: jest.fn() },
+          cart: { findFirst: jest.fn() },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow('Insufficient stock');
+    });
+
+    it('should snapshot address fields and persist termsVersion', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        termsVersion: '1.0',
+        termsAcceptedAt: '2026-04-09T12:00:00.000Z',
+      });
+
+      expect(capturedOrderData.snapshotFirstName).toBe('Jan');
+      expect(capturedOrderData.snapshotLastName).toBe('Kowalski');
+      expect(capturedOrderData.snapshotCity).toBe('Warszawa');
+      expect(capturedOrderData.snapshotCountry).toBe('PL');
+      expect(capturedOrderData.termsVersion).toBe('1.0');
+      expect(capturedOrderData.termsAcceptedAt).toEqual(new Date('2026-04-09T12:00:00.000Z'));
+    });
+
+    it('should clear cart within the same transaction', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let cartCleared = false;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: {
+            deleteMany: jest.fn().mockImplementation(() => {
+              cartCleared = true;
+            }),
+          },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(cartCleared).toBe(true);
+    });
+  });
+
+  describe('generateOrderNumber', () => {
+    it('should produce format ORD-YYYY-NNNNNN using PostgreSQL sequence', async () => {
+      // Access the private method via prototype
+      const tx = {
+        $executeRawUnsafe: jest.fn(),
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 42n }]),
+      };
+
+      // Use the service's private method through the transaction flow
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let generatedOrderNumber: string | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const fullTx = {
+          ...tx,
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              generatedOrderNumber = args.data.orderNumber;
+              return { id: 'o-1', orderNumber: args.data.orderNumber };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(fullTx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const year = new Date().getFullYear();
+      expect(generatedOrderNumber).toBe(`ORD-${year}-000042`);
+
+      // Verify it creates sequence if not exists
+      expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      );
+
+      // Verify it uses nextval from the sequence
+      expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
+        `SELECT nextval('order_number_seq_${year}')`,
+      );
+    });
+
+    it('should pad order numbers to 6 digits', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let generatedOrderNumber: string | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              generatedOrderNumber = args.data.orderNumber;
+              return { id: 'o-1', orderNumber: args.data.orderNumber };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const year = new Date().getFullYear();
+      expect(generatedOrderNumber).toBe(`ORD-${year}-000001`);
+    });
+  });
+});

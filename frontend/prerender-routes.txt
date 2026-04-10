@@ -1,0 +1,6 @@
+/
+/products
+/cart
+/legal/terms
+/legal/privacy
+/legal/withdrawal
