@@ -1,5 +1,12 @@
-import { ApplicationConfig, provideZoneChangeDetection } from '@angular/core';
 import {
+  ApplicationConfig,
+  ErrorHandler,
+  inject,
+  provideAppInitializer,
+  provideZoneChangeDetection,
+} from '@angular/core';
+import {
+  Router,
   provideRouter,
   withComponentInputBinding,
   withViewTransitions,
@@ -11,9 +18,21 @@ import {
 } from '@angular/common/http';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { NG_EVENT_PLUGINS } from '@taiga-ui/event-plugins';
+import * as Sentry from '@sentry/angular';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
+import { environment } from '../environments/environment';
+
+const sentryProviders = environment.sentryDsn
+  ? [
+      { provide: ErrorHandler, useValue: Sentry.createErrorHandler() },
+      { provide: Sentry.TraceService, deps: [Router] },
+      provideAppInitializer(() => {
+        inject(Sentry.TraceService);
+      }),
+    ]
+  : [];
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -25,5 +44,6 @@ export const appConfig: ApplicationConfig = {
     ),
     provideAnimationsAsync(),
     NG_EVENT_PLUGINS,
+    ...sentryProviders,
   ],
 };

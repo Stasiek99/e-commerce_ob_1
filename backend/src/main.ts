@@ -1,3 +1,7 @@
+// Sentry instrumentation must load before any other module.
+// eslint-disable-next-line import/order
+import './instrument';
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
