@@ -54,7 +54,7 @@ export class SeoService {
     const fullTitle = `${page.title} | ${SITE_NAME}`;
     const description = page.description?.trim() || DEFAULT_DESCRIPTION;
     const image = page.image ?? DEFAULT_IMAGE;
-    const url = `${SITE_URL}${page.path ?? this.router.url}`;
+    const url = `${SITE_URL}${this.normalizePath(page.path ?? this.router.url)}`;
 
     this.applyMeta({
       title: fullTitle,
@@ -73,6 +73,75 @@ export class SeoService {
       url: SITE_URL,
       type: 'website',
     });
+    this.clearJsonLd();
+  }
+
+  applyDefaults(path: string): void {
+    this.applyMeta({
+      title: SITE_NAME,
+      description: DEFAULT_DESCRIPTION,
+      image: DEFAULT_IMAGE,
+      url: `${SITE_URL}${this.normalizePath(path)}`,
+      type: 'website',
+    });
+    this.clearJsonLd();
+  }
+
+  setProductJsonLd(product: ProductSeoInput): void {
+    const prices =
+      product.variants?.map((v) => v.priceInCents).filter((p) => p > 0) ?? [];
+    const lowestCents = prices.length ? Math.min(...prices) : 0;
+    const highestCents = prices.length ? Math.max(...prices) : 0;
+    const productUrl = `${SITE_URL}/products/${product.slug}`;
+    const images = product.images?.map((i) => i.url) ?? [DEFAULT_IMAGE];
+
+    const priceValidUntil = new Date();
+    priceValidUntil.setFullYear(priceValidUntil.getFullYear() + 1);
+
+    const offers =
+      prices.length > 1
+        ? {
+            '@type': 'AggregateOffer',
+            url: productUrl,
+            priceCurrency: 'PLN',
+            lowPrice: (lowestCents / 100).toFixed(2),
+            highPrice: (highestCents / 100).toFixed(2),
+            offerCount: prices.length,
+            availability: 'https://schema.org/InStock',
+          }
+        : {
+            '@type': 'Offer',
+            url: productUrl,
+            priceCurrency: 'PLN',
+            price: (lowestCents / 100).toFixed(2),
+            priceValidUntil: priceValidUntil.toISOString().slice(0, 10),
+            availability: 'https://schema.org/InStock',
+            itemCondition: 'https://schema.org/NewCondition',
+          };
+
+    const jsonld: Record<string, unknown> = {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: product.name,
+      sku: product.slug,
+      image: images,
+      url: productUrl,
+      offers,
+    };
+
+    if (product.shortDescription?.trim()) {
+      jsonld['description'] = product.shortDescription.trim();
+    }
+    if (product.brand) {
+      jsonld['brand'] = { '@type': 'Brand', name: product.brand };
+    }
+
+    this.upsertJsonLd(jsonld);
+  }
+
+  clearJsonLd(): void {
+    const existing = this.document.getElementById('ld-product');
+    if (existing) existing.remove();
   }
 
   private applyMeta(data: {
@@ -127,5 +196,24 @@ export class SeoService {
       head.appendChild(link);
     }
     link.setAttribute('href', url);
+  }
+
+  private upsertJsonLd(data: Record<string, unknown>): void {
+    const head = this.document.head;
+    let script = this.document.getElementById(
+      'ld-product',
+    ) as HTMLScriptElement | null;
+    if (!script) {
+      script = this.document.createElement('script') as HTMLScriptElement;
+      script.id = 'ld-product';
+      script.type = 'application/ld+json';
+      head.appendChild(script);
+    }
+    script.textContent = JSON.stringify(data);
+  }
+
+  private normalizePath(path: string): string {
+    if (!path || path === '/') return '';
+    return path.startsWith('/') ? path : `/${path}`;
   }
 }

@@ -80,14 +80,16 @@ export class ProductDetailComponent implements OnInit {
         next: (p) => {
           this.product.set(p);
           if (p.variants?.length) this.selectedVariant.set(p.variants[0]);
-          this.seo.updateProductMeta({
+          const seoInput = {
             name: p.name,
             brand: p.brand,
             shortDescription: p.shortDescription,
             slug: p.slug ?? slug,
             images: p.images,
             variants: p.variants,
-          });
+          };
+          this.seo.updateProductMeta(seoInput);
+          this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
         },
         error: () => this.loading.set(false),
