@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "start": "ng serve",
+    "prebuild": "node scripts/generate-sitemap.mjs",
     "build": "ng build --configuration production",
+    "sitemap:generate": "node scripts/generate-sitemap.mjs",
     "watch": "ng build --watch --configuration development",
     "serve:ssr:frontend": "node dist/frontend/server/server.mjs"
   },

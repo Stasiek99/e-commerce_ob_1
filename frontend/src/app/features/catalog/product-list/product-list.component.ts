@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { RouterLink, ActivatedRoute } from '@angular/router';
 import { environment } from '../../../../environments/environment';
+import { SeoService } from '../../../core/services/seo.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 
 @Component({
@@ -49,6 +50,7 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
 export class ProductListComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
+  private readonly seo = inject(SeoService);
 
   readonly loading = signal(true);
   readonly products = signal<any[]>([]);
@@ -56,6 +58,13 @@ export class ProductListComponent implements OnInit {
   ngOnInit() {
     const slug = this.route.snapshot.paramMap.get('slug');
     const params = slug ? `?category=${slug}` : '';
+
+    this.seo.updatePageMeta({
+      title: slug ? `Kategoria: ${slug}` : 'Wszystkie produkty',
+      description: slug
+        ? `Perfumy, dyfuzory i żele z kategorii ${slug}. Premium zapachy w Fragrance Store.`
+        : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
+    });
 
     this.http
       .get<any>(`${environment.apiUrl}/products${params}`)

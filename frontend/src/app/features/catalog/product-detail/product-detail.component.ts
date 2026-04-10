@@ -4,6 +4,7 @@ import { ActivatedRoute } from '@angular/router';
 import { environment } from '../../../../environments/environment';
 import { CartService } from '../../../core/services/cart.service';
 import { ToastService } from '../../../core/services/toast.service';
+import { SeoService } from '../../../core/services/seo.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 
 @Component({
@@ -65,6 +66,7 @@ export class ProductDetailComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly cartService = inject(CartService);
   private readonly toast = inject(ToastService);
+  private readonly seo = inject(SeoService);
 
   readonly loading = signal(true);
   readonly product = signal<any>(null);
@@ -78,6 +80,16 @@ export class ProductDetailComponent implements OnInit {
         next: (p) => {
           this.product.set(p);
           if (p.variants?.length) this.selectedVariant.set(p.variants[0]);
+          const seoInput = {
+            name: p.name,
+            brand: p.brand,
+            shortDescription: p.shortDescription,
+            slug: p.slug ?? slug,
+            images: p.images,
+            variants: p.variants,
+          };
+          this.seo.updateProductMeta(seoInput);
+          this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
         },
         error: () => this.loading.set(false),
