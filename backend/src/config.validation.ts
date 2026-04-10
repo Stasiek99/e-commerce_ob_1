@@ -16,15 +16,13 @@ export const envValidationSchema = Joi.object({
   GOOGLE_CLIENT_SECRET: Joi.string().required(),
   GOOGLE_CALLBACK_URL: Joi.string().uri().required(),
 
-  // ── Przelewy24 ──
-  P24_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
-  P24_SANDBOX: Joi.string().valid('true', 'false').default('true'),
-  P24_MERCHANT_ID: Joi.string().required(),
-  P24_POS_ID: Joi.string().required(),
-  P24_CRC: Joi.string().required(),
-  P24_API_KEY: Joi.string().required(),
-  P24_RETURN_URL: Joi.string().required(),
-  P24_NOTIFY_URL: Joi.string().required(),
+  // ── Stripe ──
+  STRIPE_SECRET_KEY: Joi.string().required(),
+  STRIPE_PUBLISHABLE_KEY: Joi.string().required(),
+  STRIPE_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  STRIPE_CURRENCY: Joi.string().lowercase().default('pln'),
+  STRIPE_SUCCESS_URL: Joi.string().uri().required(),
+  STRIPE_CANCEL_URL: Joi.string().uri().required(),
 
   // ── InPost ShipX ──
   INPOST_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
