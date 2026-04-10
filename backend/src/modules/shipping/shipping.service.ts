@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import * as Sentry from '@sentry/nestjs';
 import { CarrierCode, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -164,7 +163,8 @@ export class ShippingService {
         trackingNumber,
         trackingUrl,
       })
-      .catch((err) => Sentry.captureException(err));
+      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
+      .catch(() => undefined);
 
     return shipment;
   }

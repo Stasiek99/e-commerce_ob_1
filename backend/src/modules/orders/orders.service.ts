@@ -3,7 +3,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import * as Sentry from '@sentry/nestjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
@@ -177,7 +176,8 @@ export class OrdersService {
         })),
         totalInCents,
       })
-      .catch((err) => Sentry.captureException(err));
+      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
+      .catch(() => undefined);
 
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
   }
