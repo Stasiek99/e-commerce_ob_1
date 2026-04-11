@@ -84,7 +84,7 @@ Everything in this phase MUST be done before the first real order.
 
 - [x] Railway backend — build command, start command, env vars, `prisma migrate deploy`
 - [x] Vercel frontend — prerendered build, `environment.prod.ts` API URL updated
-- [ ] Supabase — RLS on product-images bucket, verify connection limits
+- [x] Supabase — RLS on product-images bucket, verify connection limits
 - [ ] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
 - [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
 

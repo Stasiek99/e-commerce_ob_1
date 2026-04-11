@@ -84,8 +84,10 @@ Source of truth for enums (`Role`, `OrderStatus`, `PaymentStatus`, `ShipmentStat
 ## Database
 
 Prisma schema at `backend/prisma/schema.prisma`. Uses two connection strings:
-- `DATABASE_URL` — pooled (pgbouncer, for runtime)
-- `DIRECT_URL` — direct (for Prisma migrations)
+- `DATABASE_URL` — pooled (pgbouncer, port 6543, for runtime). Must include `?pgbouncer=true&connection_limit=10&pool_timeout=20` — caps Prisma's per-instance pool so multiple Railway replicas don't exhaust Supabase's shared transaction pool (~200 conns on Pro tier, ~60 on free).
+- `DIRECT_URL` — direct (port 5432, for Prisma migrations only)
+
+**Supabase Storage RLS:** policies for the `product-images` bucket live in [`backend/prisma/supabase/product-images-rls.sql`](backend/prisma/supabase/product-images-rls.sql) — Prisma can't manage the `storage` schema, so apply this manually via Supabase Dashboard → SQL Editor whenever the bucket is reprovisioned. Model: public SELECT (CDN reads), writes locked to service role (backend uses `SUPABASE_SERVICE_ROLE_KEY`, which bypasses RLS).
 
 Key model relationships: `User → Address[]`, `User → Order[]`, `Order → OrderItem[]`, `Order → Payment (1:1)`, `Order → Shipment (1:1)`, `Product → ProductVariant[]`, `Cart → CartItem[]`.
 
