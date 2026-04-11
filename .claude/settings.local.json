@@ -39,7 +39,12 @@
       "WebFetch(domain:docs.railway.com)",
       "Bash(pnpm --filter backend exec prisma generate)",
       "Bash(ls e:/repos/e-commerce_ob_1/backend/*.ts)",
-      "Bash(pnpm --filter frontend build)"
+      "Bash(pnpm --filter frontend build)",
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__click",
+      "Bash(git fetch:*)"
     ]
   }
 }
