@@ -44,7 +44,10 @@
       "mcp__chrome-devtools__navigate_page",
       "mcp__chrome-devtools__take_snapshot",
       "mcp__chrome-devtools__click",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)"
     ]
   }
 }
