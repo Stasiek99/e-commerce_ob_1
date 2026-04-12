@@ -84,8 +84,10 @@ Source of truth for enums (`Role`, `OrderStatus`, `PaymentStatus`, `ShipmentStat
 ## Database
 
 Prisma schema at `backend/prisma/schema.prisma`. Uses two connection strings:
-- `DATABASE_URL` — pooled (pgbouncer, for runtime)
-- `DIRECT_URL` — direct (for Prisma migrations)
+- `DATABASE_URL` — pooled (pgbouncer, port 6543, for runtime). Must include `?pgbouncer=true&connection_limit=10&pool_timeout=20` — caps Prisma's per-instance pool so multiple Railway replicas don't exhaust Supabase's shared transaction pool (~200 conns on Pro tier, ~60 on free).
+- `DIRECT_URL` — direct (port 5432, for Prisma migrations only)
+
+**Supabase Storage RLS:** policies for the `product-images` bucket live in [`backend/prisma/supabase/product-images-rls.sql`](backend/prisma/supabase/product-images-rls.sql) — Prisma can't manage the `storage` schema, so apply this manually via Supabase Dashboard → SQL Editor whenever the bucket is reprovisioned. Model: public SELECT (CDN reads), writes locked to service role (backend uses `SUPABASE_SERVICE_ROLE_KEY`, which bypasses RLS).
 
 Key model relationships: `User → Address[]`, `User → Order[]`, `Order → OrderItem[]`, `Order → Payment (1:1)`, `Order → Shipment (1:1)`, `Product → ProductVariant[]`, `Cart → CartItem[]`.
 
@@ -143,6 +145,38 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 **Build-layout gotcha:** `backend/tsconfig.build.json` must include `"include": ["src/**/*"]`. Without it, any stray `.ts` file at `backend/` root (e.g. old smoke-test scripts) shifts TypeScript's computed rootDir up one level and the compiled entrypoint ends up at `dist/src/main.js` instead of `dist/main.js` — breaking the Railway start command.
 
 **Required Railway env vars** (set in the service's Variables tab — `backend/.env` is not used in production): all variables from `.env.example` — database URLs, JWT secrets, Google OAuth (with the Railway callback URL), Stripe keys + webhook secret, Resend API key, Supabase keys, Sentry DSN (optional), admin credentials, and `FRONTEND_URL` pointing at the deployed Vercel frontend.
+
+#### Production env var checklist
+
+`config.validation.ts` enforces the rules below when `NODE_ENV=production`. The app fails fast at boot on any violation — don't try to paper over a failure by loosening the schema.
+
+| Variable | Production requirement | How to obtain |
+|---|---|---|
+| `NODE_ENV` | `production` | Railway auto-sets, but verify |
+| `STRIPE_SECRET_KEY` | must start with `sk_live_` | Stripe Dashboard → Developers → API keys, **flip the "Test mode" toggle off first** |
+| `STRIPE_PUBLISHABLE_KEY` | must start with `pk_live_` | same page as above |
+| `STRIPE_WEBHOOK_SECRET` | required (non-empty) | Stripe Dashboard → Developers → Webhooks → Add endpoint → URL `https://<railway>/payments/webhook`, events `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_failed` → copy "Signing secret" (`whsec_…`). **Each webhook endpoint has its own secret — test-mode and live-mode secrets are different, don't mix them up.** |
+| `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` | must point at the Vercel frontend, not localhost | e.g. `https://<vercel>/checkout/success` |
+| `RESEND_API_KEY` | required (no `re_mock` fallback) | Resend Dashboard → API Keys |
+| `EMAIL_FROM` | must be an address on a **verified** domain | see Resend domain verification below |
+| `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
+| `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
+
+#### Resend domain verification (SPF + DKIM)
+
+Until the sender domain is verified, `EMAIL_FROM` can only use Resend's shared sandbox address (`onboarding@resend.dev`), and those emails are rate-limited and can only be sent to the account owner — useless for real customers. Full flow:
+
+1. Resend Dashboard → Domains → Add Domain → enter the apex domain (e.g. `fragrancestore.pl`, not a subdomain).
+2. Resend shows DNS records to add. There are three:
+   - **MX** record on `send.<domain>` pointing to `feedback-smtp.<region>.amazonses.com` — required for Resend to receive bounce/complaint reports (SPF alignment).
+   - **TXT** SPF record on `send.<domain>`: `v=spf1 include:amazonses.com ~all`.
+   - **TXT** DKIM record on `resend._domainkey.<domain>` (long base64 value — copy the entire string including the `p=` portion).
+3. Add the records in your DNS provider (Cloudflare, OVH, etc.). Set **TTL to "Auto"** or the lowest allowed value; propagation is usually under 30 minutes but Resend will re-check every few hours if it's slow.
+4. Resend Dashboard → Domains → click the domain → "Verify DNS Records". Wait for all three rows to show green.
+5. Optional but recommended: add a DMARC record on `_dmarc.<domain>`: `v=DMARC1; p=none; rua=mailto:postmaster@<domain>`. Starts in monitor-only mode — once you see reports coming in cleanly, tighten to `p=quarantine` then `p=reject`.
+6. Only after the domain is marked **Verified** in Resend, set `EMAIL_FROM=sklep@<domain>` in Railway and redeploy. Sending from an unverified domain throws at the API level.
+
+Verification gotcha: if you're using Cloudflare, DNS records default to "Proxied" (orange cloud). **Switch MX and TXT records to DNS-only (grey cloud)** — Cloudflare's proxy strips the records otherwise and Resend's check fails with no useful error.
 
 ### Frontend — Vercel
 
