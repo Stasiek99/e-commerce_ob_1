@@ -34,18 +34,21 @@ export class AuthService {
 
   register(email: string, password: string, firstName?: string, lastName?: string) {
     return this.http
-      .post<TokensResponse>(`${environment.apiUrl}/auth/register`, {
-        email,
-        password,
-        firstName,
-        lastName,
-      })
+      .post<TokensResponse>(
+        `${environment.apiUrl}/auth/register`,
+        { email, password, firstName, lastName },
+        { withCredentials: true },
+      )
       .pipe(tap((res) => this.setToken(res.accessToken)));
   }
 
   login(email: string, password: string) {
     return this.http
-      .post<TokensResponse>(`${environment.apiUrl}/auth/login`, { email, password })
+      .post<TokensResponse>(
+        `${environment.apiUrl}/auth/login`,
+        { email, password },
+        { withCredentials: true },
+      )
       .pipe(tap((res) => this.setToken(res.accessToken)));
   }
 

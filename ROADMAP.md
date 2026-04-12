@@ -91,12 +91,12 @@ Everything in this phase MUST be done before the first real order.
 ### 1D. Smoke Testing (Days 6-7)
 
 - [ ] 13-step checklist (see below) against deployed app
-- [ ] P24 sandbox payment end-to-end with ngrok
+- [ ] Stripe test-mode payment end-to-end
 - [ ] Verify Sentry captures errors
 - [ ] Legal pages accessible, consent checkbox works
 - [ ] Google Search Console: submit sitemap, check indexability
 
-**Exit criteria:** App deployed · Product pages indexable · Sentry capturing · P24 sandbox checkout works · Legal pages live
+**Exit criteria:** App deployed · Product pages indexable · Sentry capturing · Stripe test checkout works · Legal pages live
 
 ---
 
@@ -236,9 +236,10 @@ Everything in this phase MUST be done before the first real order.
 | 4 | Polish (UX/design + invoices + emails) | 8 days | Week 8-9 |
 | 5 | Scale Prep (performance + security hardening) | 5 days | Week 10 |
 | 6 | Growth (post-launch features) | ongoing | Week 11+ |
+| 7 | Pre-Launch Polish (domain, emails, real data) | 2 days | Before go-live |
 
 **First real order possible:** End of Week 1 (after Phase 0)
-**Full production launch:** End of Week 3 (after Phase 1)
+**Full production launch:** After Phase 7 (all placeholders replaced with real values)
 **Feature-complete:** End of Week 10 (after Phase 5)
 
 ---
@@ -265,8 +266,8 @@ Everything in this phase MUST be done before the first real order.
 3. Google OAuth flow → confirm `googleId` set in DB
 4. Add 2 product variants to cart as guest → confirm persistence on reload
 5. Login → confirm cart merge (guest items appear)
-6. Full checkout: address → InPost + locker code → consent checkbox → summary → P24 redirect
-7. Complete payment on P24 sandbox → confirm webhook received → DB: COMPLETED / PAID
+6. Full checkout: address → InPost + locker code → consent checkbox → summary → Stripe redirect
+7. Complete payment on Stripe test mode → confirm webhook received → DB: COMPLETED / PAID
 8. Confirm order confirmation + payment emails in Resend dashboard
 9. AdminJS: change order to PROCESSING → confirm updated at `/account/orders`
 10. AdminJS: Generate Label → confirm Supabase URL + shipping notification email
@@ -292,6 +293,27 @@ Everything in this phase MUST be done before the first real order.
 | `frontend/angular.json` | 1 | Prerender config |
 | `frontend/src/environments/environment.prod.ts` | 1 | Production API URL |
 | `.github/workflows/ci.yml` | 0 | CI pipeline (new) |
+
+---
+
+## Phase 7 — PRE-LAUNCH POLISH (Final Go-Live Checklist) — ~2 days
+
+**Goal:** Everything that's been deferred with placeholders gets its real value before the first real customer.
+
+- [ ] Register business domain + point DNS
+- [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
+- [ ] Stripe: update statement descriptor to real business name
+- [ ] Seed real product catalog (products, variants, images, categories)
+- [ ] Upload product images to Supabase `product-images` bucket
+- [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
+- [ ] Switch Stripe to live mode in Railway (`sk_live_` / `pk_live_`) — verify checkout end-to-end with a real card (refund immediately)
+- [ ] Google Search Console: submit sitemap, verify indexability
+- [ ] Final CORS check — `FRONTEND_URL` matches production domain
+- [ ] Google OAuth: update Authorized redirect URIs to production domain
+- [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
+- [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
+
+**Exit criteria:** Real domain live · Emails sending from verified domain · Real products visible · Stripe live checkout works · Backups configured
 
 ---
 
