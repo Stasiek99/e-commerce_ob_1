@@ -48,7 +48,16 @@
       "Bash(git push:*)",
       "Bash(git checkout:*)",
       "Bash(git stash:*)",
-      "Bash(pnpm --filter backend exec tsc --noEmit -p tsconfig.build.json)"
+      "Bash(pnpm --filter backend exec tsc --noEmit -p tsconfig.build.json)",
+      "Bash(ls e:/repos/e-commerce_ob_1/backend/prisma/seed*)",
+      "Bash(ls e:/repos/e-commerce_ob_1/backend/src/seed*)",
+      "Bash(pnpm prisma:seed)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://e-commerce-ob-1-backend.vercel.app/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://backend-production-c004.up.railway.app/health)",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__chrome-devtools__list_console_messages",
+      "Bash(pnpm --filter backend exec tsc --noEmit --project backend/tsconfig.build.json)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
