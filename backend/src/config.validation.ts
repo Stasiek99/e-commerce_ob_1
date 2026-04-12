@@ -1,6 +1,23 @@
 import * as Joi from 'joi';
 
+// Joi helper: field is required in production, optional (or has a dev default)
+// otherwise. Keeps dev/test ergonomic without letting prod boot in an unsafe
+// state.
+const requiredInProd = <T extends Joi.AnySchema>(schema: T, devDefault?: unknown) =>
+  schema.when('NODE_ENV', {
+    is: 'production',
+    then: (schema as Joi.AnySchema).required(),
+    otherwise:
+      devDefault === undefined
+        ? (schema as Joi.AnySchema).optional()
+        : (schema as Joi.AnySchema).default(devDefault),
+  });
+
 export const envValidationSchema = Joi.object({
+  NODE_ENV: Joi.string()
+    .valid('development', 'production', 'test')
+    .default('development'),
+
   // ── Database (always required) ──
   DATABASE_URL: Joi.string().uri().required(),
   DIRECT_URL: Joi.string().uri().required(),
@@ -17,9 +34,29 @@ export const envValidationSchema = Joi.object({
   GOOGLE_CALLBACK_URL: Joi.string().uri().required(),
 
   // ── Stripe ──
-  STRIPE_SECRET_KEY: Joi.string().required(),
-  STRIPE_PUBLISHABLE_KEY: Joi.string().required(),
-  STRIPE_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  // In production, keys must be live-mode. Test keys (`sk_test_`, `pk_test_`)
+  // are rejected at boot so we never accidentally deploy with them.
+  STRIPE_SECRET_KEY: Joi.string()
+    .required()
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().pattern(/^sk_live_/).required().messages({
+        'string.pattern.base':
+          'STRIPE_SECRET_KEY must be a live-mode key (sk_live_…) in production',
+      }),
+    }),
+  STRIPE_PUBLISHABLE_KEY: Joi.string()
+    .required()
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().pattern(/^pk_live_/).required().messages({
+        'string.pattern.base':
+          'STRIPE_PUBLISHABLE_KEY must be a live-mode key (pk_live_…) in production',
+      }),
+    }),
+  // Webhook secret: required in prod (no signature verification means no
+  // webhook trust), optional in dev where Stripe CLI prints a `whsec_` on demand.
+  STRIPE_WEBHOOK_SECRET: requiredInProd(Joi.string(), ''),
   STRIPE_CURRENCY: Joi.string().lowercase().default('pln'),
   STRIPE_SUCCESS_URL: Joi.string().uri().required(),
   STRIPE_CANCEL_URL: Joi.string().uri().required(),
@@ -34,7 +71,13 @@ export const envValidationSchema = Joi.object({
   SUPABASE_SERVICE_ROLE_KEY: Joi.string().required(),
 
   // ── Resend (email) ──
-  RESEND_API_KEY: Joi.string().default('re_mock'),
+  // Required in prod (transactional emails are legally load-bearing — order
+  // confirmation, invoice delivery). Defaults to a mock key in dev so the
+  // service starts without a real key.
+  RESEND_API_KEY: requiredInProd(Joi.string(), 're_mock'),
+  // EMAIL_FROM must use a domain verified in Resend (SPF + DKIM). In dev we
+  // fall back to Resend's shared sandbox sender.
+  EMAIL_FROM: requiredInProd(Joi.string().email(), 'onboarding@resend.dev'),
 
   // ── Optional: DHL/GLS (not required for Phase 0) ──
   DHL_ACCOUNT_NUMBER: Joi.string().optional(),
