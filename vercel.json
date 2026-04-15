@@ -8,8 +8,8 @@
   "trailingSlash": false,
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "source": "/((?!assets/|favicon\\.ico|sitemap\\.xml|.*\\.[a-zA-Z0-9]+$).*)",
+      "destination": "/index.csr.html"
     }
   ],
   "headers": [
