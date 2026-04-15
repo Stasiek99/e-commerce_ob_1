@@ -24,6 +24,7 @@
     "@angular/router": "^20.3.18",
     "@angular/ssr": "^20.3.23",
     "@fragrance-store/shared-types": "workspace:*",
+    "@ng-web-apis/common": "^4.14.0",
     "@sentry/angular": "^10.48.0",
     "@taiga-ui/cdk": "^4.78.1",
     "@taiga-ui/core": "^4.78.1",

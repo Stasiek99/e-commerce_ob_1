@@ -1,8 +1,20 @@
 /**
- * Storage stubs for SSR — CartService and CookieConsentComponent touch
- * localStorage/sessionStorage at module-evaluation time. Everything else
- * is handled by Angular 20's @angular/ssr pipeline.
+ * SSR polyfills. Browser-only globals that some libraries touch before
+ * Angular has a chance to short-circuit via platform-id guards:
+ *   - localStorage / sessionStorage: CartService, CookieConsentComponent
+ *   - requestAnimationFrame / cancelAnimationFrame: Taiga UI (<tui-root>)
+ * Everything else is handled by Angular 20's @angular/ssr pipeline.
  */
+const globalScope = globalThis as Record<string, unknown>;
+
+if (typeof globalScope['requestAnimationFrame'] !== 'function') {
+  globalScope['requestAnimationFrame'] = (cb: FrameRequestCallback): number =>
+    setTimeout(() => cb(Date.now()), 16) as unknown as number;
+  globalScope['cancelAnimationFrame'] = (handle: number): void => {
+    clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+  };
+}
+
 if (typeof localStorage === 'undefined') {
   const createStorageMock = (): Storage => {
     const store: Record<string, string> = {};
@@ -23,8 +35,8 @@ if (typeof localStorage === 'undefined') {
       key: (i: number) => Object.keys(store)[i] ?? null,
     };
   };
-  (globalThis as Record<string, unknown>)['localStorage'] = createStorageMock();
-  (globalThis as Record<string, unknown>)['sessionStorage'] = createStorageMock();
+  globalScope['localStorage'] = createStorageMock();
+  globalScope['sessionStorage'] = createStorageMock();
 }
 
 import { bootstrapApplication, BootstrapContext } from '@angular/platform-browser';
