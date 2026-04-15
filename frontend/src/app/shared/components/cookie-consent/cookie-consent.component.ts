@@ -1,4 +1,5 @@
-import { Component, signal } from '@angular/core';
+import { Component, signal, inject, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { RouterLink } from '@angular/router';
 
 const STORAGE_KEY = 'cookie_consent_accepted';
@@ -66,9 +67,11 @@ const STORAGE_KEY = 'cookie_consent_accepted';
   `],
 })
 export class CookieConsentComponent {
-  readonly visible = signal(!localStorage.getItem(STORAGE_KEY));
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+  readonly visible = signal(this.isBrowser && !localStorage.getItem(STORAGE_KEY));
 
   accept(): void {
+    if (!this.isBrowser) return;
     localStorage.setItem(STORAGE_KEY, '1');
     this.visible.set(false);
   }

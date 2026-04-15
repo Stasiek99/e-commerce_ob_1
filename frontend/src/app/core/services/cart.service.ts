@@ -1,4 +1,5 @@
-import { Injectable, signal, computed, inject, effect } from '@angular/core';
+import { Injectable, signal, computed, inject, effect, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { debounceTime, Subject, switchMap } from 'rxjs';
 import { environment } from '../../../environments/environment';
@@ -24,7 +25,8 @@ export interface CartDto {
 
 const SESSION_KEY = 'cart_session_id';
 
-function getOrCreateSessionId(): string {
+function getOrCreateSessionId(isBrowser: boolean): string {
+  if (!isBrowser) return '';
   let id = localStorage.getItem(SESSION_KEY);
   if (!id) {
     id = crypto.randomUUID();
@@ -36,10 +38,12 @@ function getOrCreateSessionId(): string {
 @Injectable({ providedIn: 'root' })
 export class CartService {
   private readonly http = inject(HttpClient);
+  private readonly platformId = inject(PLATFORM_ID);
+  private readonly isBrowser = isPlatformBrowser(this.platformId);
 
   private readonly _items = signal<CartItemDto[]>([]);
   private readonly _cartId = signal<string | null>(null);
-  private readonly sessionId = getOrCreateSessionId();
+  private readonly sessionId = getOrCreateSessionId(this.isBrowser);
 
   readonly items = this._items.asReadonly();
   readonly cartId = this._cartId.asReadonly();
@@ -53,6 +57,8 @@ export class CartService {
   private readonly updateQueue = new Subject<{ variantId: string; qty: number }>();
 
   constructor() {
+    if (!this.isBrowser) return;
+
     this.loadCart();
 
     // Debounced quantity updates to avoid hammering the server
