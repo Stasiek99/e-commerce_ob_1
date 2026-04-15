@@ -57,7 +57,12 @@
       "mcp__chrome-devtools__take_screenshot",
       "mcp__chrome-devtools__list_console_messages",
       "Bash(pnpm --filter backend exec tsc --noEmit --project backend/tsconfig.build.json)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Bash(pnpm --filter frontend exec ng build --configuration development)",
+      "Bash(head -40 frontend/node_modules/.pnpm/@ng-web-apis+common@4.14.0*/node_modules/@ng-web-apis/common/fesm2022/ng-web-apis-common.mjs)",
+      "Bash(pnpm --filter frontend add @ng-web-apis/common@4.14.0)",
+      "Bash(echo \"EXIT=$?\")"
     ]
   }
 }
