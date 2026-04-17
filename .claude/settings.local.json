@@ -64,7 +64,18 @@
       "Bash(pnpm --filter frontend add @ng-web-apis/common@4.14.0)",
       "Bash(echo \"EXIT=$?\")",
       "Bash(ls \"e:/repos/e-commerce_ob_1/middleware\"*)",
-      "Bash(ls \"e:/repos/e-commerce_ob_1/frontend/middleware\"*)"
+      "Bash(ls \"e:/repos/e-commerce_ob_1/frontend/middleware\"*)",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -o /dev/null -w \"backend: %{http_code}\\\\n\" http://localhost:3000/health)",
+      "Bash(curl -s -o /dev/null -w \"frontend: %{http_code}\\\\n\" http://localhost:4200)",
+      "Read(//e/e/repos/e-commerce_ob_1/backend/**)",
+      "mcp__chrome-devtools__fill_form",
+      "mcp__chrome-devtools__wait_for",
+      "mcp__chrome-devtools__list_network_requests",
+      "Bash(npx prisma *)",
+      "mcp__chrome-devtools__evaluate_script",
+      "Bash(cp /tmp/check-user.mjs ./check-user.mjs)",
+      "Bash(node ./check-user.mjs)"
     ]
   }
 }
