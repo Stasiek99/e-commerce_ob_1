@@ -23,12 +23,12 @@ import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { Throttle } from '@nestjs/throttler';
 
 const REFRESH_COOKIE = 'refresh_token';
-const IS_PROD = process.env.NODE_ENV === 'production';
+const CROSS_SITE = (process.env.FRONTEND_URL ?? '').startsWith('https://');
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: IS_PROD,
-  sameSite: (IS_PROD ? 'none' : 'lax') as 'none' | 'lax',
+  secure: CROSS_SITE,
+  sameSite: (CROSS_SITE ? 'none' : 'lax') as 'none' | 'lax',
   path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
