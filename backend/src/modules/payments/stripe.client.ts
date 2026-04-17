@@ -36,7 +36,7 @@ export class StripeClient {
     this.stripe = new Stripe(apiKey, { typescript: true });
 
     // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
-    this.paymentMethods = ['card', 'blik', 'p24'];
+    this.paymentMethods = ['card'];
 
     if (!this.webhookSecret) {
       this.logger.warn(
