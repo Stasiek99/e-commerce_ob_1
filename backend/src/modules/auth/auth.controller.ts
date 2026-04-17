@@ -29,7 +29,7 @@ const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: IS_PROD,
   sameSite: (IS_PROD ? 'none' : 'lax') as 'none' | 'lax',
-  path: '/auth/refresh',
+  path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
@@ -88,7 +88,7 @@ export class AuthController {
     if (rawRefreshToken) {
       await this.authService.logout(rawRefreshToken);
     }
-    res.clearCookie(REFRESH_COOKIE, { path: '/auth/refresh' });
+    res.clearCookie(REFRESH_COOKIE, { path: '/' });
   }
 
   @Public()

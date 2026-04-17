@@ -4,11 +4,10 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "outputDirectory": "frontend/dist/frontend/browser",
   "framework": null,
-  "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
     {
-      "source": "/((?!assets/|favicon\\.ico|sitemap\\.xml|.*\\.[a-zA-Z0-9]+$).*)",
+      "source": "/(.*)",
       "destination": "/index.csr.html"
     }
   ],

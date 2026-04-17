@@ -75,23 +75,14 @@ export class AuthService {
     });
   }
 
-  async validateRefreshToken(
-    userId: string,
-    tokenId: string,
-    rawToken: string,
-  ): Promise<User | null> {
+  async validateRefreshTokenByRaw(rawToken: string): Promise<User | null> {
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     const stored = await this.prisma.refreshToken.findUnique({
       where: { tokenHash },
       include: { user: true },
     });
 
-    if (
-      !stored ||
-      stored.userId !== userId ||
-      stored.revokedAt ||
-      stored.expiresAt < new Date()
-    ) {
+    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
       return null;
     }
 
