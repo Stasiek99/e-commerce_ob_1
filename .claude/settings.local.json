@@ -76,7 +76,8 @@
       "mcp__chrome-devtools__evaluate_script",
       "Bash(cp /tmp/check-user.mjs ./check-user.mjs)",
       "Bash(node ./check-user.mjs)",
-      "Bash(DATABASE_URL=\"postgresql://postgres.iyhflozogmuayvtwxqcs:ux5qzS8dgzlIYCtH@aws-1-eu-central-2.pooler.supabase.com:5432/postgres\" DIRECT_URL=\"postgresql://postgres.iyhflozogmuayvtwxqcs:ux5qzS8dgzlIYCtH@aws-1-eu-central-2.pooler.supabase.com:5432/postgres\" npx prisma migrate deploy)"
+      "Bash(DATABASE_URL=\"postgresql://postgres.iyhflozogmuayvtwxqcs:ux5qzS8dgzlIYCtH@aws-1-eu-central-2.pooler.supabase.com:5432/postgres\" DIRECT_URL=\"postgresql://postgres.iyhflozogmuayvtwxqcs:ux5qzS8dgzlIYCtH@aws-1-eu-central-2.pooler.supabase.com:5432/postgres\" npx prisma migrate deploy)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
