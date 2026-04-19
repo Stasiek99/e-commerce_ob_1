@@ -10,6 +10,7 @@ interface User {
   role: string;
   firstName?: string;
   lastName?: string;
+  phone?: string;
 }
 
 interface TokensResponse {
@@ -64,6 +65,10 @@ export class AuthService {
     return this.http
       .post<TokensResponse>(`${environment.apiUrl}/auth/refresh`, {}, { withCredentials: true })
       .pipe(tap((res) => this.setToken(res.accessToken)));
+  }
+
+  updateCurrentUser(user: User) {
+    this._user.set(user);
   }
 
   clearSession() {
