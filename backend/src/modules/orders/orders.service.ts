@@ -59,7 +59,12 @@ export class OrdersService {
       termsAcceptedAt?: string;
     },
   ) {
-    const cart = await this.cartService.getOrCreate(userId, sessionId);
+    let cart = await this.cartService.getOrCreate(userId, sessionId);
+    // Fallback: if userId cart is empty, check sessionId cart (items added before merge)
+    if (!cart.items.length && userId && sessionId) {
+      const sessionCart = await this.cartService.getOrCreate(undefined, sessionId);
+      if (sessionCart.items.length) cart = sessionCart;
+    }
     if (!cart.items.length) throw new BadRequestException('Cart is empty');
 
     if (dto.carrierCode === CarrierCode.INPOST && !dto.inpostLockerCode) {
