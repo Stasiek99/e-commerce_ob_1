@@ -73,7 +73,7 @@ export class StripeClient {
           orderNumber: input.orderNumber,
         },
       },
-      success_url: `${input.successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${input.successUrl}?orderId=${input.orderId}&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: input.cancelUrl,
       locale: 'pl',
     });
