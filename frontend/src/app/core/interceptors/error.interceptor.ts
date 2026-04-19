@@ -26,6 +26,7 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
           }),
           catchError((refreshErr) => {
             isRefreshing = false;
+            authService.clearSession();
             authService.logout().subscribe();
             return throwError(() => refreshErr);
           }),
