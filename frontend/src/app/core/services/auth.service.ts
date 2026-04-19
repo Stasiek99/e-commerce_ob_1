@@ -66,13 +66,17 @@ export class AuthService {
       .pipe(tap((res) => this.setToken(res.accessToken)));
   }
 
+  clearSession() {
+    this._accessToken.set(null);
+    this._user.set(null);
+  }
+
   logout() {
     return this.http
       .post(`${environment.apiUrl}/auth/logout`, {}, { withCredentials: true })
       .pipe(
         tap(() => {
-          this._accessToken.set(null);
-          this._user.set(null);
+          this.clearSession();
           this.router.navigate(['/']);
         }),
       );

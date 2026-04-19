@@ -5,6 +5,9 @@ import {
   provideAppInitializer,
   provideZoneChangeDetection,
 } from '@angular/core';
+import { firstValueFrom, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+import { AuthService } from './core/services/auth.service';
 import {
   Router,
   provideRouter,
@@ -44,6 +47,10 @@ export const appConfig: ApplicationConfig = {
     ),
     provideAnimationsAsync(),
     NG_EVENT_PLUGINS,
+    provideAppInitializer(async () => {
+      const auth = inject(AuthService);
+      await firstValueFrom(auth.refresh().pipe(catchError(() => of(null))));
+    }),
     ...sentryProviders,
   ],
 };
