@@ -72,12 +72,10 @@ const CARRIERS = [
             <label>Telefon *</label>
             <input formControlName="phone" type="tel" />
           </div>
-          @if (!auth.isAuthenticated()) {
-            <div class="field">
-              <label>Email (do potwierdzenia zamówienia) *</label>
-              <input formControlName="guestEmail" type="email" />
-            </div>
-          }
+          <div class="field">
+            <label>Email (do potwierdzenia zamówienia) *</label>
+            <input formControlName="email" type="email" />
+          </div>
           <button type="submit" [disabled]="addressForm.invalid" class="btn-next">
             Dalej: Sposób dostawy →
           </button>
@@ -261,7 +259,7 @@ export class CheckoutPageComponent {
     postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
     city: ['', Validators.required],
     phone: ['', Validators.required],
-    guestEmail: [''],
+    email: [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
   });
 
   stepLabel(s: string): string {
@@ -301,7 +299,7 @@ export class CheckoutPageComponent {
       },
       carrierCode: carrier.code,
       inpostLockerCode: this.lockerCode() ?? undefined,
-      guestEmail: a.guestEmail || undefined,
+      guestEmail: a.email,
       termsVersion: TERMS_VERSION,
       termsAcceptedAt: new Date().toISOString(),
     };
