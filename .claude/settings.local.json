@@ -86,7 +86,16 @@
       "Bash(node -e \"const p = require\\('./backend/node_modules/@adminjs/express/package.json'\\); console.log\\(JSON.stringify\\(p.exports, null, 2\\)\\)\")",
       "Bash(node -e \"const p = require\\('e:/repos/e-commerce_ob_1/backend/node_modules/@adminjs/express/package.json'\\); console.log\\(JSON.stringify\\({exports: p.exports, type: p.type, main: p.main}, null, 2\\)\\)\")",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/admin)",
-      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")"
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "Bash(node -e \"require\\('bcrypt'\\).hash\\('admin123', 10\\).then\\(console.log\\)\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type}\" \"http://localhost:3000/admin/frontend/assets/components.bundle.js\")",
+      "Bash(kill %1)",
+      "Bash(npx kill-port *)",
+      "Read(//e/repos/e-commerce_ob_1/**)",
+      "Read(//e/repos/e-commerce_ob_1/backend/**)",
+      "Bash(curl -s -I http://localhost:3000/admin)",
+      "Bash(curl -s -I http://localhost:3000/admin/login)",
+      "Bash(curl -s http://localhost:3000/admin/login)"
     ]
   }
 }

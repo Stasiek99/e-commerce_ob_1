@@ -18,7 +18,11 @@ async function bootstrap() {
     rawBody: true,
   });
 
-  app.use(helmet());
+  // Skip helmet on /admin — AdminJS uses inline scripts/styles that strict CSP blocks.
+  app.use((req: any, res: any, next: any) => {
+    if (req.path.startsWith('/admin')) return next();
+    helmet()(req, res, next);
+  });
   app.use(cookieParser());
 
   app.useGlobalPipes(
