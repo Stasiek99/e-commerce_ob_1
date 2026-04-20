@@ -128,10 +128,10 @@ Everything in this phase MUST be done before the first real order.
 
 ### 3A. Payment Hardening (Days 1-3)
 
-- [ ] Idempotency — check `payment.status === COMPLETED` before processing duplicate webhooks
-- [ ] Reconciliation service — cron checking PENDING payments >30min against P24 API
-- [ ] Transaction isolation — wrap "confirm payment → update order → send email" in single DB transaction
-- [ ] Refund flow — P24 refund API call, stock restoration, order status → REFUNDED
+- [x] Idempotency — check `payment.status === COMPLETED` before processing duplicate webhooks
+- [x] Reconciliation service — cron checking PENDING payments >30min against Stripe API
+- [x] Transaction isolation — wrap "confirm payment → update order → send email" in single DB transaction
+- [x] Refund flow — Stripe refund API call, stock restoration, order status → REFUNDED
 
 ### 3B. Shipping Completion (Days 4-6)
 

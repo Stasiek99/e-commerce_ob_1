@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus } from '@prisma/client';
 import type Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
@@ -190,6 +191,102 @@ export class PaymentsService {
       where: { orderId },
       select: { status: true, paidAt: true },
     });
+  }
+
+  /**
+   * Reconciliation cron — runs every 10 minutes.
+   * Finds payments stuck in PENDING for >30 min and reconciles against
+   * Stripe. Catches webhook delivery failures or server restarts mid-flow.
+   */
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async reconcilePendingPayments() {
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+    const stale = await this.prisma.payment.findMany({
+      where: {
+        status: PaymentStatus.PENDING,
+        createdAt: { lt: cutoff },
+        stripeCheckoutSessionId: { not: null },
+      },
+      include: { order: { include: { items: true } } },
+    });
+
+    if (stale.length === 0) return;
+    this.logger.log(`Reconciliation: found ${stale.length} stale PENDING payment(s)`);
+
+    for (const payment of stale) {
+      try {
+        const session = await this.stripeClient.retrieveCheckoutSession(
+          payment.stripeCheckoutSessionId!,
+        );
+
+        if (session.payment_status === 'paid') {
+          await this.markSessionPaid(session);
+        } else if (session.status === 'expired') {
+          await this.handlePaymentFailure(
+            payment.id,
+            payment.orderId,
+            payment.order.items,
+            'Reconciliation: session expired',
+          );
+        }
+        // status=open means the customer may still complete payment — leave it
+      } catch (err) {
+        this.logger.error(
+          `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Issues a full Stripe refund, restores stock, and marks order as REFUNDED.
+   * Call from the admin panel or an admin-only API endpoint.
+   */
+  async refundPayment(orderId: string): Promise<void> {
+    const payment = await this.prisma.payment.findUnique({
+      where: { orderId },
+      include: { order: { include: { items: true } } },
+    });
+
+    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+
+    if (payment.status === PaymentStatus.REFUNDED) {
+      this.logger.warn(`Payment for order ${orderId} is already refunded`);
+      return;
+    }
+
+    if (payment.status !== PaymentStatus.COMPLETED) {
+      throw new Error(`Cannot refund payment with status ${payment.status}`);
+    }
+
+    if (!payment.stripePaymentIntentId) {
+      throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
+    }
+
+    await this.stripeClient.createRefund(payment.stripePaymentIntentId);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: PaymentStatus.REFUNDED },
+      });
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: OrderStatus.REFUNDED },
+      });
+
+      for (const item of payment.order.items) {
+        await tx.productVariant.update({
+          where: { id: item.productVariantId },
+          data: { stock: { increment: item.quantity } },
+        });
+      }
+    });
+
+    this.logger.log(
+      `Refund issued for order ${payment.order.orderNumber} — stock restored`,
+    );
   }
 
   /**
