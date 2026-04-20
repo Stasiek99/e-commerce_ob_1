@@ -143,7 +143,7 @@ Everything in this phase MUST be done before the first real order.
 
 ### 3C. Test Coverage Expansion (Days 7-10)
 
-- [ ] Unit tests: `AuthService`, `CartService.addItem`, `CartService.mergeGuestCart`
+- [x] Unit tests: `AuthService`, `CartService.addItem`, `CartService.mergeGuestCart`
 - [ ] Integration tests: full checkout flow (cart → order → payment → status update)
 - [ ] Frontend: `errorInterceptor` test (401 → refresh → retry)
 - [ ] Target: ≥70% branch coverage on auth/payments/orders/cart
