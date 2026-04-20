@@ -114,7 +114,7 @@ Everything in this phase MUST be done before the first real order.
 
 ### 2B. Profile & Addresses (Days 6-8)
 
-- [ ] Profile edit form (reactive form, toggle read/edit mode)
+- [x] Profile edit form (reactive form, toggle read/edit mode)
 - [ ] Address book CRUD frontend (create, edit, delete, set default)
 - [ ] Backend endpoints already exist; DTOs from Phase 0
 
