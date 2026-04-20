@@ -1,34 +1,37 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { RouterLink, ActivatedRoute } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 import { environment } from '../../../../environments/environment';
 import { SeoService } from '../../../core/services/seo.service';
-import { PricePipe } from '../../../shared/pipes/price.pipe';
+import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 
 @Component({
   selector: 'app-product-list',
   standalone: true,
-  imports: [RouterLink, PricePipe],
+  imports: [ProductCardComponent],
   template: `
     <div class="page">
       <h1>Produkty</h1>
       @if (loading()) {
-        <p>Ładowanie...</p>
+        <div class="grid">
+          @for (_ of skeletons; track $index) {
+            <div class="skeleton-card">
+              <div class="skeleton-image"></div>
+              <div class="skeleton-body">
+                <div class="skeleton-line skeleton-line--title"></div>
+                <div class="skeleton-line skeleton-line--brand"></div>
+                <div class="skeleton-line skeleton-line--price"></div>
+              </div>
+              <div class="skeleton-btn"></div>
+            </div>
+          }
+        </div>
       } @else {
         <div class="grid">
           @for (product of products(); track product.id) {
-            <a [routerLink]="['/products', product.slug]" class="card">
-              @if (product.images?.[0]) {
-                <img [src]="product.images[0].url" [alt]="product.name" />
-              }
-              <div class="card__body">
-                <h3>{{ product.name }}</h3>
-                @if (product.brand) { <p class="card__brand">{{ product.brand }}</p> }
-                <p class="card__price">od {{ product.variants?.[0]?.priceInCents | price }}</p>
-              </div>
-            </a>
+            <app-product-card [product]="product" />
           } @empty {
-            <p>Brak produktów.</p>
+            <p class="empty">Brak produktów.</p>
           }
         </div>
       }
@@ -36,15 +39,61 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
   `,
   styles: [`
     .page { padding: 32px 0; }
-    h1 { font-size: 28px; font-weight: 700; margin-bottom: 32px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 24px; }
-    .card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; transition: box-shadow 0.15s; }
-    .card:hover { box-shadow: var(--shadow-md); }
-    .card img { width: 100%; aspect-ratio: 1; object-fit: cover; }
-    .card__body { padding: 16px; }
-    .card__body h3 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
-    .card__brand { font-size: 12px; color: var(--color-secondary); margin: 0 0 8px; }
-    .card__price { font-size: 14px; font-weight: 600; color: var(--color-accent); margin: 0; }
+    h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 32px; color: var(--color-primary); }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    @media (min-width: 480px) {
+      .grid { grid-template-columns: repeat(2, 1fr); gap: 20px; }
+    }
+    @media (min-width: 768px) {
+      .grid { grid-template-columns: repeat(3, 1fr); gap: 24px; }
+    }
+    @media (min-width: 1200px) {
+      .grid { grid-template-columns: repeat(4, 1fr); }
+    }
+    .empty { color: var(--color-secondary); }
+
+    /* ── Skeleton loader ─────────────────────────────────── */
+    @keyframes shimmer {
+      0%   { background-position: -400% 0; }
+      100% { background-position:  400% 0; }
+    }
+    .skeleton-card {
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--color-surface);
+      box-shadow: 0 2px 8px rgba(0,0,0,.07);
+      display: flex;
+      flex-direction: column;
+    }
+    .skeleton-image {
+      aspect-ratio: 1;
+      background: linear-gradient(90deg, #f0ede8 25%, #e8e3dc 50%, #f0ede8 75%);
+      background-size: 400% 100%;
+      animation: shimmer 1.6s infinite;
+    }
+    .skeleton-body { padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+    .skeleton-line {
+      border-radius: 4px;
+      background: linear-gradient(90deg, #f0ede8 25%, #e8e3dc 50%, #f0ede8 75%);
+      background-size: 400% 100%;
+      animation: shimmer 1.6s infinite;
+    }
+    .skeleton-line--title  { height: 16px; width: 80%; animation-delay: .1s; }
+    .skeleton-line--brand  { height: 11px; width: 45%; animation-delay: .15s; }
+    .skeleton-line--price  { height: 14px; width: 35%; margin-top: 4px; animation-delay: .2s; }
+    .skeleton-btn {
+      margin: 8px 12px 12px;
+      height: 40px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #f0ede8 25%, #e8e3dc 50%, #f0ede8 75%);
+      background-size: 400% 100%;
+      animation: shimmer 1.6s infinite;
+      animation-delay: .25s;
+    }
   `],
 })
 export class ProductListComponent implements OnInit {
@@ -53,7 +102,8 @@ export class ProductListComponent implements OnInit {
   private readonly seo = inject(SeoService);
 
   readonly loading = signal(true);
-  readonly products = signal<any[]>([]);
+  readonly products = signal<ProductCardData[]>([]);
+  readonly skeletons = Array(8);
 
   ngOnInit() {
     const slug = this.route.snapshot.paramMap.get('slug');
