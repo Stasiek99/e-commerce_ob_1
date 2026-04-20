@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus } from '@prisma/client';
 import type Stripe from 'stripe';
 import { PaymentsService } from '../payments.service';
@@ -66,6 +67,7 @@ describe('PaymentsService', () => {
           useValue: {
             payment: {
               findUnique: jest.fn(),
+              findMany: jest.fn(),
               create: jest.fn(),
               update: jest.fn(),
             },
@@ -84,6 +86,8 @@ describe('PaymentsService', () => {
           useValue: {
             createCheckoutSession: jest.fn(),
             constructWebhookEvent: jest.fn(),
+            retrieveCheckoutSession: jest.fn(),
+            createRefund: jest.fn(),
           },
         },
         {
@@ -183,7 +187,7 @@ describe('PaymentsService', () => {
       expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
     });
 
-    it('cancels order on async_payment_failed (delayed BLIK/P24 failure)', async () => {
+    it('cancels order on checkout.session.async_payment_failed (delayed BLIK/P24 failure)', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
@@ -213,6 +217,216 @@ describe('PaymentsService', () => {
       );
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('initiatePayment', () => {
+    const mockOrderWithItems = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      snapshotEmail: 'test@example.com',
+      totalInCents: 14999,
+      shippingCostInCents: 1499,
+      carrierCode: 'INPOST',
+      items: [
+        { snapshotName: 'Dior 100ml', snapshotSku: 'DS-100', snapshotPrice: 13500, quantity: 1 },
+      ],
+    };
+
+    it('returns paymentUrl on success', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({} as any);
+
+      const result = await service.initiatePayment('order-1');
+      expect(result.paymentUrl).toBe(mockSession.url);
+      expect(prisma.payment.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ orderId: 'order-1', provider: 'stripe' }),
+        }),
+      );
+    });
+
+    it('throws when Stripe session returns no redirect URL', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue({ ...mockSession, url: null } as any);
+      prisma.payment.create.mockResolvedValue({} as any);
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(
+        'missing redirect URL',
+      );
+    });
+
+    it('handles payment_intent as an object (not a string)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue({
+        ...mockSession,
+        payment_intent: { id: 'pi_nested_id' } as any,
+      } as any);
+      prisma.payment.create.mockResolvedValue({} as any);
+
+      await service.initiatePayment('order-1');
+
+      const createCall = prisma.payment.create.mock.calls[0][0];
+      expect(createCall.data.stripePaymentIntentId).toBe('pi_nested_id');
+    });
+  });
+
+  describe('getPaymentStatus', () => {
+    it('returns status and paidAt for an order', async () => {
+      const now = new Date();
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+      });
+
+      const result = await service.getPaymentStatus('order-1');
+      expect(result).toEqual({ status: PaymentStatus.COMPLETED, paidAt: now });
+    });
+  });
+
+  describe('reconcilePendingPayments', () => {
+    const stalePayment = {
+      ...mockPayment,
+      stripeCheckoutSessionId: mockSession.id as string,
+    };
+
+    it('does nothing when no stale payments exist', async () => {
+      prisma.payment.findMany.mockResolvedValue([]);
+
+      await service.reconcilePendingPayments();
+
+      expect(stripeClient.retrieveCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('marks payment as paid when Stripe shows payment_status=paid', async () => {
+      prisma.payment.findMany.mockResolvedValue([stalePayment]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        ...mockSession,
+        payment_status: 'paid',
+        status: 'complete',
+      } as any);
+      // markSessionPaid internally calls payment.findUnique
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('cancels order when Stripe session is expired', async () => {
+      prisma.payment.findMany.mockResolvedValue([stalePayment]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        id: mockSession.id,
+        payment_status: 'unpaid',
+        status: 'expired',
+      } as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves open sessions untouched (customer may still pay)', async () => {
+      prisma.payment.findMany.mockResolvedValue([stalePayment]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        id: mockSession.id,
+        payment_status: 'unpaid',
+        status: 'open',
+      } as any);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('logs error and continues when Stripe API throws', async () => {
+      prisma.payment.findMany.mockResolvedValue([stalePayment]);
+      stripeClient.retrieveCheckoutSession.mockRejectedValue(new Error('Stripe API down'));
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+    });
+  });
+
+  describe('refundPayment', () => {
+    it('throws NotFoundException when no payment exists for the order', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('returns early (no-op) when payment is already REFUNDED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.REFUNDED,
+      });
+
+      await service.refundPayment('order-1');
+
+      expect(stripeClient.createRefund).not.toHaveBeenCalled();
+    });
+
+    it('throws when payment status is not COMPLETED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.PENDING,
+      });
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow(
+        'Cannot refund payment with status',
+      );
+    });
+
+    it('throws when there is no Stripe PaymentIntent ID', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+        stripePaymentIntentId: null,
+      });
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow(
+        'No Stripe PaymentIntent ID',
+      );
+    });
+
+    it('issues Stripe refund and restores stock inside a transaction', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+
+      const stockRestored: string[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            productVariant: {
+              update: jest.fn().mockImplementation((args: any) => {
+                stockRestored.push(args.where.id);
+              }),
+            },
+          });
+        }
+      });
+
+      await service.refundPayment('order-1');
+
+      expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123');
+      expect(stockRestored).toContain('pv-1');
     });
   });
 });

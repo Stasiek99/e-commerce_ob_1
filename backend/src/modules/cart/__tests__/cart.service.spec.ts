@@ -213,7 +213,7 @@ describe('CartService', () => {
       expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
     });
 
-    it('increments existing items in user cart during merge', async () => {
+    it('increments existing items in user cart during merge (quantity accumulation)', async () => {
       const guestCart = {
         id: 'guest-cart',
         items: [{ productVariantId: 'pv-1', quantity: 3 }],
@@ -234,6 +234,102 @@ describe('CartService', () => {
         data: { quantity: 5 },
       });
       expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+    });
+  });
+
+  describe('getOrCreate', () => {
+    it('returns existing cart when found', async () => {
+      const fullCart = {
+        ...makeCart(),
+        items: [makeCartItem(1)],
+      };
+      prisma.cart.findFirst.mockResolvedValue(fullCart);
+
+      const result = await service.getOrCreate('user-1', undefined);
+
+      expect(prisma.cart.create).not.toHaveBeenCalled();
+      expect(result.id).toBe('cart-1');
+    });
+
+    it('creates a new cart when none exists', async () => {
+      const emptyCart = { ...makeCart(), items: [] };
+      prisma.cart.findFirst.mockResolvedValue(null);
+      prisma.cart.create.mockResolvedValue(emptyCart);
+
+      const result = await service.getOrCreate(undefined, 'sess-1');
+
+      expect(prisma.cart.create).toHaveBeenCalledTimes(1);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  describe('updateItem', () => {
+    it('throws NotFoundException when cart does not exist', async () => {
+      prisma.cart.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.updateItem(undefined, 'sess-1', 'pv-1', 2),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('delegates to removeItem when quantity is 0 or less', async () => {
+      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+      prisma.cartItem.deleteMany.mockResolvedValue({});
+
+      await service.updateItem(undefined, 'sess-1', 'pv-1', 0);
+
+      expect(prisma.cartItem.deleteMany).toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when requested quantity exceeds stock', async () => {
+      prisma.cart.findFirst.mockResolvedValue(makeCart());
+      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 1 }));
+
+      await expect(
+        service.updateItem(undefined, 'sess-1', 'pv-1', 5),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('updates item quantity when stock is sufficient', async () => {
+      const cart = makeCart();
+      const cartWithItem = { ...cart, items: [makeCartItem(3)] };
+      prisma.cart.findFirst
+        .mockResolvedValueOnce(cart)
+        .mockResolvedValueOnce(cartWithItem);
+      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 10 }));
+      prisma.cartItem.updateMany.mockResolvedValue({});
+
+      await service.updateItem(undefined, 'sess-1', 'pv-1', 3);
+
+      expect(prisma.cartItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { quantity: 3 } }),
+      );
+    });
+  });
+
+  describe('removeItem', () => {
+    it('throws NotFoundException when cart does not exist', async () => {
+      prisma.cart.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.removeItem(undefined, 'sess-1', 'pv-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('deletes the item and returns the updated cart', async () => {
+      const cart = makeCart();
+      const emptyCart = { ...cart, items: [] };
+      prisma.cart.findFirst
+        .mockResolvedValueOnce(cart)      // removeItem → findCart
+        .mockResolvedValueOnce(emptyCart); // getOrCreate → findCart
+      prisma.cartItem.deleteMany.mockResolvedValue({});
+
+      const result = await service.removeItem(undefined, 'sess-1', 'pv-1');
+
+      expect(prisma.cartItem.deleteMany).toHaveBeenCalledWith({
+        where: { cartId: 'cart-1', productVariantId: 'pv-1' },
+      });
+      expect(result.items).toHaveLength(0);
     });
   });
 });

@@ -231,4 +231,69 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('refreshToken');
     });
   });
+
+  describe('findOrCreateGoogleUser', () => {
+    it('returns existing user when found by googleId', async () => {
+      usersService.findByGoogleId.mockResolvedValue(mockUser as any);
+
+      const result = await service.findOrCreateGoogleUser({
+        googleId: 'gid-1',
+        email: 'test@example.com',
+      });
+
+      expect(result).toEqual(mockUser);
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+      expect(usersService.create).not.toHaveBeenCalled();
+    });
+
+    it('links googleId to an existing email account', async () => {
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+      usersService.update.mockResolvedValue({ ...mockUser, googleId: 'gid-1' } as any);
+
+      const result = await service.findOrCreateGoogleUser({
+        googleId: 'gid-1',
+        email: 'test@example.com',
+      });
+
+      expect(usersService.update).toHaveBeenCalledWith(
+        mockUser.id,
+        expect.objectContaining({ googleId: 'gid-1', isEmailVerified: true }),
+      );
+      expect(usersService.create).not.toHaveBeenCalled();
+    });
+
+    it('creates a new user when no matching account exists', async () => {
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.create.mockResolvedValue({ ...mockUser, googleId: 'gid-new' } as any);
+
+      await service.findOrCreateGoogleUser({
+        googleId: 'gid-new',
+        email: 'new@example.com',
+        firstName: 'New',
+        lastName: 'User',
+      });
+
+      expect(usersService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          googleId: 'gid-new',
+          email: 'new@example.com',
+          isEmailVerified: true,
+        }),
+      );
+    });
+  });
+
+  describe('logout', () => {
+    it('revokes the refresh token by hash', async () => {
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.logout('some-raw-token');
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { revokedAt: expect.any(Date) } }),
+      );
+    });
+  });
 });

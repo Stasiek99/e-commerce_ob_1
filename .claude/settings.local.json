@@ -106,7 +106,8 @@
       "WebFetch(domain:www.epaka.pl)",
       "WebFetch(domain:www.jakimkurierem.pl)",
       "WebFetch(domain:www.orlenpaczka.pl)",
-      "Bash(pnpm db:generate)"
+      "Bash(pnpm db:generate)",
+      "Bash(pnpm test:cov)"
     ]
   }
 }
