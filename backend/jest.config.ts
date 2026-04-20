@@ -9,6 +9,13 @@ const config: Config = {
   },
   collectCoverageFrom: ['src/**/*.ts', '!src/main.ts'],
   coverageDirectory: './coverage',
+  coverageReporters: ['text', 'json-summary'],
+  coverageThreshold: {
+    './src/modules/auth/auth.service.ts': { branches: 70 },
+    './src/modules/cart/cart.service.ts': { branches: 70 },
+    './src/modules/orders/orders.service.ts': { branches: 70 },
+    './src/modules/payments/payments.service.ts': { branches: 70 },
+  },
   testEnvironment: 'node',
   moduleNameMapper: {
     '^@shared/(.*)$': '<rootDir>/../packages/shared-types/src/$1',

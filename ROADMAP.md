@@ -143,11 +143,11 @@ Everything in this phase MUST be done before the first real order.
 
 ### 3C. Test Coverage Expansion (Days 7-10)
 
-- [ ] Unit tests: `AuthService`, `CartService.addItem`, `CartService.mergeGuestCart`
-- [ ] Integration tests: full checkout flow (cart → order → payment → status update)
-- [ ] Frontend: `errorInterceptor` test (401 → refresh → retry)
-- [ ] Target: ≥70% branch coverage on auth/payments/orders/cart
-- [ ] Add test gate to CI pipeline
+- [x] Unit tests: `AuthService`, `CartService.addItem`, `CartService.mergeGuestCart`
+- [x] Integration tests: full checkout flow (cart → order → payment → status update)
+- [x] Frontend: `errorInterceptor` test (401 → refresh → retry)
+- [x] Target: ≥70% branch coverage on auth/payments/orders/cart
+- [x] Add test gate to CI pipeline
 
 **Exit criteria:** Webhooks idempotent · Payments reconciled · All carriers produce Supabase label URLs · Coverage ≥70%
 
