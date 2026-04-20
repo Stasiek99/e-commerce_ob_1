@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Router, RouterLink } from '@angular/router';
@@ -76,6 +76,12 @@ const CARRIERS = [
             <label>Email (do potwierdzenia zamówienia) *</label>
             <input formControlName="email" type="email" />
           </div>
+          @if (auth.currentUser()) {
+            <label class="save-addr-label">
+              <input type="checkbox" [checked]="saveAddress()" (change)="saveAddress.set($any($event.target).checked)" />
+              Zapisz adres do konta na przyszłość
+            </label>
+          }
           <button type="submit" [disabled]="addressForm.invalid" class="btn-next">
             Dalej: Sposób dostawy →
           </button>
@@ -232,9 +238,11 @@ const CARRIERS = [
     .consent-checkbox { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary); }
     .consent-label span { font-size: 13px; line-height: 1.5; color: #444; }
     .consent-label a { color: var(--color-primary); text-decoration: underline; }
+    .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 20px; cursor: pointer; }
+    .save-addr-label input { width: 15px; height: 15px; accent-color: var(--color-primary); cursor: pointer; }
   `],
 })
-export class CheckoutPageComponent {
+export class CheckoutPageComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
@@ -248,6 +256,7 @@ export class CheckoutPageComponent {
   readonly lockerCode = signal<string | null>(null);
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
+  readonly saveAddress = signal(false);
 
   readonly carriers = CARRIERS;
 
@@ -261,6 +270,27 @@ export class CheckoutPageComponent {
     phone: ['', Validators.required],
     email: [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
   });
+
+  ngOnInit() {
+    if (!this.auth.currentUser()) return;
+    this.http
+      .get<any[]>(`${environment.apiUrl}/users/me/addresses`)
+      .subscribe({
+        next: (addrs) => {
+          const def = addrs.find((a) => a.isDefault) ?? addrs[0];
+          if (!def) return;
+          this.addressForm.patchValue({
+            firstName: def.firstName,
+            lastName: def.lastName,
+            company: def.company ?? '',
+            street: def.street,
+            postalCode: def.postalCode,
+            city: def.city,
+            phone: def.phone,
+          });
+        },
+      });
+  }
 
   stepLabel(s: string): string {
     return { address: '1. Adres', carrier: '2. Dostawa', summary: '3. Płatność' }[s] ?? s;
@@ -286,36 +316,42 @@ export class CheckoutPageComponent {
     this.placing.set(true);
     const a = this.addressForm.getRawValue();
     const carrier = this.selectedCarrier()!;
-
-    const body = {
-      newAddress: {
-        firstName: a.firstName,
-        lastName: a.lastName,
-        company: a.company || undefined,
-        street: a.street,
-        city: a.city,
-        postalCode: a.postalCode,
-        phone: a.phone,
-      },
-      carrierCode: carrier.code,
-      inpostLockerCode: this.lockerCode() ?? undefined,
-      guestEmail: a.email,
-      termsVersion: TERMS_VERSION,
-      termsAcceptedAt: new Date().toISOString(),
+    const addrPayload = {
+      firstName: a.firstName!,
+      lastName: a.lastName!,
+      company: a.company || undefined,
+      street: a.street!,
+      city: a.city!,
+      postalCode: a.postalCode!,
+      phone: a.phone!,
     };
 
-    this.http
-      .post<any>(`${environment.apiUrl}/orders`, body, {
-        headers: new HttpHeaders({ 'x-session-id': this.cart.getSessionId() }),
-      })
-      .subscribe({
-        next: (res) => {
-          window.location.href = res.paymentUrl;
-        },
-        error: (err) => {
-          this.toast.error(err.error?.message ?? 'Błąd tworzenia zamówienia.');
-          this.placing.set(false);
-        },
-      });
+    const order$ = this.http.post<any>(
+      `${environment.apiUrl}/orders`,
+      {
+        newAddress: addrPayload,
+        carrierCode: carrier.code,
+        inpostLockerCode: this.lockerCode() ?? undefined,
+        guestEmail: a.email,
+        termsVersion: TERMS_VERSION,
+        termsAcceptedAt: new Date().toISOString(),
+      },
+      { headers: new HttpHeaders({ 'x-session-id': this.cart.getSessionId() }) },
+    );
+
+    order$.subscribe({
+      next: (res) => {
+        if (this.saveAddress() && this.auth.currentUser()) {
+          this.http
+            .post(`${environment.apiUrl}/users/me/addresses`, addrPayload)
+            .subscribe();
+        }
+        window.location.href = res.paymentUrl;
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Błąd tworzenia zamówienia.');
+        this.placing.set(false);
+      },
+    });
   }
 }
