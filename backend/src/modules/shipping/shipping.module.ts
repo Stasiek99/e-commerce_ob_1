@@ -5,9 +5,10 @@ import { InpostClient } from './carriers/inpost.client';
 import { DhlClient } from './carriers/dhl.client';
 import { GlsClient } from './carriers/gls.client';
 import { EmailModule } from '../email/email.module';
+import { StorageModule } from '../storage/storage.module';
 
 @Module({
-  imports: [EmailModule],
+  imports: [EmailModule, StorageModule],
   providers: [ShippingService, InpostClient, DhlClient, GlsClient],
   controllers: [ShippingController],
   exports: [ShippingService],
