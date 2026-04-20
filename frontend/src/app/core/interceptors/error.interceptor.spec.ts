@@ -1,0 +1,143 @@
+import { TestBed } from '@angular/core/testing';
+import {
+  HttpClient,
+  HttpErrorResponse,
+  provideHttpClient,
+  withInterceptors,
+} from '@angular/common/http';
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from '@angular/common/http/testing';
+import { of, throwError } from 'rxjs';
+import { Router } from '@angular/router';
+import { errorInterceptor } from './error.interceptor';
+import { AuthService } from '../services/auth.service';
+
+describe('errorInterceptor', () => {
+  let http: HttpClient;
+  let httpMock: HttpTestingController;
+  let authService: {
+    refresh: jest.Mock;
+    clearSession: jest.Mock;
+    logout: jest.Mock;
+    getAccessToken: jest.Mock;
+  };
+
+  beforeEach(() => {
+    authService = {
+      refresh: jest.fn(),
+      clearSession: jest.fn(),
+      logout: jest.fn().mockReturnValue(of(null)),
+      getAccessToken: jest.fn().mockReturnValue(null),
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(withInterceptors([errorInterceptor])),
+        provideHttpClientTesting(),
+        { provide: AuthService, useValue: authService },
+        { provide: Router, useValue: { navigate: jest.fn() } },
+      ],
+    });
+
+    http = TestBed.inject(HttpClient);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('passes non-401 errors through without touching AuthService', (done) => {
+    http.get('/api/products').subscribe({
+      error: (err: HttpErrorResponse) => {
+        expect(err.status).toBe(500);
+        expect(authService.refresh).not.toHaveBeenCalled();
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/products').flush(null, {
+      status: 500,
+      statusText: 'Server Error',
+    });
+  });
+
+  it('passes 401 on /auth/ routes through without refreshing', (done) => {
+    http.post('/api/auth/login', {}).subscribe({
+      error: (err: HttpErrorResponse) => {
+        expect(err.status).toBe(401);
+        expect(authService.refresh).not.toHaveBeenCalled();
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/auth/login').flush(null, {
+      status: 401,
+      statusText: 'Unauthorized',
+    });
+  });
+
+  it('refreshes the token and retries the original request on 401', (done) => {
+    const newToken = 'new-access-token';
+    authService.refresh.mockReturnValue(of({ accessToken: newToken }));
+
+    http.get('/api/orders').subscribe({
+      next: (data) => {
+        expect(authService.refresh).toHaveBeenCalledTimes(1);
+        expect(data).toEqual({ orders: [] });
+        done();
+      },
+    });
+
+    // First request → 401
+    httpMock.expectOne('/api/orders').flush(null, {
+      status: 401,
+      statusText: 'Unauthorized',
+    });
+
+    // Retry with new Authorization header
+    const retry = httpMock.expectOne('/api/orders');
+    expect(retry.request.headers.get('Authorization')).toBe(
+      `Bearer ${newToken}`,
+    );
+    retry.flush({ orders: [] });
+  });
+
+  it('clears session and calls logout when the refresh itself fails', (done) => {
+    authService.refresh.mockReturnValue(
+      throwError(() => new HttpErrorResponse({ status: 401 })),
+    );
+
+    http.get('/api/orders').subscribe({
+      error: () => {
+        expect(authService.clearSession).toHaveBeenCalledTimes(1);
+        expect(authService.logout).toHaveBeenCalledTimes(1);
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/orders').flush(null, {
+      status: 401,
+      statusText: 'Unauthorized',
+    });
+  });
+
+  it('re-throws the refresh error so callers can react', (done) => {
+    const refreshError = new HttpErrorResponse({ status: 401 });
+    authService.refresh.mockReturnValue(throwError(() => refreshError));
+
+    http.get('/api/orders').subscribe({
+      error: (err) => {
+        expect(err).toBe(refreshError);
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/orders').flush(null, {
+      status: 401,
+      statusText: 'Unauthorized',
+    });
+  });
+});

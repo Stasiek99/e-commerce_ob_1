@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/out-tsc",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "types": ["jest"],
+    "paths": {
+      "@shared/*": ["../packages/shared-types/src/*"]
+    }
+  },
+  "include": ["src/**/*.spec.ts", "src/**/*.d.ts", "setup-jest.ts"]
+}
