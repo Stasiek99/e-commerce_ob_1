@@ -116,7 +116,7 @@ Everything in this phase MUST be done before the first real order.
 
 - [x] Profile edit form (reactive form, toggle read/edit mode)
 - [x] Address book CRUD frontend (create, edit, delete, set default)
-- [ ] Backend endpoints already exist; DTOs from Phase 0
+- [x] Backend endpoints already exist; DTOs from Phase 0
 
 **Exit criteria:** Admin can log in · View/edit orders · Manage products · Users can edit profile · Manage addresses
 

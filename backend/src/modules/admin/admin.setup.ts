@@ -31,12 +31,53 @@ export async function setupAdmin(
 
   AdminJS.registerAdapter({ Database, Resource });
 
+  const readOnly = {
+    actions: {
+      new: { isAccessible: false },
+      edit: { isAccessible: false },
+      delete: { isAccessible: false },
+    },
+  };
+
   const admin = new AdminJS({
     rootPath: '/admin',
     resources: [
+      // ── Catalog ──────────────────────────────────────────────────────
+      {
+        resource: { model: getModelByName('Category'), client: prisma },
+        options: {
+          navigation: { name: 'Katalog' },
+        },
+      },
+      {
+        resource: { model: getModelByName('Product'), client: prisma },
+        options: {
+          navigation: { name: 'Katalog' },
+          properties: {
+            notes: { isVisible: { list: false, show: true, edit: true, filter: false } },
+            description: { type: 'textarea' },
+            shortDescription: { type: 'textarea' },
+          },
+        },
+      },
+      {
+        resource: { model: getModelByName('ProductVariant'), client: prisma },
+        options: {
+          navigation: { name: 'Katalog' },
+        },
+      },
+      {
+        resource: { model: getModelByName('ProductImage'), client: prisma },
+        options: {
+          navigation: { name: 'Katalog' },
+          ...readOnly,
+        },
+      },
+      // ── Orders ───────────────────────────────────────────────────────
       {
         resource: { model: getModelByName('Order'), client: prisma },
         options: {
+          navigation: { name: 'Zamówienia' },
           actions: {
             new: { isAccessible: false },
             delete: { isAccessible: false },
@@ -46,49 +87,45 @@ export async function setupAdmin(
       {
         resource: { model: getModelByName('OrderItem'), client: prisma },
         options: {
+          navigation: { name: 'Zamówienia' },
+          ...readOnly,
+        },
+      },
+      {
+        resource: { model: getModelByName('Address'), client: prisma },
+        options: {
+          navigation: { name: 'Zamówienia' },
+          ...readOnly,
+        },
+      },
+      {
+        resource: { model: getModelByName('Payment'), client: prisma },
+        options: {
+          navigation: { name: 'Zamówienia' },
+          ...readOnly,
+        },
+      },
+      {
+        resource: { model: getModelByName('Shipment'), client: prisma },
+        options: {
+          navigation: { name: 'Zamówienia' },
           actions: {
             new: { isAccessible: false },
-            edit: { isAccessible: false },
             delete: { isAccessible: false },
           },
         },
       },
+      // ── Users ────────────────────────────────────────────────────────
       {
         resource: { model: getModelByName('User'), client: prisma },
         options: {
+          navigation: { name: 'Użytkownicy' },
           properties: {
             passwordHash: { isVisible: false },
           },
           actions: {
             new: { isAccessible: false },
             edit: { isAccessible: false },
-            delete: { isAccessible: false },
-          },
-        },
-      },
-      {
-        resource: { model: getModelByName('Product'), client: prisma },
-        options: {},
-      },
-      {
-        resource: { model: getModelByName('ProductVariant'), client: prisma },
-        options: {},
-      },
-      {
-        resource: { model: getModelByName('Payment'), client: prisma },
-        options: {
-          actions: {
-            new: { isAccessible: false },
-            edit: { isAccessible: false },
-            delete: { isAccessible: false },
-          },
-        },
-      },
-      {
-        resource: { model: getModelByName('Shipment'), client: prisma },
-        options: {
-          actions: {
-            new: { isAccessible: false },
             delete: { isAccessible: false },
           },
         },
