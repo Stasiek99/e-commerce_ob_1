@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 
-// AdminJS setup will be configured here in Phase 3
-// Requires: adminjs @adminjs/nestjs @adminjs/prisma
-
+// AdminJS is mounted as Express middleware in main.ts via setupAdmin().
+// Dynamic import() is used there to load the ESM-only @adminjs/* packages.
 @Module({})
 export class AdminModule {}

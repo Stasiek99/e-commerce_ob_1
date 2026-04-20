@@ -16,6 +16,7 @@
     "test:cov": "jest --coverage --passWithNoTests"
   },
   "dependencies": {
+    "@adminjs/express": "^6.1.1",
     "@adminjs/nestjs": "^7.0.0",
     "@adminjs/prisma": "^5.0.4",
     "@adminjs/themes": "^1.0.1",

@@ -8,6 +8,8 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { setupAdmin } from './modules/admin/admin.setup';
+import { PrismaService } from './modules/prisma/prisma.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -32,6 +34,9 @@ async function bootstrap() {
     origin: process.env.FRONTEND_URL ?? 'http://localhost:4200',
     credentials: true,
   });
+
+  const prisma = app.get(PrismaService);
+  await setupAdmin(app, prisma);
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

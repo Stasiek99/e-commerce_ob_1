@@ -18,7 +18,8 @@
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@shared/*": ["../packages/shared-types/src/*"]
+      "@shared/*": ["../packages/shared-types/src/*"],
+      "@adminjs/prisma": ["./node_modules/@adminjs/prisma/lib/index"]
     }
   }
 }

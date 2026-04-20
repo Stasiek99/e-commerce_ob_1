@@ -98,6 +98,12 @@ export const envValidationSchema = Joi.object({
   SENTRY_PROFILES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
 
   // ── Admin ──
-  ADMIN_DEFAULT_EMAIL: Joi.string().email().optional(),
-  ADMIN_DEFAULT_PASSWORD: Joi.string().optional(),
+  // ADMIN_DEFAULT_PASSWORD must be a bcrypt hash (bcrypt.hash('yourpassword', 10)).
+  ADMIN_DEFAULT_EMAIL: requiredInProd(Joi.string().email()),
+  ADMIN_DEFAULT_PASSWORD: requiredInProd(Joi.string().min(10)),
+  // Separate secret for signing the admin session cookie. Falls back to
+  // ADMIN_DEFAULT_PASSWORD in dev, but should be set explicitly in prod.
+  ADMIN_SESSION_SECRET: requiredInProd(Joi.string().min(16)),
+  // Secret used by GET /health/debug-sentry to guard the intentional-error endpoint.
+  DEBUG_SENTRY_SECRET: Joi.string().optional(),
 }).options({ allowUnknown: true });
