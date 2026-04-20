@@ -278,6 +278,7 @@ export class CheckoutPageComponent implements OnInit {
   private readonly fb = inject(FormBuilder);
   private readonly toast = inject(ToastService);
 
+
   readonly cart = inject(CartService);
   readonly auth = inject(AuthService);
 
