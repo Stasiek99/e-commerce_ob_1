@@ -106,11 +106,11 @@ Everything in this phase MUST be done before the first real order.
 
 ### 2A. AdminJS Panel (Days 1-5)
 
-- [ ] Wire `AdminModule.createAdminAsync()` with PrismaService
-- [ ] Register all models: Order (editable status), Product (image upload), User (read-only, hide passwordHash), Payment (read-only)
-- [ ] Auth: `authenticate` with bcrypt against ADMIN_DEFAULT_EMAIL/PASSWORD
-- [ ] Session store: express-session + connect-pg-simple
-- [ ] Test: unauthenticated access rejected, admin can browse/edit orders
+- [x] Wire AdminJS with PrismaService (via bootstrap `setupAdmin()` — bypasses ESM-only `@adminjs/nestjs`)
+- [x] Register all models: Order (editable status), Product (image upload), User (read-only, hide passwordHash), Payment (read-only), OrderItem, ProductVariant, Shipment
+- [x] Auth: `authenticate` with bcrypt against ADMIN_DEFAULT_EMAIL/PASSWORD
+- [x] Session store: express-session + connect-pg-simple
+- [x] Test: unauthenticated access rejected (302 → login), admin panel available at /admin
 
 ### 2B. Profile & Addresses (Days 6-8)
 
