@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { HealthController } from './health.controller';
 import { envValidationSchema } from './config.validation';
@@ -30,6 +31,7 @@ import { AdminModule } from './modules/admin/admin.module';
       ttl: 60000,  // 1 minute window
       limit: 60,   // 60 requests/min default
     }]),
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
     UsersModule,

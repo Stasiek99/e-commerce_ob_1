@@ -95,7 +95,24 @@
       "Read(//e/repos/e-commerce_ob_1/backend/**)",
       "Bash(curl -s -I http://localhost:3000/admin)",
       "Bash(curl -s -I http://localhost:3000/admin/login)",
-      "Bash(curl -s http://localhost:3000/admin/login)"
+      "Bash(curl -s http://localhost:3000/admin/login)",
+      "WebSearch",
+      "WebFetch(domain:dokumentacja-inpost.atlassian.net)",
+      "WebFetch(domain:www.dhl.com)",
+      "WebFetch(domain:developer.gls-poland.com)",
+      "WebFetch(domain:biznestime.pl)",
+      "WebFetch(domain:inpost.pl)",
+      "WebFetch(domain:tania-paczka.net)",
+      "WebFetch(domain:www.epaka.pl)",
+      "WebFetch(domain:www.jakimkurierem.pl)",
+      "WebFetch(domain:www.orlenpaczka.pl)",
+      "Bash(pnpm db:generate)",
+      "Bash(pnpm test:cov)",
+      "Bash(node -e ' *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(node -e \"const cov = require\\('e:/repos/e-commerce_ob_1/backend/coverage/coverage-summary.json'\\); console.log\\(Object.keys\\(cov\\).slice\\(0,3\\)\\);\")",
+      "Bash(node --input-type=module)",
+      "Bash(node -e \"var cov=require\\('e:/repos/e-commerce_ob_1/backend/coverage/coverage-summary.json'\\);var t='src/modules/auth/auth.service.ts';var k=Object.keys\\(cov\\).find\\(function\\(k\\){return k.replace\\(/\\\\\\\\\\\\\\\\/g,'/'\\).endsWith\\(t\\);}\\);console.log\\('found:',k\\);\")"
     ]
   }
 }

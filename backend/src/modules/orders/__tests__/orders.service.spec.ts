@@ -9,7 +9,7 @@ import { EmailService } from '../../email/email.service';
 
 describe('OrdersService', () => {
   let service: OrdersService;
-  let prisma: jest.Mocked<PrismaService>;
+  let prisma: any;
   let cartService: jest.Mocked<CartService>;
   let paymentsService: jest.Mocked<PaymentsService>;
 
@@ -61,7 +61,7 @@ describe('OrdersService', () => {
           provide: PrismaService,
           useValue: {
             address: { findFirst: jest.fn() },
-            order: { create: jest.fn(), findMany: jest.fn() },
+            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn() },
@@ -315,6 +315,162 @@ describe('OrdersService', () => {
       });
 
       expect(cartCleared).toBe(true);
+    });
+
+    it('resolves address by saved addressId', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.address.findFirst.mockResolvedValue({
+        firstName: 'Jan', lastName: 'K', street: 'ul. X 1',
+        city: 'Kraków', postalCode: '30-001', country: 'PL', phone: '+48111111111',
+      });
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        addressId: 'addr-1',
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(prisma.address.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 'addr-1' }) }),
+      );
+    });
+
+    it('throws NotFoundException when addressId does not exist', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.address.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          addressId: 'nonexistent-addr',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('falls back to sessionId cart when userId cart is empty', async () => {
+      const emptyCart = { id: 'cart-user', items: [], totalInCents: 0, itemCount: 0 };
+      const sessionCart = mockCart;
+
+      cartService.getOrCreate
+        .mockResolvedValueOnce(emptyCart as any)    // userId cart — empty
+        .mockResolvedValueOnce(sessionCart as any)  // sessionId cart — has items
+        .mockResolvedValueOnce(sessionCart as any); // getOrCreate after add
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      const result = await service.createFromCart(
+        'user-1', 'sess-1', 'test@example.com',
+        { newAddress: mockAddress, carrierCode: CarrierCode.DHL },
+      );
+
+      expect(result.orderId).toBe('o-1');
+    });
+
+    it('proceeds gracefully when no cartRecord found inside transaction', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+            update: jest.fn(),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
+          cartItem: { deleteMany: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      const result = await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(result.orderId).toBe('o-1');
+    });
+  });
+
+  describe('findAllForUser', () => {
+    it('returns all orders for a user', async () => {
+      const orders = [{ id: 'o-1' }, { id: 'o-2' }];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.findAllForUser('user-1');
+
+      expect(result).toEqual(orders);
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'user-1' } }),
+      );
+    });
+  });
+
+  describe('findOneForUser', () => {
+    it('returns the order when found', async () => {
+      const order = { id: 'o-1', userId: 'user-1' };
+      prisma.order.findFirst.mockResolvedValue(order);
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result).toEqual(order);
+    });
+
+    it('throws NotFoundException when order does not belong to user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.findOneForUser('o-1', 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('updateStatus', () => {
+    it('updates the order status', async () => {
+      const updated = { id: 'o-1', status: OrderStatus.PROCESSING };
+      prisma.order.update.mockResolvedValue(updated);
+
+      const result = await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(result).toEqual(updated);
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o-1' },
+        data: { status: OrderStatus.PROCESSING },
+      });
     });
   });
 

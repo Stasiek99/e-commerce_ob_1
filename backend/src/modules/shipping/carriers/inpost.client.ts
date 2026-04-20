@@ -12,7 +12,6 @@ interface InpostShipmentPayload {
 interface InpostShipmentResult {
   id: string;
   trackingNumber: string;
-  labelUrl: string;
 }
 
 interface MockShipment {
@@ -92,27 +91,28 @@ export class InpostClient {
     const shipment = response.data;
     this.logger.log(`InPost shipment created: ${shipment.id}`);
 
-    const labelUrl = await this.getLabelUrl(shipment.id);
-
     return {
       id: shipment.id,
       trackingNumber: shipment.tracking_number,
-      labelUrl,
     };
   }
 
-  async getLabelUrl(shipmentId: string): Promise<string> {
+  /**
+   * Downloads the shipment label PDF from InPost API.
+   * Returns null in mock mode (no real PDF available).
+   */
+  async fetchLabelPdf(shipmentId: string): Promise<Buffer | null> {
     if (this.mockEnabled) {
-      return this.mockGetLabelUrl(shipmentId);
+      this.logger.log(`[MOCK] Skipping PDF download for ${shipmentId}`);
+      return null;
     }
 
     const response = await this.client.get<ArrayBuffer>(
       `/organizations/${this.organizationId}/shipments/${shipmentId}/label`,
       { responseType: 'arraybuffer', headers: { Accept: 'application/pdf' } },
     );
-    // In production: upload PDF to Supabase Storage and return URL
-    // For now return a placeholder to be implemented in Phase 5
-    return `label://${shipmentId}`;
+
+    return Buffer.from(response.data);
   }
 
   getTrackingUrl(trackingNumber: string): string {
@@ -137,24 +137,6 @@ export class InpostClient {
       `[MOCK] InPost shipment created: id=${shipmentId}, tracking=${trackingNumber}, locker=${data.targetLockerCode}`,
     );
 
-    return {
-      id: shipmentId,
-      trackingNumber,
-      labelUrl: this.mockGetLabelUrl(shipmentId),
-    };
-  }
-
-  private mockGetLabelUrl(shipmentId: string): string {
-    const shipment = this.mockShipments.get(shipmentId);
-
-    if (!shipment) {
-      this.logger.warn(`[MOCK] Shipment not found: ${shipmentId}`);
-    }
-
-    this.logger.log(
-      `[MOCK] Label URL generated: mock-label-${shipmentId}.pdf`,
-    );
-
-    return `mock-label-${shipmentId}.pdf`;
+    return { id: shipmentId, trackingNumber };
   }
 }

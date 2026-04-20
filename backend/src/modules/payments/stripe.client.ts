@@ -91,6 +91,14 @@ export class StripeClient {
    * Requires the untouched request body — do NOT pass a re-serialized
    * JSON object, Stripe's HMAC will fail.
    */
+  async retrieveCheckoutSession(sessionId: string): Promise<Stripe.Checkout.Session> {
+    return this.stripe.checkout.sessions.retrieve(sessionId);
+  }
+
+  async createRefund(paymentIntentId: string): Promise<Stripe.Refund> {
+    return this.stripe.refunds.create({ payment_intent: paymentIntentId });
+  }
+
   constructWebhookEvent(rawBody: Buffer, signatureHeader: string): Stripe.Event {
     if (!this.webhookSecret) {
       throw new Error(

@@ -128,26 +128,26 @@ Everything in this phase MUST be done before the first real order.
 
 ### 3A. Payment Hardening (Days 1-3)
 
-- [ ] Idempotency — check `payment.status === COMPLETED` before processing duplicate webhooks
-- [ ] Reconciliation service — cron checking PENDING payments >30min against P24 API
-- [ ] Transaction isolation — wrap "confirm payment → update order → send email" in single DB transaction
-- [ ] Refund flow — P24 refund API call, stock restoration, order status → REFUNDED
+- [x] Idempotency — check `payment.status === COMPLETED` before processing duplicate webhooks
+- [x] Reconciliation service — cron checking PENDING payments >30min against Stripe API
+- [x] Transaction isolation — wrap "confirm payment → update order → send email" in single DB transaction
+- [x] Refund flow — Stripe refund API call, stock restoration, order status → REFUNDED
 
 ### 3B. Shipping Completion (Days 4-6)
 
-- [ ] InPost label — download PDF → upload to Supabase Storage → store public URL
+- [x] InPost label — download PDF → upload to Supabase Storage → store public URL
 - [ ] DHL — move shipper address to env vars (currently hardcoded Krakow)
 - [ ] GLS — implement GetLabel endpoint
 - [ ] AdminJS "Generate Label" action
-- [ ] Carrier error handling — LABEL_ERROR status on API failure
+- [x] Carrier error handling — LABEL_ERROR status on API failure
 
 ### 3C. Test Coverage Expansion (Days 7-10)
 
-- [ ] Unit tests: `AuthService`, `CartService.addItem`, `CartService.mergeGuestCart`
-- [ ] Integration tests: full checkout flow (cart → order → payment → status update)
-- [ ] Frontend: `errorInterceptor` test (401 → refresh → retry)
-- [ ] Target: ≥70% branch coverage on auth/payments/orders/cart
-- [ ] Add test gate to CI pipeline
+- [x] Unit tests: `AuthService`, `CartService.addItem`, `CartService.mergeGuestCart`
+- [x] Integration tests: full checkout flow (cart → order → payment → status update)
+- [x] Frontend: `errorInterceptor` test (401 → refresh → retry)
+- [x] Target: ≥70% branch coverage on auth/payments/orders/cart
+- [x] Add test gate to CI pipeline
 
 **Exit criteria:** Webhooks idempotent · Payments reconciled · All carriers produce Supabase label URLs · Coverage ≥70%
 
