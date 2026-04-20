@@ -71,4 +71,11 @@ export class PaymentsController {
   getStatus(@Param('orderId') orderId: string) {
     return this.paymentsService.getPaymentStatus(orderId);
   }
+
+  @Post(':orderId/refund')
+  @HttpCode(HttpStatus.OK)
+  async refund(@Param('orderId') orderId: string) {
+    await this.paymentsService.refundPayment(orderId);
+    return { refunded: true };
+  }
 }
