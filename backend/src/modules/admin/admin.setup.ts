@@ -19,7 +19,6 @@ export async function setupAdmin(
   if (!adminEmail || !adminPassword) {
     logger.warn('ADMIN_DEFAULT_EMAIL / ADMIN_DEFAULT_PASSWORD not set — /admin is UNPROTECTED');
   }
-  logger.log(`Admin email: ${adminEmail}, password hash prefix: ${adminPassword?.substring(0, 7)}`);
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
   // TypeScript compiles `await import()` to `require()` in commonjs mode, which
