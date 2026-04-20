@@ -40,6 +40,26 @@ const CARRIERS = [
       @if (step() === 'address') {
         <form [formGroup]="addressForm" (ngSubmit)="goToCarrier()" class="form-card">
           <h2>Adres dostawy</h2>
+
+          @if (savedAddresses().length > 0) {
+            <div class="addr-picker">
+              @for (addr of savedAddresses(); track addr.id) {
+                <button
+                  type="button"
+                  class="addr-pill"
+                  [class.addr-pill--active]="selectedSavedId() === addr.id"
+                  (click)="selectSavedAddress(addr)">
+                  <span class="addr-pill__name">{{ addr.firstName }} {{ addr.lastName }}</span>
+                  <span class="addr-pill__city">{{ addr.city }}</span>
+                  @if (addr.isDefault) { <span class="addr-pill__badge">★</span> }
+                </button>
+              }
+              <button type="button" class="addr-pill addr-pill--new" [class.addr-pill--active]="selectedSavedId() === null" (click)="useNewAddress()">
+                + Nowy adres
+              </button>
+            </div>
+          }
+
           <div class="row">
             <div class="field">
               <label>Imię *</label>
@@ -76,12 +96,14 @@ const CARRIERS = [
             <label>Email (do potwierdzenia zamówienia) *</label>
             <input formControlName="email" type="email" />
           </div>
-          @if (auth.currentUser()) {
+
+          @if (auth.currentUser() && selectedSavedId() === null) {
             <label class="save-addr-label">
               <input type="checkbox" [checked]="saveAddress()" (change)="saveAddress.set($any($event.target).checked)" />
-              Zapisz adres do konta na przyszłość
+              {{ savedAddresses().length === 0 ? 'Zapisz jako domyślny adres dostawy' : 'Zapisz adres w adresach dostawy' }}
             </label>
           }
+
           <button type="submit" [disabled]="addressForm.invalid" class="btn-next">
             Dalej: Sposób dostawy →
           </button>
@@ -240,6 +262,14 @@ const CARRIERS = [
     .consent-label a { color: var(--color-primary); text-decoration: underline; }
     .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 20px; cursor: pointer; }
     .save-addr-label input { width: 15px; height: 15px; accent-color: var(--color-primary); cursor: pointer; }
+    .addr-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--color-border); }
+    .addr-pill { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px 12px; cursor: pointer; font-size: 12px; transition: border-color 0.15s; }
+    .addr-pill:hover { border-color: var(--color-primary); }
+    .addr-pill--active { border-color: var(--color-primary); background: #f0f0ff; }
+    .addr-pill--new { color: var(--color-primary); font-weight: 600; justify-content: center; }
+    .addr-pill__name { font-weight: 600; font-size: 13px; }
+    .addr-pill__city { color: var(--color-secondary); }
+    .addr-pill__badge { color: var(--color-primary); font-size: 10px; }
   `],
 })
 export class CheckoutPageComponent implements OnInit {
@@ -257,6 +287,8 @@ export class CheckoutPageComponent implements OnInit {
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
   readonly saveAddress = signal(false);
+  readonly savedAddresses = signal<any[]>([]);
+  readonly selectedSavedId = signal<string | null>(null);
 
   readonly carriers = CARRIERS;
 
@@ -277,19 +309,29 @@ export class CheckoutPageComponent implements OnInit {
       .get<any[]>(`${environment.apiUrl}/users/me/addresses`)
       .subscribe({
         next: (addrs) => {
+          this.savedAddresses.set(addrs);
           const def = addrs.find((a) => a.isDefault) ?? addrs[0];
-          if (!def) return;
-          this.addressForm.patchValue({
-            firstName: def.firstName,
-            lastName: def.lastName,
-            company: def.company ?? '',
-            street: def.street,
-            postalCode: def.postalCode,
-            city: def.city,
-            phone: def.phone,
-          });
+          if (def) this.selectSavedAddress(def);
         },
       });
+  }
+
+  selectSavedAddress(addr: any) {
+    this.selectedSavedId.set(addr.id);
+    this.addressForm.patchValue({
+      firstName: addr.firstName,
+      lastName: addr.lastName,
+      company: addr.company ?? '',
+      street: addr.street,
+      postalCode: addr.postalCode,
+      city: addr.city,
+      phone: addr.phone,
+    });
+  }
+
+  useNewAddress() {
+    this.selectedSavedId.set(null);
+    this.addressForm.reset({ email: this.auth.currentUser()?.email ?? '' });
   }
 
   stepLabel(s: string): string {
@@ -341,9 +383,10 @@ export class CheckoutPageComponent implements OnInit {
 
     order$.subscribe({
       next: (res) => {
-        if (this.saveAddress() && this.auth.currentUser()) {
+        if (this.saveAddress() && this.auth.currentUser() && this.selectedSavedId() === null) {
+          const isDefault = this.savedAddresses().length === 0;
           this.http
-            .post(`${environment.apiUrl}/users/me/addresses`, addrPayload)
+            .post(`${environment.apiUrl}/users/me/addresses`, { ...addrPayload, isDefault })
             .subscribe();
         }
         window.location.href = res.paymentUrl;
