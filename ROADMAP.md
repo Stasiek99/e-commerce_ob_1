@@ -147,7 +147,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] Integration tests: full checkout flow (cart → order → payment → status update)
 - [x] Frontend: `errorInterceptor` test (401 → refresh → retry)
 - [x] Target: ≥70% branch coverage on auth/payments/orders/cart
-- [ ] Add test gate to CI pipeline
+- [x] Add test gate to CI pipeline
 
 **Exit criteria:** Webhooks idempotent · Payments reconciled · All carriers produce Supabase label URLs · Coverage ≥70%
 
