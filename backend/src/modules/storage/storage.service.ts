@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const PRODUCT_IMAGES_BUCKET = 'product-images';
+const SHIPPING_LABELS_BUCKET = 'shipping-labels';
 
 @Injectable()
 export class StorageService {
@@ -36,6 +37,22 @@ export class StorageService {
       .getPublicUrl(path);
 
     return { url: data.publicUrl, path };
+  }
+
+  async uploadShippingLabel(pdfBuffer: Buffer, filename: string): Promise<string> {
+    const path = `labels/${filename}`;
+
+    const { error } = await this.supabase.storage
+      .from(SHIPPING_LABELS_BUCKET)
+      .upload(path, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+
+    if (error) throw new Error(`Label upload failed: ${error.message}`);
+
+    const { data } = this.supabase.storage
+      .from(SHIPPING_LABELS_BUCKET)
+      .getPublicUrl(path);
+
+    return data.publicUrl;
   }
 
   async deleteFile(bucket: string, path: string) {

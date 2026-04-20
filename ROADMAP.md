@@ -135,11 +135,11 @@ Everything in this phase MUST be done before the first real order.
 
 ### 3B. Shipping Completion (Days 4-6)
 
-- [ ] InPost label — download PDF → upload to Supabase Storage → store public URL
+- [x] InPost label — download PDF → upload to Supabase Storage → store public URL
 - [ ] DHL — move shipper address to env vars (currently hardcoded Krakow)
 - [ ] GLS — implement GetLabel endpoint
 - [ ] AdminJS "Generate Label" action
-- [ ] Carrier error handling — LABEL_ERROR status on API failure
+- [x] Carrier error handling — LABEL_ERROR status on API failure
 
 ### 3C. Test Coverage Expansion (Days 7-10)
 
