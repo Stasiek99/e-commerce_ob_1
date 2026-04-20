@@ -1,16 +1,23 @@
-import { Component } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Component, inject } from '@angular/core';
+import { RouterLink, ActivatedRoute } from '@angular/router';
+import { AsyncPipe } from '@angular/common';
+import { map } from 'rxjs/operators';
 
 @Component({
   selector: 'app-home',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, AsyncPipe],
   template: `
     <section class="hero">
       <h1>Odkryj świat wyjątkowych zapachów</h1>
       <p>Ekskluzywne perfumy i dyfuzory do Twojego domu</p>
       <a routerLink="/products" class="btn-primary">Przeglądaj kolekcję</a>
     </section>
+    @if (showDebug$ | async) {
+      <div class="debug-sentry">
+        <button (click)="throwFrontendError()">Throw frontend error (Sentry)</button>
+      </div>
+    }
   `,
   styles: [`
     .hero {
@@ -29,6 +36,31 @@ import { RouterLink } from '@angular/router';
       transition: opacity 0.15s;
     }
     .btn-primary:hover { opacity: 0.85; }
+    .debug-sentry {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      z-index: 9999;
+    }
+    .debug-sentry button {
+      background: #e11d48;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
   `],
 })
-export class HomeComponent {}
+export class HomeComponent {
+  private route = inject(ActivatedRoute);
+
+  showDebug$ = this.route.queryParamMap.pipe(
+    map(params => params.get('debug') === 'sentry'),
+  );
+
+  throwFrontendError() {
+    throw new Error('Sentry frontend test — intentional error');
+  }
+}
