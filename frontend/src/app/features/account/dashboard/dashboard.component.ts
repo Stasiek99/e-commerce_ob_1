@@ -60,14 +60,14 @@ import { AuthService } from '../../../core/services/auth.service';
       gap: 8px;
       padding: 28px 24px;
       background: var(--color-surface);
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+      border-radius: var(--border-radius-md);
+      box-shadow: var(--shadow-sm);
       color: inherit;
       text-decoration: none;
       transition: box-shadow 0.2s ease, transform 0.2s ease;
     }
     .card:hover {
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.13);
+      box-shadow: var(--shadow-hover);
       transform: translateY(-2px);
     }
     .card:hover .card__icon { color: var(--color-accent); }

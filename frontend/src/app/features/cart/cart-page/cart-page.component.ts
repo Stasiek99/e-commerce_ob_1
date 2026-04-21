@@ -80,18 +80,18 @@ import { TuiCell } from "@taiga-ui/layout";
 
     .cart-layout { display: grid; grid-template-columns: 1fr 320px; gap: 32px; align-items: start; }
 
-    .cart-items { background: var(--color-surface); border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.07); overflow: hidden; }
+    .cart-items { background: var(--color-surface); border-radius: var(--border-radius-md); box-shadow: var(--shadow-sm); overflow: hidden; }
     .cart-cell { border-bottom: 1px solid var(--color-border); }
     .cart-cell:last-child { border-bottom: none; }
-    .cart-cell__img { width: 3.5rem; height: 3.5rem; object-fit: cover; border-radius: 0.5rem; flex-shrink: 0; }
+    .cart-cell__img { width: 3.5rem; height: 3.5rem; object-fit: cover; border-radius: var(--border-radius-md); flex-shrink: 0; }
     .cart-cell__remove { background: none; border: none; cursor: pointer; font-size: 16px; color: var(--color-secondary); padding: 4px; transition: color 0.15s; }
     .cart-cell__remove:hover { color: var(--color-primary); }
 
     /* Summary card — matches product card visual style */
     .summary-card {
       background: var(--color-surface);
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,.07);
+      border-radius: var(--border-radius-md);
+      box-shadow: var(--shadow-sm);
       padding: 24px;
     }
     .summary-card__title { font-size: 18px; font-weight: 700; margin: 0 0 20px; }

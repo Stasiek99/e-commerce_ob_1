@@ -34,11 +34,11 @@ import { TuiButton } from '@taiga-ui/core';
       z-index: 9999;
     }
     .debug-sentry button {
-      background: #e11d48;
+      background: var(--color-error);
       color: white;
       border: none;
       padding: 10px 16px;
-      border-radius: 6px;
+      border-radius: var(--border-radius-md);
       cursor: pointer;
       font-size: 13px;
     }

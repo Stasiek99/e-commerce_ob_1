@@ -7,15 +7,15 @@
   flex-direction: column;
   height: 100%;
   background: var(--color-surface);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
   transition:
     box-shadow 0.2s ease,
     transform 0.2s ease;
 
   &:hover {
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.13);
+    box-shadow: var(--shadow-hover);
     transform: translateY(-2px);
   }
 }
@@ -88,13 +88,13 @@
 
   &--active {
     opacity: 1;
-    color: #e63946;
+    color: var(--color-error);
     background: rgba(255, 255, 255, 0.95);
   }
 
   &:hover {
     transform: scale(1.15);
-    color: #e63946;
+    color: var(--color-error);
   }
 
   tui-icon {

@@ -50,8 +50,8 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
 
     .orders-list {
       background: var(--color-surface);
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+      border-radius: var(--border-radius-md);
+      box-shadow: var(--shadow-sm);
       overflow: hidden;
     }
 
@@ -63,13 +63,13 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
       border-radius: 999px;
       font-size: 11px;
       font-weight: 600;
-      background: #e5e7eb;
+      background: var(--color-border);
       white-space: nowrap;
     }
-    .status--paid      { background: #d1fae5; color: #065f46; }
-    .status--pending_payment { background: #fef3c7; color: #92400e; }
-    .status--cancelled { background: #fee2e2; color: #991b1b; }
-    .status--shipped   { background: #dbeafe; color: #1e40af; }
+    .status--paid            { background: var(--color-status-paid-bg);      color: var(--color-status-paid-text); }
+    .status--pending_payment { background: var(--color-status-pending-bg);   color: var(--color-status-pending-text); }
+    .status--cancelled       { background: var(--color-status-cancelled-bg); color: var(--color-status-cancelled-text); }
+    .status--shipped         { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
 
     .order-total { font-size: 14px; white-space: nowrap; }
 

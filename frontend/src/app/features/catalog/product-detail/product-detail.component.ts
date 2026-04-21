@@ -181,11 +181,11 @@ const CATEGORY_LABELS: Record<string, string> = {
 
     /* Gallery */
     .detail__gallery { position: sticky; top: 80px; }
-    .detail__main-img { width: 100%; border-radius: var(--radius-md); display: block; }
+    .detail__main-img { width: 100%; border-radius: var(--border-radius-md); display: block; }
     .detail__thumbs { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
     .detail__thumb {
       width: 72px; height: 72px; object-fit: cover;
-      border-radius: var(--radius-sm);
+      border-radius: var(--border-radius-sm);
       border: 2px solid var(--color-border);
       cursor: pointer; transition: border-color 0.15s;
     }
@@ -209,14 +209,14 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
-    .detail__stock--ok { color: #22863a; }
+    .detail__stock--ok { color: var(--color-success); }
     .detail__stock--out { color: var(--color-error); }
 
     /* CTA row */
     .detail__cta { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
     .detail__add-btn { flex: 1; }
     .detail__wishlist-btn { flex-shrink: 0; }
-    .detail__wishlist-btn--active tui-icon { color: #e53e3e; }
+    .detail__wishlist-btn--active tui-icon { color: var(--color-error); }
 
     /* Description expand */
     .detail__desc-section { border-top: 1px solid var(--color-border); padding-top: 16px; margin-bottom: 16px; }

@@ -277,7 +277,7 @@ const CARRIERS = [
     input:not([type=checkbox]) {
       width: 100%;
       border: 1px solid var(--color-border);
-      border-radius: 6px;
+      border-radius: var(--border-radius-md);
       padding: 10px 12px;
       font-size: 14px;
       outline: none;
@@ -288,7 +288,7 @@ const CARRIERS = [
 
     /* Carrier */
     .carrier-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
-    .carrier-option { border: 1px solid var(--color-border); border-radius: 6px; padding: 16px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 12px; }
+    .carrier-option { border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 16px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 12px; }
     .carrier-option:hover { border-color: var(--color-primary); }
     .carrier-option--selected { border-color: var(--color-primary); background: #f8f8f8; }
     .carrier-option__name { font-weight: 600; flex: 1; }
@@ -309,7 +309,7 @@ const CARRIERS = [
     /* Consent */
     .consent-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
     .consent-checkbox { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary); }
-    .consent-label span { font-size: 13px; line-height: 1.5; color: #444; }
+    .consent-label span { font-size: 13px; line-height: 1.5; color: var(--color-primary); }
     .consent-label a { color: var(--color-primary); text-decoration: underline; }
 
     /* Save address */
@@ -318,7 +318,7 @@ const CARRIERS = [
 
     /* Address picker */
     .addr-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--color-border); }
-    .addr-pill { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 12px; transition: border-color 0.15s; }
+    .addr-pill { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 8px 12px; cursor: pointer; font-size: 12px; transition: border-color 0.15s; }
     .addr-pill:hover { border-color: var(--color-primary); }
     .addr-pill--active { border-color: var(--color-primary); background: #f0f0ff; }
     .addr-pill--new { color: var(--color-primary); font-weight: 600; justify-content: center; }
