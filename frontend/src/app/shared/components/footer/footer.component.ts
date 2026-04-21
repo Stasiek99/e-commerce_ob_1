@@ -46,10 +46,10 @@ import { RouterLink } from '@angular/router';
     }
     .footer__logo { font-size: 18px; font-weight: 700; color: white; }
     .footer__brand p { margin: 6px 0 0; }
-    .footer__nav { display: flex; gap: 24px; margin: 24px 0; }
+    .footer__nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 24px; margin: 24px 0; }
     .footer__nav a { font-size: 14px; color: rgba(255,255,255,0.7); transition: color 0.15s; }
     .footer__nav a:hover { color: white; }
-    .footer__legal { display: flex; gap: 20px; margin-bottom: 16px; }
+    .footer__legal { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; margin-bottom: 16px; }
     .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.55); transition: color 0.15s; }
     .footer__legal a:hover { color: white; }
     .footer__copy { font-size: 12px; margin-top: 16px; }

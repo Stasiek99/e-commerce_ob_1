@@ -196,7 +196,7 @@ const CATEGORY_LABELS: Record<string, string> = {
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
       color: var(--color-accent); margin: 0 0 6px; font-weight: 600;
     }
-    .detail__name { font-size: 28px; font-weight: 700; margin: 0 0 12px; line-height: 1.25; }
+    .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.25; }
     .detail__short-desc { color: var(--color-secondary); font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
 
     /* Variants */
@@ -234,8 +234,12 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__meta-label { color: var(--color-secondary); font-weight: 500; }
 
     @media (max-width: 768px) {
-      .detail { grid-template-columns: 1fr; gap: 32px; }
+      .detail { grid-template-columns: 1fr; gap: 32px; padding: 24px 0 48px; }
       .detail__gallery { position: static; }
+    }
+    @media (max-width: 480px) {
+      .detail__cta { flex-wrap: wrap; }
+      .detail__add-btn { width: 100%; }
     }
   `],
 })

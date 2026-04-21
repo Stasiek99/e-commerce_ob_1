@@ -260,8 +260,8 @@ const CARRIERS = [
     </div>
   `,
   styles: [`
-    .checkout { max-width: 640px; margin: 0 auto; padding: 32px 24px; }
-    h1 { font-size: 28px; font-weight: 700; margin-bottom: 32px; }
+    .checkout { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+    h1 { font-size: clamp(22px, 5vw, 28px); font-weight: 700; margin-bottom: 32px; }
 
     .checkout__stepper { margin-bottom: 32px; }
     .checkout__slides { display: block; }
@@ -328,6 +328,12 @@ const CARRIERS = [
 
     /* Footer nav */
     .checkout__nav { display: flex; justify-content: space-between; }
+
+    @media (max-width: 480px) {
+      .row { grid-template-columns: 1fr; }
+      .carrier-option { flex-wrap: wrap; }
+      .carrier-option__desc { width: 100%; order: 3; }
+    }
   `],
 })
 export class CheckoutPageComponent implements OnInit {
