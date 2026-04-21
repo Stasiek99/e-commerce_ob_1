@@ -13,8 +13,10 @@ import { RouterLink } from '@angular/router';
           <p>Wysokiej jakości perfumy i zapachy do domu.</p>
         </div>
         <nav class="footer__nav">
-          <a routerLink="/products">Perfumy</a>
+          <a routerLink="/products">Wszystkie produkty</a>
+          <a routerLink="/category/perfumy">Perfumy</a>
           <a routerLink="/category/dyfuzory">Dyfuzory</a>
+          <a routerLink="/category/zele">Żele pod prysznic</a>
           <a routerLink="/account">Moje konto</a>
         </nav>
         <nav class="footer__legal">
@@ -37,8 +39,13 @@ import { RouterLink } from '@angular/router';
       max-width: var(--max-width);
       margin: 0 auto;
       padding: 0 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
     }
     .footer__logo { font-size: 18px; font-weight: 700; color: white; }
+    .footer__brand p { margin: 6px 0 0; }
     .footer__nav { display: flex; gap: 24px; margin: 24px 0; }
     .footer__nav a { font-size: 14px; color: rgba(255,255,255,0.7); transition: color 0.15s; }
     .footer__nav a:hover { color: white; }

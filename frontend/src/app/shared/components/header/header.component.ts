@@ -2,7 +2,6 @@ import { Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, Router } from '@angular/router';
 import { ReactiveFormsModule, FormControl, FormGroup } from '@angular/forms';
 import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
-import { TuiSearch } from '@taiga-ui/layout';
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 
@@ -16,7 +15,6 @@ import { AuthService } from '../../../core/services/auth.service';
     TuiButton,
     TuiIcon,
     TuiTextfield,
-    TuiSearch,
   ],
   template: `
     <header class="header">
@@ -29,8 +27,9 @@ import { AuthService } from '../../../core/services/auth.service';
             <span class="header__logo-sub">Store</span>
           </a>
           <nav class="header__nav">
-            <a routerLink="/products" routerLinkActive="active">Perfumy</a>
+            <a routerLink="/category/perfumy" routerLinkActive="active">Perfumy</a>
             <a routerLink="/category/dyfuzory" routerLinkActive="active">Dyfuzory</a>
+            <a routerLink="/category/zele" routerLinkActive="active">Żele</a>
           </nav>
         </div>
 
@@ -68,9 +67,6 @@ import { AuthService } from '../../../core/services/auth.service';
             <span>Konto</span>
           </a>
 
-          @if (auth.isAuthenticated()) {
-            <button class="header__logout" (click)="logout()">Wyloguj</button>
-          }
         </div>
 
       </div>
@@ -170,18 +166,7 @@ import { AuthService } from '../../../core/services/auth.service';
       justify-content: center;
       padding: 0 3px;
     }
-    .header__logout {
-      background: none;
-      border: none;
-      cursor: pointer;
-      font-size: 13px;
-      color: var(--color-secondary);
-      padding: 0;
-      transition: color 0.15s;
-    }
-    .header__logout:hover { color: var(--color-primary); }
-
-    @media (max-width: 999px) {
+@media (max-width: 999px) {
       .header__nav { display: none; }
       .header__action-link span { display: none; }
       .header__actions { gap: 12px; }

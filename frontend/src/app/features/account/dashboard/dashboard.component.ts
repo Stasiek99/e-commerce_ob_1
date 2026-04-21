@@ -1,16 +1,23 @@
 import { Component, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { TuiIcon } from '@taiga-ui/core';
+import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { AuthService } from '../../../core/services/auth.service';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [RouterLink, TuiIcon],
+  imports: [RouterLink, TuiButton, TuiIcon],
   template: `
     <div class="page">
-      <h1>Witaj, {{ firstName() }}!</h1>
-      <p class="subtitle">Co chcesz dzisiaj zrobić?</p>
+      <div class="page-header">
+        <div>
+          <h1>Witaj, {{ firstName() }}!</h1>
+          <p class="subtitle">Co chcesz dzisiaj zrobić?</p>
+        </div>
+        <button tuiButton appearance="accent" size="s" type="button" (click)="logout()">
+          Wyloguj
+        </button>
+      </div>
 
       <div class="grid">
 
@@ -37,8 +44,9 @@ import { AuthService } from '../../../core/services/auth.service';
   `,
   styles: [`
     .page { padding: 32px 0; }
+    .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 32px; }
     h1 { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
-    .subtitle { color: var(--color-secondary); margin-bottom: 32px; font-size: 15px; }
+    .subtitle { color: var(--color-secondary); font-size: 15px; margin: 0; }
 
     .grid {
       display: grid;
@@ -81,5 +89,9 @@ export class DashboardComponent {
 
   firstName(): string {
     return this.auth.currentUser()?.firstName || 'Użytkowniku';
+  }
+
+  logout(): void {
+    this.auth.logout().subscribe();
   }
 }

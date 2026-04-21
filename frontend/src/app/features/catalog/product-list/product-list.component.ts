@@ -1,17 +1,27 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
 import { environment } from '../../../../environments/environment';
 import { SeoService } from '../../../core/services/seo.service';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
+import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
+
+const CATEGORY_LABELS: Record<string, string> = {
+  perfumy: 'Perfumy',
+  dyfuzory: 'Dyfuzory',
+  zele: 'Żele pod prysznic',
+};
 
 @Component({
   selector: 'app-product-list',
   standalone: true,
-  imports: [ProductCardComponent],
+  imports: [ProductCardComponent, BreadcrumbComponent],
   template: `
     <div class="page">
-      <h1>Produkty</h1>
+      @if (slug()) {
+        <app-breadcrumb [crumbs]="breadcrumbs()" />
+      }
+      <h1>{{ pageTitle() }}</h1>
       @if (loading()) {
         <div class="grid">
           @for (_ of skeletons; track $index) {
@@ -105,25 +115,42 @@ export class ProductListComponent implements OnInit {
   readonly products = signal<ProductCardData[]>([]);
   readonly skeletons = Array(8);
 
+  readonly slug = signal<string | null>(null);
+
+  readonly pageTitle = computed(() => {
+    const s = this.slug();
+    return s ? (CATEGORY_LABELS[s] ?? s) : 'Wszystkie produkty';
+  });
+
+  readonly breadcrumbs = computed<Breadcrumb[]>(() => [
+    { label: 'Strona główna', link: '/' },
+    { label: this.pageTitle() },
+  ]);
+
   ngOnInit() {
-    const slug = this.route.snapshot.paramMap.get('slug');
-    const params = slug ? `?category=${slug}` : '';
+    this.route.paramMap.subscribe(params => {
+      const slug = params.get('slug');
+      this.slug.set(slug);
+      this.loading.set(true);
 
-    this.seo.updatePageMeta({
-      title: slug ? `Kategoria: ${slug}` : 'Wszystkie produkty',
-      description: slug
-        ? `Perfumy, dyfuzory i żele z kategorii ${slug}. Premium zapachy w Fragrance Store.`
-        : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
-    });
-
-    this.http
-      .get<any>(`${environment.apiUrl}/products${params}`)
-      .subscribe({
-        next: (res) => {
-          this.products.set(res.data ?? []);
-          this.loading.set(false);
-        },
-        error: () => this.loading.set(false),
+      const label = slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
+      this.seo.updatePageMeta({
+        title: label,
+        description: slug
+          ? `${label} — premium zapachy w Fragrance Store.`
+          : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
       });
+
+      const params2 = slug ? `?category=${slug}` : '';
+      this.http
+        .get<any>(`${environment.apiUrl}/products${params2}`)
+        .subscribe({
+          next: (res) => {
+            this.products.set(res.data ?? []);
+            this.loading.set(false);
+          },
+          error: () => this.loading.set(false),
+        });
+    });
   }
 }

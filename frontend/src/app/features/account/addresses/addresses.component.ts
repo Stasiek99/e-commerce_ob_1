@@ -1,7 +1,8 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { TuiButton, TuiLabel, TuiTextfield } from '@taiga-ui/core';
+import { Location } from '@angular/common';
+import { TuiButton, TuiLabel, TuiTextfield, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm } from '@taiga-ui/layout';
 import { ToastService } from '../../../core/services/toast.service';
 import { environment } from '../../../../environments/environment';
@@ -21,9 +22,13 @@ interface Address {
 @Component({
   selector: 'app-addresses',
   standalone: true,
-  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiCard, TuiForm],
+  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiIcon, TuiCard, TuiForm],
   template: `
     <div class="page">
+      <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
+        <tui-icon icon="@tui.chevron-left" />
+        Wróć
+      </button>
       <div class="page-header">
         <h1>Adresy dostawy</h1>
         @if (!showAddForm()) {
@@ -165,6 +170,7 @@ interface Address {
   `,
   styles: [`
     .page { padding: 32px 0; max-width: 560px; margin: 0 auto; }
+    .back-btn { margin-bottom: 8px; }
     .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
     h1 { font-size: 24px; font-weight: 700; }
 
@@ -206,6 +212,7 @@ export class AddressesComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly toast = inject(ToastService);
   private readonly fb = inject(FormBuilder);
+  private readonly location = inject(Location);
 
   readonly addresses   = signal<Address[]>([]);
   readonly showAddForm = signal(false);
@@ -230,6 +237,8 @@ export class AddressesComponent implements OnInit {
   }
 
   ngOnInit(): void { this.load(); }
+
+  back(): void { this.location.back(); }
 
   private load(): void {
     this.http.get<Address[]>(`${environment.apiUrl}/users/me/addresses`)

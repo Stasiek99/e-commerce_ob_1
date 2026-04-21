@@ -1,7 +1,8 @@
 import { Component, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
+import { Location } from '@angular/common';
+import { TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
@@ -10,9 +11,13 @@ import { environment } from '../../../../environments/environment';
 @Component({
   selector: 'app-profile',
   standalone: true,
-  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiCard, TuiForm, TuiHeader],
+  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon, TuiCard, TuiForm, TuiHeader],
   template: `
     <div class="page">
+      <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
+        <tui-icon icon="@tui.chevron-left" />
+        Wróć
+      </button>
       <h1>Mój profil</h1>
 
       <!-- ── View mode ─────────────────────────────────── -->
@@ -82,6 +87,7 @@ import { environment } from '../../../../environments/environment';
   `,
   styles: [`
     .page { padding: 32px 0; max-width: 520px; margin: 0 auto; }
+    .back-btn { margin-bottom: 8px; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
 
     .profile-card { display: block; }
@@ -108,6 +114,7 @@ import { environment } from '../../../../environments/environment';
 export class ProfileComponent {
   readonly auth = inject(AuthService);
   private readonly http = inject(HttpClient);
+  private readonly location = inject(Location);
   private readonly toast = inject(ToastService);
   private readonly fb = inject(FormBuilder);
 
@@ -119,6 +126,8 @@ export class ProfileComponent {
     lastName:  [this.auth.currentUser()?.lastName  ?? '', Validators.maxLength(50)],
     phone:     [this.auth.currentUser()?.phone     ?? '', Validators.maxLength(20)],
   });
+
+  back(): void { this.location.back(); }
 
   startEdit(): void {
     const u = this.auth.currentUser();

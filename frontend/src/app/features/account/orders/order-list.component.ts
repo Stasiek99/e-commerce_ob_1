@@ -1,8 +1,8 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
-import { LowerCasePipe, DatePipe } from '@angular/common';
-import { TuiButton, TuiTitle } from '@taiga-ui/core';
+import { Location, LowerCasePipe, DatePipe } from '@angular/common';
+import { TuiButton, TuiTitle, TuiIcon } from '@taiga-ui/core';
 import { TuiCell } from '@taiga-ui/layout';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
@@ -10,9 +10,13 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
 @Component({
   selector: 'app-order-list',
   standalone: true,
-  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiCell],
+  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiIcon, TuiCell],
   template: `
     <div class="page">
+      <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
+        <tui-icon icon="@tui.chevron-left" />
+        Wróć
+      </button>
       <h1>Moje zamówienia</h1>
 
       <div class="orders-list">
@@ -40,7 +44,8 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
     </div>
   `,
   styles: [`
-    .page { padding: 32px 0; }
+    .page { padding: 32px 0; max-width: 560px; margin: 0 auto; }
+    .back-btn { margin-bottom: 8px; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
 
     .orders-list {
@@ -73,6 +78,7 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
 })
 export class OrderListComponent implements OnInit {
   private readonly http = inject(HttpClient);
+  private readonly location = inject(Location);
   readonly orders = signal<any[]>([]);
 
   ngOnInit(): void {
@@ -80,4 +86,6 @@ export class OrderListComponent implements OnInit {
       next: (o) => this.orders.set(o),
     });
   }
+
+  back(): void { this.location.back(); }
 }
