@@ -1,6 +1,9 @@
 import { Component, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
+import { Location } from '@angular/common';
+import { TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon } from '@taiga-ui/core';
+import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { environment } from '../../../../environments/environment';
@@ -8,86 +11,110 @@ import { environment } from '../../../../environments/environment';
 @Component({
   selector: 'app-profile',
   standalone: true,
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon, TuiCard, TuiForm, TuiHeader],
   template: `
     <div class="page">
-      <div class="header">
-        <h1>Mój profil</h1>
-        @if (!editing()) {
-          <button class="btn btn--outline" (click)="startEdit()">Edytuj</button>
-        }
-      </div>
+      <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
+        <tui-icon icon="@tui.chevron-left" />
+        Wróć
+      </button>
+      <h1>Mój profil</h1>
 
-      <div class="card">
-        <div class="field">
-          <label>Email</label>
-          @if (editing()) {
-            <input [value]="auth.currentUser()?.email ?? ''" disabled class="input input--disabled" />
-          } @else {
-            <p class="value">{{ auth.currentUser()?.email ?? '—' }}</p>
-          }
-        </div>
+      <!-- ── View mode ─────────────────────────────────── -->
+      @if (!editing()) {
+        <div tuiCardLarge appearance="elevated" class="profile-card">
+          <header tuiHeader>
+            <h2 tuiTitle>Dane konta</h2>
+            <button tuiButton appearance="secondary" size="s" type="button" (click)="startEdit()">
+              Edytuj
+            </button>
+          </header>
 
-        <div class="row">
-          <div class="field">
-            <label>Imię</label>
-            @if (editing()) {
-              <input formControlName="firstName" [formControl]="form.controls.firstName" class="input" />
-            } @else {
-              <p class="value">{{ auth.currentUser()?.firstName || '—' }}</p>
-            }
+          <div class="info-row">
+            <span class="info-label">Email</span>
+            <span class="info-value">{{ auth.currentUser()?.email ?? '—' }}</span>
           </div>
-          <div class="field">
-            <label>Nazwisko</label>
-            @if (editing()) {
-              <input formControlName="lastName" [formControl]="form.controls.lastName" class="input" />
-            } @else {
-              <p class="value">{{ auth.currentUser()?.lastName || '—' }}</p>
-            }
+          <div class="info-row">
+            <span class="info-label">Imię</span>
+            <span class="info-value">{{ auth.currentUser()?.firstName || '—' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Nazwisko</span>
+            <span class="info-value">{{ auth.currentUser()?.lastName || '—' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Telefon</span>
+            <span class="info-value">{{ auth.currentUser()?.phone || '—' }}</span>
           </div>
         </div>
+      }
 
-        <div class="field">
-          <label>Telefon</label>
-          @if (editing()) {
-            <input formControlName="phone" [formControl]="form.controls.phone" type="tel" class="input" />
-          } @else {
-            <p class="value">{{ auth.currentUser()?.phone || '—' }}</p>
-          }
-        </div>
+      <!-- ── Edit mode ──────────────────────────────────── -->
+      @if (editing()) {
+        <form tuiCardLarge tuiForm appearance="elevated" [formGroup]="form" (ngSubmit)="save()">
+          <div class="info-row info-row--top">
+            <span class="info-label">Email</span>
+            <span class="info-value info-value--muted">{{ auth.currentUser()?.email ?? '—' }}</span>
+          </div>
 
-        @if (editing()) {
-          <div class="actions">
-            <button class="btn btn--outline" type="button" (click)="cancelEdit()" [disabled]="saving()">Anuluj</button>
-            <button class="btn" type="button" (click)="save()" [disabled]="saving() || form.invalid">
+          <div class="name-row">
+            <tui-textfield>
+              <label tuiLabel>Imię</label>
+              <input tuiTextfield type="text" formControlName="firstName" />
+            </tui-textfield>
+            <tui-textfield>
+              <label tuiLabel>Nazwisko</label>
+              <input tuiTextfield type="text" formControlName="lastName" />
+            </tui-textfield>
+          </div>
+
+          <tui-textfield>
+            <label tuiLabel>Telefon</label>
+            <input tuiTextfield type="tel" formControlName="phone" />
+          </tui-textfield>
+
+          <div class="form-actions">
+            <button tuiButton appearance="secondary" size="s" type="button" [disabled]="saving()" (click)="cancelEdit()">
+              Anuluj
+            </button>
+            <button tuiButton size="s" type="submit" [disabled]="saving() || form.invalid">
               {{ saving() ? 'Zapisywanie…' : 'Zapisz zmiany' }}
             </button>
           </div>
-        }
-      </div>
+        </form>
+      }
     </div>
   `,
   styles: [`
-    .page { padding: 32px 0; max-width: 480px; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-    h1 { font-size: 24px; font-weight: 700; }
-    .card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 28px; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .field { margin-bottom: 16px; }
-    label { display: block; font-size: 13px; font-weight: 500; color: var(--color-secondary); margin-bottom: 5px; }
-    .value { font-size: 15px; color: var(--color-secondary); padding: 2px 0; }
-    .input { width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 14px; outline: none; box-sizing: border-box; }
-    .input:focus { border-color: var(--color-primary); }
-    .input--disabled { background: #f5f5f5; color: var(--color-secondary); cursor: not-allowed; }
-    .actions { display: flex; gap: 12px; margin-top: 8px; }
-    .btn { background: var(--color-primary); color: white; border: none; padding: 11px 24px; border-radius: var(--radius-md); font-size: 14px; font-weight: 600; cursor: pointer; }
-    .btn--outline { background: transparent; color: var(--color-primary); border: 1px solid var(--color-primary); }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .page { padding: 32px 0; max-width: 520px; margin: 0 auto; }
+    .back-btn { margin-bottom: 8px; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
+
+    .profile-card { display: block; }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--color-border);
+      font-size: 14px;
+    }
+    .info-row:last-of-type { border-bottom: none; }
+    .info-row--top { margin-bottom: 4px; }
+    .info-label { font-weight: 500; color: var(--color-secondary); }
+    .info-value { color: var(--color-primary); }
+    .info-value--muted { color: var(--color-secondary); }
+
+    .name-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
   `],
 })
 export class ProfileComponent {
   readonly auth = inject(AuthService);
   private readonly http = inject(HttpClient);
+  private readonly location = inject(Location);
   private readonly toast = inject(ToastService);
   private readonly fb = inject(FormBuilder);
 
@@ -96,42 +123,37 @@ export class ProfileComponent {
 
   readonly form = this.fb.group({
     firstName: [this.auth.currentUser()?.firstName ?? '', Validators.maxLength(50)],
-    lastName: [this.auth.currentUser()?.lastName ?? '', Validators.maxLength(50)],
-    phone: [this.auth.currentUser()?.phone ?? '', Validators.maxLength(20)],
+    lastName:  [this.auth.currentUser()?.lastName  ?? '', Validators.maxLength(50)],
+    phone:     [this.auth.currentUser()?.phone     ?? '', Validators.maxLength(20)],
   });
 
-  startEdit() {
-    const user = this.auth.currentUser();
-    this.form.setValue({
-      firstName: user?.firstName ?? '',
-      lastName: user?.lastName ?? '',
-      phone: user?.phone ?? '',
-    });
+  back(): void { this.location.back(); }
+
+  startEdit(): void {
+    const u = this.auth.currentUser();
+    this.form.setValue({ firstName: u?.firstName ?? '', lastName: u?.lastName ?? '', phone: u?.phone ?? '' });
     this.editing.set(true);
   }
 
-  cancelEdit() {
+  cancelEdit(): void {
     this.editing.set(false);
     this.form.markAsPristine();
   }
 
-  save() {
+  save(): void {
     if (this.form.invalid) return;
     this.saving.set(true);
-
-    this.http
-      .patch<any>(`${environment.apiUrl}/users/me`, this.form.getRawValue())
-      .subscribe({
-        next: (user) => {
-          this.auth.updateCurrentUser(user);
-          this.toast.success('Profil zaktualizowany');
-          this.saving.set(false);
-          this.editing.set(false);
-        },
-        error: () => {
-          this.toast.error('Błąd zapisu profilu');
-          this.saving.set(false);
-        },
-      });
+    this.http.patch<any>(`${environment.apiUrl}/users/me`, this.form.getRawValue()).subscribe({
+      next: (user) => {
+        this.auth.updateCurrentUser(user);
+        this.toast.success('Profil zaktualizowany');
+        this.saving.set(false);
+        this.editing.set(false);
+      },
+      error: () => {
+        this.toast.error('Błąd zapisu profilu');
+        this.saving.set(false);
+      },
+    });
   }
 }

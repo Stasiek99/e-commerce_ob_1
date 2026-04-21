@@ -159,8 +159,8 @@ Everything in this phase MUST be done before the first real order.
 
 ### 4A. Design System + Taiga UI Components (Days 1-4)
 
-- [ ] Product card as reusable component using Taiga UI (already started: Taiga UI installed, design tokens created)
-- [ ] Refactor existing components to use design tokens + Taiga UI primitives
+- [x] Product card as reusable component using Taiga UI (already started: Taiga UI installed, design tokens created)
+- [x] Refactor existing components to use design tokens + Taiga UI primitives
 - [ ] Mobile responsive testing (320px → 1440px)
 - [ ] Accessibility pass: focus indicators, ARIA labels, color contrast (WCAG AA)
 

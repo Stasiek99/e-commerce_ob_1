@@ -1,72 +1,97 @@
 import { Component, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { AuthService } from '../../../core/services/auth.service';
-
-const TILES = [
-  {
-    route: 'orders',
-    icon: '📦',
-    label: 'Moje zamówienia',
-    description: 'Historia i status Twoich zamówień',
-  },
-  {
-    route: 'profile',
-    icon: '👤',
-    label: 'Dane osobowe',
-    description: 'Imię, nazwisko, numer telefonu',
-  },
-  {
-    route: 'addresses',
-    icon: '📍',
-    label: 'Adresy dostawy',
-    description: 'Zarządzaj zapisanymi adresami',
-  },
-];
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, TuiButton, TuiIcon],
   template: `
     <div class="page">
-      <h1>Witaj, {{ firstName() }}!</h1>
-      <p class="subtitle">Co chcesz dzisiaj zrobić?</p>
+      <div class="page-header">
+        <div>
+          <h1>Witaj, {{ firstName() }}!</h1>
+          <p class="subtitle">Co chcesz dzisiaj zrobić?</p>
+        </div>
+        <button tuiButton appearance="accent" size="s" type="button" (click)="logout()">
+          Wyloguj
+        </button>
+      </div>
 
       <div class="grid">
-        @for (tile of tiles; track tile.route) {
-          <a [routerLink]="tile.route" class="tile">
-            <span class="tile__icon">{{ tile.icon }}</span>
-            <span class="tile__label">{{ tile.label }}</span>
-            <span class="tile__desc">{{ tile.description }}</span>
-          </a>
-        }
+
+        <a routerLink="orders" class="card">
+          <tui-icon icon="@tui.package" class="card__icon" />
+          <span class="card__label">Moje zamówienia</span>
+          <span class="card__desc">Historia i status Twoich zamówień</span>
+        </a>
+
+        <a routerLink="profile" class="card">
+          <tui-icon icon="@tui.user-pen" class="card__icon" />
+          <span class="card__label">Dane osobowe</span>
+          <span class="card__desc">Imię, nazwisko, numer telefonu</span>
+        </a>
+
+        <a routerLink="addresses" class="card">
+          <tui-icon icon="@tui.map-pinned" class="card__icon" />
+          <span class="card__label">Adresy dostawy</span>
+          <span class="card__desc">Zarządzaj zapisanymi adresami</span>
+        </a>
+
       </div>
     </div>
   `,
   styles: [`
-    .page { padding: 40px 0; max-width: 640px; }
+    .page { padding: 32px 0; }
+    .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 32px; }
     h1 { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
-    .subtitle { color: var(--color-secondary); margin-bottom: 32px; font-size: 15px; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-    .tile {
-      display: flex; flex-direction: column; gap: 6px;
-      background: var(--color-surface); border: 1px solid var(--color-border);
-      border-radius: var(--radius-md); padding: 24px 20px;
-      text-decoration: none; color: inherit;
-      transition: box-shadow 0.15s, border-color 0.15s;
+    .subtitle { color: var(--color-secondary); font-size: 15px; margin: 0; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
     }
-    .tile:hover { border-color: var(--color-primary); box-shadow: 0 4px 12px rgba(0,0,0,.07); }
-    .tile__icon { font-size: 28px; }
-    .tile__label { font-size: 15px; font-weight: 600; margin-top: 4px; }
-    .tile__desc { font-size: 13px; color: var(--color-secondary); line-height: 1.4; }
-    @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+
+    .card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 28px 24px;
+      background: var(--color-surface);
+      border-radius: var(--border-radius-md);
+      box-shadow: var(--shadow-sm);
+      color: inherit;
+      text-decoration: none;
+      transition: box-shadow 0.2s ease, transform 0.2s ease;
+    }
+    .card:hover {
+      box-shadow: var(--shadow-hover);
+      transform: translateY(-2px);
+    }
+    .card:hover .card__icon { color: var(--color-accent); }
+
+    .card__icon {
+      font-size: 32px;
+      color: var(--color-primary);
+      transition: color 0.15s;
+      margin-bottom: 4px;
+    }
+    .card__label { font-size: 15px; font-weight: 600; }
+    .card__desc  { font-size: 13px; color: var(--color-secondary); line-height: 1.4; }
+
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   `],
 })
 export class DashboardComponent {
-  readonly tiles = TILES;
   private readonly auth = inject(AuthService);
 
-  firstName() {
+  firstName(): string {
     return this.auth.currentUser()?.firstName || 'Użytkowniku';
+  }
+
+  logout(): void {
+    this.auth.logout().subscribe();
   }
 }
