@@ -22,3 +22,16 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+// ── Taiga UI checkout overrides ───────────────────────────────────────────
+.checkout-form[tuiForm] {
+  gap: 0 !important;
+}
+
+[tuiHeader] {
+  margin-bottom: 1.5rem !important;
+}
+
+.checkout-card[tuiCardLarge][data-space] {
+  padding: 0.5rem !important;
+}

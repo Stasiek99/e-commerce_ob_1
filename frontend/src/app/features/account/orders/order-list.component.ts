@@ -2,44 +2,80 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
 import { LowerCasePipe, DatePipe } from '@angular/common';
+import { TuiButton, TuiTitle } from '@taiga-ui/core';
+import { TuiCell } from '@taiga-ui/layout';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 
 @Component({
   selector: 'app-order-list',
   standalone: true,
-  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe],
+  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiCell],
   template: `
     <div class="page">
       <h1>Moje zamówienia</h1>
-      @for (order of orders(); track order.id) {
-        <div class="order-row">
-          <div>
-            <strong>#{{ order.orderNumber }}</strong>
+
+      <div class="orders-list">
+        @for (order of orders(); track order.id) {
+          <div tuiCell class="order-cell">
+            <div tuiTitle>
+              <span>#{{ order.orderNumber }}</span>
+              <div tuiSubtitle>{{ order.createdAt | date:'dd.MM.yyyy' }}</div>
+            </div>
             <span class="status status--{{ order.status | lowercase }}">{{ order.status }}</span>
+            <strong class="order-total">{{ order.totalInCents | price }}</strong>
+            <a
+              tuiButton
+              appearance="secondary"
+              size="s"
+              [routerLink]="['/account/orders', order.id]"
+            >
+              Szczegóły
+            </a>
           </div>
-          <div>{{ order.totalInCents | price }}</div>
-          <div>{{ order.createdAt | date:'dd.MM.yyyy' }}</div>
-          <a [routerLink]="['/account/orders', order.id]">Szczegóły</a>
-        </div>
-      } @empty {
-        <p>Brak zamówień.</p>
-      }
+        } @empty {
+          <p class="empty">Brak zamówień.</p>
+        }
+      </div>
     </div>
   `,
   styles: [`
     .page { padding: 32px 0; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
-    .order-row { display: flex; align-items: center; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--color-border); font-size: 14px; }
-    .status { margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #e5e7eb; }
-    a { margin-left: auto; color: var(--color-primary); font-weight: 500; }
+
+    .orders-list {
+      background: var(--color-surface);
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+      overflow: hidden;
+    }
+
+    .order-cell { border-bottom: 1px solid var(--color-border); }
+    .order-cell:last-child { border-bottom: none; }
+
+    .status {
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #e5e7eb;
+      white-space: nowrap;
+    }
+    .status--paid      { background: #d1fae5; color: #065f46; }
+    .status--pending_payment { background: #fef3c7; color: #92400e; }
+    .status--cancelled { background: #fee2e2; color: #991b1b; }
+    .status--shipped   { background: #dbeafe; color: #1e40af; }
+
+    .order-total { font-size: 14px; white-space: nowrap; }
+
+    .empty { padding: 32px; color: var(--color-secondary); text-align: center; }
   `],
 })
 export class OrderListComponent implements OnInit {
   private readonly http = inject(HttpClient);
   readonly orders = signal<any[]>([]);
 
-  ngOnInit() {
+  ngOnInit(): void {
     this.http.get<any[]>(`${environment.apiUrl}/orders`).subscribe({
       next: (o) => this.orders.set(o),
     });

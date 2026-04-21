@@ -29,7 +29,7 @@ import { SeoService } from './core/services/seo.service';
       min-height: calc(100vh - 64px - 120px);
       max-width: var(--max-width);
       margin: 0 auto;
-      padding: 0 16px;
+      padding: 0 24px;
     }
   `],
 })

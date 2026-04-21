@@ -36,7 +36,7 @@ import { RouterLink } from '@angular/router';
     .footer__inner {
       max-width: var(--max-width);
       margin: 0 auto;
-      padding: 0 16px;
+      padding: 0 24px;
     }
     .footer__logo { font-size: 18px; font-weight: 700; color: white; }
     .footer__nav { display: flex; gap: 24px; margin: 24px 0; }

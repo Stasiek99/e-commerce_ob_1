@@ -36,42 +36,40 @@ import { AuthService } from '../../../core/services/auth.service';
 
         <!-- CENTER: search -->
         <div class="header__search">
-          <search tuiSearch>
-            <form [formGroup]="searchForm" (ngSubmit)="onSearch()">
-              <fieldset tuiTextfieldSize="s">
-                <tui-textfield iconStart="@tui.search">
-                  <input
-                    formControlName="q"
-                    placeholder="Szukaj produktów…"
-                    tuiTextfield
-                  />
-                </tui-textfield>
-              </fieldset>
-              <button size="s" tuiButton type="submit">Szukaj</button>
-            </form>
-          </search>
+          <form class="header__search-form" [formGroup]="searchForm" (ngSubmit)="onSearch()">
+            <tui-textfield iconStart="@tui.search" class="header__search-field" tuiTextfieldSize="s">
+              <input
+                formControlName="q"
+                placeholder="Szukaj produktów…"
+                tuiTextfield
+              />
+            </tui-textfield>
+            <button size="s" tuiButton type="submit" appearance="primary" class="header__search-btn">Szukaj</button>
+          </form>
         </div>
 
         <!-- RIGHT: actions -->
         <div class="header__actions">
-          <a routerLink="/account/wishlist" class="header__action-link">
-            <tui-icon src="@tui.heart" class="header__action-icon" />
+          <a routerLink="/wishlist" class="header__action-link">
+            <tui-icon icon="@tui.heart" />
             <span>Ulubione</span>
           </a>
 
           <a routerLink="/cart" class="header__action-link header__action-link--cart">
-            <tui-icon src="@tui.shopping-cart" class="header__action-icon" />
-            <span>Koszyk</span>
+            <tui-icon icon="@tui.shopping-cart" />
             @if (cartService.itemCount() > 0) {
               <span class="header__cart-badge">{{ cartService.itemCount() }}</span>
             }
+            <span>Koszyk</span>
+          </a>
+
+          <a [routerLink]="auth.isAuthenticated() ? '/account' : '/auth/login'" class="header__action-link">
+            <tui-icon icon="@tui.user" />
+            <span>Konto</span>
           </a>
 
           @if (auth.isAuthenticated()) {
-            <a routerLink="/account" class="header__action-link">Konto</a>
             <button class="header__logout" (click)="logout()">Wyloguj</button>
-          } @else {
-            <a routerLink="/auth/login" class="header__action-link">Zaloguj się</a>
           }
         </div>
 
@@ -111,20 +109,30 @@ import { AuthService } from '../../../core/services/auth.service';
       font-weight: 700;
       white-space: nowrap;
     }
-    .header__logo-text { font-size: 18px; color: var(--color-primary); }
-    .header__logo-sub  { font-size: 11px; color: var(--color-accent); letter-spacing: 0.1em; text-transform: uppercase; }
+    .header__logo-text { font-size: 18px; color: var(--color-primary); font-family: var(--tui-font-text); }
+    .header__logo-sub  { font-size: 11px; color: var(--color-accent); letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--tui-font-text); }
     .header__nav { display: flex; gap: 20px; }
-    .header__nav a { color: var(--color-secondary); font-size: 14px; transition: color 0.15s; white-space: nowrap; }
-    .header__nav a:hover, .header__nav a.active { color: var(--color-primary); }
+    .header__nav a { color: var(--color-primary); font-size: 14px; font-weight: 500; font-family: var(--tui-font-text); transition: color 0.15s; white-space: nowrap; }
+    .header__nav a:hover, .header__nav a.active { color: var(--color-accent); }
 
     /* ── Center ─────────────────────────────── */
     .header__search {
       display: flex;
       justify-content: center;
     }
-    .header__search search {
+    .header__search-form {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       width: 100%;
       max-width: 480px;
+    }
+    .header__search-field {
+      flex: 1;
+      min-width: 0;
+    }
+    .header__search-btn {
+      flex-shrink: 0;
     }
 
     /* ── Right ──────────────────────────────── */
@@ -144,8 +152,7 @@ import { AuthService } from '../../../core/services/auth.service';
       position: relative;
     }
     .header__action-link:hover { color: var(--color-accent); }
-    .header__action-icon { font-size: 18px; }
-
+    .header__action-link tui-icon { font-size: 20px; }
     .header__action-link--cart { position: relative; }
     .header__cart-badge {
       position: absolute;
@@ -173,6 +180,12 @@ import { AuthService } from '../../../core/services/auth.service';
       transition: color 0.15s;
     }
     .header__logout:hover { color: var(--color-primary); }
+
+    @media (max-width: 999px) {
+      .header__nav { display: none; }
+      .header__action-link span { display: none; }
+      .header__actions { gap: 12px; }
+    }
   `],
 })
 export class HeaderComponent {

@@ -1,8 +1,9 @@
-import { Component, Input, inject, signal } from '@angular/core';
+import { Component, Input, inject, signal, computed } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { PricePipe } from '../pipes/price.pipe';
 import { CartService } from '../../core/services/cart.service';
+import { WishlistService } from '../../core/services/wishlist.service';
 
 export interface ProductCardData {
   id: string;
@@ -22,10 +23,18 @@ export interface ProductCardData {
 })
 export class ProductCardComponent {
   private readonly cart = inject(CartService);
+  private readonly wishlist = inject(WishlistService);
 
   @Input({ required: true }) product!: ProductCardData;
 
   readonly adding = signal(false);
+  readonly wishlisted = computed(() => this.wishlist.isInWishlist(this.product?.id));
+
+  onToggleWishlist(event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.wishlist.toggle(this.product);
+  }
 
   get firstVariant() {
     return this.product.variants?.[0];

@@ -48,7 +48,7 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
     }
   `,
   styles: [`
-    .detail { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; padding: 48px 0; }
+    .detail { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; padding: 32px 0; }
     .detail__gallery img { width: 100%; border-radius: var(--radius-md); }
     .detail__brand { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-accent); margin: 0 0 8px; }
     h1 { font-size: 28px; font-weight: 700; margin: 0 0 16px; }

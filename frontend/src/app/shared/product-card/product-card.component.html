@@ -15,6 +15,15 @@
       } @else {
         <div class="product-card__placeholder" aria-hidden="true"></div>
       }
+
+      <button
+        class="product-card__wishlist"
+        type="button"
+        [class.product-card__wishlist--active]="wishlisted()"
+        [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
+        (click)="onToggleWishlist($event)">
+        <tui-icon [icon]="wishlisted() ? '@tui.heart' : '@tui.heart'" />
+      </button>
     </div>
 
     <div class="product-card__body">

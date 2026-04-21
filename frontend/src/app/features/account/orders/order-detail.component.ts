@@ -34,7 +34,7 @@ import { DatePipe } from '@angular/common';
     }
   `,
   styles: [`
-    .page { padding: 32px 0; max-width: 600px; }
+    .page { padding: 32px 0; max-width: 600px; margin: 0 auto; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 16px; }
     .status { margin-bottom: 24px; }
     .item { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--color-border); font-size: 14px; }

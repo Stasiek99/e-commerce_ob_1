@@ -77,7 +77,7 @@ import { RouterLink } from '@angular/router';
     </div>
   `,
   styles: [`
-    .legal-page { max-width: 740px; margin: 0 auto; padding: 40px 0; }
+    .legal-page { max-width: 740px; margin: 0 auto; padding: 32px 0; }
     h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
     .version { font-size: 13px; color: var(--color-secondary); margin-bottom: 40px; }
     section { margin-bottom: 32px; }
