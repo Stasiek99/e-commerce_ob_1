@@ -15,9 +15,9 @@ import { ProductCardData } from '../../../shared/product-card/product-card.compo
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
 
 const CATEGORY_LABELS: Record<string, string> = {
-  perfumy: 'Perfumy',
-  dyfuzory: 'Dyfuzory',
-  zele: 'Żele pod prysznic',
+  perfume: 'Perfumy',
+  diffusers: 'Dyfuzory',
+  gels: 'Żele pod prysznic',
 };
 
 @Component({

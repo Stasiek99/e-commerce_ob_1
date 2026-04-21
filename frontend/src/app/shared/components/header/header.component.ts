@@ -1,7 +1,8 @@
 import { Component, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive, Router } from '@angular/router';
+import { RouterLink, Router } from '@angular/router';
 import { ReactiveFormsModule, FormControl, FormGroup } from '@angular/forms';
-import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
+import { TuiButton, TuiIcon, TuiTextfield, TuiDropdown, TuiDropdownHover, TuiDataList } from '@taiga-ui/core';
+import { TuiChevron } from '@taiga-ui/kit';
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 
@@ -10,11 +11,14 @@ import { AuthService } from '../../../core/services/auth.service';
   standalone: true,
   imports: [
     RouterLink,
-    RouterLinkActive,
     ReactiveFormsModule,
     TuiButton,
     TuiIcon,
     TuiTextfield,
+    TuiDropdown,
+    TuiDropdownHover,
+    TuiDataList,
+    TuiChevron,
   ],
   template: `
     <header class="header">
@@ -27,9 +31,28 @@ import { AuthService } from '../../../core/services/auth.service';
             <span class="header__logo-sub">Store</span>
           </a>
           <nav class="header__nav">
-            <a routerLink="/category/perfumy" routerLinkActive="active">Perfumy</a>
-            <a routerLink="/category/dyfuzory" routerLinkActive="active">Dyfuzory</a>
-            <a routerLink="/category/zele" routerLinkActive="active">Żele</a>
+            <button
+              tuiChevron
+              tuiDropdownHover
+              type="button"
+              class="header__nav-link"
+              [class.active]="isCategoryActive()"
+              [tuiDropdown]="categoryDropdown"
+              [(tuiDropdownOpen)]="dropdownOpen"
+              (click)="router.navigate(['/products'])"
+            >
+              Produkty
+            </button>
+
+            <ng-template #categoryDropdown>
+              <tui-data-list (click)="dropdownOpen = false">
+                <a tuiOption new routerLink="/category/perfume">Perfumy</a>
+                <a tuiOption new routerLink="/category/diffusers">Dyfuzory</a>
+                <a tuiOption new routerLink="/category/gels">Żele pod prysznic</a>
+                <hr class="header__dropdown-divider" />
+                <a tuiOption new routerLink="/products" class="header__dropdown-item--all">Wszystkie produkty</a>
+              </tui-data-list>
+            </ng-template>
           </nav>
         </div>
 
@@ -66,7 +89,6 @@ import { AuthService } from '../../../core/services/auth.service';
             <tui-icon icon="@tui.user" />
             <span>Konto</span>
           </a>
-
         </div>
 
       </div>
@@ -108,14 +130,29 @@ import { AuthService } from '../../../core/services/auth.service';
     .header__logo-text { font-size: 18px; color: var(--color-primary); font-family: var(--tui-font-text); }
     .header__logo-sub  { font-size: 11px; color: var(--color-accent); letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--tui-font-text); }
     .header__nav { display: flex; gap: 20px; }
-    .header__nav a { color: var(--color-primary); font-size: 14px; font-weight: 500; font-family: var(--tui-font-text); transition: color 0.15s; white-space: nowrap; }
-    .header__nav a:hover, .header__nav a.active { color: var(--color-accent); }
+
+    .header__nav-link {
+      display: inline-flex;
+      align-items: center;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      color: var(--color-primary);
+      font-size: 14px;
+      font-weight: 500;
+      font-family: var(--tui-font-text);
+      transition: color 0.15s;
+      white-space: nowrap;
+    }
+    .header__nav-link:hover,
+    .header__nav-link.active { color: var(--color-accent); }
+
+    .header__dropdown-divider { border: none; border-top: 1px solid var(--color-border); margin: 4px 0; }
+    .header__dropdown-item--all { font-weight: 600; }
 
     /* ── Center ─────────────────────────────── */
-    .header__search {
-      display: flex;
-      justify-content: center;
-    }
+    .header__search { display: flex; justify-content: center; }
     .header__search-form {
       display: flex;
       align-items: center;
@@ -123,20 +160,11 @@ import { AuthService } from '../../../core/services/auth.service';
       width: 100%;
       max-width: 480px;
     }
-    .header__search-field {
-      flex: 1;
-      min-width: 0;
-    }
-    .header__search-btn {
-      flex-shrink: 0;
-    }
+    .header__search-field { flex: 1; min-width: 0; }
+    .header__search-btn { flex-shrink: 0; }
 
     /* ── Right ──────────────────────────────── */
-    .header__actions {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-    }
+    .header__actions { display: flex; align-items: center; gap: 20px; }
     .header__action-link {
       display: flex;
       align-items: center;
@@ -166,7 +194,7 @@ import { AuthService } from '../../../core/services/auth.service';
       justify-content: center;
       padding: 0 3px;
     }
-@media (max-width: 999px) {
+    @media (max-width: 999px) {
       .header__nav { display: none; }
       .header__action-link span { display: none; }
       .header__actions { gap: 12px; }
@@ -174,13 +202,19 @@ import { AuthService } from '../../../core/services/auth.service';
   `],
 })
 export class HeaderComponent {
-  private readonly router = inject(Router);
+  readonly router = inject(Router);
   readonly cartService = inject(CartService);
   readonly auth = inject(AuthService);
+
+  dropdownOpen = false;
 
   readonly searchForm = new FormGroup({
     q: new FormControl(''),
   });
+
+  isCategoryActive(): boolean {
+    return this.router.url.startsWith('/category/');
+  }
 
   onSearch(): void {
     const q = this.searchForm.value.q?.trim();

@@ -14,9 +14,9 @@ import { RouterLink } from '@angular/router';
         </div>
         <nav class="footer__nav">
           <a routerLink="/products">Wszystkie produkty</a>
-          <a routerLink="/category/perfumy">Perfumy</a>
-          <a routerLink="/category/dyfuzory">Dyfuzory</a>
-          <a routerLink="/category/zele">Żele pod prysznic</a>
+          <a routerLink="/category/perfume">Perfumy</a>
+          <a routerLink="/category/diffusers">Dyfuzory</a>
+          <a routerLink="/category/gels">Żele pod prysznic</a>
           <a routerLink="/account">Moje konto</a>
         </nav>
         <nav class="footer__legal">
