@@ -4,12 +4,14 @@ import * as bcrypt from 'bcrypt';
 import * as session from 'express-session';
 import connectPgSimple = require('connect-pg-simple');
 import { PrismaService } from '../prisma/prisma.service';
+import { InvoiceService } from '../invoice/invoice.service';
 
 const logger = new Logger('AdminJS');
 
 export async function setupAdmin(
   app: NestExpressApplication,
   prisma: PrismaService,
+  invoiceService: InvoiceService,
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
@@ -78,9 +80,66 @@ export async function setupAdmin(
         resource: { model: getModelByName('Order'), client: prisma },
         options: {
           navigation: { name: 'Zamówienia' },
+          properties: {
+            invoiceUrl: {
+              isVisible: { list: false, show: true, edit: false, filter: false },
+            },
+          },
           actions: {
             new: { isAccessible: false },
             delete: { isAccessible: false },
+            downloadInvoice: {
+              actionType: 'record',
+              icon: 'Download',
+              label: 'Pobierz fakturę',
+              isVisible: true,
+              handler: async (request: any, response: any, context: any) => {
+                const { record } = context;
+                const orderId: string = record.params.id;
+
+                const order = await prisma.order.findUnique({
+                  where: { id: orderId },
+                  include: { items: true },
+                });
+
+                if (!order) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: 'Zamówienie nie istnieje.', type: 'error' },
+                  };
+                }
+
+                let invoiceUrl = order.invoiceUrl;
+
+                if (!invoiceUrl) {
+                  const result = await invoiceService.processInvoice({
+                    id: order.id,
+                    orderNumber: order.orderNumber,
+                    snapshotFirstName: order.snapshotFirstName,
+                    snapshotLastName: order.snapshotLastName,
+                    snapshotCompany: order.snapshotCompany,
+                    snapshotStreet: order.snapshotStreet,
+                    snapshotCity: order.snapshotCity,
+                    snapshotPostalCode: order.snapshotPostalCode,
+                    itemsTotalInCents: order.itemsTotalInCents,
+                    shippingCostInCents: order.shippingCostInCents,
+                    totalInCents: order.totalInCents,
+                    createdAt: order.createdAt,
+                    items: order.items.map((i) => ({
+                      snapshotName: i.snapshotName,
+                      snapshotPrice: i.snapshotPrice,
+                      quantity: i.quantity,
+                    })),
+                  });
+                  invoiceUrl = result.url;
+                }
+
+                return {
+                  redirectUrl: invoiceUrl,
+                  record: record.toJSON(),
+                };
+              },
+            },
           },
         },
       },

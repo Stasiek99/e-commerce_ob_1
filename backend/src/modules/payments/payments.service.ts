@@ -5,6 +5,7 @@ import { OrderStatus, PaymentStatus } from '@prisma/client';
 import type Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
 
 @Injectable()
@@ -15,6 +16,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly stripeClient: StripeClient,
     private readonly emailService: EmailService,
+    private readonly invoiceService: InvoiceService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -148,15 +150,32 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
-    this.emailService
-      .sendPaymentConfirmed({
-        to: payment.order.snapshotEmail,
-        orderNumber: payment.order.orderNumber,
-        firstName: payment.order.snapshotFirstName,
-        totalInCents: payment.order.totalInCents,
-      })
-      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
-      .catch(() => undefined);
+    // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
+    // Falls back to a plain payment confirmation if invoice generation fails.
+    this.invoiceService
+      .processInvoice(payment.order)
+      .then(({ url: _url, pdf }) =>
+        this.emailService.sendPaymentConfirmedWithInvoice({
+          to: payment.order.snapshotEmail,
+          orderNumber: payment.order.orderNumber,
+          firstName: payment.order.snapshotFirstName,
+          totalInCents: payment.order.totalInCents,
+          invoiceUrl: _url,
+          invoicePdf: pdf,
+        }),
+      )
+      .catch((err: Error) => {
+        this.logger.error(`Invoice generation failed for order ${payment.order.orderNumber}: ${err.message}`);
+        // Still deliver payment confirmation even if invoice failed
+        this.emailService
+          .sendPaymentConfirmed({
+            to: payment.order.snapshotEmail,
+            orderNumber: payment.order.orderNumber,
+            firstName: payment.order.snapshotFirstName,
+            totalInCents: payment.order.totalInCents,
+          })
+          .catch(() => undefined);
+      });
   }
 
   private async markSessionFailed(
