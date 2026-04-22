@@ -5,6 +5,7 @@ import { Resend } from 'resend';
 import { orderConfirmationTemplate } from './templates/order-confirmation.template';
 import { paymentConfirmedTemplate } from './templates/payment-confirmed.template';
 import { shippingNotificationTemplate } from './templates/shipping-notification.template';
+import { invoiceTemplate } from './templates/invoice.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -56,15 +57,13 @@ export class EmailService {
     to: string;
     orderNumber: string;
     firstName: string;
+    items: Array<{ name: string; quantity: number; price: number }>;
+    shippingCostInCents: number;
     totalInCents: number;
     invoiceUrl: string;
     invoicePdf: Buffer;
   }) {
-    const { subject, html } = paymentConfirmedTemplate({
-      orderNumber: data.orderNumber,
-      firstName: data.firstName,
-      totalInCents: data.totalInCents,
-    });
+    const { subject, html } = invoiceTemplate(data);
     return this.sendWithAttachments(
       'payment_confirmed_with_invoice',
       data.to,

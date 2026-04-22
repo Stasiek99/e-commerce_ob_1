@@ -172,7 +172,7 @@ Everything in this phase MUST be done before the first real order.
 
 ### 4C. Email Improvements (Days 7-8)
 
-- [ ] Invoice email template
+- [x] Invoice email template
 - [ ] Retry mechanism (3 attempts, exponential backoff)
 - [ ] Email delivery logging (Resend webhook)
 
