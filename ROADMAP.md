@@ -186,7 +186,7 @@ Everything in this phase MUST be done before the first real order.
 
 ### 5A. Database & Performance (Days 1-2)
 
-- [ ] OrderEvent audit trail — new Prisma model, log all status changes with actor + timestamp
+- [x] OrderEvent audit trail — new Prisma model, log all status changes with actor + timestamp
 - [ ] Connection pool tuning — `connection_limit` in DATABASE_URL
 - [ ] Stale cart cleanup — cron to delete anonymous carts >30 days old
 - [ ] Product listing pagination — cursor/offset on all list endpoints

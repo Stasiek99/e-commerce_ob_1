@@ -162,6 +162,16 @@ export class OrdersService {
         await tx.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
       }
 
+      await tx.orderEvent.create({
+        data: {
+          orderId: newOrder.id,
+          fromStatus: null,
+          toStatus: OrderStatus.PENDING_PAYMENT,
+          actor: userId ?? 'CUSTOMER',
+          note: 'Order created from cart',
+        },
+      });
+
       return newOrder;
     });
 
@@ -225,8 +235,17 @@ export class OrdersService {
     return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  async updateStatus(id: string, status: OrderStatus) {
-    return this.prisma.order.update({ where: { id }, data: { status } });
+  async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
+    const current = await this.prisma.order.findUniqueOrThrow({
+      where: { id },
+      select: { status: true },
+    });
+    return this.prisma.$transaction([
+      this.prisma.order.update({ where: { id }, data: { status } }),
+      this.prisma.orderEvent.create({
+        data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
+      }),
+    ]);
   }
 
   /**
