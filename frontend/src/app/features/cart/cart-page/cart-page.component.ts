@@ -46,7 +46,15 @@ import { TuiCell } from "@taiga-ui/layout";
                   appearance="flat"
                   size="s"
                 ></tui-counter>
-                <button tuiButton appearance="secondary" class="cart-cell__remove" type="button" (click)="remove(item.productVariantId)">✕</button>
+                <button
+                  tuiButton
+                  appearance="secondary"
+                  class="cart-cell__remove"
+                  type="button"
+                  [attr.aria-label]="'Usuń ' + item.productName + ' z koszyka'"
+                  (click)="remove(item.productVariantId)">
+                  <span aria-hidden="true">✕</span>
+                </button>
               </div>
             }
           </div>

@@ -12,14 +12,14 @@ import { RouterLink } from '@angular/router';
           <img src="assets/images/logo_full_white.png" alt="Aromaterie" class="footer__logo-img" />
           <p>Wysokiej jakości perfumy i zapachy do domu.</p>
         </div>
-        <nav class="footer__nav">
+        <nav class="footer__nav" aria-label="Nawigacja sklepu">
           <a routerLink="/products">Wszystkie produkty</a>
           <a routerLink="/category/perfume">Perfumy</a>
           <a routerLink="/category/diffusers">Dyfuzory</a>
           <a routerLink="/category/gels">Żele pod prysznic</a>
           <a routerLink="/account">Moje konto</a>
         </nav>
-        <nav class="footer__legal">
+        <nav class="footer__legal" aria-label="Informacje prawne">
           <a routerLink="/legal/terms">Regulamin</a>
           <a routerLink="/legal/privacy">Polityka prywatności</a>
           <a routerLink="/legal/withdrawal">Prawo odstąpienia</a>
@@ -50,7 +50,7 @@ import { RouterLink } from '@angular/router';
     .footer__nav a { font-size: 14px; color: rgba(255,255,255,0.7); transition: color 0.15s; }
     .footer__nav a:hover { color: white; }
     .footer__legal { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; margin-bottom: 16px; }
-    .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.55); transition: color 0.15s; }
+    .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.75); transition: color 0.15s; }
     .footer__legal a:hover { color: white; }
     .footer__copy { font-size: 12px; margin-top: 16px; }
   `],

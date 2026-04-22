@@ -122,7 +122,11 @@
       "Bash(dir /b \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\")",
       "Read(//c/Users/Administrator/.claude/**)",
       "Skill(stochastic-consensus)",
-      "Skill(stochastic-consensus:*)"
+      "Skill(stochastic-consensus:*)",
+      "Bash(pnpm --filter frontend exec ng build --configuration production)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git reset *)"
     ]
   }
 }

@@ -5,9 +5,13 @@ import { ToastService } from '../../../core/services/toast.service';
   selector: 'app-toast',
   standalone: true,
   template: `
-    <div class="toast-container">
+    <div class="toast-container" aria-live="polite" aria-atomic="false">
       @for (toast of toastService.toasts(); track toast.id) {
-        <div class="toast toast--{{ toast.type }}" (click)="toastService.dismiss(toast.id)">
+        <div
+          class="toast toast--{{ toast.type }}"
+          [attr.role]="toast.type === 'error' ? 'alert' : 'status'"
+          (click)="toastService.dismiss(toast.id)"
+          [attr.aria-label]="toast.message + ' (kliknij, aby zamknąć)'">
           {{ toast.message }}
         </div>
       }

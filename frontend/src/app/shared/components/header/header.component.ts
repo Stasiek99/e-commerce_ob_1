@@ -29,7 +29,7 @@ import { AuthService } from '../../../core/services/auth.service';
           <a routerLink="/" class="header__logo" (click)="closeMobileMenu()">
             <img src="assets/images/logo_full.png" alt="Aromaterie" class="header__logo-img" />
           </a>
-          <nav class="header__nav">
+          <nav class="header__nav" aria-label="Nawigacja główna">
             <button
               tuiChevron
               tuiDropdownHover
@@ -62,6 +62,7 @@ import { AuthService } from '../../../core/services/auth.service';
               <input
                 formControlName="q"
                 placeholder="Szukaj produktów…"
+                aria-label="Szukaj produktów"
                 tuiTextfield
               />
             </tui-textfield>
@@ -105,8 +106,8 @@ import { AuthService } from '../../../core/services/auth.service';
 
       <!-- Mobile navigation panel -->
       @if (mobileMenuOpen) {
-        <div class="mobile-nav" (click)="closeMobileMenu()">
-          <nav class="mobile-nav__links" (click)="$event.stopPropagation()">
+        <div class="mobile-nav" (click)="closeMobileMenu()" (keydown.escape)="closeMobileMenu()">
+          <nav class="mobile-nav__links" aria-label="Nawigacja mobilna" (click)="$event.stopPropagation()">
             <a routerLink="/products" class="mobile-nav__link" (click)="closeMobileMenu()">Wszystkie produkty</a>
             <a routerLink="/category/perfume" class="mobile-nav__link" (click)="closeMobileMenu()">Perfumy</a>
             <a routerLink="/category/diffusers" class="mobile-nav__link" (click)="closeMobileMenu()">Dyfuzory</a>
@@ -114,7 +115,7 @@ import { AuthService } from '../../../core/services/auth.service';
             <hr class="mobile-nav__divider" />
             <form class="mobile-nav__search" [formGroup]="searchForm" (ngSubmit)="onMobileSearch()">
               <tui-textfield iconStart="@tui.search" tuiTextfieldSize="s" class="mobile-nav__search-field">
-                <input formControlName="q" placeholder="Szukaj produktów…" tuiTextfield />
+                <input formControlName="q" placeholder="Szukaj produktów…" aria-label="Szukaj produktów" tuiTextfield />
               </tui-textfield>
               <button tuiButton type="submit" appearance="primary" size="s">Szukaj</button>
             </form>
@@ -172,6 +173,7 @@ import { AuthService } from '../../../core/services/auth.service';
     }
     .header__nav-link:hover,
     .header__nav-link.active { color: var(--color-accent); }
+    .header__nav-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; border-radius: 3px; }
 
     .header__dropdown-divider { border: none; border-top: 1px solid var(--color-border); margin: 4px 0; }
     .header__dropdown-item--all { font-weight: 600; }
@@ -201,6 +203,7 @@ import { AuthService } from '../../../core/services/auth.service';
       position: relative;
     }
     .header__action-link:hover { color: var(--color-accent); }
+    .header__action-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; border-radius: 3px; }
     .header__action-link tui-icon { font-size: 20px; }
     .header__action-link--cart { position: relative; }
     .header__cart-badge {
