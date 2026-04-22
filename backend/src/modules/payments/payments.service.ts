@@ -159,6 +159,12 @@ export class PaymentsService {
           to: payment.order.snapshotEmail,
           orderNumber: payment.order.orderNumber,
           firstName: payment.order.snapshotFirstName,
+          items: payment.order.items.map((i) => ({
+            name: i.snapshotName,
+            quantity: i.quantity,
+            price: i.snapshotPrice,
+          })),
+          shippingCostInCents: payment.order.shippingCostInCents,
           totalInCents: payment.order.totalInCents,
           invoiceUrl: _url,
           invoicePdf: pdf,
