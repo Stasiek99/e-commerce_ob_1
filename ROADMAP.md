@@ -173,7 +173,7 @@ Everything in this phase MUST be done before the first real order.
 ### 4C. Email Improvements (Days 7-8)
 
 - [x] Invoice email template
-- [ ] Retry mechanism (3 attempts, exponential backoff)
+- [x] Retry mechanism (3 attempts, exponential backoff)
 - [ ] Email delivery logging (Resend webhook)
 
 **Exit criteria:** Taiga UI components live · Product cards reusable · Invoices generated · Emails retry on failure
