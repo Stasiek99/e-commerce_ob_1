@@ -13,7 +13,7 @@ import { RouterLink } from '@angular/router';
       <section>
         <h2>1. Administrator danych osobowych</h2>
         <p>Administratorem Twoich danych osobowych jest <strong>[Nazwa spółki]</strong>, z siedzibą w [Adres], NIP: [NIP] (dalej: <strong>Administrator</strong>).</p>
-        <p>Kontakt w sprawach ochrony danych osobowych: <strong>rodo&#64;fragrance-store.pl</strong></p>
+        <p>Kontakt w sprawach ochrony danych osobowych: <strong>rodo&#64;aromaterie.pl</strong></p>
       </section>
 
       <section>
@@ -61,7 +61,7 @@ import { RouterLink } from '@angular/router';
           <li><strong>Prawo do sprzeciwu</strong> wobec przetwarzania (art. 21 RODO).</li>
           <li><strong>Prawo do cofnięcia zgody</strong> w dowolnym momencie, bez wpływu na zgodność z prawem przetwarzania dokonanego przed cofnięciem.</li>
         </ul>
-        <p>Wnioski prosimy kierować na adres: <strong>rodo&#64;fragrance-store.pl</strong>. Odpowiadamy w terminie 30 dni.</p>
+        <p>Wnioski prosimy kierować na adres: <strong>rodo&#64;aromaterie.pl</strong>. Odpowiadamy w terminie 30 dni.</p>
         <p>Masz prawo wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych (ul. Stawki 2, 00-193 Warszawa, <a href="https://uodo.gov.pl" target="_blank" rel="noopener noreferrer">uodo.gov.pl</a>).</p>
       </section>
 
@@ -77,7 +77,7 @@ import { RouterLink } from '@angular/router';
 
       <section>
         <h2>7. Kontakt</h2>
-        <p>W sprawach związanych z ochroną danych osobowych prosimy kontaktować się pod adresem: <strong>rodo&#64;fragrance-store.pl</strong></p>
+        <p>W sprawach związanych z ochroną danych osobowych prosimy kontaktować się pod adresem: <strong>rodo&#64;aromaterie.pl</strong></p>
       </section>
     </div>
   `,

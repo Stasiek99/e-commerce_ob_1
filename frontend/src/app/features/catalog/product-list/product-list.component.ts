@@ -137,7 +137,7 @@ export class ProductListComponent implements OnInit {
       this.seo.updatePageMeta({
         title: label,
         description: slug
-          ? `${label} — premium zapachy w Fragrance Store.`
+          ? `${label} — premium zapachy w Aromaterie.`
           : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
       });
 

@@ -27,8 +27,7 @@ import { AuthService } from '../../../core/services/auth.service';
         <!-- LEFT: logo + nav -->
         <div class="header__left">
           <a routerLink="/" class="header__logo" (click)="closeMobileMenu()">
-            <span class="header__logo-text">Fragrance</span>
-            <span class="header__logo-sub">Store</span>
+            <img src="assets/images/logo_full.png" alt="Aromaterie" class="header__logo-img" />
           </a>
           <nav class="header__nav">
             <button
@@ -151,13 +150,10 @@ import { AuthService } from '../../../core/services/auth.service';
     }
     .header__logo {
       display: flex;
-      flex-direction: column;
+      align-items: center;
       line-height: 1;
-      font-weight: 700;
-      white-space: nowrap;
     }
-    .header__logo-text { font-size: 18px; color: var(--color-primary); font-family: var(--tui-font-text); }
-    .header__logo-sub  { font-size: 11px; color: var(--color-accent); letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--tui-font-text); }
+    .header__logo-img { height: 60px; width: auto; display: block; margin-top: 10px; }
     .header__nav { display: flex; gap: 20px; }
 
     .header__nav-link {

@@ -42,32 +42,37 @@ async function main() {
 
   // ── Categories ──────────────────────────────────────────────────────────────
 
+  // Migrate old slugs to new English slugs if they exist in DB
+  await prisma.category.updateMany({ where: { slug: 'perfumy' }, data: { slug: 'perfume' } });
+  await prisma.category.updateMany({ where: { slug: 'dyfuzory' }, data: { slug: 'diffusers' } });
+  await prisma.category.updateMany({ where: { slug: 'zele-pod-prysznic' }, data: { slug: 'gels' } });
+
   const perfumes = await prisma.category.upsert({
-    where: { slug: 'perfumy' },
+    where: { slug: 'perfume' },
     update: {},
     create: {
       name: 'Perfumy',
-      slug: 'perfumy',
+      slug: 'perfume',
       description: 'Luksusowe perfumy dla kobiet i mężczyzn',
     },
   });
 
   const diffusers = await prisma.category.upsert({
-    where: { slug: 'dyfuzory' },
+    where: { slug: 'diffusers' },
     update: {},
     create: {
       name: 'Dyfuzory',
-      slug: 'dyfuzory',
+      slug: 'diffusers',
       description: 'Eleganckie dyfuzory zapachowe do domu',
     },
   });
 
   const bodyWash = await prisma.category.upsert({
-    where: { slug: 'zele-pod-prysznic' },
+    where: { slug: 'gels' },
     update: {},
     create: {
       name: 'Żele pod prysznic',
-      slug: 'zele-pod-prysznic',
+      slug: 'gels',
       description: 'Perfumowane żele pod prysznic',
     },
   });

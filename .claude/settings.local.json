@@ -119,7 +119,10 @@
       "PowerShell(Get-ChildItem \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\\\\src\" | Where-Object { $_.Name -eq \"package.svg\" -or $_.Name -eq \"user-pen.svg\" -or $_.Name -eq \"map-pinned.svg\" } | Select-Object Name)",
       "Read(//tmp/**)",
       "Bash(dir /b \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\")",
-      "Bash(dir /b \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\")"
+      "Bash(dir /b \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\")",
+      "Read(//c/Users/Administrator/.claude/**)",
+      "Skill(stochastic-consensus)",
+      "Skill(stochastic-consensus:*)"
     ]
   }
 }
