@@ -159,22 +159,22 @@ Everything in this phase MUST be done before the first real order.
 
 ### 4A. Design System + Taiga UI Components (Days 1-4)
 
-- [ ] Product card as reusable component using Taiga UI (already started: Taiga UI installed, design tokens created)
-- [ ] Refactor existing components to use design tokens + Taiga UI primitives
-- [ ] Mobile responsive testing (320px → 1440px)
-- [ ] Accessibility pass: focus indicators, ARIA labels, color contrast (WCAG AA)
+- [x] Product card as reusable component using Taiga UI (already started: Taiga UI installed, design tokens created)
+- [x] Refactor existing components to use design tokens + Taiga UI primitives
+- [x] Mobile responsive testing (320px → 1440px)
+- [x] Accessibility pass: focus indicators, ARIA labels, color contrast (WCAG AA)
 
 ### 4B. Invoice PDF (Days 5-6)
 
-- [ ] Invoice PDF generator (pdfkit or puppeteer-based) — legally required for VAT (ustawa o VAT Art. 106b)
-- [ ] Upload to Supabase Storage
-- [ ] Admin: download invoice from order detail
+- [x] Invoice PDF generator (pdfkit or puppeteer-based) — legally required for VAT (ustawa o VAT Art. 106b)
+- [x] Upload to Supabase Storage
+- [x] Admin: download invoice from order detail
 
 ### 4C. Email Improvements (Days 7-8)
 
-- [ ] Invoice email template
-- [ ] Retry mechanism (3 attempts, exponential backoff)
-- [ ] Email delivery logging (Resend webhook)
+- [x] Invoice email template
+- [x] Retry mechanism (3 attempts, exponential backoff)
+- [x] Email delivery logging (Resend webhook)
 
 **Exit criteria:** Taiga UI components live · Product cards reusable · Invoices generated · Emails retry on failure
 
@@ -302,6 +302,7 @@ Everything in this phase MUST be done before the first real order.
 
 - [ ] Register business domain + point DNS
 - [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
+- [ ] Resend Dashboard → Webhooks → Add endpoint: URL `https://<railway>/email/webhook`, events `email.sent`, `email.delivered`, `email.bounced`, `email.complained` → copy Signing Secret → set `RESEND_WEBHOOK_SECRET` in Railway
 - [ ] Stripe: update statement descriptor to real business name
 - [ ] Seed real product catalog (products, variants, images, categories)
 - [ ] Upload product images to Supabase `product-images` bucket

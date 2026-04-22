@@ -10,6 +10,19 @@
   box-sizing: border-box;
 }
 
+// ── Accessibility utilities ───────────────────────────────────────────────
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html, body {
   height: 100%;
   margin: 0;
@@ -21,4 +34,17 @@ html, body {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+// ── Taiga UI checkout overrides ───────────────────────────────────────────
+.checkout-form[tuiForm] {
+  gap: 0 !important;
+}
+
+[tuiHeader] {
+  margin-bottom: 1.5rem !important;
+}
+
+.checkout-card[tuiCardLarge][data-space] {
+  padding: 0.5rem !important;
 }

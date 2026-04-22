@@ -4,6 +4,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const PRODUCT_IMAGES_BUCKET = 'product-images';
 const SHIPPING_LABELS_BUCKET = 'shipping-labels';
+const INVOICES_BUCKET = 'invoices';
 
 @Injectable()
 export class StorageService {
@@ -53,6 +54,25 @@ export class StorageService {
       .getPublicUrl(path);
 
     return data.publicUrl;
+  }
+
+  async uploadInvoice(pdfBuffer: Buffer, filename: string): Promise<string> {
+    const storagePath = `invoices/${filename}`;
+
+    const { error: uploadError } = await this.supabase.storage
+      .from(INVOICES_BUCKET)
+      .upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+
+    if (uploadError) throw new Error(`Invoice upload failed: ${uploadError.message}`);
+
+    // 10-year signed URL — invoices are legal documents and must stay accessible long-term
+    const TEN_YEARS_SECONDS = 10 * 365 * 24 * 60 * 60;
+    const { data, error: signError } = await this.supabase.storage
+      .from(INVOICES_BUCKET)
+      .createSignedUrl(storagePath, TEN_YEARS_SECONDS);
+
+    if (signError || !data) throw new Error(`Invoice signing failed: ${signError?.message}`);
+    return data.signedUrl;
   }
 
   async deleteFile(bucket: string, path: string) {

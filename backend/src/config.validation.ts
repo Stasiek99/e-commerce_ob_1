@@ -78,6 +78,10 @@ export const envValidationSchema = Joi.object({
   // EMAIL_FROM must use a domain verified in Resend (SPF + DKIM). In dev we
   // fall back to Resend's shared sandbox sender.
   EMAIL_FROM: requiredInProd(Joi.string().email(), 'onboarding@resend.dev'),
+  // Signing secret for Resend webhook events (svix `whsec_…`).
+  // Required in prod — without it, any caller can spoof delivery events.
+  // In dev, the controller logs a warning and skips verification.
+  RESEND_WEBHOOK_SECRET: requiredInProd(Joi.string(), ''),
 
   // ── Optional: DHL/GLS (not required for Phase 0) ──
   DHL_ACCOUNT_NUMBER: Joi.string().optional(),
@@ -86,6 +90,16 @@ export const envValidationSchema = Joi.object({
   GLS_SENDER_ID: Joi.string().optional(),
   GLS_USERNAME: Joi.string().optional(),
   GLS_PASSWORD: Joi.string().optional(),
+
+  // ── Invoice / Seller info ──
+  // Required in production to generate legally-compliant Polish VAT invoices.
+  // SELLER_NIP is the seller's Polish tax ID (10 digits, no spaces).
+  SELLER_NAME: requiredInProd(Joi.string(), 'Aromaterie'),
+  SELLER_NIP: requiredInProd(Joi.string(), ''),
+  SELLER_STREET: requiredInProd(Joi.string(), ''),
+  SELLER_CITY: requiredInProd(Joi.string(), ''),
+  SELLER_POSTAL_CODE: requiredInProd(Joi.string(), ''),
+  INVOICE_FONT_PATH: Joi.string().optional(),
 
   // ── App ──
   PORT: Joi.number().default(3000),

@@ -21,6 +21,7 @@
     "@adminjs/prisma": "^5.0.4",
     "@adminjs/themes": "^1.0.1",
     "@babel/plugin-syntax-import-assertions": "^7.28.6",
+    "@fontsource/inter": "^5.2.8",
     "@fragrance-store/shared-types": "workspace:*",
     "@nestjs/common": "^10.4.1",
     "@nestjs/config": "^3.2.3",
@@ -48,10 +49,12 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",
+    "pdfkit": "^0.18.0",
     "reflect-metadata": "^0.2.2",
     "resend": "^3.5.0",
     "rxjs": "^7.8.1",
     "stripe": "^18.5.0",
+    "svix": "^1.91.1",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
@@ -68,6 +71,7 @@
     "@types/node": "^22.5.5",
     "@types/passport-google-oauth20": "^2.0.16",
     "@types/passport-jwt": "^4.0.1",
+    "@types/pdfkit": "^0.17.6",
     "@types/uuid": "^10.0.0",
     "jest": "^30.3.0",
     "prisma": "^5.19.1",

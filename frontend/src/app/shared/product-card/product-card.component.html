@@ -1,0 +1,59 @@
+<article class="product-card">
+  <!-- Image + Name + Price — full-card link -->
+  <a
+    [routerLink]="['/products', product.slug]"
+    class="product-card__link"
+    [attr.aria-label]="product.name">
+
+    <div class="product-card__image-wrap">
+      @if (product.images?.[0]?.url) {
+        <img
+          class="product-card__image"
+          [src]="product.images![0].url"
+          [alt]="product.name"
+          loading="lazy" />
+      } @else {
+        <div class="product-card__placeholder" aria-hidden="true">
+          <img src="assets/images/logo_small_black.png" alt="" class="product-card__placeholder-logo" />
+        </div>
+      }
+
+      <button
+        class="product-card__wishlist"
+        type="button"
+        [class.product-card__wishlist--active]="wishlisted()"
+        [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
+        (click)="onToggleWishlist($event)">
+        <tui-icon [icon]="wishlisted() ? '@tui.heart' : '@tui.heart'" />
+      </button>
+    </div>
+
+    <div class="product-card__body">
+      <h3 class="product-card__name">{{ product.name }}</h3>
+
+      @if (product.brand) {
+        <p class="product-card__brand">{{ product.brand }}</p>
+      }
+
+      <p class="product-card__price">
+        od {{ firstVariant?.priceInCents | price }}
+      </p>
+    </div>
+  </a>
+
+  <!-- Add-to-cart CTA — outside the link to avoid nested interactives -->
+  <div class="product-card__footer">
+    <button
+      tuiButton
+      type="button"
+      appearance="primary"
+      size="m"
+      class="product-card__btn"
+      [disabled]="adding() || outOfStock"
+      (click)="onAddToCart($event)"
+      [attr.aria-label]="'Dodaj ' + product.name + ' do koszyka'">
+      <tui-icon src="@tui.shopping-cart" />
+      {{ outOfStock ? 'Brak w magazynie' : (adding() ? 'Dodawanie…' : 'Do koszyka') }}
+    </button>
+  </div>
+</article>

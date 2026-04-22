@@ -16,7 +16,7 @@ import { Component } from '@angular/core';
         <div class="contact-box">
           <p><strong>[Nazwa spółki]</strong></p>
           <p>[Adres]</p>
-          <p>E-mail: <strong>zwroty&#64;fragrance-store.pl</strong></p>
+          <p>E-mail: <strong>zwroty&#64;aromaterie.pl</strong></p>
         </div>
         <p>o swojej decyzji o odstąpieniu od niniejszej umowy w drodze jednoznacznego oświadczenia (na przykład pismo wysłane pocztą lub pocztą elektroniczną).</p>
         <p>Możesz skorzystać z wzoru formularza odstąpienia od umowy zamieszczonego poniżej, jednak nie jest to obowiązkowe.</p>
@@ -38,7 +38,7 @@ import { Component } from '@angular/core';
         <div class="form-template">
           <p>(formularz ten należy wypełnić i odesłać tylko w przypadku chęci odstąpienia od umowy)</p>
           <br>
-          <p>Adresat: [Nazwa spółki], [Adres], zwroty&#64;fragrance-store.pl</p>
+          <p>Adresat: [Nazwa spółki], [Adres], zwroty&#64;aromaterie.pl</p>
           <br>
           <p>Ja/My(*) niniejszym informuję/informujemy(*) o moim/naszym(*) odstąpieniu od umowy sprzedaży następujących rzeczy(*) / o świadczenie następującej usługi(*):</p>
           <p>Data zawarcia umowy(*)/odbioru(*):</p>
@@ -67,7 +67,7 @@ import { Component } from '@angular/core';
     </div>
   `,
   styles: [`
-    .legal-page { max-width: 740px; margin: 0 auto; padding: 40px 0; }
+    .legal-page { max-width: 740px; margin: 0 auto; padding: 32px 0; }
     h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
     .version { font-size: 13px; color: var(--color-secondary); margin-bottom: 40px; }
     section { margin-bottom: 32px; }
