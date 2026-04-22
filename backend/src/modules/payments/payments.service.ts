@@ -144,6 +144,15 @@ export class PaymentsService {
         where: { id: payment.orderId },
         data: { status: OrderStatus.PAID },
       }),
+      this.prisma.orderEvent.create({
+        data: {
+          orderId: payment.orderId,
+          fromStatus: OrderStatus.PENDING_PAYMENT,
+          toStatus: OrderStatus.PAID,
+          actor: 'SYSTEM:stripe-webhook',
+          note: `Stripe session ${session.id}`,
+        },
+      }),
     ]);
 
     this.logger.log(
@@ -307,6 +316,16 @@ export class PaymentsService {
           data: { stock: { increment: item.quantity } },
         });
       }
+
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: OrderStatus.PAID,
+          toStatus: OrderStatus.REFUNDED,
+          actor: 'ADMIN',
+          note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
+        },
+      });
     });
 
     this.logger.log(
@@ -344,6 +363,16 @@ export class PaymentsService {
           data: { stock: { increment: item.quantity } },
         });
       }
+
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: OrderStatus.PENDING_PAYMENT,
+          toStatus: OrderStatus.CANCELLED,
+          actor: 'SYSTEM:stripe-webhook',
+          note: failureReason,
+        },
+      });
     });
 
     this.logger.log(

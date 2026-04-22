@@ -21,6 +21,9 @@ export const envValidationSchema = Joi.object({
   // ── Database (always required) ──
   DATABASE_URL: Joi.string().uri().required(),
   DIRECT_URL: Joi.string().uri().required(),
+  // Prisma connections per instance. Formula: instances × limit ≤ pgbouncer max_client_conn.
+  // Supabase free: ~60 total. Supabase Pro: ~200 total. Default 10 → safe up to 6/20 replicas.
+  DATABASE_CONNECTION_LIMIT: Joi.number().integer().min(1).max(100).default(10),
 
   // ── JWT (always required) ──
   JWT_ACCESS_SECRET: Joi.string().min(16).required(),
