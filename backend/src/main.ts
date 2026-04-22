@@ -10,6 +10,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { setupAdmin } from './modules/admin/admin.setup';
 import { PrismaService } from './modules/prisma/prisma.service';
+import { InvoiceService } from './modules/invoice/invoice.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -40,7 +41,8 @@ async function bootstrap() {
   });
 
   const prisma = app.get(PrismaService);
-  await setupAdmin(app, prisma);
+  const invoiceService = app.get(InvoiceService);
+  await setupAdmin(app, prisma, invoiceService);
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

@@ -87,6 +87,16 @@ export const envValidationSchema = Joi.object({
   GLS_USERNAME: Joi.string().optional(),
   GLS_PASSWORD: Joi.string().optional(),
 
+  // ── Invoice / Seller info ──
+  // Required in production to generate legally-compliant Polish VAT invoices.
+  // SELLER_NIP is the seller's Polish tax ID (10 digits, no spaces).
+  SELLER_NAME: requiredInProd(Joi.string(), 'Aromaterie'),
+  SELLER_NIP: requiredInProd(Joi.string(), ''),
+  SELLER_STREET: requiredInProd(Joi.string(), ''),
+  SELLER_CITY: requiredInProd(Joi.string(), ''),
+  SELLER_POSTAL_CODE: requiredInProd(Joi.string(), ''),
+  INVOICE_FONT_PATH: Joi.string().optional(),
+
   // ── App ──
   PORT: Joi.number().default(3000),
   FRONTEND_URL: Joi.string().default('http://localhost:4200'),

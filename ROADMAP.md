@@ -166,9 +166,9 @@ Everything in this phase MUST be done before the first real order.
 
 ### 4B. Invoice PDF (Days 5-6)
 
-- [ ] Invoice PDF generator (pdfkit or puppeteer-based) — legally required for VAT (ustawa o VAT Art. 106b)
-- [ ] Upload to Supabase Storage
-- [ ] Admin: download invoice from order detail
+- [x] Invoice PDF generator (pdfkit or puppeteer-based) — legally required for VAT (ustawa o VAT Art. 106b)
+- [x] Upload to Supabase Storage
+- [x] Admin: download invoice from order detail
 
 ### 4C. Email Improvements (Days 7-8)
 

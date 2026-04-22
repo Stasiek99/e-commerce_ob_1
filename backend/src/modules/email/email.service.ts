@@ -9,6 +9,7 @@ import { shippingNotificationTemplate } from './templates/shipping-notification.
 type EmailKind =
   | 'order_confirmation'
   | 'payment_confirmed'
+  | 'payment_confirmed_with_invoice'
   | 'shipping_notification';
 
 @Injectable()
@@ -51,6 +52,29 @@ export class EmailService {
     });
   }
 
+  async sendPaymentConfirmedWithInvoice(data: {
+    to: string;
+    orderNumber: string;
+    firstName: string;
+    totalInCents: number;
+    invoiceUrl: string;
+    invoicePdf: Buffer;
+  }) {
+    const { subject, html } = paymentConfirmedTemplate({
+      orderNumber: data.orderNumber,
+      firstName: data.firstName,
+      totalInCents: data.totalInCents,
+    });
+    return this.sendWithAttachments(
+      'payment_confirmed_with_invoice',
+      data.to,
+      subject,
+      html,
+      { orderNumber: data.orderNumber },
+      [{ filename: `FV-${data.orderNumber}.pdf`, content: data.invoicePdf }],
+    );
+  }
+
   async sendShippingNotification(data: {
     to: string;
     orderNumber: string;
@@ -64,6 +88,48 @@ export class EmailService {
       orderNumber: data.orderNumber,
       carrier: data.carrier,
     });
+  }
+
+  private async sendWithAttachments(
+    kind: EmailKind,
+    to: string,
+    subject: string,
+    html: string,
+    context: Record<string, string>,
+    attachments: Array<{ filename: string; content: Buffer }>,
+  ) {
+    try {
+      const result = await this.resend.emails.send({
+        from: this.from,
+        to,
+        subject,
+        html,
+        attachments: attachments.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+        })),
+      });
+
+      if (result.error) {
+        throw new Error(
+          `Resend API error: ${result.error.name} — ${result.error.message}`,
+        );
+      }
+
+      this.logger.log(`Email with attachment sent to ${to}: ${subject}`);
+      return result;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send ${kind} email to ${to}: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      Sentry.withScope((scope) => {
+        scope.setTag('email.kind', kind);
+        scope.setContext('email', { to, subject, ...context });
+        Sentry.captureException(error);
+      });
+      throw error;
+    }
   }
 
   private async send(
