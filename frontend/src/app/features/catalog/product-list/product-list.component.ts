@@ -23,16 +23,25 @@ interface FilterGroup {
   options: string[];
 }
 
-const FILTER_GROUPS: FilterGroup[] = [
-  { label: 'Płeć',                key: 'gender',      options: ['Kobieta', 'Mężczyzna', 'Unisex'] },
-  { label: 'Pojemność',           key: 'volume',      options: ['30ml', '50ml', '70ml'] },
-  { label: 'Linia',               key: 'line',        options: ['Millesime', 'Luxury'] },
-  { label: 'Grupa olfaktoryczna', key: 'scentFamily', options: [] },
-];
+const VOLUME_OPTIONS: Record<string, string[]> = {
+  perfume:   ['30ml', '50ml', '70ml'],
+  diffusers: ['100ml', '200ml', '500ml'],
+  gels:      ['250ml'],
+};
+const ALL_VOLUMES = ['30ml', '50ml', '70ml', '100ml', '200ml', '250ml', '500ml'];
+
+function buildFilterGroups(slug: string | null): FilterGroup[] {
+  return [
+    { label: 'Płeć',                key: 'gender',      options: ['Kobieta', 'Mężczyzna', 'Unisex'] },
+    { label: 'Pojemność',           key: 'volume',      options: slug ? (VOLUME_OPTIONS[slug] ?? []) : ALL_VOLUMES },
+    { label: 'Linia',               key: 'line',        options: ['Millesime', 'Luxury'] },
+    { label: 'Grupa olfaktoryczna', key: 'scentFamily', options: [] },
+  ];
+}
 
 type FilterState = Record<string, string[]>;
 const emptyFilters = (): FilterState =>
-  Object.fromEntries(FILTER_GROUPS.map(g => [g.key, []]));
+  Object.fromEntries(buildFilterGroups(null).map((g: FilterGroup) => [g.key, []]));
 
 type SortOption = 'newest' | 'price_asc' | 'price_desc';
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
@@ -166,7 +175,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
         </div>
 
         <tui-accordion>
-          @for (group of filterGroups; track group.key) {
+          @for (group of filterGroups(); track group.key) {
             <tui-accordion-item
               [open]="openGroups()[group.key]"
               (openChange)="setGroupOpen(group.key, $event)"
@@ -374,12 +383,11 @@ export class ProductListComponent implements OnInit {
   readonly staged = signal<FilterState>(emptyFilters());
   readonly appliedFilters = signal<FilterState>(emptyFilters());
 
-  // Per-group open state — first group open by default
+  // Per-group open state — first group open by default (keys are stable across slugs)
   readonly openGroups = signal<Record<string, boolean>>(
-    Object.fromEntries(FILTER_GROUPS.map((g, i) => [g.key, i === 0])),
+    Object.fromEntries(buildFilterGroups(null).map((g, i) => [g.key, i === 0])),
   );
 
-  readonly filterGroups = FILTER_GROUPS;
   readonly sortOptions = SORT_OPTIONS;
 
   // Sort — applied immediately, backend connection comes in the next step
@@ -393,6 +401,9 @@ export class ProductListComponent implements OnInit {
   readonly sortLabel = computed(
     () => SORT_OPTIONS.find(o => o.value === this.sortBy())?.label ?? 'Sortuj',
   );
+
+  // Filter groups are slug-aware: Pojemność options change per category
+  readonly filterGroups = computed(() => buildFilterGroups(this.slug()));
 
   readonly pageTitle = computed(() => {
     const s = this.slug();
