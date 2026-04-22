@@ -153,7 +153,14 @@
       "Bash(unzip -l inter.zip)",
       "Bash(unzip -o inter.zip \"extras/ttf/Inter-Regular.ttf\" \"extras/ttf/Inter-Bold.ttf\" -d inter_extracted)",
       "Bash(cp \"inter_extracted/extras/ttf/Inter-Regular.ttf\" \"e:/repos/e-commerce_ob_1/backend/src/modules/invoice/fonts/Inter-Regular.ttf\")",
-      "Bash(cp \"inter_extracted/extras/ttf/Inter-Bold.ttf\" \"e:/repos/e-commerce_ob_1/backend/src/modules/invoice/fonts/Inter-Bold.ttf\")"
+      "Bash(cp \"inter_extracted/extras/ttf/Inter-Bold.ttf\" \"e:/repos/e-commerce_ob_1/backend/src/modules/invoice/fonts/Inter-Bold.ttf\")",
+      "WebFetch(domain:resend.com)",
+      "WebFetch(domain:docs.svix.com)",
+      "WebFetch(domain:www.svix.com)",
+      "WebFetch(domain:www.inngest.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(pnpm db:migrate)"
     ]
   }
 }

@@ -314,3 +314,20 @@ model Shipment {
 
   @@map("shipments")
 }
+
+// ─── Email Logs ───────────────────────────────────────────────────────────────
+
+model EmailLog {
+  id            String   @id @default(uuid())
+  resendEmailId String
+  event         String
+  to            String
+  subject       String?
+  payload       Json
+  createdAt     DateTime @default(now())
+
+  @@index([resendEmailId])
+  @@index([event])
+  @@index([to])
+  @@map("email_logs")
+}
