@@ -172,9 +172,9 @@ Everything in this phase MUST be done before the first real order.
 
 ### 4C. Email Improvements (Days 7-8)
 
-- [ ] Invoice email template
-- [ ] Retry mechanism (3 attempts, exponential backoff)
-- [ ] Email delivery logging (Resend webhook)
+- [x] Invoice email template
+- [x] Retry mechanism (3 attempts, exponential backoff)
+- [x] Email delivery logging (Resend webhook)
 
 **Exit criteria:** Taiga UI components live · Product cards reusable · Invoices generated · Emails retry on failure
 
@@ -302,6 +302,7 @@ Everything in this phase MUST be done before the first real order.
 
 - [ ] Register business domain + point DNS
 - [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
+- [ ] Resend Dashboard → Webhooks → Add endpoint: URL `https://<railway>/email/webhook`, events `email.sent`, `email.delivered`, `email.bounced`, `email.complained` → copy Signing Secret → set `RESEND_WEBHOOK_SECRET` in Railway
 - [ ] Stripe: update statement descriptor to real business name
 - [ ] Seed real product catalog (products, variants, images, categories)
 - [ ] Upload product images to Supabase `product-images` bucket

@@ -78,6 +78,10 @@ export const envValidationSchema = Joi.object({
   // EMAIL_FROM must use a domain verified in Resend (SPF + DKIM). In dev we
   // fall back to Resend's shared sandbox sender.
   EMAIL_FROM: requiredInProd(Joi.string().email(), 'onboarding@resend.dev'),
+  // Signing secret for Resend webhook events (svix `whsec_…`).
+  // Required in prod — without it, any caller can spoof delivery events.
+  // In dev, the controller logs a warning and skips verification.
+  RESEND_WEBHOOK_SECRET: requiredInProd(Joi.string(), ''),
 
   // ── Optional: DHL/GLS (not required for Phase 0) ──
   DHL_ACCOUNT_NUMBER: Joi.string().optional(),

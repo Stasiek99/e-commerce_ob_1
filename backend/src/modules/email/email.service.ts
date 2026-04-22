@@ -5,6 +5,7 @@ import { Resend } from 'resend';
 import { orderConfirmationTemplate } from './templates/order-confirmation.template';
 import { paymentConfirmedTemplate } from './templates/payment-confirmed.template';
 import { shippingNotificationTemplate } from './templates/shipping-notification.template';
+import { invoiceTemplate } from './templates/invoice.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -56,15 +57,13 @@ export class EmailService {
     to: string;
     orderNumber: string;
     firstName: string;
+    items: Array<{ name: string; quantity: number; price: number }>;
+    shippingCostInCents: number;
     totalInCents: number;
     invoiceUrl: string;
     invoicePdf: Buffer;
   }) {
-    const { subject, html } = paymentConfirmedTemplate({
-      orderNumber: data.orderNumber,
-      firstName: data.firstName,
-      totalInCents: data.totalInCents,
-    });
+    const { subject, html } = invoiceTemplate(data);
     return this.sendWithAttachments(
       'payment_confirmed_with_invoice',
       data.to,
@@ -99,23 +98,18 @@ export class EmailService {
     attachments: Array<{ filename: string; content: Buffer }>,
   ) {
     try {
-      const result = await this.resend.emails.send({
-        from: this.from,
-        to,
-        subject,
-        html,
-        attachments: attachments.map((a) => ({
-          filename: a.filename,
-          content: a.content,
-        })),
-      });
-
-      if (result.error) {
-        throw new Error(
-          `Resend API error: ${result.error.name} — ${result.error.message}`,
-        );
-      }
-
+      const result = await this.withRetry(kind, () =>
+        this.resend.emails.send({
+          from: this.from,
+          to,
+          subject,
+          html,
+          attachments: attachments.map((a) => ({
+            filename: a.filename,
+            content: a.content,
+          })),
+        }),
+      );
       this.logger.log(`Email with attachment sent to ${to}: ${subject}`);
       return result;
     } catch (error) {
@@ -140,21 +134,11 @@ export class EmailService {
     context: Record<string, string>,
   ) {
     try {
-      const result = await this.resend.emails.send({
-        from: this.from,
-        to,
-        subject,
-        html,
-      });
-
       // Resend's SDK returns { data, error } on validation/API errors
-      // instead of throwing, so we must branch on result.error explicitly.
-      if (result.error) {
-        throw new Error(
-          `Resend API error: ${result.error.name} — ${result.error.message}`,
-        );
-      }
-
+      // instead of throwing, so withRetry normalises both paths into a throw.
+      const result = await this.withRetry(kind, () =>
+        this.resend.emails.send({ from: this.from, to, subject, html }),
+      );
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return result;
     } catch (error) {
@@ -164,14 +148,39 @@ export class EmailService {
       );
       Sentry.withScope((scope) => {
         scope.setTag('email.kind', kind);
-        scope.setContext('email', {
-          to,
-          subject,
-          ...context,
-        });
+        scope.setContext('email', { to, subject, ...context });
         Sentry.captureException(error);
       });
       throw error;
     }
+  }
+
+  private async withRetry<T extends { error: unknown }>(
+    kind: EmailKind,
+    fn: () => Promise<T>,
+    maxAttempts = 3,
+    baseDelayMs = 1000,
+  ): Promise<T> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const result = await fn();
+
+      if (!result.error) return result;
+
+      lastError = new Error(
+        `Resend API error: ${(result.error as any).name} — ${(result.error as any).message}`,
+      );
+
+      if (attempt < maxAttempts) {
+        const delay = baseDelayMs * 2 ** (attempt - 1);
+        this.logger.warn(
+          `${kind} email attempt ${attempt}/${maxAttempts} failed — retrying in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+
+    throw lastError;
   }
 }
