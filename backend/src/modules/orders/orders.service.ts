@@ -197,12 +197,23 @@ export class OrdersService {
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
   }
 
-  async findAllForUser(userId: string) {
-    return this.prisma.order.findMany({
-      where: { userId },
-      include: { items: true, payment: true, shipment: true },
-      orderBy: { createdAt: 'desc' },
-    });
+  async findAllForUser(userId: string, query: { page?: number; limit?: number } = {}) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 50);
+    const skip = (page - 1) * limit;
+
+    const [orders, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where: { userId },
+        include: { items: true, payment: true, shipment: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.order.count({ where: { userId } }),
+    ]);
+
+    return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   async findOneForUser(id: string, userId: string) {

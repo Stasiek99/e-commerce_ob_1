@@ -3,14 +3,17 @@ import { HttpClient } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
 import { Location, LowerCasePipe, DatePipe } from '@angular/common';
 import { TuiButton, TuiTitle, TuiIcon } from '@taiga-ui/core';
-import { TuiCell } from '@taiga-ui/layout';
+import { TuiCell, } from '@taiga-ui/layout';
+import { TuiPagination } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
+
+const PAGE_SIZE = 20;
 
 @Component({
   selector: 'app-order-list',
   standalone: true,
-  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiIcon, TuiCell],
+  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiIcon, TuiCell, TuiPagination],
   template: `
     <div class="page">
       <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
@@ -41,6 +44,16 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
           <p class="empty">Brak zamówień.</p>
         }
       </div>
+
+      @if (totalPages() > 1) {
+        <div class="pagination">
+          <tui-pagination
+            [index]="pageIndex()"
+            [length]="totalPages()"
+            (indexChange)="goToPage($event)"
+          />
+        </div>
+      }
     </div>
   `,
   styles: [`
@@ -72,20 +85,40 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
     .status--shipped         { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
 
     .order-total { font-size: 14px; white-space: nowrap; }
-
     .empty { padding: 32px; color: var(--color-secondary); text-align: center; }
+    .pagination { display: flex; justify-content: center; margin-top: 32px; }
   `],
 })
 export class OrderListComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly location = inject(Location);
+
   readonly orders = signal<any[]>([]);
+  readonly pageIndex = signal(0);
+  readonly totalPages = signal(1);
 
   ngOnInit(): void {
-    this.http.get<any[]>(`${environment.apiUrl}/orders`).subscribe({
-      next: (o) => this.orders.set(o),
-    });
+    this.loadOrders(1);
+  }
+
+  goToPage(index: number): void {
+    this.pageIndex.set(index);
+    this.loadOrders(index + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   back(): void { this.location.back(); }
+
+  private loadOrders(page: number): void {
+    this.http
+      .get<{ data: any[]; meta: { totalPages: number } }>(
+        `${environment.apiUrl}/orders?page=${page}&limit=${PAGE_SIZE}`,
+      )
+      .subscribe({
+        next: (res) => {
+          this.orders.set(res.data);
+          this.totalPages.set(res.meta?.totalPages ?? 1);
+        },
+      });
+  }
 }

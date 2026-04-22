@@ -189,7 +189,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] OrderEvent audit trail — new Prisma model, log all status changes with actor + timestamp
 - [x] Connection pool tuning — `connection_limit` in DATABASE_URL
 - [x] Stale cart cleanup — cron to delete anonymous carts >30 days old
-- [ ] Product listing pagination — cursor/offset on all list endpoints
+- [x] Product listing pagination — cursor/offset on all list endpoints
 
 ### 5B. Security Hardening (Days 3-4)
 

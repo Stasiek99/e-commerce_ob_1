@@ -1,6 +1,7 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
+import { TuiPagination } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { SeoService } from '../../../core/services/seo.service';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
@@ -12,10 +13,12 @@ const CATEGORY_LABELS: Record<string, string> = {
   gels: 'Żele pod prysznic',
 };
 
+const PAGE_SIZE = 20;
+
 @Component({
   selector: 'app-product-list',
   standalone: true,
-  imports: [ProductCardComponent, BreadcrumbComponent],
+  imports: [ProductCardComponent, BreadcrumbComponent, TuiPagination],
   template: `
     <div class="page">
       @if (slug()) {
@@ -44,6 +47,16 @@ const CATEGORY_LABELS: Record<string, string> = {
             <p class="empty">Brak produktów.</p>
           }
         </div>
+
+        @if (totalPages() > 1) {
+          <div class="pagination">
+            <tui-pagination
+              [index]="pageIndex()"
+              [length]="totalPages()"
+              (indexChange)="goToPage($event)"
+            />
+          </div>
+        }
       }
     </div>
   `,
@@ -65,6 +78,7 @@ const CATEGORY_LABELS: Record<string, string> = {
       .grid { grid-template-columns: repeat(4, 1fr); }
     }
     .empty { color: var(--color-secondary); }
+    .pagination { display: flex; justify-content: center; margin-top: 40px; }
 
     /* ── Skeleton loader ─────────────────────────────────── */
     @keyframes shimmer {
@@ -113,6 +127,8 @@ export class ProductListComponent implements OnInit {
 
   readonly loading = signal(true);
   readonly products = signal<ProductCardData[]>([]);
+  readonly pageIndex = signal(0);
+  readonly totalPages = signal(1);
   readonly skeletons = Array(8);
 
   readonly slug = signal<string | null>(null);
@@ -131,7 +147,7 @@ export class ProductListComponent implements OnInit {
     this.route.paramMap.subscribe(params => {
       const slug = params.get('slug');
       this.slug.set(slug);
-      this.loading.set(true);
+      this.pageIndex.set(0);
 
       const label = slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
       this.seo.updatePageMeta({
@@ -141,16 +157,29 @@ export class ProductListComponent implements OnInit {
           : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
       });
 
-      const params2 = slug ? `?category=${slug}` : '';
-      this.http
-        .get<any>(`${environment.apiUrl}/products${params2}`)
-        .subscribe({
-          next: (res) => {
-            this.products.set(res.data ?? []);
-            this.loading.set(false);
-          },
-          error: () => this.loading.set(false),
-        });
+      this.loadProducts(1);
+    });
+  }
+
+  goToPage(index: number): void {
+    this.pageIndex.set(index);
+    this.loadProducts(index + 1);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  private loadProducts(page: number): void {
+    this.loading.set(true);
+    const slug = this.slug();
+    const categoryParam = slug ? `&category=${slug}` : '';
+    const url = `${environment.apiUrl}/products?page=${page}&limit=${PAGE_SIZE}${categoryParam}`;
+
+    this.http.get<{ data: ProductCardData[]; meta: { totalPages: number } }>(url).subscribe({
+      next: (res) => {
+        this.products.set(res.data ?? []);
+        this.totalPages.set(res.meta?.totalPages ?? 1);
+        this.loading.set(false);
+      },
+      error: () => this.loading.set(false),
     });
   }
 }
