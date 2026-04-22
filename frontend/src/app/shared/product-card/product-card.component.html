@@ -13,7 +13,9 @@
           [alt]="product.name"
           loading="lazy" />
       } @else {
-        <div class="product-card__placeholder" aria-hidden="true"></div>
+        <div class="product-card__placeholder" aria-hidden="true">
+          <img src="assets/images/logo_small_black.png" alt="" class="product-card__placeholder-logo" />
+        </div>
       }
 
       <button

@@ -9,22 +9,22 @@ import { RouterLink } from '@angular/router';
     <footer class="footer">
       <div class="footer__inner">
         <div class="footer__brand">
-          <span class="footer__logo">Fragrance Store</span>
+          <img src="assets/images/logo_full_white.png" alt="Aromaterie" class="footer__logo-img" />
           <p>Wysokiej jakości perfumy i zapachy do domu.</p>
         </div>
-        <nav class="footer__nav">
+        <nav class="footer__nav" aria-label="Nawigacja sklepu">
           <a routerLink="/products">Wszystkie produkty</a>
           <a routerLink="/category/perfume">Perfumy</a>
           <a routerLink="/category/diffusers">Dyfuzory</a>
           <a routerLink="/category/gels">Żele pod prysznic</a>
           <a routerLink="/account">Moje konto</a>
         </nav>
-        <nav class="footer__legal">
+        <nav class="footer__legal" aria-label="Informacje prawne">
           <a routerLink="/legal/terms">Regulamin</a>
           <a routerLink="/legal/privacy">Polityka prywatności</a>
           <a routerLink="/legal/withdrawal">Prawo odstąpienia</a>
         </nav>
-        <p class="footer__copy">&copy; {{ year }} Fragrance Store. Wszelkie prawa zastrzeżone.</p>
+        <p class="footer__copy">&copy; {{ year }} Aromaterie. Wszelkie prawa zastrzeżone.</p>
       </div>
     </footer>
   `,
@@ -44,13 +44,13 @@ import { RouterLink } from '@angular/router';
       align-items: center;
       text-align: center;
     }
-    .footer__logo { font-size: 18px; font-weight: 700; color: white; }
+    .footer__logo-img { height: 128px; width: auto; display: block; margin: -28px auto -16px; }
     .footer__brand p { margin: 6px 0 0; }
-    .footer__nav { display: flex; gap: 24px; margin: 24px 0; }
+    .footer__nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 24px; margin: 24px 0; }
     .footer__nav a { font-size: 14px; color: rgba(255,255,255,0.7); transition: color 0.15s; }
     .footer__nav a:hover { color: white; }
-    .footer__legal { display: flex; gap: 20px; margin-bottom: 16px; }
-    .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.55); transition: color 0.15s; }
+    .footer__legal { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; margin-bottom: 16px; }
+    .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.75); transition: color 0.15s; }
     .footer__legal a:hover { color: white; }
     .footer__copy { font-size: 12px; margin-top: 16px; }
   `],

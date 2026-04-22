@@ -14,15 +14,17 @@ export interface Breadcrumb {
   standalone: true,
   imports: [RouterLink, TuiLink, TuiBreadcrumbs, TuiItem],
   template: `
-    <tui-breadcrumbs>
-      @for (crumb of crumbs; track $index; let last = $last) {
-        @if (!last && crumb.link) {
-          <a *tuiItem tuiLink [routerLink]="crumb.link">{{ crumb.label }}</a>
-        } @else {
-          <span *tuiItem>{{ crumb.label }}</span>
+    <nav aria-label="Nawigacja strony">
+      <tui-breadcrumbs>
+        @for (crumb of crumbs; track $index; let last = $last) {
+          @if (!last && crumb.link) {
+            <a *tuiItem tuiLink [routerLink]="crumb.link">{{ crumb.label }}</a>
+          } @else {
+            <span *tuiItem aria-current="page">{{ crumb.label }}</span>
+          }
         }
-      }
-    </tui-breadcrumbs>
+      </tui-breadcrumbs>
+    </nav>
   `,
   styles: [`
     :host { display: block; margin-bottom: 16px; }

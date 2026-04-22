@@ -23,10 +23,13 @@ import { TuiButton } from '@taiga-ui/core';
   styles: [`
     .hero {
       text-align: center;
-      padding: 96px 0;
+      padding: 96px 16px;
     }
-    h1 { font-size: 42px; font-weight: 700; margin-bottom: 16px; }
-    p { font-size: 18px; color: var(--color-secondary); margin-bottom: 32px; }
+    h1 { font-size: clamp(24px, 6vw, 42px); font-weight: 700; margin-bottom: 16px; line-height: 1.2; }
+    p { font-size: clamp(15px, 2.5vw, 18px); color: var(--color-secondary); margin-bottom: 32px; }
+    @media (max-width: 480px) {
+      .hero { padding: 56px 0; }
+    }
     .debug-sentry {
       position: fixed;
       bottom: 16px;

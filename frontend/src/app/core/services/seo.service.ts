@@ -3,8 +3,8 @@ import { Meta, Title } from '@angular/platform-browser';
 import { DOCUMENT } from '@angular/common';
 import { Router } from '@angular/router';
 
-const SITE_NAME = 'Fragrance Store';
-const SITE_URL = 'https://fragrance-store.pl';
+const SITE_NAME = 'Aromaterie';
+const SITE_URL = 'https://aromaterie.pl';
 const DEFAULT_DESCRIPTION =
   'Perfumy, dyfuzory i żele pod prysznic premium. Starannie wyselekcjonowane zapachy dla wymagających.';
 const DEFAULT_IMAGE = `${SITE_URL}/assets/og-default.jpg`;

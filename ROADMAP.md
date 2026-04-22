@@ -161,8 +161,8 @@ Everything in this phase MUST be done before the first real order.
 
 - [x] Product card as reusable component using Taiga UI (already started: Taiga UI installed, design tokens created)
 - [x] Refactor existing components to use design tokens + Taiga UI primitives
-- [ ] Mobile responsive testing (320px → 1440px)
-- [ ] Accessibility pass: focus indicators, ARIA labels, color contrast (WCAG AA)
+- [x] Mobile responsive testing (320px → 1440px)
+- [x] Accessibility pass: focus indicators, ARIA labels, color contrast (WCAG AA)
 
 ### 4B. Invoice PDF (Days 5-6)
 

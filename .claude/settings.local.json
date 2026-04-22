@@ -116,7 +116,17 @@
       "WebFetch(domain:taiga-ui.dev)",
       "PowerShell(head)",
       "PowerShell(dir \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\\\\src\" | Where-Object { $_.Name -match \"heart|shopping|user|search\" } | Select-Object Name)",
-      "PowerShell(Get-ChildItem \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\\\\src\" | Where-Object { $_.Name -eq \"package.svg\" -or $_.Name -eq \"user-pen.svg\" -or $_.Name -eq \"map-pinned.svg\" } | Select-Object Name)"
+      "PowerShell(Get-ChildItem \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\\\\src\" | Where-Object { $_.Name -eq \"package.svg\" -or $_.Name -eq \"user-pen.svg\" -or $_.Name -eq \"map-pinned.svg\" } | Select-Object Name)",
+      "Read(//tmp/**)",
+      "Bash(dir /b \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\")",
+      "Bash(dir /b \"e:\\\\repos\\\\e-commerce_ob_1\\\\frontend\\\\node_modules\\\\@taiga-ui\\\\icons\")",
+      "Read(//c/Users/Administrator/.claude/**)",
+      "Skill(stochastic-consensus)",
+      "Skill(stochastic-consensus:*)",
+      "Bash(pnpm --filter frontend exec ng build --configuration production)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git reset *)"
     ]
   }
 }

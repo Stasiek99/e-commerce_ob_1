@@ -37,11 +37,17 @@ const CATEGORY_LABELS: Record<string, string> = {
             <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img" />
           }
           @if (product()!.images?.length > 1) {
-            <div class="detail__thumbs">
-              @for (img of product()!.images; track img.url) {
-                <img [src]="img.url" [alt]="product()!.name"
-                  class="detail__thumb" [class.detail__thumb--active]="activeImage() === img.url"
-                  (click)="activeImage.set(img.url)" />
+            <div class="detail__thumbs" role="group" aria-label="Miniatury zdjęć">
+              @for (img of product()!.images; track img.url; let i = $index) {
+                <button
+                  type="button"
+                  class="detail__thumb-btn"
+                  [class.detail__thumb-btn--active]="activeImage() === img.url"
+                  [attr.aria-label]="'Zdjęcie ' + (i + 1)"
+                  [attr.aria-pressed]="activeImage() === img.url"
+                  (click)="activeImage.set(img.url)">
+                  <img [src]="img.url" [alt]="" class="detail__thumb" />
+                </button>
               }
             </div>
           }
@@ -120,8 +126,9 @@ const CATEGORY_LABELS: Record<string, string> = {
                 size="l"
                 class="detail__wishlist-btn"
                 [class.detail__wishlist-btn--active]="wishlisted()"
+                [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
                 (click)="toggleWishlist()">
-                <tui-icon [icon]="wishlisted() ? '@tui.heart-fill' : '@tui.heart'" />
+                <tui-icon [icon]="wishlisted() ? '@tui.heart-fill' : '@tui.heart'" aria-hidden="true" />
               </button>
             </div>
           }
@@ -155,12 +162,14 @@ const CATEGORY_LABELS: Record<string, string> = {
             <div class="detail__desc-section">
               <button tuiButton type="button" appearance="flat" size="s"
                 class="detail__expand-btn"
+                [attr.aria-expanded]="descExpanded"
+                aria-controls="product-description"
                 (click)="descExpanded = !descExpanded">
                 {{ descExpanded ? 'Zwiń opis' : 'Rozwiń opis' }}
-                <tui-icon [icon]="descExpanded ? '@tui.chevron-up' : '@tui.chevron-down'" />
+                <tui-icon [icon]="descExpanded ? '@tui.chevron-up' : '@tui.chevron-down'" aria-hidden="true" />
               </button>
               <tui-expand [expanded]="descExpanded">
-                <div class="detail__desc-body">{{ product()!.description }}</div>
+                <div id="product-description" class="detail__desc-body">{{ product()!.description }}</div>
               </tui-expand>
             </div>
           }
@@ -183,20 +192,29 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__gallery { position: sticky; top: 80px; }
     .detail__main-img { width: 100%; border-radius: var(--border-radius-md); display: block; }
     .detail__thumbs { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-    .detail__thumb {
-      width: 72px; height: 72px; object-fit: cover;
-      border-radius: var(--border-radius-sm);
+    .detail__thumb-btn {
+      padding: 0;
+      background: none;
       border: 2px solid var(--color-border);
-      cursor: pointer; transition: border-color 0.15s;
+      border-radius: var(--border-radius-sm);
+      cursor: pointer;
+      transition: border-color 0.15s;
+      flex-shrink: 0;
     }
-    .detail__thumb--active { border-color: var(--color-primary); }
+    .detail__thumb-btn--active { border-color: var(--color-primary); }
+    .detail__thumb-btn:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+    .detail__thumb {
+      width: 68px; height: 68px; object-fit: cover;
+      border-radius: calc(var(--border-radius-sm) - 2px);
+      display: block;
+    }
 
     /* Info */
     .detail__brand {
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
       color: var(--color-accent); margin: 0 0 6px; font-weight: 600;
     }
-    .detail__name { font-size: 28px; font-weight: 700; margin: 0 0 12px; line-height: 1.25; }
+    .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.25; }
     .detail__short-desc { color: var(--color-secondary); font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
 
     /* Variants */
@@ -234,8 +252,12 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__meta-label { color: var(--color-secondary); font-weight: 500; }
 
     @media (max-width: 768px) {
-      .detail { grid-template-columns: 1fr; gap: 32px; }
+      .detail { grid-template-columns: 1fr; gap: 32px; padding: 24px 0 48px; }
       .detail__gallery { position: static; }
+    }
+    @media (max-width: 480px) {
+      .detail__cta { flex-wrap: wrap; }
+      .detail__add-btn { width: 100%; }
     }
   `],
 })

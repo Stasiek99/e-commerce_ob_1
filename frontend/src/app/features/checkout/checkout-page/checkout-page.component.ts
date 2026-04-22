@@ -79,10 +79,12 @@ const CARRIERS = [
                       type="button"
                       class="addr-pill"
                       [class.addr-pill--active]="selectedSavedId() === addr.id"
+                      [attr.aria-label]="addr.firstName + ' ' + addr.lastName + ', ' + addr.city + (addr.isDefault ? ' (domyślny)' : '')"
+                      [attr.aria-pressed]="selectedSavedId() === addr.id"
                       (click)="selectSavedAddress(addr)">
-                      <span class="addr-pill__name">{{ addr.firstName }} {{ addr.lastName }}</span>
-                      <span class="addr-pill__city">{{ addr.city }}</span>
-                      @if (addr.isDefault) { <span class="addr-pill__badge">★</span> }
+                      <span class="addr-pill__name" aria-hidden="true">{{ addr.firstName }} {{ addr.lastName }}</span>
+                      <span class="addr-pill__city" aria-hidden="true">{{ addr.city }}</span>
+                      @if (addr.isDefault) { <span class="addr-pill__badge" aria-hidden="true">★</span> }
                     </button>
                   }
                   <button
@@ -97,39 +99,39 @@ const CARRIERS = [
 
               <div class="row">
                 <div class="field">
-                  <label>Imię *</label>
-                  <input formControlName="firstName" [class.invalid]="isInvalid('firstName')" />
+                  <label for="checkout-firstName">Imię *</label>
+                  <input id="checkout-firstName" formControlName="firstName" [class.invalid]="isInvalid('firstName')" />
                 </div>
                 <div class="field">
-                  <label>Nazwisko *</label>
-                  <input formControlName="lastName" [class.invalid]="isInvalid('lastName')" />
+                  <label for="checkout-lastName">Nazwisko *</label>
+                  <input id="checkout-lastName" formControlName="lastName" [class.invalid]="isInvalid('lastName')" />
                 </div>
               </div>
               <div class="field">
-                <label>Firma</label>
-                <input formControlName="company" />
+                <label for="checkout-company">Firma</label>
+                <input id="checkout-company" formControlName="company" />
               </div>
               <div class="field">
-                <label>Ulica i numer *</label>
-                <input formControlName="street" [class.invalid]="isInvalid('street')" />
+                <label for="checkout-street">Ulica i numer *</label>
+                <input id="checkout-street" formControlName="street" [class.invalid]="isInvalid('street')" />
               </div>
               <div class="row">
                 <div class="field">
-                  <label>Kod pocztowy *</label>
-                  <input formControlName="postalCode" placeholder="00-000" [class.invalid]="isInvalid('postalCode')" />
+                  <label for="checkout-postalCode">Kod pocztowy *</label>
+                  <input id="checkout-postalCode" formControlName="postalCode" placeholder="00-000" [class.invalid]="isInvalid('postalCode')" />
                 </div>
                 <div class="field">
-                  <label>Miasto *</label>
-                  <input formControlName="city" [class.invalid]="isInvalid('city')" />
+                  <label for="checkout-city">Miasto *</label>
+                  <input id="checkout-city" formControlName="city" [class.invalid]="isInvalid('city')" />
                 </div>
               </div>
               <div class="field">
-                <label>Telefon *</label>
-                <input formControlName="phone" type="tel" [class.invalid]="isInvalid('phone')" />
+                <label for="checkout-phone">Telefon *</label>
+                <input id="checkout-phone" formControlName="phone" type="tel" [class.invalid]="isInvalid('phone')" />
               </div>
               <div class="field">
-                <label>Email (do potwierdzenia zamówienia) *</label>
-                <input formControlName="email" type="email" [class.invalid]="isInvalid('email')" />
+                <label for="checkout-email">Email (do potwierdzenia zamówienia) *</label>
+                <input id="checkout-email" formControlName="email" type="email" [class.invalid]="isInvalid('email')" />
               </div>
 
               @if (auth.currentUser() && selectedSavedId() === null) {
@@ -147,26 +149,36 @@ const CARRIERS = [
               <header tuiHeader>
                 <h2 tuiTitle>Sposób dostawy</h2>
               </header>
-              <div class="carrier-list">
+              <fieldset class="carrier-list">
+                <legend class="sr-only">Wybierz sposób dostawy</legend>
                 @for (c of carriers; track c.code) {
-                  <div
+                  <label
                     class="carrier-option"
-                    [class.carrier-option--selected]="selectedCarrier()?.code === c.code"
-                    (click)="selectedCarrier.set(c)">
+                    [class.carrier-option--selected]="selectedCarrier()?.code === c.code">
+                    <input
+                      type="radio"
+                      name="carrier"
+                      [id]="'carrier-' + c.code"
+                      [value]="c.code"
+                      [checked]="selectedCarrier()?.code === c.code"
+                      (change)="selectedCarrier.set(c)"
+                      class="sr-only"
+                    />
                     <div class="carrier-option__name">{{ c.name }}</div>
                     <div class="carrier-option__desc">{{ c.desc }}</div>
                     <div class="carrier-option__price">{{ c.price | price }}</div>
-                  </div>
+                  </label>
                 }
-              </div>
+              </fieldset>
               @if (selectedCarrier()?.code === 'INPOST') {
                 <div class="inpost-section">
-                  <p>Wybierz paczkomat:</p>
+                  <label for="locker-code" class="locker-label">Kod paczkomatu:</label>
                   <input
+                    id="locker-code"
                     type="text"
                     [value]="lockerCode() ?? ''"
                     (input)="lockerCode.set($any($event.target).value)"
-                    placeholder="Wpisz kod paczkomatu (np. KRA001)"
+                    placeholder="np. KRA001"
                     class="locker-input" />
                   <p class="hint">Pełna mapa paczkomatów będzie dostępna wkrótce.</p>
                 </div>
@@ -260,8 +272,8 @@ const CARRIERS = [
     </div>
   `,
   styles: [`
-    .checkout { max-width: 640px; margin: 0 auto; padding: 32px 24px; }
-    h1 { font-size: 28px; font-weight: 700; margin-bottom: 32px; }
+    .checkout { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+    h1 { font-size: clamp(22px, 5vw, 28px); font-weight: 700; margin-bottom: 32px; }
 
     .checkout__stepper { margin-bottom: 32px; }
     .checkout__slides { display: block; }
@@ -281,21 +293,26 @@ const CARRIERS = [
       padding: 10px 12px;
       font-size: 14px;
       outline: none;
-      transition: border-color 0.15s;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
-    input:not([type=checkbox]):focus { border-color: var(--color-primary); }
+    input:not([type=checkbox]):focus-visible {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 30%, transparent);
+    }
     input.invalid { border-color: var(--color-error); }
 
     /* Carrier */
-    .carrier-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+    .carrier-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; border: none; padding: 0; }
     .carrier-option { border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 16px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 12px; }
     .carrier-option:hover { border-color: var(--color-primary); }
+    .carrier-option:has(input:focus-visible) { outline: 3px solid var(--color-accent); outline-offset: 1px; }
     .carrier-option--selected { border-color: var(--color-primary); background: #f8f8f8; }
     .carrier-option__name { font-weight: 600; flex: 1; }
     .carrier-option__desc { font-size: 12px; color: var(--color-secondary); }
     .carrier-option__price { font-weight: 600; }
     .inpost-section { padding: 16px 0 0; }
-    .locker-input { margin: 8px 0; }
+    .locker-label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; }
+    .locker-input { margin: 0 0 8px; }
     .hint { font-size: 12px; color: var(--color-secondary); margin: 0; }
 
     /* Summary */
@@ -328,6 +345,12 @@ const CARRIERS = [
 
     /* Footer nav */
     .checkout__nav { display: flex; justify-content: space-between; }
+
+    @media (max-width: 480px) {
+      .row { grid-template-columns: 1fr; }
+      .carrier-option { flex-wrap: wrap; }
+      .carrier-option__desc { width: 100%; order: 3; }
+    }
   `],
 })
 export class CheckoutPageComponent implements OnInit {

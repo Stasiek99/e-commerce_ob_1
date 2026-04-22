@@ -81,7 +81,9 @@ import { AuthService } from '../../../core/services/auth.service';
     .card__label { font-size: 15px; font-weight: 600; }
     .card__desc  { font-size: 13px; color: var(--color-secondary); line-height: 1.4; }
 
-    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 768px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 16px; } }
+    @media (max-width: 480px) { .grid { grid-template-columns: 1fr; gap: 12px; } }
+    @media (max-width: 480px) { h1 { font-size: 22px; } }
   `],
 })
 export class DashboardComponent {
