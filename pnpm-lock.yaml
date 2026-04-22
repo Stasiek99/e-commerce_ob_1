@@ -51,6 +51,9 @@ importers:
       '@babel/plugin-syntax-import-assertions':
         specifier: ^7.28.6
         version: 7.28.6(@babel/core@7.29.0)
+      '@fontsource/inter':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@fragrance-store/shared-types':
         specifier: workspace:*
         version: link:../packages/shared-types
@@ -2024,6 +2027,9 @@ packages:
 
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@fontsource/inter@5.2.8':
+    resolution: {integrity: sha512-P6r5WnJoKiNVV+zvW2xM13gNdFhAEpQ9dQJHt3naLvfg+LkF2ldgSLiF4T41lf1SQCM9QmkqPTn4TH568IRagg==}
 
   '@gar/promise-retry@1.0.3':
     resolution: {integrity: sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA==}
@@ -11468,6 +11474,8 @@ snapshots:
       '@floating-ui/utils': 0.2.11
 
   '@floating-ui/utils@0.2.11': {}
+
+  '@fontsource/inter@5.2.8': {}
 
   '@gar/promise-retry@1.0.3': {}
 

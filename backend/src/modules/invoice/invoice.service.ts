@@ -78,14 +78,11 @@ export class InvoiceService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      // Bundled Inter font supports full Polish character set (Latin Extended A/B)
-      try {
-        doc.registerFont('Inter', path.join(FONTS_DIR, 'Inter-Regular.woff2'));
-        doc.registerFont('Inter-Bold', path.join(FONTS_DIR, 'Inter-Bold.woff2'));
-        doc.font('Inter');
-      } catch (err) {
-        this.logger.warn(`Inter font failed to load, using Helvetica: ${(err as Error).message}`);
-      }
+      // Inter TTF — full glyph set including Polish (Latin Extended A/B).
+      // woff/woff2 cause fontkit subsetting errors; TTF embeds cleanly.
+      doc.registerFont('Inter', path.join(FONTS_DIR, 'Inter-Regular.ttf'));
+      doc.registerFont('Inter-Bold', path.join(FONTS_DIR, 'Inter-Bold.ttf'));
+      doc.font('Inter');
 
       this.render(doc, order);
       doc.end();
@@ -204,7 +201,7 @@ export class InvoiceService {
     this.sumRow(doc, 'Suma netto:', this.fmtMoney(totalNetCents), sumX, y, sumLabelW, sumValueW, false);
     y += 16;
     this.sumRow(doc, 'VAT 23%:', this.fmtMoney(totalVatCents), sumX, y, sumLabelW, sumValueW, false);
-    y += 4;
+    y += 16;
     doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
     y += 6;
     this.sumRow(doc, 'Razem brutto:', this.fmtMoney(totalGrossCents), sumX, y, sumLabelW, sumValueW, false);
