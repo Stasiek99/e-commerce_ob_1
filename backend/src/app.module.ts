@@ -5,6 +5,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { HealthController } from './health.controller';
+import { LocationController } from './modules/location/location.controller';
 import { envValidationSchema } from './config.validation';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -48,7 +49,7 @@ import { InvoiceModule } from './modules/invoice/invoice.module';
     // AdminModule must be last — depends on PrismaModule being initialized
     AdminModule,
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, LocationController],
   providers: [
     { provide: APP_FILTER, useClass: SentryGlobalFilter },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
