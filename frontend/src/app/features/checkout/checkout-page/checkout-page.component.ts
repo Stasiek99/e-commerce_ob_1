@@ -5,7 +5,7 @@ import { Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
-import { TuiButton, TuiTitle } from '@taiga-ui/core';
+import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
 import { TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
@@ -35,7 +35,7 @@ const CARRIERS = [
     ReactiveFormsModule,
     RouterLink,
     PricePipe,
-    TuiButton,
+    TuiButton, TuiLabel, TuiTextfield,
     TuiTitle,
     TuiStepper,
     TuiCard,
@@ -76,7 +76,7 @@ const CARRIERS = [
               tuiCardLarge
               tuiForm=""
               appearance="elevated"
-              class="checkout-card checkout-form"
+              class="checkout-card addr-form"
               [formGroup]="addressForm"
               (ngSubmit)="onNext()"
             >
@@ -109,31 +109,37 @@ const CARRIERS = [
                 </div>
               }
 
-              <div class="row">
-                <div class="field">
-                  <label for="checkout-firstName">Imię *</label>
-                  <input id="checkout-firstName" formControlName="firstName" autocomplete="given-name"
-                    [class.invalid]="isInvalid('firstName')" />
+              <!-- Name -->
+              <div class="name-row">
+                <div class="name-col">
+                  <tui-textfield>
+                    <label tuiLabel>Imię *</label>
+                    <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
+                  </tui-textfield>
                   @if (errorMsg('firstName'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
-                <div class="field">
-                  <label for="checkout-lastName">Nazwisko *</label>
-                  <input id="checkout-lastName" formControlName="lastName" autocomplete="family-name"
-                    [class.invalid]="isInvalid('lastName')" />
+                <div class="name-col">
+                  <tui-textfield>
+                    <label tuiLabel>Nazwisko *</label>
+                    <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
+                  </tui-textfield>
                   @if (errorMsg('lastName'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
               </div>
 
-              <div class="field">
-                <label for="checkout-company">Firma</label>
-                <input id="checkout-company" formControlName="company" autocomplete="organization" />
-              </div>
+              <!-- Company -->
+              <tui-textfield>
+                <label tuiLabel>Firma</label>
+                <input tuiTextfield type="text" formControlName="company" autocomplete="organization" />
+              </tui-textfield>
 
-              <div class="field">
-                <label for="checkout-street">Ulica i numer budynku *</label>
-                <input id="checkout-street" formControlName="street" autocomplete="street-address"
-                  placeholder="np. ul. Marszałkowska 12/4"
-                  [class.invalid]="isInvalid('street')" />
+              <!-- Street -->
+              <div>
+                <tui-textfield>
+                  <label tuiLabel>Ulica i numer budynku *</label>
+                  <input tuiTextfield type="text" formControlName="street" autocomplete="street-address"
+                    placeholder="np. ul. Marszałkowska 12/4" />
+                </tui-textfield>
                 @if (errorMsg('street'); as msg) {
                   <p class="field-error">{{ msg }}</p>
                 } @else {
@@ -145,17 +151,21 @@ const CARRIERS = [
                 }
               </div>
 
-              <div class="row">
-                <div class="field">
-                  <label for="checkout-postalCode">Kod pocztowy *</label>
-                  <input id="checkout-postalCode" formControlName="postalCode" placeholder="00-000"
-                    autocomplete="postal-code" [class.invalid]="isInvalid('postalCode')" />
+              <!-- Postal code + city + country (3-column) -->
+              <div class="addr-row-3">
+                <div>
+                  <tui-textfield>
+                    <label tuiLabel>Kod pocztowy *</label>
+                    <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000"
+                      autocomplete="postal-code" />
+                  </tui-textfield>
                   @if (errorMsg('postalCode'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
-                <div class="field">
-                  <label for="checkout-city">Miasto *</label>
-                  <input id="checkout-city" formControlName="city" autocomplete="address-level2"
-                    [class.invalid]="isInvalid('city')" />
+                <div class="name-col">
+                  <tui-textfield>
+                    <label tuiLabel>Miasto *</label>
+                    <input tuiTextfield type="text" formControlName="city" autocomplete="address-level2" />
+                  </tui-textfield>
                   @if (cityLoading()) { <p class="city-hint">Szukam miejscowości…</p> }
                   @if (citySuggestions().length > 1) {
                     <div class="city-suggestions">
@@ -166,33 +176,35 @@ const CARRIERS = [
                   }
                   @if (errorMsg('city'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
+                <div>
+                  <tui-textfield class="field-disabled">
+                    <label tuiLabel>Kraj</label>
+                    <input tuiTextfield value="Polska" [attr.disabled]="true" tabindex="-1" />
+                  </tui-textfield>
+                </div>
               </div>
 
-              <!-- Country — disabled; selectable in a future release -->
-              <div class="field">
-                <label for="checkout-country">Kraj</label>
-                <input id="checkout-country" value="Polska" disabled tabindex="-1" />
-              </div>
-
-              <!-- Phone — TuiInputPhoneInternational -->
-              <div class="field field--phone">
-                <tui-input-phone-international
-                  formControlName="phone"
-                  [countries]="countries"
-                  [countryIsoCode]="countryIsoCode"
-                  [countrySearch]="true"
-                  (countryIsoCodeChange)="countryIsoCode = $event"
-                >
-                  Telefon *
-                </tui-input-phone-international>
-                @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
-              </div>
-
-              <div class="field">
-                <label for="checkout-email">Email (do potwierdzenia zamówienia) *</label>
-                <input id="checkout-email" formControlName="email" type="email" autocomplete="email"
-                  [class.invalid]="isInvalid('email')" />
-                @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
+              <!-- Phone + email (2-column) -->
+              <div class="addr-row-2">
+                <div>
+                  <tui-input-phone-international
+                    formControlName="phone"
+                    [countries]="countries"
+                    [countryIsoCode]="countryIsoCode"
+                    [countrySearch]="true"
+                    (countryIsoCodeChange)="countryIsoCode = $event"
+                  >
+                    Telefon *
+                  </tui-input-phone-international>
+                  @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
+                </div>
+                <div>
+                  <tui-textfield>
+                    <label tuiLabel>Email *</label>
+                    <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
+                  </tui-textfield>
+                  @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
+                </div>
               </div>
 
               @if (auth.currentUser() && selectedSavedId() === null) {
@@ -233,14 +245,13 @@ const CARRIERS = [
               </fieldset>
               @if (selectedCarrier()?.code === 'INPOST') {
                 <div class="inpost-section">
-                  <label for="locker-code" class="locker-label">Kod paczkomatu:</label>
-                  <input
-                    id="locker-code"
-                    type="text"
-                    [value]="lockerCode() ?? ''"
-                    (input)="lockerCode.set($any($event.target).value)"
-                    placeholder="np. KRA001"
-                    class="locker-input" />
+                  <tui-textfield>
+                    <label tuiLabel>Kod paczkomatu</label>
+                    <input tuiTextfield type="text"
+                      [value]="lockerCode() ?? ''"
+                      (input)="lockerCode.set($any($event.target).value)"
+                      placeholder="np. POL001" />
+                  </tui-textfield>
                   <p class="hint">Pełna mapa paczkomatów będzie dostępna wkrótce.</p>
                 </div>
               }
@@ -316,10 +327,9 @@ const CARRIERS = [
           tuiButton
           appearance="secondary"
           type="button"
-          [disabled]="!index"
           (click)="goBack()"
         >
-          Wróć
+          {{ index === 0 ? 'Koszyk' : 'Wróć' }}
         </button>
         <button
           tuiButton
@@ -344,25 +354,16 @@ const CARRIERS = [
     h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-secondary); margin: 0 0 8px; }
     .step-card { display: block; }
 
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .field { margin-bottom: 16px; }
-    .field--phone { margin-bottom: 16px; }
-    label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; }
-    input:not([type=checkbox]):not([type=radio]) {
-      width: 100%;
-      border: 1px solid var(--color-border);
-      border-radius: var(--border-radius-md);
-      padding: 10px 12px;
-      font-size: 14px;
-      outline: none;
-      transition: border-color 0.15s, box-shadow 0.15s;
-    }
-    input:not([type=checkbox]):not([type=radio]):focus-visible {
-      border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 30%, transparent);
-    }
-    input.invalid { border-color: var(--color-error); }
-    input:disabled, input[disabled] { color: var(--color-secondary); background: #f8f8f8; cursor: default; opacity: 0.7; }
+    /* Address form — Taiga UI style matching /account/addresses */
+    .checkout-card { border: 1px solid var(--color-border) !important; }
+    .addr-form { display: flex; flex-direction: column; gap: 1rem; }
+    .addr-form [tuiHeader] { margin-bottom: 0; }
+    .name-row  { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+    .addr-row-3 { display: grid; grid-template-columns: 9rem 1fr 7rem; gap: 12px; align-items: start; }
+    .addr-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+    .name-col { display: flex; flex-direction: column; }
+    .field-disabled { opacity: 0.6; pointer-events: none; }
+
     .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
     .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
     .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -390,9 +391,7 @@ const CARRIERS = [
     .carrier-option__name { font-weight: 600; flex: 1; }
     .carrier-option__desc { font-size: 12px; color: var(--color-secondary); }
     .carrier-option__price { font-weight: 600; }
-    .inpost-section { padding: 16px 0 0; }
-    .locker-label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; }
-    .locker-input { margin: 0 0 8px; }
+    .inpost-section { padding: 16px 0 0; display: flex; flex-direction: column; gap: 8px; }
     .hint { font-size: 12px; color: var(--color-secondary); margin: 0; }
 
     /* Summary */
@@ -410,11 +409,11 @@ const CARRIERS = [
     .consent-label a { color: var(--color-primary); text-decoration: underline; }
 
     /* Save address */
-    .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 20px; cursor: pointer; }
+    .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 0; cursor: pointer; }
     .save-addr-label input { width: 15px; height: 15px; accent-color: var(--color-primary); cursor: pointer; }
 
     /* Address picker */
-    .addr-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--color-border); }
+    .addr-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 0; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
     .addr-pill { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 8px 12px; cursor: pointer; font-size: 12px; transition: border-color 0.15s; }
     .addr-pill:hover { border-color: var(--color-primary); }
     .addr-pill--active { border-color: var(--color-primary); background: #f0f0ff; }
@@ -424,10 +423,13 @@ const CARRIERS = [
     .addr-pill__badge { color: var(--color-primary); font-size: 10px; }
 
     /* Footer nav */
-    .checkout__nav { display: flex; justify-content: space-between; }
+    .checkout__nav { display: flex; justify-content: space-between; margin-top: 24px; }
 
-    @media (max-width: 480px) {
-      .row { grid-template-columns: 1fr; }
+    @media (max-width: 540px) {
+      .name-row  { grid-template-columns: 1fr; }
+      .addr-row-2 { grid-template-columns: 1fr; }
+      .addr-row-3 { grid-template-columns: 1fr 1fr; }
+      .addr-row-3 > div:last-child { grid-column: 1 / -1; }
       .carrier-option { flex-wrap: wrap; }
       .carrier-option__desc { width: 100%; order: 3; }
     }
@@ -455,8 +457,8 @@ export class CheckoutPageComponent implements OnInit {
   readonly savedAddresses = signal<any[]>([]);
   readonly selectedSavedId = signal<string | null>(null);
   readonly citySuggestions = signal<string[]>([]);
-  readonly cityLoading     = signal(false);
-  readonly streetStatus    = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+  readonly cityLoading = signal(false);
+  readonly streetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
 
   readonly carriers = CARRIERS;
 
@@ -468,13 +470,13 @@ export class CheckoutPageComponent implements OnInit {
 
   readonly addressForm = this.fb.group({
     firstName: ['', [Validators.required, Validators.maxLength(50), nameValidator]],
-    lastName:  ['', [Validators.required, Validators.maxLength(50), nameValidator]],
-    company:   [''],
-    street:    ['', [Validators.required, Validators.maxLength(100), streetValidator]],
-    postalCode:['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
-    city:      ['', [Validators.required, Validators.minLength(2), Validators.maxLength(60)]],
-    phone:     ['', [Validators.required, phoneValidator]],
-    email:     [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
+    lastName: ['', [Validators.required, Validators.maxLength(50), nameValidator]],
+    company: [''],
+    street: ['', [Validators.required, Validators.maxLength(100), streetValidator]],
+    postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
+    city: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(60)]],
+    phone: ['', [Validators.required, phoneValidator]],
+    email: [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
   });
 
   ngOnInit(): void {
@@ -509,7 +511,7 @@ export class CheckoutPageComponent implements OnInit {
       debounceTime(1200),
       map(() => ({
         street: this.addressForm.controls.street.value?.trim() ?? '',
-        city:   this.addressForm.controls.city.value?.trim()   ?? '',
+        city: this.addressForm.controls.city.value?.trim() ?? '',
       })),
       filter(({ street, city }) => !!street && !!city && this.addressForm.controls.street.valid),
       distinctUntilChanged((a, b) => a.street === b.street && a.city === b.city),
@@ -552,8 +554,12 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   goBack(): void {
+    if (this.index === 0) {
+      this.router.navigate(['/cart']);
+      return;
+    }
     this.direction = -1;
-    this.index = Math.max(0, this.index - 1);
+    this.index--;
   }
 
   onNext(): void {
@@ -583,15 +589,15 @@ export class CheckoutPageComponent implements OnInit {
     const ctrl = this.addressForm.get(field);
     if (!ctrl?.touched || ctrl.valid) return null;
     const e = ctrl.errors!;
-    if (e['required'])      return 'To pole jest wymagane';
-    if (e['nameTooShort'])  return 'Minimum 2 znaki';
-    if (e['nameInvalid'])   return 'Tylko litery, myślniki i apostrofy';
+    if (e['required']) return 'To pole jest wymagane';
+    if (e['nameTooShort']) return 'Minimum 2 znaki';
+    if (e['nameInvalid']) return 'Tylko litery, myślniki i apostrofy';
     if (e['streetInvalid']) return 'Podaj ulicę i numer budynku';
-    if (e['invalidPhone'])  return 'Wprowadź poprawny numer telefonu';
-    if (e['email'])         return 'Podaj prawidłowy adres e-mail';
-    if (e['pattern'])       return 'Wymagany format: 00-000';
-    if (e['minlength'])     return `Minimum ${e['minlength'].requiredLength} znaki`;
-    if (e['maxlength'])     return `Maksymalnie ${e['maxlength'].requiredLength} znaków`;
+    if (e['invalidPhone']) return 'Wprowadź poprawny numer telefonu';
+    if (e['email']) return 'Podaj prawidłowy adres e-mail';
+    if (e['pattern']) return 'Wymagany format: 00-000';
+    if (e['minlength']) return `Minimum ${e['minlength'].requiredLength} znaki`;
+    if (e['maxlength']) return `Maksymalnie ${e['maxlength'].requiredLength} znaków`;
     return 'Nieprawidłowa wartość';
   }
 
@@ -607,12 +613,12 @@ export class CheckoutPageComponent implements OnInit {
     // emitEvent: false — prevents postal lookup from firing on a pre-filled address
     this.addressForm.patchValue({
       firstName: addr.firstName,
-      lastName:  addr.lastName,
-      company:   addr.company ?? '',
-      street:    addr.street,
-      postalCode:addr.postalCode,
-      city:      addr.city,
-      phone:     addr.phone,
+      lastName: addr.lastName,
+      company: addr.company ?? '',
+      street: addr.street,
+      postalCode: addr.postalCode,
+      city: addr.city,
+      phone: addr.phone,
     }, { emitEvent: false });
   }
 
@@ -629,13 +635,13 @@ export class CheckoutPageComponent implements OnInit {
     const a = this.addressForm.getRawValue();
     const carrier = this.selectedCarrier()!;
     const addrPayload = {
-      firstName:  a.firstName!,
-      lastName:   a.lastName!,
-      company:    a.company || undefined,
-      street:     a.street!,
-      city:       a.city!,
+      firstName: a.firstName!,
+      lastName: a.lastName!,
+      company: a.company || undefined,
+      street: a.street!,
+      city: a.city!,
       postalCode: a.postalCode!,
-      phone:      a.phone!,
+      phone: a.phone!,
     };
 
     this.http.post<any>(

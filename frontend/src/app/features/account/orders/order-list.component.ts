@@ -65,6 +65,7 @@ const PAGE_SIZE = 20;
       background: var(--color-surface);
       border-radius: var(--border-radius-md);
       box-shadow: var(--shadow-sm);
+      border: 1px solid var(--color-border);
       overflow: hidden;
     }
 

@@ -318,9 +318,9 @@ interface Address {
     .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
     h1 { font-size: 24px; font-weight: 700; }
 
-    .addr-form { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 16px; }
+    .addr-form { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 16px; border: 1px solid var(--color-border) !important; }
 
-    .addr-card { display: block; margin-bottom: 12px; }
+    .addr-card { display: block; margin-bottom: 12px; border: 1px solid var(--color-border) !important; }
     .addr-card--default { outline: 2px solid var(--color-primary); }
     .addr-card__top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 

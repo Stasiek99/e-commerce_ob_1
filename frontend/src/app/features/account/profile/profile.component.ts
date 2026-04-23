@@ -78,7 +78,7 @@ function formatPhone(raw: string): string {
 
       <!-- ── Edit mode ──────────────────────────────────── -->
       @if (editing()) {
-        <form tuiCardLarge tuiForm appearance="elevated" [formGroup]="form" (ngSubmit)="save()">
+        <form tuiCardLarge tuiForm appearance="elevated" class="profile-edit-card" [formGroup]="form" (ngSubmit)="save()">
           <div class="info-row info-row--top">
             <span class="info-label">Email</span>
             <span class="info-value info-value--muted">{{ auth.currentUser()?.email ?? '—' }}</span>
@@ -136,7 +136,8 @@ function formatPhone(raw: string): string {
     .back-btn { margin-bottom: 8px; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
 
-    .profile-card { display: block; }
+    .profile-card { display: block; border: 1px solid var(--color-border) !important; }
+    .profile-edit-card { border: 1px solid var(--color-border) !important; }
 
     .info-row {
       display: flex;
