@@ -1,11 +1,18 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Router, RouterLink } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
 import { TuiButton, TuiTitle } from '@taiga-ui/core';
-import { TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
+import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
+import { getCountries } from 'libphonenumber-js/min';
+import { parsePhoneNumber } from 'libphonenumber-js';
+import { nameValidator, phoneValidator, streetValidator } from '../../../shared/validators/form.validators';
+
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
@@ -36,8 +43,13 @@ const CARRIERS = [
     TuiForm,
     TuiHeader,
     TuiSlides,
-    TuiSlides,
-    TuiStep
+    TuiStep,
+    TuiInputPhoneInternational,
+  ],
+  providers: [
+    tuiInputPhoneInternationalOptionsProvider({
+      metadata: import('libphonenumber-js/min/metadata').then((m) => m.default),
+    }),
   ],
   template: `
     <div class="checkout">
@@ -100,38 +112,87 @@ const CARRIERS = [
               <div class="row">
                 <div class="field">
                   <label for="checkout-firstName">Imię *</label>
-                  <input id="checkout-firstName" formControlName="firstName" [class.invalid]="isInvalid('firstName')" />
+                  <input id="checkout-firstName" formControlName="firstName" autocomplete="given-name"
+                    [class.invalid]="isInvalid('firstName')" />
+                  @if (errorMsg('firstName'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
                 <div class="field">
                   <label for="checkout-lastName">Nazwisko *</label>
-                  <input id="checkout-lastName" formControlName="lastName" [class.invalid]="isInvalid('lastName')" />
+                  <input id="checkout-lastName" formControlName="lastName" autocomplete="family-name"
+                    [class.invalid]="isInvalid('lastName')" />
+                  @if (errorMsg('lastName'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
               </div>
+
               <div class="field">
                 <label for="checkout-company">Firma</label>
-                <input id="checkout-company" formControlName="company" />
+                <input id="checkout-company" formControlName="company" autocomplete="organization" />
               </div>
+
               <div class="field">
-                <label for="checkout-street">Ulica i numer *</label>
-                <input id="checkout-street" formControlName="street" [class.invalid]="isInvalid('street')" />
+                <label for="checkout-street">Ulica i numer budynku *</label>
+                <input id="checkout-street" formControlName="street" autocomplete="street-address"
+                  placeholder="np. ul. Marszałkowska 12/4"
+                  [class.invalid]="isInvalid('street')" />
+                @if (errorMsg('street'); as msg) {
+                  <p class="field-error">{{ msg }}</p>
+                } @else {
+                  @switch (streetStatus()) {
+                    @case ('checking')  { <p class="street-hint street-hint--checking">Weryfikuję adres…</p> }
+                    @case ('found')     { <p class="street-hint street-hint--found">✓ Adres potwierdzony</p> }
+                    @case ('not-found') { <p class="street-hint street-hint--warning">⚠ Nie znaleziono adresu — sprawdź poprawność danych</p> }
+                  }
+                }
               </div>
+
               <div class="row">
                 <div class="field">
                   <label for="checkout-postalCode">Kod pocztowy *</label>
-                  <input id="checkout-postalCode" formControlName="postalCode" placeholder="00-000" [class.invalid]="isInvalid('postalCode')" />
+                  <input id="checkout-postalCode" formControlName="postalCode" placeholder="00-000"
+                    autocomplete="postal-code" [class.invalid]="isInvalid('postalCode')" />
+                  @if (errorMsg('postalCode'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
                 <div class="field">
                   <label for="checkout-city">Miasto *</label>
-                  <input id="checkout-city" formControlName="city" [class.invalid]="isInvalid('city')" />
+                  <input id="checkout-city" formControlName="city" autocomplete="address-level2"
+                    [class.invalid]="isInvalid('city')" />
+                  @if (cityLoading()) { <p class="city-hint">Szukam miejscowości…</p> }
+                  @if (citySuggestions().length > 1) {
+                    <div class="city-suggestions">
+                      @for (city of citySuggestions(); track city) {
+                        <button type="button" class="city-chip" (click)="selectCity(city)">{{ city }}</button>
+                      }
+                    </div>
+                  }
+                  @if (errorMsg('city'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
               </div>
+
+              <!-- Country — disabled; selectable in a future release -->
               <div class="field">
-                <label for="checkout-phone">Telefon *</label>
-                <input id="checkout-phone" formControlName="phone" type="tel" [class.invalid]="isInvalid('phone')" />
+                <label for="checkout-country">Kraj</label>
+                <input id="checkout-country" value="Polska" disabled tabindex="-1" />
               </div>
+
+              <!-- Phone — TuiInputPhoneInternational -->
+              <div class="field field--phone">
+                <tui-input-phone-international
+                  formControlName="phone"
+                  [countries]="countries"
+                  [countryIsoCode]="countryIsoCode"
+                  [countrySearch]="true"
+                  (countryIsoCodeChange)="countryIsoCode = $event"
+                >
+                  Telefon *
+                </tui-input-phone-international>
+                @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
+              </div>
+
               <div class="field">
                 <label for="checkout-email">Email (do potwierdzenia zamówienia) *</label>
-                <input id="checkout-email" formControlName="email" type="email" [class.invalid]="isInvalid('email')" />
+                <input id="checkout-email" formControlName="email" type="email" autocomplete="email"
+                  [class.invalid]="isInvalid('email')" />
+                @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
               </div>
 
               @if (auth.currentUser() && selectedSavedId() === null) {
@@ -285,8 +346,9 @@ const CARRIERS = [
 
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .field { margin-bottom: 16px; }
+    .field--phone { margin-bottom: 16px; }
     label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; }
-    input:not([type=checkbox]) {
+    input:not([type=checkbox]):not([type=radio]) {
       width: 100%;
       border: 1px solid var(--color-border);
       border-radius: var(--border-radius-md);
@@ -295,11 +357,29 @@ const CARRIERS = [
       outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
     }
-    input:not([type=checkbox]):focus-visible {
+    input:not([type=checkbox]):not([type=radio]):focus-visible {
       border-color: var(--color-primary);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 30%, transparent);
     }
     input.invalid { border-color: var(--color-error); }
+    input:disabled, input[disabled] { color: var(--color-secondary); background: #f8f8f8; cursor: default; opacity: 0.7; }
+    .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
+    .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
+    .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .city-chip {
+      background: #f0f0f5;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      padding: 3px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .city-chip:hover { border-color: var(--color-primary); background: #e8e8f0; }
+    .street-hint { font-size: 12px; margin-top: 4px; }
+    .street-hint--checking { color: var(--color-primary); }
+    .street-hint--found    { color: #2a9d4e; }
+    .street-hint--warning  { color: #c47a00; }
 
     /* Carrier */
     .carrier-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; border: none; padding: 0; }
@@ -365,6 +445,8 @@ export class CheckoutPageComponent implements OnInit {
   index = 0;
   direction = 0;
 
+  private readonly destroyRef = inject(DestroyRef);
+
   readonly selectedCarrier = signal<(typeof CARRIERS)[0] | null>(null);
   readonly lockerCode = signal<string | null>(null);
   readonly placing = signal(false);
@@ -372,21 +454,75 @@ export class CheckoutPageComponent implements OnInit {
   readonly saveAddress = signal(false);
   readonly savedAddresses = signal<any[]>([]);
   readonly selectedSavedId = signal<string | null>(null);
+  readonly citySuggestions = signal<string[]>([]);
+  readonly cityLoading     = signal(false);
+  readonly streetStatus    = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
 
   readonly carriers = CARRIERS;
 
+  readonly countries: readonly TuiCountryIsoCode[] = [
+    'PL',
+    ...getCountries().filter((c) => c !== 'PL'),
+  ];
+  countryIsoCode: TuiCountryIsoCode = 'PL';
+
   readonly addressForm = this.fb.group({
-    firstName: ['', Validators.required],
-    lastName: ['', Validators.required],
-    company: [''],
-    street: ['', Validators.required],
-    postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
-    city: ['', Validators.required],
-    phone: ['', Validators.required],
-    email: [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
+    firstName: ['', [Validators.required, Validators.maxLength(50), nameValidator]],
+    lastName:  ['', [Validators.required, Validators.maxLength(50), nameValidator]],
+    company:   [''],
+    street:    ['', [Validators.required, Validators.maxLength(100), streetValidator]],
+    postalCode:['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
+    city:      ['', [Validators.required, Validators.minLength(2), Validators.maxLength(60)]],
+    phone:     ['', [Validators.required, phoneValidator]],
+    email:     [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
   });
 
   ngOnInit(): void {
+    this.addressForm.controls.postalCode.valueChanges.pipe(
+      tap((val) => { if (!/^\d{2}-\d{3}$/.test(val ?? '')) this.citySuggestions.set([]); }),
+      debounceTime(500),
+      distinctUntilChanged(),
+      filter((val) => /^\d{2}-\d{3}$/.test(val ?? '')),
+      tap(() => this.cityLoading.set(true)),
+      switchMap((code) =>
+        this.http.get<string[]>(`${environment.apiUrl}/location/postal-code/${code}`).pipe(
+          catchError(() => of(null)),
+          finalize(() => this.cityLoading.set(false)),
+        ),
+      ),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((cities) => {
+      if (!cities?.length) return;
+      this.citySuggestions.set(cities);
+      if (cities.length === 1) {
+        this.addressForm.patchValue({ city: cities[0] }, { emitEvent: false });
+        this.addressForm.controls.city.markAsDirty();
+        this.citySuggestions.set([]);
+      }
+    });
+
+    merge(
+      this.addressForm.controls.street.valueChanges,
+      this.addressForm.controls.city.valueChanges,
+    ).pipe(
+      tap(() => this.streetStatus.set('idle')),
+      debounceTime(1200),
+      map(() => ({
+        street: this.addressForm.controls.street.value?.trim() ?? '',
+        city:   this.addressForm.controls.city.value?.trim()   ?? '',
+      })),
+      filter(({ street, city }) => !!street && !!city && this.addressForm.controls.street.valid),
+      distinctUntilChanged((a, b) => a.street === b.street && a.city === b.city),
+      tap(() => this.streetStatus.set('checking')),
+      switchMap(({ street, city }) =>
+        this.http.get<{ exists: boolean }>(
+          `${environment.apiUrl}/location/street-check`,
+          { params: { street, city } },
+        ).pipe(catchError(() => of({ exists: false }))),
+      ),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(({ exists }) => this.streetStatus.set(exists ? 'found' : 'not-found'));
+
     if (!this.auth.currentUser()) return;
     this.http.get<any[]>(`${environment.apiUrl}/users/me/addresses`).subscribe({
       next: (addrs) => {
@@ -397,6 +533,12 @@ export class CheckoutPageComponent implements OnInit {
     });
   }
 
+  selectCity(city: string): void {
+    this.addressForm.patchValue({ city }, { emitEvent: false });
+    this.addressForm.controls.city.markAsDirty();
+    this.citySuggestions.set([]);
+  }
+
   stepState(i: number): 'pass' | 'normal' | 'error' {
     if (i < this.index) return 'pass';
     if (i === 0 && this.addressForm.invalid && this.addressForm.touched) return 'error';
@@ -404,7 +546,6 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   onStep(newIndex: number): void {
-    // Only allow navigating back to completed steps via stepper click
     if (newIndex >= this.index) return;
     this.direction = newIndex - this.index;
     this.index = newIndex;
@@ -438,21 +579,48 @@ export class CheckoutPageComponent implements OnInit {
     return !!(ctrl?.invalid && ctrl.touched);
   }
 
+  errorMsg(field: string): string | null {
+    const ctrl = this.addressForm.get(field);
+    if (!ctrl?.touched || ctrl.valid) return null;
+    const e = ctrl.errors!;
+    if (e['required'])      return 'To pole jest wymagane';
+    if (e['nameTooShort'])  return 'Minimum 2 znaki';
+    if (e['nameInvalid'])   return 'Tylko litery, myślniki i apostrofy';
+    if (e['streetInvalid']) return 'Podaj ulicę i numer budynku';
+    if (e['invalidPhone'])  return 'Wprowadź poprawny numer telefonu';
+    if (e['email'])         return 'Podaj prawidłowy adres e-mail';
+    if (e['pattern'])       return 'Wymagany format: 00-000';
+    if (e['minlength'])     return `Minimum ${e['minlength'].requiredLength} znaki`;
+    if (e['maxlength'])     return `Maksymalnie ${e['maxlength'].requiredLength} znaków`;
+    return 'Nieprawidłowa wartość';
+  }
+
   selectSavedAddress(addr: any): void {
     this.selectedSavedId.set(addr.id);
+    this.citySuggestions.set([]);
+    if (addr.phone) {
+      try {
+        const parsed = parsePhoneNumber(addr.phone);
+        if (parsed?.country) this.countryIsoCode = parsed.country as TuiCountryIsoCode;
+      } catch { /* ignore */ }
+    }
+    // emitEvent: false — prevents postal lookup from firing on a pre-filled address
     this.addressForm.patchValue({
       firstName: addr.firstName,
-      lastName: addr.lastName,
-      company: addr.company ?? '',
-      street: addr.street,
-      postalCode: addr.postalCode,
-      city: addr.city,
-      phone: addr.phone,
-    });
+      lastName:  addr.lastName,
+      company:   addr.company ?? '',
+      street:    addr.street,
+      postalCode:addr.postalCode,
+      city:      addr.city,
+      phone:     addr.phone,
+    }, { emitEvent: false });
   }
 
   useNewAddress(): void {
     this.selectedSavedId.set(null);
+    this.countryIsoCode = 'PL';
+    this.citySuggestions.set([]);
+    this.streetStatus.set('idle');
     this.addressForm.reset({ email: this.auth.currentUser()?.email ?? '' });
   }
 
@@ -461,13 +629,13 @@ export class CheckoutPageComponent implements OnInit {
     const a = this.addressForm.getRawValue();
     const carrier = this.selectedCarrier()!;
     const addrPayload = {
-      firstName: a.firstName!,
-      lastName: a.lastName!,
-      company: a.company || undefined,
-      street: a.street!,
-      city: a.city!,
+      firstName:  a.firstName!,
+      lastName:   a.lastName!,
+      company:    a.company || undefined,
+      street:     a.street!,
+      city:       a.city!,
       postalCode: a.postalCode!,
-      phone: a.phone!,
+      phone:      a.phone!,
     };
 
     this.http.post<any>(

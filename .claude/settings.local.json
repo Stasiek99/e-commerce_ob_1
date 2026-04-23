@@ -162,7 +162,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(pnpm db:migrate)",
       "Bash(taskkill /F /IM node.exe)",
-      "Bash(grep -rn \"findAllForUser\\\\|getMyOrders\\\\|orders\\\\$\\\\|\\\\.orders\" e:/repos/e-commerce_ob_1/frontend/src --include=\"*.ts\")"
+      "Bash(grep -rn \"findAllForUser\\\\|getMyOrders\\\\|orders\\\\$\\\\|\\\\.orders\" e:/repos/e-commerce_ob_1/frontend/src --include=\"*.ts\")",
+      "Bash(pnpm --filter frontend add libphonenumber-js)"
     ]
   }
 }

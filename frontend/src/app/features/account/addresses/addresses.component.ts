@@ -1,9 +1,18 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
-import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
+import {
+  Component, DestroyRef, OnInit, WritableSignal, inject, signal,
+} from '@angular/core';
+import { AbstractControl, FormGroup, ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { Location } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { TuiButton, TuiLabel, TuiTextfield, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm } from '@taiga-ui/layout';
+import { TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider } from '@taiga-ui/kit';
+import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
+import { getCountries } from 'libphonenumber-js/min';
+import { parsePhoneNumber } from 'libphonenumber-js';
+import { nameValidator, phoneValidator, streetValidator } from '../../../shared/validators/form.validators';
 import { ToastService } from '../../../core/services/toast.service';
 import { environment } from '../../../../environments/environment';
 
@@ -19,10 +28,20 @@ interface Address {
   isDefault: boolean;
 }
 
+
 @Component({
   selector: 'app-addresses',
   standalone: true,
-  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiIcon, TuiCard, TuiForm],
+  imports: [
+    ReactiveFormsModule,
+    TuiButton, TuiLabel, TuiTextfield, TuiIcon, TuiCard, TuiForm,
+    TuiInputPhoneInternational,
+  ],
+  providers: [
+    tuiInputPhoneInternationalOptionsProvider({
+      metadata: import('libphonenumber-js/min/metadata').then((m) => m.default),
+    }),
+  ],
   template: `
     <div class="page">
       <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
@@ -42,38 +61,104 @@ interface Address {
       @if (showAddForm()) {
         <form tuiCardLarge tuiForm appearance="elevated" data-size="l" data-space="normal"
               class="addr-form" [formGroup]="addForm" (ngSubmit)="submitAdd()">
+
           <div class="name-row">
-            <tui-textfield>
-              <label tuiLabel>Imię *</label>
-              <input tuiTextfield type="text" formControlName="firstName" />
-            </tui-textfield>
-            <tui-textfield>
-              <label tuiLabel>Nazwisko *</label>
-              <input tuiTextfield type="text" formControlName="lastName" />
-            </tui-textfield>
+            <div class="name-col">
+              <tui-textfield>
+                <label tuiLabel>Imię *</label>
+                <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
+              </tui-textfield>
+              @if (fieldError(addForm.controls.firstName); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
+            <div class="name-col">
+              <tui-textfield>
+                <label tuiLabel>Nazwisko *</label>
+                <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
+              </tui-textfield>
+              @if (fieldError(addForm.controls.lastName); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
           </div>
+
           <tui-textfield>
             <label tuiLabel>Firma</label>
-            <input tuiTextfield type="text" formControlName="company" />
+            <input tuiTextfield type="text" formControlName="company" autocomplete="organization" />
           </tui-textfield>
-          <tui-textfield>
-            <label tuiLabel>Ulica i numer *</label>
-            <input tuiTextfield type="text" formControlName="street" />
-          </tui-textfield>
-          <div class="name-row">
+
+          <div>
             <tui-textfield>
-              <label tuiLabel>Kod pocztowy *</label>
-              <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000" />
+              <label tuiLabel>Ulica i numer budynku *</label>
+              <input tuiTextfield type="text" formControlName="street" autocomplete="street-address"
+                placeholder="np. ul. Marszałkowska 12/4" />
             </tui-textfield>
-            <tui-textfield>
-              <label tuiLabel>Miasto *</label>
-              <input tuiTextfield type="text" formControlName="city" />
-            </tui-textfield>
+            @if (fieldError(addForm.controls.street); as msg) {
+              <p class="field-error">{{ msg }}</p>
+            }
+            @if (!addForm.controls.street.errors) {
+              @switch (addStreetStatus()) {
+                @case ('checking') { <p class="street-hint street-hint--checking">Weryfikuję adres…</p> }
+                @case ('found')    { <p class="street-hint street-hint--found">✓ Adres potwierdzony</p> }
+                @case ('not-found') { <p class="street-hint street-hint--warning">⚠ Nie znaleziono adresu — sprawdź poprawność danych</p> }
+              }
+            }
           </div>
-          <tui-textfield>
-            <label tuiLabel>Telefon *</label>
-            <input tuiTextfield type="tel" formControlName="phone" />
+
+          <div class="name-row">
+            <div>
+              <tui-textfield>
+                <label tuiLabel>Kod pocztowy *</label>
+                <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000"
+                  autocomplete="postal-code" />
+              </tui-textfield>
+              @if (fieldError(addForm.controls.postalCode); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
+            <div class="name-col">
+              <tui-textfield>
+                <label tuiLabel>Miasto *</label>
+                <input tuiTextfield type="text" formControlName="city" autocomplete="address-level2" />
+              </tui-textfield>
+              @if (addCityLoading()) {
+                <p class="city-hint">Szukam miejscowości…</p>
+              }
+              @if (addCitySuggestions().length > 1) {
+                <div class="city-suggestions">
+                  @for (city of addCitySuggestions(); track city) {
+                    <button type="button" class="city-chip" (click)="selectAddCity(city)">{{ city }}</button>
+                  }
+                </div>
+              }
+              @if (fieldError(addForm.controls.city); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
+          </div>
+
+          <!-- Country — disabled; selectable in a future release -->
+          <tui-textfield class="field-disabled">
+            <label tuiLabel>Kraj</label>
+            <input tuiTextfield value="Polska" [attr.disabled]="true" tabindex="-1" />
           </tui-textfield>
+
+          <div>
+            <tui-input-phone-international
+              formControlName="phone"
+              [countries]="countries"
+              [countryIsoCode]="addIsoCode"
+              [countrySearch]="true"
+              (countryIsoCodeChange)="addIsoCode = $event"
+            >
+              Telefon *
+            </tui-input-phone-international>
+            @if (fieldError(addForm.controls.phone); as msg) {
+              <p class="field-error">{{ msg }}</p>
+            }
+          </div>
+
           <div class="form-actions">
             <button tuiButton appearance="secondary" size="s" type="button" [disabled]="adding()" (click)="cancelAdd()">
               Anuluj
@@ -90,38 +175,97 @@ interface Address {
         @if (editingId() === addr.id) {
           <form tuiCardLarge tuiForm appearance="elevated" data-size="l" data-space="normal"
                 class="addr-form" [formGroup]="editForm" (ngSubmit)="submitEdit(addr.id)">
+
             <div class="name-row">
-              <tui-textfield>
-                <label tuiLabel>Imię *</label>
-                <input tuiTextfield type="text" formControlName="firstName" />
-              </tui-textfield>
-              <tui-textfield>
-                <label tuiLabel>Nazwisko *</label>
-                <input tuiTextfield type="text" formControlName="lastName" />
-              </tui-textfield>
+              <div class="name-col">
+                <tui-textfield>
+                  <label tuiLabel>Imię *</label>
+                  <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
+                </tui-textfield>
+                @if (fieldError(editForm.controls.firstName); as msg) {
+                  <p class="field-error">{{ msg }}</p>
+                }
+              </div>
+              <div class="name-col">
+                <tui-textfield>
+                  <label tuiLabel>Nazwisko *</label>
+                  <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
+                </tui-textfield>
+                @if (fieldError(editForm.controls.lastName); as msg) {
+                  <p class="field-error">{{ msg }}</p>
+                }
+              </div>
             </div>
+
             <tui-textfield>
               <label tuiLabel>Firma</label>
-              <input tuiTextfield type="text" formControlName="company" />
+              <input tuiTextfield type="text" formControlName="company" autocomplete="organization" />
             </tui-textfield>
-            <tui-textfield>
-              <label tuiLabel>Ulica i numer *</label>
-              <input tuiTextfield type="text" formControlName="street" />
-            </tui-textfield>
-            <div class="name-row">
+
+            <div>
               <tui-textfield>
-                <label tuiLabel>Kod pocztowy *</label>
-                <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000" />
+                <label tuiLabel>Ulica i numer budynku *</label>
+                <input tuiTextfield type="text" formControlName="street" autocomplete="street-address"
+                  placeholder="np. ul. Marszałkowska 12/4" />
               </tui-textfield>
-              <tui-textfield>
-                <label tuiLabel>Miasto *</label>
-                <input tuiTextfield type="text" formControlName="city" />
-              </tui-textfield>
+              @if (fieldError(editForm.controls.street); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
             </div>
+
+            <div class="name-row">
+              <div>
+                <tui-textfield>
+                  <label tuiLabel>Kod pocztowy *</label>
+                  <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000"
+                    autocomplete="postal-code" />
+                </tui-textfield>
+                @if (fieldError(editForm.controls.postalCode); as msg) {
+                  <p class="field-error">{{ msg }}</p>
+                }
+              </div>
+              <div class="name-col">
+                <tui-textfield>
+                  <label tuiLabel>Miasto *</label>
+                  <input tuiTextfield type="text" formControlName="city" autocomplete="address-level2" />
+                </tui-textfield>
+                @if (editCityLoading()) {
+                  <p class="city-hint">Szukam miejscowości…</p>
+                }
+                @if (editCitySuggestions().length > 1) {
+                  <div class="city-suggestions">
+                    @for (city of editCitySuggestions(); track city) {
+                      <button type="button" class="city-chip" (click)="selectEditCity(city)">{{ city }}</button>
+                    }
+                  </div>
+                }
+                @if (fieldError(editForm.controls.city); as msg) {
+                  <p class="field-error">{{ msg }}</p>
+                }
+              </div>
+            </div>
+
+            <!-- Country — read-only -->
             <tui-textfield>
-              <label tuiLabel>Telefon *</label>
-              <input tuiTextfield type="tel" formControlName="phone" />
+              <label tuiLabel>Kraj</label>
+              <input tuiTextfield value="Polska" readonly tabindex="-1" class="readonly-input" />
             </tui-textfield>
+
+            <div>
+              <tui-input-phone-international
+                formControlName="phone"
+                [countries]="countries"
+                [countryIsoCode]="editIsoCode"
+                [countrySearch]="true"
+                (countryIsoCodeChange)="editIsoCode = $event"
+              >
+                Telefon *
+              </tui-input-phone-international>
+              @if (fieldError(editForm.controls.phone); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
+
             <div class="form-actions">
               <button tuiButton appearance="secondary" size="s" type="button" [disabled]="saving()" (click)="cancelEdit()">
                 Anuluj
@@ -203,7 +347,29 @@ interface Address {
     .btn-delete { margin-left: auto; color: var(--color-error) !important; }
 
     .name-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .name-col { display: flex; flex-direction: column; }
     .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+
+    .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
+    .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
+    .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .city-chip {
+      background: var(--tui-background-neutral-1, #f0f0f5);
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      padding: 3px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .city-chip:hover { border-color: var(--color-primary); background: var(--tui-background-neutral-2, #e8e8f0); }
+
+    .field-disabled { opacity: 0.6; pointer-events: none; }
+
+    .street-hint { font-size: 12px; margin-top: 4px; }
+    .street-hint--checking { color: var(--color-primary); }
+    .street-hint--found    { color: #2a9d4e; }
+    .street-hint--warning  { color: #c47a00; }
 
     .empty { color: var(--color-secondary); font-size: 14px; }
   `],
@@ -213,30 +379,69 @@ export class AddressesComponent implements OnInit {
   private readonly toast = inject(ToastService);
   private readonly fb = inject(FormBuilder);
   private readonly location = inject(Location);
+  private readonly destroyRef = inject(DestroyRef);
 
-  readonly addresses   = signal<Address[]>([]);
-  readonly showAddForm = signal(false);
-  readonly editingId   = signal<string | null>(null);
-  readonly adding      = signal(false);
-  readonly saving      = signal(false);
-  readonly working     = signal<string | null>(null);
+  readonly addresses    = signal<Address[]>([]);
+  readonly showAddForm  = signal(false);
+  readonly editingId    = signal<string | null>(null);
+  readonly adding       = signal(false);
+  readonly saving       = signal(false);
+  readonly working      = signal<string | null>(null);
+
+  // City suggestion state — separate for add and edit since both can exist in DOM
+  readonly addCitySuggestions  = signal<string[]>([]);
+  readonly addCityLoading      = signal(false);
+  readonly editCitySuggestions = signal<string[]>([]);
+  readonly editCityLoading     = signal(false);
+
+  // Street existence check state (soft — never blocks submission)
+  readonly addStreetStatus  = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+  readonly editStreetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+
+  readonly countries: readonly TuiCountryIsoCode[] = [
+    'PL',
+    ...getCountries().filter((c) => c !== 'PL'),
+  ];
+  addIsoCode: TuiCountryIsoCode  = 'PL';
+  editIsoCode: TuiCountryIsoCode = 'PL';
 
   readonly addForm  = this.buildForm();
   readonly editForm = this.buildForm();
 
   private buildForm() {
     return this.fb.group({
-      firstName:  ['', Validators.required],
-      lastName:   ['', Validators.required],
+      firstName:  ['', [Validators.required, Validators.maxLength(50), nameValidator]],
+      lastName:   ['', [Validators.required, Validators.maxLength(50), nameValidator]],
       company:    [''],
-      street:     ['', Validators.required],
+      street:     ['', [Validators.required, Validators.maxLength(100), streetValidator]],
       postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
-      city:       ['', Validators.required],
-      phone:      ['', Validators.required],
+      city:       ['', [Validators.required, Validators.minLength(2)]],
+      phone:      ['', [Validators.required, phoneValidator]],
     });
   }
 
-  ngOnInit(): void { this.load(); }
+  fieldError(ctrl: AbstractControl | null): string | null {
+    if (!ctrl || (!ctrl.dirty && !ctrl.touched)) return null;
+    const e = ctrl.errors;
+    if (!e) return null;
+    if (e['required'])      return 'To pole jest wymagane';
+    if (e['nameTooShort'])  return 'Minimum 2 znaki';
+    if (e['nameInvalid'])   return 'Tylko litery, myślniki i apostrofy';
+    if (e['streetInvalid']) return 'Podaj ulicę i numer budynku';
+    if (e['invalidPhone'])  return 'Wprowadź poprawny numer telefonu';
+    if (e['pattern'])       return 'Wymagany format: 00-000';
+    if (e['minlength'])     return `Minimum ${e['minlength'].requiredLength} znaki`;
+    if (e['maxlength'])     return `Maksymalnie ${e['maxlength'].requiredLength} znaków`;
+    return 'Nieprawidłowa wartość';
+  }
+
+  ngOnInit(): void {
+    this.load();
+    this.initPostalLookup(this.addForm, this.addCitySuggestions, this.addCityLoading);
+    this.initPostalLookup(this.editForm, this.editCitySuggestions, this.editCityLoading);
+    this.initStreetCheck(this.addForm, this.addStreetStatus);
+    this.initStreetCheck(this.editForm, this.editStreetStatus);
+  }
 
   back(): void { this.location.back(); }
 
@@ -245,9 +450,98 @@ export class AddressesComponent implements OnInit {
       .subscribe({ next: (a) => this.addresses.set(a) });
   }
 
-  openAddForm(): void { this.addForm.reset(); this.showAddForm.set(true); }
-  cancelAdd():   void { this.showAddForm.set(false); this.addForm.reset(); }
-  cancelEdit():  void { this.editingId.set(null); }
+  private initPostalLookup(
+    form: FormGroup,
+    suggestions: WritableSignal<string[]>,
+    loading: WritableSignal<boolean>,
+  ): void {
+    form.get('postalCode')!.valueChanges.pipe(
+      tap((val) => { if (!/^\d{2}-\d{3}$/.test(val ?? '')) suggestions.set([]); }),
+      debounceTime(500),
+      distinctUntilChanged(),
+      filter((val) => /^\d{2}-\d{3}$/.test(val ?? '')),
+      tap(() => loading.set(true)),
+      switchMap((code) =>
+        this.http.get<string[]>(`${environment.apiUrl}/location/postal-code/${code}`).pipe(
+          catchError(() => of(null)),
+          finalize(() => loading.set(false)),
+        ),
+      ),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((cities) => {
+      if (!cities?.length) return;
+      suggestions.set(cities);
+      if (cities.length === 1) {
+        form.patchValue({ city: cities[0] }, { emitEvent: false });
+        form.get('city')!.markAsDirty();
+        suggestions.set([]);
+      }
+    });
+  }
+
+  private initStreetCheck(
+    form: FormGroup,
+    status: WritableSignal<'idle' | 'checking' | 'found' | 'not-found'>,
+  ): void {
+    // merge fires when EITHER field changes; values are read from the form at
+    // debounce time so a city auto-filled with emitEvent:false is still picked up.
+    merge(
+      form.get('street')!.valueChanges,
+      form.get('city')!.valueChanges,
+    ).pipe(
+      tap(() => status.set('idle')),
+      debounceTime(1200),
+      map(() => ({
+        street: (form.get('street')!.value as string)?.trim() ?? '',
+        city:   (form.get('city')!.value   as string)?.trim() ?? '',
+      })),
+      filter(({ street, city }) => !!street && !!city && form.get('street')!.valid),
+      distinctUntilChanged((a, b) => a.street === b.street && a.city === b.city),
+      tap(() => status.set('checking')),
+      switchMap(({ street, city }) =>
+        this.http.get<{ exists: boolean }>(
+          `${environment.apiUrl}/location/street-check`,
+          { params: { street, city } },
+        ).pipe(catchError(() => of({ exists: false }))),
+      ),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(({ exists }) => status.set(exists ? 'found' : 'not-found'));
+  }
+
+  openAddForm(): void {
+    this.addIsoCode = 'PL';
+    this.addCitySuggestions.set([]);
+    this.addStreetStatus.set('idle');
+    this.addForm.reset();
+    this.showAddForm.set(true);
+  }
+
+  cancelAdd(): void {
+    this.addIsoCode = 'PL';
+    this.addCitySuggestions.set([]);
+    this.addStreetStatus.set('idle');
+    this.showAddForm.set(false);
+    this.addForm.reset();
+  }
+
+  cancelEdit(): void {
+    this.editIsoCode = 'PL';
+    this.editCitySuggestions.set([]);
+    this.editStreetStatus.set('idle');
+    this.editingId.set(null);
+  }
+
+  selectAddCity(city: string): void {
+    this.addForm.patchValue({ city }, { emitEvent: false });
+    this.addForm.get('city')!.markAsDirty();
+    this.addCitySuggestions.set([]);
+  }
+
+  selectEditCity(city: string): void {
+    this.editForm.patchValue({ city }, { emitEvent: false });
+    this.editForm.get('city')!.markAsDirty();
+    this.editCitySuggestions.set([]);
+  }
 
   submitAdd(): void {
     if (this.addForm.invalid) return;
@@ -257,6 +551,8 @@ export class AddressesComponent implements OnInit {
         this.addresses.update((l) => [...l, addr]);
         this.showAddForm.set(false);
         this.addForm.reset();
+        this.addIsoCode = 'PL';
+        this.addStreetStatus.set('idle');
         this.adding.set(false);
         this.toast.success('Adres zapisany');
       },
@@ -265,7 +561,17 @@ export class AddressesComponent implements OnInit {
   }
 
   startEdit(addr: Address): void {
+    this.editCitySuggestions.set([]);
+    this.editStreetStatus.set('idle');
+    this.editIsoCode = 'PL';
+    if (addr.phone) {
+      try {
+        const parsed = parsePhoneNumber(addr.phone);
+        if (parsed?.country) this.editIsoCode = parsed.country as TuiCountryIsoCode;
+      } catch { /* ignore */ }
+    }
     this.editingId.set(addr.id);
+    // emitEvent: false prevents postal lookup from re-firing on setValue
     this.editForm.setValue({
       firstName:  addr.firstName,
       lastName:   addr.lastName,
@@ -274,7 +580,7 @@ export class AddressesComponent implements OnInit {
       postalCode: addr.postalCode,
       city:       addr.city,
       phone:      addr.phone,
-    });
+    }, { emitEvent: false });
   }
 
   submitEdit(id: string): void {

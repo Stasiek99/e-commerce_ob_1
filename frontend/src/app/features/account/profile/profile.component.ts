@@ -4,14 +4,41 @@ import { HttpClient } from '@angular/common/http';
 import { Location } from '@angular/common';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
+import {
+  TuiInputPhoneInternational,
+  tuiInputPhoneInternationalOptionsProvider,
+} from '@taiga-ui/kit';
+import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
+import { getCountries } from 'libphonenumber-js/min';
+import { parsePhoneNumber } from 'libphonenumber-js';
+import { nameValidator, phoneValidator } from '../../../shared/validators/form.validators';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { environment } from '../../../../environments/environment';
 
+function formatPhone(raw: string): string {
+  if (!raw) return '—';
+  try {
+    return parsePhoneNumber(raw)?.formatInternational() ?? raw;
+  } catch {
+    return raw;
+  }
+}
+
 @Component({
   selector: 'app-profile',
   standalone: true,
-  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon, TuiCard, TuiForm, TuiHeader],
+  imports: [
+    ReactiveFormsModule,
+    TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon,
+    TuiCard, TuiForm, TuiHeader,
+    TuiInputPhoneInternational,
+  ],
+  providers: [
+    tuiInputPhoneInternationalOptionsProvider({
+      metadata: import('libphonenumber-js/min/metadata').then((m) => m.default),
+    }),
+  ],
   template: `
     <div class="page">
       <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
@@ -44,7 +71,7 @@ import { environment } from '../../../../environments/environment';
           </div>
           <div class="info-row">
             <span class="info-label">Telefon</span>
-            <span class="info-value">{{ auth.currentUser()?.phone || '—' }}</span>
+            <span class="info-value">{{ formatPhone(auth.currentUser()?.phone ?? '') }}</span>
           </div>
         </div>
       }
@@ -58,20 +85,39 @@ import { environment } from '../../../../environments/environment';
           </div>
 
           <div class="name-row">
-            <tui-textfield>
-              <label tuiLabel>Imię</label>
-              <input tuiTextfield type="text" formControlName="firstName" />
-            </tui-textfield>
-            <tui-textfield>
-              <label tuiLabel>Nazwisko</label>
-              <input tuiTextfield type="text" formControlName="lastName" />
-            </tui-textfield>
+            <div class="name-col">
+              <tui-textfield>
+                <label tuiLabel>Imię</label>
+                <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
+              </tui-textfield>
+              @if (nameError('firstName'); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
+            <div class="name-col">
+              <tui-textfield>
+                <label tuiLabel>Nazwisko</label>
+                <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
+              </tui-textfield>
+              @if (nameError('lastName'); as msg) {
+                <p class="field-error">{{ msg }}</p>
+              }
+            </div>
           </div>
 
-          <tui-textfield>
-            <label tuiLabel>Telefon</label>
-            <input tuiTextfield type="tel" formControlName="phone" />
-          </tui-textfield>
+          <tui-input-phone-international
+            formControlName="phone"
+            [countries]="countries"
+            [countryIsoCode]="countryIsoCode"
+            [countrySearch]="true"
+            (countryIsoCodeChange)="countryIsoCode = $event"
+          >
+            Telefon
+          </tui-input-phone-international>
+
+          @if (form.controls.phone.errors?.['invalidPhone'] && (form.controls.phone.dirty || form.controls.phone.touched)) {
+            <p class="field-error">Wprowadź poprawny numer telefonu</p>
+          }
 
           <div class="form-actions">
             <button tuiButton appearance="secondary" size="s" type="button" [disabled]="saving()" (click)="cancelEdit()">
@@ -107,6 +153,9 @@ import { environment } from '../../../../environments/environment';
     .info-value--muted { color: var(--color-secondary); }
 
     .name-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .name-col { display: flex; flex-direction: column; }
+
+    .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
 
     .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
   `],
@@ -121,10 +170,18 @@ export class ProfileComponent {
   readonly editing = signal(false);
   readonly saving = signal(false);
 
+  readonly countries: readonly TuiCountryIsoCode[] = [
+    'PL',
+    ...getCountries().filter((c) => c !== 'PL'),
+  ];
+  countryIsoCode: TuiCountryIsoCode = 'PL';
+
+  readonly formatPhone = formatPhone;
+
   readonly form = this.fb.group({
-    firstName: [this.auth.currentUser()?.firstName ?? '', Validators.maxLength(50)],
-    lastName:  [this.auth.currentUser()?.lastName  ?? '', Validators.maxLength(50)],
-    phone:     [this.auth.currentUser()?.phone     ?? '', Validators.maxLength(20)],
+    firstName: [this.auth.currentUser()?.firstName ?? '', [Validators.maxLength(50), nameValidator]],
+    lastName:  [this.auth.currentUser()?.lastName  ?? '', [Validators.maxLength(50), nameValidator]],
+    phone:     [this.auth.currentUser()?.phone     ?? '', [phoneValidator]],
   });
 
   back(): void { this.location.back(); }
@@ -138,6 +195,15 @@ export class ProfileComponent {
   cancelEdit(): void {
     this.editing.set(false);
     this.form.markAsPristine();
+  }
+
+  nameError(field: 'firstName' | 'lastName'): string | null {
+    const ctrl = this.form.controls[field];
+    if (!ctrl.dirty && !ctrl.touched) return null;
+    if (ctrl.errors?.['nameTooShort']) return 'Minimum 2 znaki';
+    if (ctrl.errors?.['nameInvalid']) return 'Tylko litery, myślniki i apostrofy';
+    if (ctrl.errors?.['maxlength']) return 'Maksymalnie 50 znaków';
+    return null;
   }
 
   save(): void {
