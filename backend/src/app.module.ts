@@ -8,6 +8,8 @@ import { LoggerModule } from 'nestjs-pino';
 import { HealthController } from './health.controller';
 import { LocationController } from './modules/location/location.controller';
 import { envValidationSchema } from './config.validation';
+import { getCorrelationId } from './modules/correlation/correlation-id.storage';
+import { CorrelationModule } from './modules/correlation/correlation.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -33,6 +35,10 @@ import { InvoiceModule } from './modules/invoice/invoice.module';
         level: process.env.LOG_LEVEL ?? 'info',
         // Redact sensitive headers from request logs
         redact: ['req.headers.authorization', 'req.headers.cookie'],
+        mixin: () => {
+          const correlationId = getCorrelationId();
+          return correlationId ? { correlationId } : {};
+        },
         customProps: () => ({ environment: process.env.NODE_ENV ?? 'development' }),
       },
     }),
@@ -46,6 +52,7 @@ import { InvoiceModule } from './modules/invoice/invoice.module';
       limit: 60,   // 60 requests/min default
     }]),
     ScheduleModule.forRoot(),
+    CorrelationModule,
     PrismaModule,
     AuthModule,
     UsersModule,
