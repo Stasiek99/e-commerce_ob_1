@@ -11,6 +11,7 @@ const config: Config = {
   coverageDirectory: './coverage',
   coverageReporters: ['text', 'json-summary'],
   coverageThreshold: {
+    global: {},
     './src/modules/auth/auth.service.ts': { branches: 70 },
     './src/modules/cart/cart.service.ts': { branches: 70 },
     './src/modules/orders/orders.service.ts': { branches: 70 },
