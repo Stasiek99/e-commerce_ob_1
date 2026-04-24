@@ -7,6 +7,7 @@ import {
   Post,
   Req,
   Res,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { Response, Request } from 'express';
@@ -23,6 +24,7 @@ import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { Throttle } from '@nestjs/throttler';
 
 const REFRESH_COOKIE = 'refresh_token';
+const OAUTH_EXCHANGE_COOKIE = 'oauth_access_token';
 const CROSS_SITE = (process.env.FRONTEND_URL ?? '').startsWith('https://');
 
 const COOKIE_OPTIONS = {
@@ -31,6 +33,16 @@ const COOKIE_OPTIONS = {
   sameSite: (CROSS_SITE ? 'none' : 'lax') as 'none' | 'lax',
   path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000,
+};
+
+// Short-lived cookie used only during the OAuth exchange window.
+// 60 seconds is enough for the frontend callback page to call /auth/token/exchange.
+const OAUTH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: CROSS_SITE,
+  sameSite: (CROSS_SITE ? 'none' : 'lax') as 'none' | 'lax',
+  path: '/',
+  maxAge: 60 * 1000,
 };
 
 @Controller('auth')
@@ -107,7 +119,28 @@ export class AuthController {
   ) {
     const { accessToken, refreshToken } = await this.authService.generateTokenPair(user);
     res.cookie(REFRESH_COOKIE, refreshToken, { ...COOKIE_OPTIONS, path: '/' });
+    // Set a short-lived httpOnly cookie instead of exposing the access token in
+    // the redirect URL. The frontend callback page immediately calls
+    // GET /auth/token/exchange to retrieve it, then the cookie is cleared.
+    // Dev note: GOOGLE_CALLBACK_URL must route through the Angular proxy
+    // (http://localhost:4200/api/auth/google/callback) so the cookie lands on
+    // localhost:4200, matching the origin the exchange fetch is sent from.
+    res.cookie(OAUTH_EXCHANGE_COOKIE, accessToken, OAUTH_COOKIE_OPTIONS);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
-    res.redirect(`${frontendUrl}/auth/callback?token=${accessToken}`);
+    res.redirect(`${frontendUrl}/auth/callback`);
+  }
+
+  @Public()
+  @Get('token/exchange')
+  exchangeOAuthToken(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const token = req.cookies?.[OAUTH_EXCHANGE_COOKIE] as string | undefined;
+    if (!token) {
+      throw new UnauthorizedException('OAuth exchange token not found or expired');
+    }
+    res.clearCookie(OAUTH_EXCHANGE_COOKIE, { path: '/' });
+    return { accessToken: token };
   }
 }

@@ -17,6 +17,7 @@ import { PaymentsService } from '../../payments/payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../../payments/stripe.client';
 import { EmailService } from '../../email/email.service';
+import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 
 // Fixed IDs shared across the test scenarios
@@ -134,6 +135,7 @@ describe('Checkout Integration Flow', () => {
           findFirst: jest.fn().mockResolvedValue({ id: IDS.cartId }),
         },
         cartItem: { deleteMany: jest.fn() },
+        orderEvent: { create: jest.fn() },
       };
       return fn(tx);
     });
@@ -151,6 +153,7 @@ describe('Checkout Integration Flow', () => {
             cartItem: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn() },
             order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
+            orderEvent: { create: jest.fn() },
             payment: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
             $transaction: jest.fn(),
           },
@@ -168,6 +171,13 @@ describe('Checkout Integration Flow', () => {
           useValue: {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
+            sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: InvoiceService,
+          useValue: {
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from('') }),
           },
         },
         {
@@ -338,7 +348,9 @@ describe('Checkout Integration Flow', () => {
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       const txArgs = prisma.$transaction.mock.calls[0][0];
       expect(Array.isArray(txArgs)).toBe(true);
-      expect(emailService.sendPaymentConfirmed).toHaveBeenCalledWith(
+      // Invoice + email chain is fire-and-forget; flush microtasks before asserting
+      await Promise.resolve();
+      expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalledWith(
         expect.objectContaining({ orderNumber: IDS.orderNumber }),
       );
     });
@@ -368,6 +380,7 @@ describe('Checkout Integration Flow', () => {
           await fn({
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
             productVariant: {
               update: jest.fn().mockImplementation((args: any) => {
                 stockRestored.push(args.where.id);

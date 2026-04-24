@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
@@ -20,6 +19,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { UserOrdersQueryDto } from './dto/user-orders-query.dto';
+import { SessionId } from '../../common/decorators/session-id.decorator';
 
 @Controller('orders')
 export class OrdersController {
@@ -29,7 +29,7 @@ export class OrdersController {
   @UseGuards(OptionalJwtGuard)
   createOrder(
     @CurrentUser() user: User | undefined,
-    @Headers('x-session-id') sessionId: string,
+    @SessionId() sessionId: string | undefined,
     @Body() dto: CreateOrderDto,
   ) {
     const userEmail = user?.email ?? dto.guestEmail;

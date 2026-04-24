@@ -106,7 +106,9 @@ export const envValidationSchema = Joi.object({
 
   // ── App ──
   PORT: Joi.number().default(3000),
-  FRONTEND_URL: Joi.string().default('http://localhost:4200'),
+  // Comma-separated list of allowed CORS origins. Required in production so
+  // the app never boots with the localhost fallback against a live database.
+  FRONTEND_URL: requiredInProd(Joi.string().uri(), 'http://localhost:4200'),
 
   // ── Sentry (optional — SDK is a no-op when SENTRY_DSN is empty) ──
   SENTRY_DSN: Joi.string().uri().allow('').optional(),

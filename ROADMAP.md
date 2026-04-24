@@ -193,11 +193,11 @@ Everything in this phase MUST be done before the first real order.
 
 ### 5B. Security Hardening (Days 3-4)
 
-- [ ] CORS whitelist — restrict to production frontend URL
-- [ ] Session ID validation — server-generated UUIDs, reject invalid formats
-- [ ] Payment endpoint ownership — verify user owns order in `GET /payments/:orderId/status`
-- [ ] Google OAuth token — switch from URL query param to httpOnly cookie
-- [ ] E2E security tests — Playwright: unauthenticated admin access, cross-user data access
+- [x] CORS whitelist — restrict to production frontend URL
+- [x] Session ID validation — server-generated UUIDs, reject invalid formats
+- [x] Payment endpoint ownership — verify user owns order in `GET /payments/:orderId/status`
+- [x] Google OAuth token — switch from URL query param to httpOnly cookie
+- [x] E2E security tests — Playwright: unauthenticated admin access, cross-user data access
 
 ### 5C. Observability (Day 5)
 

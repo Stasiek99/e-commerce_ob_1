@@ -3,7 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
@@ -16,6 +15,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import { User } from '@prisma/client';
 import { AddToCartDto } from './dto/add-to-cart.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
+import { SessionId } from '../../common/decorators/session-id.decorator';
 
 @Controller('cart')
 @UseGuards(JwtAuthGuard)
@@ -26,7 +26,7 @@ export class CartController {
   @Get()
   getCart(
     @CurrentUser() user: User | undefined,
-    @Headers('x-session-id') sessionId: string,
+    @SessionId() sessionId: string | undefined,
   ) {
     return this.cartService.getOrCreate(user?.id, sessionId);
   }
@@ -35,7 +35,7 @@ export class CartController {
   @Post('items')
   addItem(
     @CurrentUser() user: User | undefined,
-    @Headers('x-session-id') sessionId: string,
+    @SessionId() sessionId: string | undefined,
     @Body() dto: AddToCartDto,
   ) {
     return this.cartService.addItem(
@@ -50,7 +50,7 @@ export class CartController {
   @Patch('items/:variantId')
   updateItem(
     @CurrentUser() user: User | undefined,
-    @Headers('x-session-id') sessionId: string,
+    @SessionId() sessionId: string | undefined,
     @Param('variantId') variantId: string,
     @Body() dto: UpdateCartItemDto,
   ) {
@@ -61,7 +61,7 @@ export class CartController {
   @Delete('items/:variantId')
   removeItem(
     @CurrentUser() user: User | undefined,
-    @Headers('x-session-id') sessionId: string,
+    @SessionId() sessionId: string | undefined,
     @Param('variantId') variantId: string,
   ) {
     return this.cartService.removeItem(user?.id, sessionId, variantId);
@@ -70,8 +70,9 @@ export class CartController {
   @Post('merge')
   mergeCart(
     @CurrentUser() user: User,
-    @Headers('x-session-id') sessionId: string,
+    @SessionId() sessionId: string | undefined,
   ) {
+    if (!sessionId) return this.cartService.getOrCreate(user.id, undefined);
     return this.cartService.mergeGuestCart(user.id, sessionId);
   }
 }
