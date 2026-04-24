@@ -128,7 +128,10 @@ const CATEGORY_LABELS: Record<string, string> = {
                 [class.detail__wishlist-btn--active]="wishlisted()"
                 [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
                 (click)="toggleWishlist()">
-                <tui-icon [icon]="wishlisted() ? '@tui.heart-fill' : '@tui.heart'" aria-hidden="true" />
+                <tui-icon
+                  icon="@tui.heart"
+                  [style.color]="wishlisted() ? 'var(--color-error)' : null"
+                  aria-hidden="true" />
               </button>
             </div>
           }
@@ -342,6 +345,7 @@ export class ProductDetailComponent implements OnInit {
   toggleWishlist(): void {
     const p = this.product();
     if (!p) return;
+    const wasWishlisted = this.wishlisted();
     const data: ProductCardData = {
       id: p.id,
       name: p.name,
@@ -351,5 +355,10 @@ export class ProductDetailComponent implements OnInit {
       variants: p.variants,
     };
     this.wishlist.toggle(data);
+    if (wasWishlisted) {
+      this.toast.info('Usunięto z ulubionych');
+    } else {
+      this.toast.success('Dodano do ulubionych!');
+    }
   }
 }

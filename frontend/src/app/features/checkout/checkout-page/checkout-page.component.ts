@@ -334,7 +334,7 @@ const CARRIERS = [
         <button
           tuiButton
           type="button"
-          [disabled]="placing()"
+          [disabled]="placing() || (index === 2 && !termsAccepted())"
           (click)="onNext()"
         >
           {{ index === 2 ? (placing() ? 'Przekierowanie...' : 'Przejdź do płatności') : 'Dalej' }}
@@ -661,6 +661,7 @@ export class CheckoutPageComponent implements OnInit {
           const isDefault = this.savedAddresses().length === 0;
           this.http.post(`${environment.apiUrl}/users/me/addresses`, { ...addrPayload, isDefault }).subscribe();
         }
+        this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
         window.location.href = res.paymentUrl;
       },
       error: (err) => {
