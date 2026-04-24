@@ -209,6 +209,21 @@ Everything in this phase MUST be done before the first real order.
 
 ---
 
+## Phase 5B — CORE LOGIC GAPS (Missing Auth Flows) — ~1 day
+
+**Goal:** Close auth features that existed as stubs or dead code in the codebase.
+
+| Task | Status |
+|------|--------|
+| Password reset flow — `PasswordResetToken` model, `POST /auth/forgot-password`, `POST /auth/reset-password`, Resend email, frontend forms (`/auth/forgot-password`, `/auth/reset-password`), "Nie pamiętasz hasła?" link on login | ✅ |
+| Email verification — `EmailVerificationToken` model, verification email on register (fire-and-forget), `POST /auth/verify-email`, `POST /auth/resend-verification`, `VerifyEmailComponent` (`/auth/verify-email`), unverified-email banner with resend button in account dashboard | ✅ |
+| Race condition fix — `verifyEmail()` checks `isEmailVerified` before validating token, so a double-click returns 204 instead of 400 | ✅ |
+| Expired token cleanup cron — daily job deletes `email_verification_tokens` and `password_reset_tokens` rows where `expiresAt < now()` to prevent table bloat | ⏳ |
+
+**Exit criteria:** Users can recover forgotten passwords via email · New email/password registrations receive a verification email · `isEmailVerified` field is set correctly and reflected in the UI · Expired tokens are purged daily
+
+---
+
 ## Phase 6 — GROWTH (Post-Launch Features) — ongoing
 
 **Goal:** Revenue growth features. Prioritize based on customer feedback.
@@ -222,6 +237,9 @@ Everything in this phase MUST be done before the first real order.
 - [ ] PWA (offline catalog, push notifications)
 - [ ] DHL/GLS mock modes
 - [ ] Advanced AdminJS views (order timeline, analytics dashboard)
+- [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
+- [ ] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send
+- [ ] Magic Link login — passwordless flow reusing the `EmailVerificationToken` infrastructure; issue a short-lived token, exchange for a session on click
 
 ---
 
