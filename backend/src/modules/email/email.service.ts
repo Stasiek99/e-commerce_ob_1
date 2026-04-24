@@ -6,12 +6,14 @@ import { orderConfirmationTemplate } from './templates/order-confirmation.templa
 import { paymentConfirmedTemplate } from './templates/payment-confirmed.template';
 import { shippingNotificationTemplate } from './templates/shipping-notification.template';
 import { invoiceTemplate } from './templates/invoice.template';
+import { passwordResetTemplate } from './templates/password-reset.template';
 
 type EmailKind =
   | 'order_confirmation'
   | 'payment_confirmed'
   | 'payment_confirmed_with_invoice'
-  | 'shipping_notification';
+  | 'shipping_notification'
+  | 'password_reset';
 
 @Injectable()
 export class EmailService {
@@ -72,6 +74,11 @@ export class EmailService {
       { orderNumber: data.orderNumber },
       [{ filename: `FV-${data.orderNumber}.pdf`, content: data.invoicePdf }],
     );
+  }
+
+  async sendPasswordReset(data: { to: string; firstName: string; resetUrl: string }) {
+    const { subject, html } = passwordResetTemplate({ firstName: data.firstName, resetUrl: data.resetUrl });
+    return this.send('password_reset', data.to, subject, html, { resetUrl: data.resetUrl });
   }
 
   async sendShippingNotification(data: {

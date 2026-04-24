@@ -191,7 +191,12 @@
       "Bash(pnpm test:e2e)",
       "Bash(pnpm --filter backend exec tsc --noEmit --project tsconfig.json)",
       "Bash(pnpm --filter backend add nestjs-pino pino-http)",
-      "Bash(pnpm --filter backend add -D pino-pretty)"
+      "Bash(pnpm --filter backend add -D pino-pretty)",
+      "Bash(pnpm jest *)",
+      "Bash(awk '{print $NF}')",
+      "Bash(taskkill /PID 12400 /F)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"stasiekpilich@gmail.com\"}')",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"nonexistent@example.com\"}')"
     ]
   }
 }
