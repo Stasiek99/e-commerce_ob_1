@@ -6,6 +6,7 @@ import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';
 import { EmailService } from '../../email/email.service';
+import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 
 describe('PaymentsService', () => {
@@ -75,6 +76,9 @@ describe('PaymentsService', () => {
               findUniqueOrThrow: jest.fn(),
               update: jest.fn(),
             },
+            orderEvent: {
+              create: jest.fn(),
+            },
             productVariant: {
               update: jest.fn(),
             },
@@ -94,6 +98,13 @@ describe('PaymentsService', () => {
           provide: EmailService,
           useValue: {
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
+            sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: InvoiceService,
+          useValue: {
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from('') }),
           },
         },
         {
@@ -153,7 +164,9 @@ describe('PaymentsService', () => {
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       const txArgs = prisma.$transaction.mock.calls[0][0];
       expect(Array.isArray(txArgs)).toBe(true);
-      expect(emailService.sendPaymentConfirmed).toHaveBeenCalled();
+      // The invoice + email chain is fire-and-forget; flush microtasks before asserting
+      await Promise.resolve();
+      expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalled();
     });
 
     it('silently returns if no payment exists for the session id', async () => {
@@ -174,6 +187,7 @@ describe('PaymentsService', () => {
           await fn({
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn() },
           });
         }
@@ -194,6 +208,7 @@ describe('PaymentsService', () => {
           await fn({
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn() },
           });
         }
@@ -348,6 +363,7 @@ describe('PaymentsService', () => {
           await fn({
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn() },
           });
         }
@@ -435,6 +451,7 @@ describe('PaymentsService', () => {
           await fn({
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
             productVariant: {
               update: jest.fn().mockImplementation((args: any) => {
                 stockRestored.push(args.where.id);

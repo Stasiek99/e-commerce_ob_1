@@ -175,7 +175,20 @@
       "Bash(rm verify-heart.mjs)",
       "Bash(rm -rf verify-screenshots)",
       "Bash(pnpm remove *)",
-      "Bash(pnpm --filter backend exec tsc --noEmit)"
+      "Bash(pnpm --filter backend exec tsc --noEmit)",
+      "Bash(pnpm --filter backend prisma:generate)",
+      "Bash(pnpm --filter backend test:cov)",
+      "Bash(pnpm --filter backend test)",
+      "Bash(npx jest *)",
+      "Bash(pnpm --filter backend exec jest src/modules/orders/__tests__/orders.service.spec.ts)",
+      "Bash(pnpm --filter backend exec jest src/modules/payments/__tests__/payments.service.spec.ts)",
+      "Bash(pnpm --filter frontend test)",
+      "Bash(curl -s http://localhost:3000/health)",
+      "Read(//c/Users/Administrator/.cache/**)",
+      "Read(//root/.cache/**)",
+      "Bash(pnpm --filter e2e exec playwright install chromium)",
+      "Read(//c/Users/Administrator/AppData/Local/ms-playwright/**)",
+      "Bash(pnpm test:e2e)"
     ]
   }
 }

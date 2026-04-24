@@ -197,7 +197,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] Session ID validation — server-generated UUIDs, reject invalid formats
 - [x] Payment endpoint ownership — verify user owns order in `GET /payments/:orderId/status`
 - [x] Google OAuth token — switch from URL query param to httpOnly cookie
-- [ ] E2E security tests — Playwright: unauthenticated admin access, cross-user data access
+- [x] E2E security tests — Playwright: unauthenticated admin access, cross-user data access
 
 ### 5C. Observability (Day 5)
 
