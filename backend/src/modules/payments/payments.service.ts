@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus } from '@prisma/client';
@@ -220,11 +220,19 @@ export class PaymentsService {
     );
   }
 
-  async getPaymentStatus(orderId: string) {
-    return this.prisma.payment.findUnique({
+  async getPaymentStatus(orderId: string, requestingUserId: string) {
+    const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { status: true, paidAt: true },
+      select: { status: true, paidAt: true, order: { select: { userId: true } } },
     });
+
+    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+
+    if (payment.order.userId !== requestingUserId) {
+      throw new ForbiddenException('You do not have access to this order');
+    }
+
+    return { status: payment.status, paidAt: payment.paidAt };
   }
 
   /**

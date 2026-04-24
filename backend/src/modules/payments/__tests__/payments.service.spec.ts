@@ -273,15 +273,36 @@ describe('PaymentsService', () => {
   });
 
   describe('getPaymentStatus', () => {
-    it('returns status and paidAt for an order', async () => {
+    it('returns status and paidAt for an order the user owns', async () => {
       const now = new Date();
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
+        order: { userId: 'user-1' },
       });
 
-      const result = await service.getPaymentStatus('order-1');
+      const result = await service.getPaymentStatus('order-1', 'user-1');
       expect(result).toEqual({ status: PaymentStatus.COMPLETED, paidAt: now });
+    });
+
+    it('throws ForbiddenException when user does not own the order', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { userId: 'other-user' },
+      });
+
+      await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
+        'You do not have access to this order',
+      );
+    });
+
+    it('throws NotFoundException when payment does not exist', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
+        'No payment found for order order-1',
+      );
     });
   });
 
