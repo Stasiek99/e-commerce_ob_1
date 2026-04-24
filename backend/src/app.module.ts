@@ -23,6 +23,7 @@ import { EmailModule } from './modules/email/email.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
+import { MonitoringModule } from './modules/monitoring/monitoring.module';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { InvoiceModule } from './modules/invoice/invoice.module';
     EmailModule,
     StorageModule,
     InvoiceModule,
+    MonitoringModule,
     // AdminModule must be last — depends on PrismaModule being initialized
     AdminModule,
   ],

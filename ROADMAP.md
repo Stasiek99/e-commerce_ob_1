@@ -203,7 +203,7 @@ Everything in this phase MUST be done before the first real order.
 
 - [x] Structured logging — Pino for JSON-formatted logs (Railway-friendly)
 - [x] Request tracing — correlation IDs across requests
-- [ ] Supabase monitoring — connection count alerts, storage usage
+- [x] Supabase monitoring — connection count alerts, storage usage
 
 **Exit criteria:** Audit trail active · CORS locked · Session IDs validated · Structured logs in production
 
