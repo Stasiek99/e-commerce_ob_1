@@ -87,16 +87,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-secondary);
+  color: rgba(0, 0, 0, 0.35);
   transition: color 0.15s, transform 0.15s, background 0.15s;
-  opacity: 0;
-
-  .product-card:hover & {
-    opacity: 1;
-  }
 
   &--active {
-    opacity: 1;
     color: var(--color-error);
     background: rgba(255, 255, 255, 0.95);
   }
@@ -104,6 +98,7 @@
   &:hover {
     transform: scale(1.15);
     color: var(--color-error);
+    background: rgba(255, 255, 255, 0.95);
   }
 
   tui-icon {

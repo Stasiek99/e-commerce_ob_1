@@ -165,7 +165,16 @@
       "Bash(grep -rn \"findAllForUser\\\\|getMyOrders\\\\|orders\\\\$\\\\|\\\\.orders\" e:/repos/e-commerce_ob_1/frontend/src --include=\"*.ts\")",
       "Bash(pnpm --filter frontend add libphonenumber-js)",
       "Bash(git -C e:/repos/e-commerce_ob_1 log --oneline -5)",
-      "Bash(git -C e:/repos/e-commerce_ob_1 diff --stat HEAD)"
+      "Bash(git -C e:/repos/e-commerce_ob_1 diff --stat HEAD)",
+      "Bash(pnpm --filter frontend exec tsc --noEmit)",
+      "Bash(curl -s http://localhost:4200 -o /dev/null -w \"%{http_code}\")",
+      "Bash(node verify-heart.mjs)",
+      "Bash(node node_modules/.bin/puppeteer browsers install chrome)",
+      "Bash(npx puppeteer *)",
+      "Bash(echo \"Started PID $!\")",
+      "Bash(rm verify-heart.mjs)",
+      "Bash(rm -rf verify-screenshots)",
+      "Bash(pnpm remove *)"
     ]
   }
 }

@@ -1,35 +1,31 @@
-import { Injectable, signal } from '@angular/core';
-
-export interface Toast {
-  id: string;
-  type: 'success' | 'error' | 'info';
-  message: string;
-}
+import { Injectable, inject } from '@angular/core';
+import { TuiToastService } from '@taiga-ui/kit';
+import { PolymorpheusComponent } from '@taiga-ui/polymorpheus';
+import { AppToastComponent, AppToastData } from '../../shared/components/toast/app-toast.component';
 
 @Injectable({ providedIn: 'root' })
 export class ToastService {
-  private readonly _toasts = signal<Toast[]>([]);
-  readonly toasts = this._toasts.asReadonly();
+  private readonly tuiToast = inject(TuiToastService);
 
-  success(message: string, durationMs = 4000) {
-    this.add({ type: 'success', message }, durationMs);
+  success(message: string, durationMs = 4000): void {
+    this.open('success', message, durationMs);
   }
 
-  error(message: string, durationMs = 5000) {
-    this.add({ type: 'error', message }, durationMs);
+  error(message: string, durationMs = 5000): void {
+    this.open('error', message, durationMs);
   }
 
-  info(message: string, durationMs = 4000) {
-    this.add({ type: 'info', message }, durationMs);
+  info(message: string, durationMs = 4000): void {
+    this.open('info', message, durationMs);
   }
 
-  dismiss(id: string) {
-    this._toasts.update((toasts) => toasts.filter((t) => t.id !== id));
-  }
-
-  private add(toast: Omit<Toast, 'id'>, durationMs: number) {
-    const id = crypto.randomUUID();
-    this._toasts.update((toasts) => [...toasts, { ...toast, id }]);
-    setTimeout(() => this.dismiss(id), durationMs);
+  private open(type: AppToastData['type'], message: string, autoClose: number): void {
+    this.tuiToast
+      .open<AppToastData>(new PolymorpheusComponent(AppToastComponent), {
+        autoClose,
+        closable: false,
+        data: { message, type },
+      })
+      .subscribe();
   }
 }

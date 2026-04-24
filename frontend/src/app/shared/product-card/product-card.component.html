@@ -24,7 +24,9 @@
         [class.product-card__wishlist--active]="wishlisted()"
         [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
         (click)="onToggleWishlist($event)">
-        <tui-icon [icon]="wishlisted() ? '@tui.heart' : '@tui.heart'" />
+        <tui-icon
+          icon="@tui.heart"
+          [style.color]="wishlisted() ? 'var(--color-error)' : null" />
       </button>
     </div>
 
