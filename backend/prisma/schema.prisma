@@ -251,6 +251,7 @@ model Order {
   items    OrderItem[]
   payment  Payment?
   shipment Shipment?
+  events   OrderEvent[]
 
   @@map("orders")
 }
@@ -313,6 +314,22 @@ model Shipment {
   updatedAt        DateTime       @updatedAt
 
   @@map("shipments")
+}
+
+// ─── Order Events (Audit Trail) ──────────────────────────────────────────────
+
+model OrderEvent {
+  id         String       @id @default(uuid())
+  orderId    String
+  order      Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  actor      String
+  note       String?
+  createdAt  DateTime     @default(now())
+
+  @@index([orderId])
+  @@map("order_events")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────

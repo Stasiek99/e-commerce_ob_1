@@ -61,7 +61,8 @@ describe('OrdersService', () => {
           provide: PrismaService,
           useValue: {
             address: { findFirst: jest.fn() },
-            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
+            orderEvent: { create: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn() },
@@ -159,6 +160,7 @@ describe('OrdersService', () => {
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -200,6 +202,7 @@ describe('OrdersService', () => {
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -231,6 +234,7 @@ describe('OrdersService', () => {
           order: { create: jest.fn() },
           cart: { findFirst: jest.fn() },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -263,6 +267,7 @@ describe('OrdersService', () => {
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -303,6 +308,7 @@ describe('OrdersService', () => {
               cartCleared = true;
             }),
           },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -335,6 +341,7 @@ describe('OrdersService', () => {
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -383,6 +390,7 @@ describe('OrdersService', () => {
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -411,6 +419,7 @@ describe('OrdersService', () => {
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });
@@ -430,10 +439,12 @@ describe('OrdersService', () => {
     it('returns all orders for a user', async () => {
       const orders = [{ id: 'o-1' }, { id: 'o-2' }];
       prisma.order.findMany.mockResolvedValue(orders);
+      prisma.order.count.mockResolvedValue(2);
 
       const result = await service.findAllForUser('user-1');
 
-      expect(result).toEqual(orders);
+      expect(result.data).toEqual(orders);
+      expect(result.meta.total).toBe(2);
       expect(prisma.order.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { userId: 'user-1' } }),
       );
@@ -461,12 +472,11 @@ describe('OrdersService', () => {
 
   describe('updateStatus', () => {
     it('updates the order status', async () => {
-      const updated = { id: 'o-1', status: OrderStatus.PROCESSING };
-      prisma.order.update.mockResolvedValue(updated);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PENDING_PAYMENT });
+      prisma.$transaction.mockResolvedValue([{ id: 'o-1', status: OrderStatus.PROCESSING }, {}]);
 
-      const result = await service.updateStatus('o-1', OrderStatus.PROCESSING);
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
 
-      expect(result).toEqual(updated);
       expect(prisma.order.update).toHaveBeenCalledWith({
         where: { id: 'o-1' },
         data: { status: OrderStatus.PROCESSING },
@@ -501,6 +511,7 @@ describe('OrdersService', () => {
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(fullTx);
       });
@@ -546,6 +557,7 @@ describe('OrdersService', () => {
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
         };
         return fn(tx);
       });

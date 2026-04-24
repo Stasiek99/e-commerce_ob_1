@@ -1,6 +1,6 @@
 import { Component, inject } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { AuthService } from '../../../core/services/auth.service';
@@ -46,14 +46,14 @@ import { ToastService } from '../../../core/services/toast.service';
         </button>
 
         <p class="auth-link">
-          Nie masz konta? <a routerLink="/auth/register">Zarejestruj się</a>
+          Nie masz konta? <a [routerLink]="['/auth/register']" [queryParams]="returnTo ? { returnTo } : {}">Zarejestruj się</a>
         </p>
       </form>
     </div>
   `,
   styles: [`
     .auth-page { display: flex; justify-content: center; padding: 32px 16px; }
-    .auth-card { width: 100%; max-width: 420px; }
+    .auth-card { width: 100%; max-width: 420px; box-shadow: var(--shadow-sm) !important; }
     .btn-full { display: flex; width: 100%; justify-content: center; }
     .auth-divider {
       text-align: center;
@@ -76,13 +76,16 @@ import { ToastService } from '../../../core/services/toast.service';
   `],
 })
 export class LoginComponent {
-  private readonly auth = inject(AuthService);
-  private readonly cart = inject(CartService);
+  private readonly auth  = inject(AuthService);
+  private readonly cart  = inject(CartService);
   private readonly toast = inject(ToastService);
   private readonly router = inject(Router);
-  private readonly fb = inject(FormBuilder);
+  private readonly route  = inject(ActivatedRoute);
+  private readonly fb    = inject(FormBuilder);
 
   loading = false;
+
+  readonly returnTo: string | null = this.route.snapshot.queryParams['returnTo'] ?? null;
 
   form = this.fb.group({
     email:    ['', [Validators.required, Validators.email]],
@@ -96,7 +99,7 @@ export class LoginComponent {
     this.auth.login(email!, password!).subscribe({
       next: () => {
         this.cart.mergeWithServer('').subscribe();
-        this.router.navigate(['/']);
+        this.router.navigateByUrl(this.returnTo ?? '/');
       },
       error: () => {
         this.toast.error('Nieprawidłowy email lub hasło.');
@@ -106,6 +109,10 @@ export class LoginComponent {
   }
 
   loginWithGoogle(): void {
+    // Preserve returnTo across the OAuth redirect via sessionStorage
+    if (this.returnTo) {
+      sessionStorage.setItem('auth_return_to', this.returnTo);
+    }
     this.auth.loginWithGoogle();
   }
 }

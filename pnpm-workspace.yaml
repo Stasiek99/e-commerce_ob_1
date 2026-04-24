@@ -2,6 +2,7 @@ packages:
   - 'packages/*'
   - 'backend'
   - 'frontend'
+  - 'e2e'
 allowBuilds:
   '@nestjs/core': true
   '@prisma/client': true

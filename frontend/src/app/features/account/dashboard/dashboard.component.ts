@@ -2,6 +2,7 @@ import { Component, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { AuthService } from '../../../core/services/auth.service';
+import { ToastService } from '../../../core/services/toast.service';
 
 @Component({
   selector: 'app-dashboard',
@@ -88,12 +89,15 @@ import { AuthService } from '../../../core/services/auth.service';
 })
 export class DashboardComponent {
   private readonly auth = inject(AuthService);
+  private readonly toast = inject(ToastService);
 
   firstName(): string {
     return this.auth.currentUser()?.firstName || 'Użytkowniku';
   }
 
   logout(): void {
-    this.auth.logout().subscribe();
+    this.auth.logout().subscribe({
+      next: () => this.toast.info('Zostałeś wylogowany.'),
+    });
   }
 }

@@ -21,6 +21,9 @@ export const envValidationSchema = Joi.object({
   // ── Database (always required) ──
   DATABASE_URL: Joi.string().uri().required(),
   DIRECT_URL: Joi.string().uri().required(),
+  // Prisma connections per instance. Formula: instances × limit ≤ pgbouncer max_client_conn.
+  // Supabase free: ~60 total. Supabase Pro: ~200 total. Default 10 → safe up to 6/20 replicas.
+  DATABASE_CONNECTION_LIMIT: Joi.number().integer().min(1).max(100).default(10),
 
   // ── JWT (always required) ──
   JWT_ACCESS_SECRET: Joi.string().min(16).required(),
@@ -103,7 +106,9 @@ export const envValidationSchema = Joi.object({
 
   // ── App ──
   PORT: Joi.number().default(3000),
-  FRONTEND_URL: Joi.string().default('http://localhost:4200'),
+  // Comma-separated list of allowed CORS origins. Required in production so
+  // the app never boots with the localhost fallback against a live database.
+  FRONTEND_URL: requiredInProd(Joi.string().uri(), 'http://localhost:4200'),
 
   // ── Sentry (optional — SDK is a no-op when SENTRY_DSN is empty) ──
   SENTRY_DSN: Joi.string().uri().allow('').optional(),

@@ -57,8 +57,10 @@ export class AuthService {
     window.location.href = `${environment.apiUrl}/auth/google`;
   }
 
-  handleGoogleCallback(token: string) {
-    this.setToken(token);
+  exchangeOAuthToken() {
+    return this.http
+      .get<TokensResponse>(`${environment.apiUrl}/auth/token/exchange`, { withCredentials: true })
+      .pipe(tap((res) => this.setToken(res.accessToken)));
   }
 
   refresh() {

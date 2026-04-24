@@ -147,7 +147,7 @@ import { AuthService } from '../../../core/services/auth.service';
     .header__left {
       display: flex;
       align-items: center;
-      gap: 32px;
+      gap: 20px;
     }
     .header__logo {
       display: flex;
@@ -165,8 +165,8 @@ import { AuthService } from '../../../core/services/auth.service';
       padding: 0;
       cursor: pointer;
       color: var(--color-primary);
-      font-size: 14px;
-      font-weight: 500;
+      font-size: 13px;
+      font-weight: 400;
       font-family: var(--tui-font-text);
       transition: color 0.15s;
       white-space: nowrap;

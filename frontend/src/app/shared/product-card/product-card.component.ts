@@ -4,6 +4,7 @@ import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { PricePipe } from '../pipes/price.pipe';
 import { CartService } from '../../core/services/cart.service';
 import { WishlistService } from '../../core/services/wishlist.service';
+import { ToastService } from '../../core/services/toast.service';
 
 export interface ProductCardData {
   id: string;
@@ -24,6 +25,7 @@ export interface ProductCardData {
 export class ProductCardComponent {
   private readonly cart = inject(CartService);
   private readonly wishlist = inject(WishlistService);
+  private readonly toast = inject(ToastService);
 
   @Input({ required: true }) product!: ProductCardData;
 
@@ -33,7 +35,13 @@ export class ProductCardComponent {
   onToggleWishlist(event: Event): void {
     event.preventDefault();
     event.stopPropagation();
+    const wasWishlisted = this.wishlisted();
     this.wishlist.toggle(this.product);
+    if (wasWishlisted) {
+      this.toast.info(`Usunięto „${this.product.name}" z ulubionych`);
+    } else {
+      this.toast.success(`Dodano „${this.product.name}" do ulubionych!`);
+    }
   }
 
   get firstVariant() {
@@ -55,6 +63,7 @@ export class ProductCardComponent {
     this.cart.addItem(variant.id, 1).subscribe({
       next: (cart) => {
         this.cart.refreshFromServer(cart);
+        this.toast.success('Dodano do koszyka!');
         this.adding.set(false);
       },
       error: () => this.adding.set(false),

@@ -186,24 +186,24 @@ Everything in this phase MUST be done before the first real order.
 
 ### 5A. Database & Performance (Days 1-2)
 
-- [ ] OrderEvent audit trail — new Prisma model, log all status changes with actor + timestamp
-- [ ] Connection pool tuning — `connection_limit` in DATABASE_URL
-- [ ] Stale cart cleanup — cron to delete anonymous carts >30 days old
-- [ ] Product listing pagination — cursor/offset on all list endpoints
+- [x] OrderEvent audit trail — new Prisma model, log all status changes with actor + timestamp
+- [x] Connection pool tuning — `connection_limit` in DATABASE_URL
+- [x] Stale cart cleanup — cron to delete anonymous carts >30 days old
+- [x] Product listing pagination — cursor/offset on all list endpoints
 
 ### 5B. Security Hardening (Days 3-4)
 
-- [ ] CORS whitelist — restrict to production frontend URL
-- [ ] Session ID validation — server-generated UUIDs, reject invalid formats
-- [ ] Payment endpoint ownership — verify user owns order in `GET /payments/:orderId/status`
-- [ ] Google OAuth token — switch from URL query param to httpOnly cookie
-- [ ] E2E security tests — Playwright: unauthenticated admin access, cross-user data access
+- [x] CORS whitelist — restrict to production frontend URL
+- [x] Session ID validation — server-generated UUIDs, reject invalid formats
+- [x] Payment endpoint ownership — verify user owns order in `GET /payments/:orderId/status`
+- [x] Google OAuth token — switch from URL query param to httpOnly cookie
+- [x] E2E security tests — Playwright: unauthenticated admin access, cross-user data access
 
 ### 5C. Observability (Day 5)
 
-- [ ] Structured logging — Pino for JSON-formatted logs (Railway-friendly)
-- [ ] Request tracing — correlation IDs across requests
-- [ ] Supabase monitoring — connection count alerts, storage usage
+- [x] Structured logging — Pino for JSON-formatted logs (Railway-friendly)
+- [x] Request tracing — correlation IDs across requests
+- [x] Supabase monitoring — connection count alerts, storage usage
 
 **Exit criteria:** Audit trail active · CORS locked · Session IDs validated · Structured logs in production
 
@@ -304,7 +304,7 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
 - [ ] Resend Dashboard → Webhooks → Add endpoint: URL `https://<railway>/email/webhook`, events `email.sent`, `email.delivered`, `email.bounced`, `email.complained` → copy Signing Secret → set `RESEND_WEBHOOK_SECRET` in Railway
 - [ ] Stripe: update statement descriptor to real business name
-- [ ] Seed real product catalog (products, variants, images, categories)
+- [ ] Seed real product catalog (products, variants, images, categories) — see field guide below
 - [ ] Upload product images to Supabase `product-images` bucket
 - [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
 - [ ] Switch Stripe to live mode in Railway (`sk_live_` / `pk_live_`) — verify checkout end-to-end with a real card (refund immediately)
@@ -315,6 +315,43 @@ Everything in this phase MUST be done before the first real order.
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
 
 **Exit criteria:** Real domain live · Emails sending from verified domain · Real products visible · Stripe live checkout works · Backups configured
+
+---
+
+## Product Catalog Field Guide (for seeding real data)
+
+Reference for how filter values map to Prisma fields. The frontend filter UI reads these exact strings — casing matters.
+
+### `Product` model fields
+
+| Filter UI label | Prisma field | Accepted values |
+|---|---|---|
+| Płeć | `gender` | `"Kobieta"`, `"Mężczyzna"`, `"Unisex"` |
+| Grupa olfaktoryczna | `scentFamily` | e.g. `"Drzewne"`, `"Kwiatowe"`, `"Cytrusowe"`, `"Orientalne"` — decide final list before seeding |
+| Linia | *(field TBD — needs schema migration)* | `"Millesime"`, `"Luxury"` |
+
+### `ProductVariant` model fields
+
+| Filter UI label | Prisma field | Values by category |
+|---|---|---|
+| Pojemność | `volume` (integer, ml) | Perfumy: `30`, `50`, `70` · Dyfuzory: `100`, `200`, `500` · Żele: `250` |
+
+`volume` is stored as an integer (ml). The filter UI displays it as "30ml", "50ml" etc. — the backend converts on query.
+
+### Volume options per category (for dynamic filter UI)
+
+When a category is selected in the frontend, the "Pojemność" accordion shows only that category's sizes. When "Wszystkie produkty" is shown, all sizes are merged.
+
+| Category slug | Volume options |
+|---|---|
+| `perfume` | 30ml, 50ml, 70ml |
+| `diffusers` | 100ml, 200ml, 500ml |
+| `gels` | 250ml |
+| *(all products)* | 30ml, 50ml, 70ml, 100ml, 200ml, 250ml, 500ml |
+
+### `inStock` filter
+
+Maps to `variants: { some: { stock: { gt: 0 }, isActive: true } }` in Prisma. No schema change needed — uses the existing `stock` field on `ProductVariant`.
 
 ---
 

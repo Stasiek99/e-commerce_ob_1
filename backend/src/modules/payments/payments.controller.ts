@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Logger,
   Param,
+  ParseUUIDPipe,
   Post,
   Req,
   UseGuards,
@@ -14,10 +15,12 @@ import {
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
+import { User } from '@prisma/client';
 import { PaymentsService } from './payments.service';
 import { StripeClient } from './stripe.client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard)
@@ -68,13 +71,16 @@ export class PaymentsController {
   }
 
   @Get(':orderId/status')
-  getStatus(@Param('orderId') orderId: string) {
-    return this.paymentsService.getPaymentStatus(orderId);
+  getStatus(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.paymentsService.getPaymentStatus(orderId, user.id);
   }
 
   @Post(':orderId/refund')
   @HttpCode(HttpStatus.OK)
-  async refund(@Param('orderId') orderId: string) {
+  async refund(@Param('orderId', ParseUUIDPipe) orderId: string) {
     await this.paymentsService.refundPayment(orderId);
     return { refunded: true };
   }

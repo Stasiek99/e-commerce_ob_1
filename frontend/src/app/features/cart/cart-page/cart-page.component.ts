@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 import { TuiButton, TuiTitle } from '@taiga-ui/core';
 import { TuiCounter } from '@taiga-ui/kit';
 import { CartService } from '../../../core/services/cart.service';
+import { ToastService } from '../../../core/services/toast.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { TuiCell } from "@taiga-ui/layout";
 
@@ -114,12 +115,16 @@ import { TuiCell } from "@taiga-ui/layout";
 })
 export class CartPageComponent {
   readonly cart = inject(CartService);
+  private readonly toast = inject(ToastService);
 
   updateQty(variantId: string, qty: number): void {
     this.cart.updateQuantity(variantId, qty);
   }
 
   remove(variantId: string): void {
-    this.cart.removeItem(variantId).subscribe();
+    const name = this.cart.items().find((i) => i.productVariantId === variantId)?.productName;
+    this.cart.removeItem(variantId).subscribe({
+      next: () => this.toast.info(name ? `Usunięto „${name}" z koszyka` : 'Produkt usunięty z koszyka'),
+    });
   }
 }

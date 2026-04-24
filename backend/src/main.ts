@@ -5,6 +5,7 @@ import './instrument';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { Logger } from 'nestjs-pino';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -35,8 +36,13 @@ async function bootstrap() {
     }),
   );
 
+  const allowedOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:4200')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: process.env.FRONTEND_URL ?? 'http://localhost:4200',
+    origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
     credentials: true,
   });
 
@@ -44,9 +50,11 @@ async function bootstrap() {
   const invoiceService = app.get(InvoiceService);
   await setupAdmin(app, prisma, invoiceService);
 
+  app.useLogger(app.get(Logger));
+
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
-  console.log(`Backend running on http://localhost:${port}`);
+  app.get(Logger).log(`Backend running on http://localhost:${port}`, 'Bootstrap');
 }
 
 bootstrap();
