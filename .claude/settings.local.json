@@ -174,7 +174,8 @@
       "Bash(echo \"Started PID $!\")",
       "Bash(rm verify-heart.mjs)",
       "Bash(rm -rf verify-screenshots)",
-      "Bash(pnpm remove *)"
+      "Bash(pnpm remove *)",
+      "Bash(pnpm --filter backend exec tsc --noEmit)"
     ]
   }
 }
