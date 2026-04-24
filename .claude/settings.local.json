@@ -189,7 +189,9 @@
       "Bash(pnpm --filter e2e exec playwright install chromium)",
       "Read(//c/Users/Administrator/AppData/Local/ms-playwright/**)",
       "Bash(pnpm test:e2e)",
-      "Bash(pnpm --filter backend exec tsc --noEmit --project tsconfig.json)"
+      "Bash(pnpm --filter backend exec tsc --noEmit --project tsconfig.json)",
+      "Bash(pnpm --filter backend add nestjs-pino pino-http)",
+      "Bash(pnpm --filter backend add -D pino-pretty)"
     ]
   }
 }

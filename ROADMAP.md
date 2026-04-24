@@ -201,7 +201,7 @@ Everything in this phase MUST be done before the first real order.
 
 ### 5C. Observability (Day 5)
 
-- [ ] Structured logging — Pino for JSON-formatted logs (Railway-friendly)
+- [x] Structured logging — Pino for JSON-formatted logs (Railway-friendly)
 - [ ] Request tracing — correlation IDs across requests
 - [ ] Supabase monitoring — connection count alerts, storage usage
 

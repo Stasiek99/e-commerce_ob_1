@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
+import { LoggerModule } from 'nestjs-pino';
 import { HealthController } from './health.controller';
 import { LocationController } from './modules/location/location.controller';
 import { envValidationSchema } from './config.validation';
@@ -24,6 +25,17 @@ import { InvoiceModule } from './modules/invoice/invoice.module';
 @Module({
   imports: [
     SentryModule.forRoot(),
+    LoggerModule.forRoot({
+      pinoHttp: {
+        transport: process.env.NODE_ENV !== 'production'
+          ? { target: 'pino-pretty', options: { colorize: true, singleLine: true } }
+          : undefined,
+        level: process.env.LOG_LEVEL ?? 'info',
+        // Redact sensitive headers from request logs
+        redact: ['req.headers.authorization', 'req.headers.cookie'],
+        customProps: () => ({ environment: process.env.NODE_ENV ?? 'development' }),
+      },
+    }),
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: envValidationSchema,
