@@ -209,6 +209,28 @@ Everything in this phase MUST be done before the first real order.
 
 ---
 
+## Phase 5D — CORE LOGIC GAPS (Missing Auth Flows) — ~1 day
+
+**Goal:** Close auth features that existed as stubs or dead code in the codebase.
+
+| Task | Status |
+|------|--------|
+| Password reset flow — `PasswordResetToken` model, `POST /auth/forgot-password`, `POST /auth/reset-password`, Resend email, frontend forms (`/auth/forgot-password`, `/auth/reset-password`), "Nie pamiętasz hasła?" link on login | ✅ |
+| Email verification — `EmailVerificationToken` model, verification email on register (fire-and-forget), `POST /auth/verify-email`, `POST /auth/resend-verification`, `VerifyEmailComponent` (`/auth/verify-email`), unverified-email banner with resend button in account dashboard | ✅ |
+| Race condition fix — `verifyEmail()` checks `isEmailVerified` before validating token, so a double-click returns 204 instead of 400 | ✅ |
+| Expired token cleanup cron — daily job deletes `email_verification_tokens` and `password_reset_tokens` rows where `expiresAt < now()` to prevent table bloat | ⏳ |
+| Low-stock / out-of-stock alert — after each order's stock decrements, query post-decrement levels; email `ADMIN_ALERT_EMAIL` listing any SKU at 0 (out-of-stock) or ≤ 2 (low-stock threshold); one fire-and-forget email per order, no schema change | ✅ |
+| New order notification — on `checkout.session.completed`, fire-and-forget email to `ADMIN_ALERT_EMAIL` with order number, customer email, items table, total, carrier, and admin panel link | ✅ |
+| Guest order tracking — `GET /orders/track?email=&orderNumber=` (public, case-insensitive match); returns status, items, tracking number; `/orders/track` frontend page with form + result card; link added to checkout success page | ✅ |
+| GDPR Art. 17 erasure procedure — `backend/prisma/gdpr/erasure-procedure.sql` (anonymises user + order snapshots, deletes tokens/addresses, preserves order rows for 5-year tax retention); privacy policy updated with Art. 17 section, contact address, and legal retention explanation | ✅ |
+| B2B invoice NIP — `nip` field on `User`, `snapshotNip` on `Order`; NIP snapshoted from DTO or user profile at order creation; printed in NABYWCA section of PDF invoice; NIP field in profile view/edit with 10-digit validation; `PATCH /users/me` accepts `nip`; Prisma migration `20260425020000` | ✅ |
+| Inventory replenishment — `PATCH /products/admin/variants/:variantId/stock` (admin-only); accepts `{ set: number }` for absolute value or `{ adjustment: number }` for relative delta (floored at 0); no direct DB access required | ✅ |
+| Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel` (PENDING_PAYMENT → expire Stripe session + restore stock + CANCELLED; PAID/PROCESSING → full Stripe refund + REFUNDED), inline confirm UI in order detail with legal note, cancellation/refund email via Resend, Polish status labels on list + detail | ✅ |
+
+**Exit criteria:** Users can recover forgotten passwords via email · New email/password registrations receive a verification email · `isEmailVerified` field is set correctly and reflected in the UI · Expired tokens are purged daily · Buyers can self-serve cancel unpaid orders and withdraw from paid orders before shipment
+
+---
+
 ## Phase 6 — GROWTH (Post-Launch Features) — ongoing
 
 **Goal:** Revenue growth features. Prioritize based on customer feedback.
@@ -222,6 +244,12 @@ Everything in this phase MUST be done before the first real order.
 - [ ] PWA (offline catalog, push notifications)
 - [ ] DHL/GLS mock modes
 - [ ] Advanced AdminJS views (order timeline, analytics dashboard)
+- [x] Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel`, inline confirm UI in order detail, Polish status labels on list + detail, cancellation email (see Phase 5B)
+- [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
+- [ ] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send
+- [ ] Magic Link login — passwordless flow reusing the `EmailVerificationToken` infrastructure; issue a short-lived token, exchange for a session on click
+- [ ] Partial order cancellation — cancel individual line items rather than the whole order; requires item-selection UI, partial Stripe refund amount calculation, and per-item stock restoration
+- [ ] `refund.succeeded` webhook — currently refunds are confirmed synchronously via Stripe API response (sufficient for cards/BLIK/P24); add webhook handler for async payment methods where refund confirmation may be delayed
 
 ---
 

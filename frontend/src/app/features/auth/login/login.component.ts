@@ -35,6 +35,10 @@ import { ToastService } from '../../../core/services/toast.service';
           <input tuiTextfield type="password" formControlName="password" autocomplete="current-password" />
         </tui-textfield>
 
+        <p class="forgot-link">
+          <a [routerLink]="['/auth/forgot-password']">Nie pamiętasz hasła?</a>
+        </p>
+
         <button tuiButton type="submit" [disabled]="form.invalid || loading" class="btn-full">
           {{ loading ? 'Logowanie...' : 'Zaloguj się' }}
         </button>
@@ -73,6 +77,9 @@ import { ToastService } from '../../../core/services/toast.service';
     .auth-divider span { background: white; padding: 0 12px; position: relative; }
     .auth-link { text-align: center; font-size: 14px; color: var(--color-secondary); margin: 0; }
     .auth-link a { color: var(--color-primary); font-weight: 500; }
+    .forgot-link { text-align: right; font-size: 13px; margin: 0; }
+    .forgot-link a { color: var(--color-secondary); }
+    .forgot-link a:hover { color: var(--color-primary); }
   `],
 })
 export class LoginComponent {

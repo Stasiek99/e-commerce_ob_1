@@ -6,12 +6,22 @@ import { orderConfirmationTemplate } from './templates/order-confirmation.templa
 import { paymentConfirmedTemplate } from './templates/payment-confirmed.template';
 import { shippingNotificationTemplate } from './templates/shipping-notification.template';
 import { invoiceTemplate } from './templates/invoice.template';
+import { passwordResetTemplate } from './templates/password-reset.template';
+import { emailVerificationTemplate } from './templates/email-verification.template';
+import { orderCancellationTemplate } from './templates/order-cancellation.template';
+import { lowStockAlertTemplate } from './templates/low-stock-alert.template';
+import { newOrderNotificationTemplate } from './templates/new-order-notification.template';
 
 type EmailKind =
   | 'order_confirmation'
   | 'payment_confirmed'
   | 'payment_confirmed_with_invoice'
-  | 'shipping_notification';
+  | 'shipping_notification'
+  | 'password_reset'
+  | 'email_verification'
+  | 'order_cancellation'
+  | 'low_stock_alert'
+  | 'new_order_notification';
 
 @Injectable()
 export class EmailService {
@@ -72,6 +82,49 @@ export class EmailService {
       { orderNumber: data.orderNumber },
       [{ filename: `FV-${data.orderNumber}.pdf`, content: data.invoicePdf }],
     );
+  }
+
+  async sendOrderCancellation(data: {
+    to: string;
+    orderNumber: string;
+    firstName: string;
+    totalInCents: number;
+    isRefund: boolean;
+  }) {
+    const { subject, html } = orderCancellationTemplate(data);
+    return this.send('order_cancellation', data.to, subject, html, { orderNumber: data.orderNumber });
+  }
+
+  async sendEmailVerification(data: { to: string; firstName: string; verifyUrl: string }) {
+    const { subject, html } = emailVerificationTemplate({ firstName: data.firstName, verifyUrl: data.verifyUrl });
+    return this.send('email_verification', data.to, subject, html, { verifyUrl: data.verifyUrl });
+  }
+
+  async sendPasswordReset(data: { to: string; firstName: string; resetUrl: string }) {
+    const { subject, html } = passwordResetTemplate({ firstName: data.firstName, resetUrl: data.resetUrl });
+    return this.send('password_reset', data.to, subject, html, { resetUrl: data.resetUrl });
+  }
+
+  async sendNewOrderNotification(data: {
+    to: string;
+    orderNumber: string;
+    customerEmail: string;
+    totalInCents: number;
+    items: Array<{ name: string; quantity: number; price: number }>;
+    carrierCode: string;
+    adminUrl?: string;
+  }) {
+    const { subject, html } = newOrderNotificationTemplate(data);
+    return this.send('new_order_notification', data.to, subject, html, { orderNumber: data.orderNumber });
+  }
+
+  async sendLowStockAlert(data: {
+    to: string;
+    orderNumber: string;
+    items: Array<{ sku: string; name: string; stock: number; isOutOfStock: boolean }>;
+  }) {
+    const { subject, html } = lowStockAlertTemplate(data);
+    return this.send('low_stock_alert', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async sendShippingNotification(data: {

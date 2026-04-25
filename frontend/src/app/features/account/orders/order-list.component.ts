@@ -8,6 +8,24 @@ import { TuiPagination } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 
+interface OrderSummary {
+  id: string;
+  orderNumber: string;
+  status: string;
+  totalInCents: number;
+  createdAt: string;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  PENDING_PAYMENT: 'Oczekuje na płatność',
+  PAID:            'Opłacone',
+  PROCESSING:      'W realizacji',
+  SHIPPED:         'Wysłane',
+  DELIVERED:       'Dostarczone',
+  CANCELLED:       'Anulowane',
+  REFUNDED:        'Zwrócone',
+};
+
 const PAGE_SIZE = 20;
 
 @Component({
@@ -29,7 +47,7 @@ const PAGE_SIZE = 20;
               <span>#{{ order.orderNumber }}</span>
               <div tuiSubtitle>{{ order.createdAt | date:'dd.MM.yyyy' }}</div>
             </div>
-            <span class="status status--{{ order.status | lowercase }}">{{ order.status }}</span>
+            <span class="status status--{{ order.status | lowercase }}">{{ statusLabel(order.status) }}</span>
             <strong class="order-total">{{ order.totalInCents | price }}</strong>
             <a
               tuiButton
@@ -84,6 +102,9 @@ const PAGE_SIZE = 20;
     .status--pending_payment { background: var(--color-status-pending-bg);   color: var(--color-status-pending-text); }
     .status--cancelled       { background: var(--color-status-cancelled-bg); color: var(--color-status-cancelled-text); }
     .status--shipped         { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
+    .status--refunded        { background: #f3f4f6; color: #6b7280; }
+    .status--processing      { background: #eff6ff; color: #1d4ed8; }
+    .status--delivered       { background: #f0fdf4; color: #166534; }
 
     .order-total { font-size: 14px; white-space: nowrap; }
     .empty { padding: 32px; color: var(--color-secondary); text-align: center; }
@@ -94,7 +115,7 @@ export class OrderListComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly location = inject(Location);
 
-  readonly orders = signal<any[]>([]);
+  readonly orders = signal<OrderSummary[]>([]);
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
 
@@ -110,9 +131,13 @@ export class OrderListComponent implements OnInit {
 
   back(): void { this.location.back(); }
 
+  statusLabel(status: string): string {
+    return STATUS_LABELS[status] ?? status;
+  }
+
   private loadOrders(page: number): void {
     this.http
-      .get<{ data: any[]; meta: { totalPages: number } }>(
+      .get<{ data: OrderSummary[]; meta: { totalPages: number } }>(
         `${environment.apiUrl}/orders?page=${page}&limit=${PAGE_SIZE}`,
       )
       .subscribe({

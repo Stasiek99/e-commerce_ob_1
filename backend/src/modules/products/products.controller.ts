@@ -25,6 +25,7 @@ import {
   ProductQueryDto,
   CreateVariantDto,
   UpdateVariantDto,
+  UpdateVariantStockDto,
 } from './dto/product.dto';
 
 @Controller('products')
@@ -75,6 +76,15 @@ export class ProductsController {
   @Roles(Role.ADMIN)
   updateVariant(@Param('variantId') variantId: string, @Body() dto: UpdateVariantDto) {
     return this.productsService.updateVariant(variantId, dto);
+  }
+
+  @Patch('admin/variants/:variantId/stock')
+  @Roles(Role.ADMIN)
+  updateVariantStock(
+    @Param('variantId') variantId: string,
+    @Body() dto: UpdateVariantStockDto,
+  ) {
+    return this.productsService.updateVariantStock(variantId, dto);
   }
 
   @Post(':id/images')

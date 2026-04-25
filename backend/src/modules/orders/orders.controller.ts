@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -36,6 +38,14 @@ export class OrdersController {
     return this.ordersService.createFromCart(user?.id, sessionId, userEmail!, dto);
   }
 
+  @Get('track')
+  trackOrder(
+    @Query('email') email: string,
+    @Query('orderNumber') orderNumber: string,
+  ) {
+    return this.ordersService.trackByEmailAndNumber(email, orderNumber);
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard)
   getMyOrders(@CurrentUser() user: User, @Query() query: UserOrdersQueryDto) {
@@ -46,6 +56,13 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard)
   getMyOrder(@CurrentUser() user: User, @Param('id') id: string) {
     return this.ordersService.findOneForUser(id, user.id);
+  }
+
+  @Post(':id/cancel')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  cancelOrder(@CurrentUser() user: User, @Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.ordersService.cancelByUser(id, user.id, body.reason);
   }
 
   // ── Admin ────────────────────────────────────────────────────────────────

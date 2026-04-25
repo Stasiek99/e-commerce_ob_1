@@ -11,6 +11,8 @@ interface User {
   firstName?: string;
   lastName?: string;
   phone?: string;
+  nip?: string | null;
+  isEmailVerified: boolean;
 }
 
 interface TokensResponse {
@@ -87,6 +89,38 @@ export class AuthService {
           this.router.navigate(['/']);
         }),
       );
+  }
+
+  verifyEmail(token: string) {
+    return this.http.post(
+      `${environment.apiUrl}/auth/verify-email`,
+      { token },
+      { withCredentials: true },
+    );
+  }
+
+  resendVerification() {
+    return this.http.post(
+      `${environment.apiUrl}/auth/resend-verification`,
+      {},
+      { withCredentials: true },
+    );
+  }
+
+  forgotPassword(email: string) {
+    return this.http.post(
+      `${environment.apiUrl}/auth/forgot-password`,
+      { email },
+      { withCredentials: true },
+    );
+  }
+
+  resetPassword(token: string, password: string) {
+    return this.http.post(
+      `${environment.apiUrl}/auth/reset-password`,
+      { token, password },
+      { withCredentials: true },
+    );
   }
 
   loadCurrentUser() {

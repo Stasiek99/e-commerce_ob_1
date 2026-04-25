@@ -191,7 +191,22 @@
       "Bash(pnpm test:e2e)",
       "Bash(pnpm --filter backend exec tsc --noEmit --project tsconfig.json)",
       "Bash(pnpm --filter backend add nestjs-pino pino-http)",
-      "Bash(pnpm --filter backend add -D pino-pretty)"
+      "Bash(pnpm --filter backend add -D pino-pretty)",
+      "Bash(pnpm jest *)",
+      "Bash(awk '{print $NF}')",
+      "Bash(taskkill /PID 12400 /F)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"stasiekpilich@gmail.com\"}')",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"nonexistent@example.com\"}')",
+      "mcp__chrome-devtools__fill",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(./node_modules/.bin/prisma generate *)",
+      "PowerShell(Stop-Process -Name \"node\" -Force -ErrorAction SilentlyContinue)",
+      "Bash(pnpm info *)",
+      "Bash(node -e \"const v=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\(v.filter\\(x=>x.startsWith\\('4.'\\)\\).slice\\(-5\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"require\\('@taiga-ui/experimental'\\); console.log\\('ok'\\)\")",
+      "Bash(tasklist)",
+      "Bash(node -e \"const p=require\\('./node_modules/@taiga-ui/experimental/package.json'\\); console.log\\(p.version\\)\")",
+      "Bash(node -e \"console.log\\(require\\('e:/repos/e-commerce_ob_1/frontend/node_modules/@taiga-ui/experimental/package.json'\\).version\\)\")"
     ]
   }
 }

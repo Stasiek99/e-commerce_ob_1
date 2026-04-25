@@ -159,6 +159,27 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
+    // Internal admin notification (fire-and-forget)
+    const adminEmail = this.configService.get<string>('ADMIN_ALERT_EMAIL');
+    if (adminEmail) {
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+      this.emailService
+        .sendNewOrderNotification({
+          to: adminEmail,
+          orderNumber: payment.order.orderNumber,
+          customerEmail: payment.order.snapshotEmail,
+          totalInCents: payment.order.totalInCents,
+          items: payment.order.items.map((i) => ({
+            name: i.snapshotName,
+            quantity: i.quantity,
+            price: i.snapshotPrice,
+          })),
+          carrierCode: payment.order.carrierCode,
+          adminUrl: frontendUrl ? `${frontendUrl}/admin` : undefined,
+        })
+        .catch(() => undefined);
+    }
+
     // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
     // Falls back to a plain payment confirmation if invoice generation fails.
     this.invoiceService
@@ -281,10 +302,20 @@ export class PaymentsService {
   }
 
   /**
+   * Expires a pending Stripe Checkout Session for a PENDING_PAYMENT order.
+   * Best-effort — session may already be expired or non-existent.
+   */
+  async expirePendingCheckoutSession(orderId: string): Promise<void> {
+    const payment = await this.prisma.payment.findUnique({ where: { orderId } });
+    if (!payment?.stripeCheckoutSessionId) return;
+    await this.stripeClient.expireCheckoutSession(payment.stripeCheckoutSessionId).catch(() => {});
+  }
+
+  /**
    * Issues a full Stripe refund, restores stock, and marks order as REFUNDED.
    * Call from the admin panel or an admin-only API endpoint.
    */
-  async refundPayment(orderId: string): Promise<void> {
+  async refundPayment(orderId: string, actor = 'ADMIN'): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
       include: { order: { include: { items: true } } },
@@ -305,7 +336,7 @@ export class PaymentsService {
       throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
     }
 
-    await this.stripeClient.createRefund(payment.stripePaymentIntentId);
+    await this.stripeClient.createRefund(payment.stripePaymentIntentId, orderId);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.payment.update({
@@ -330,7 +361,7 @@ export class PaymentsService {
           orderId,
           fromStatus: OrderStatus.PAID,
           toStatus: OrderStatus.REFUNDED,
-          actor: 'ADMIN',
+          actor,
           note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
         },
       });

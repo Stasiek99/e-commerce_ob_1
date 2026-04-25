@@ -88,4 +88,9 @@ export class CreateOrderDto {
   @IsOptional()
   @IsDateString()
   termsAcceptedAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{10}$/, { message: 'NIP must be exactly 10 digits' })
+  nip?: string;
 }

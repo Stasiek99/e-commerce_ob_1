@@ -1,13 +1,17 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
 import { EmailService } from '../email/email.service';
 import { CarrierCode, OrderStatus } from '@prisma/client';
+
+const LOW_STOCK_THRESHOLD = 2;
 
 interface CartItem {
   productVariantId: string;
@@ -29,11 +33,14 @@ const SHIPPING_RATES: Record<CarrierCode, number> = {
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cartService: CartService,
     private readonly paymentsService: PaymentsService,
     private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
 
   async createFromCart(
@@ -57,6 +64,7 @@ export class OrdersService {
       notes?: string;
       termsVersion?: string;
       termsAcceptedAt?: string;
+      nip?: string;
     },
   ) {
     let cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -97,6 +105,13 @@ export class OrdersService {
     const itemsTotalInCents = cart.totalInCents;
     const totalInCents = itemsTotalInCents + shippingCostInCents;
 
+    // Resolve NIP: DTO value takes priority, else fall back to user's stored NIP
+    let snapshotNip: string | null = dto.nip ?? null;
+    if (!snapshotNip && userId) {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { nip: true } });
+      snapshotNip = user?.nip ?? null;
+    }
+
     // Use the transaction for everything: stock decrement, order creation, cart clearing
     const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number using raw SQL to avoid race conditions
@@ -134,6 +149,7 @@ export class OrdersService {
           snapshotCountry: address!.country,
           snapshotPhone: address!.phone,
           snapshotEmail: userEmail,
+          snapshotNip,
           carrierCode: dto.carrierCode,
           inpostLockerCode: dto.inpostLockerCode,
           itemsTotalInCents,
@@ -194,6 +210,12 @@ export class OrdersService {
       // Fire-and-forget: EmailService.send already logs + reports to Sentry.
       .catch(() => undefined);
 
+    // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
+    this.sendStockAlertIfNeeded(
+      order.orderNumber,
+      cart.items.map((i: CartItem) => i.productVariantId),
+    ).catch(() => undefined);
+
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
   }
 
@@ -225,6 +247,30 @@ export class OrdersService {
     return order;
   }
 
+  async trackByEmailAndNumber(email: string, orderNumber: string) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        orderNumber: orderNumber.trim().toUpperCase(),
+        snapshotEmail: { equals: email.trim(), mode: 'insensitive' },
+      },
+      include: {
+        items: { select: { snapshotName: true, quantity: true, snapshotPrice: true } },
+        shipment: { select: { trackingNumber: true, carrierCode: true } },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    return {
+      orderNumber: order.orderNumber,
+      status: order.status,
+      createdAt: order.createdAt,
+      totalInCents: order.totalInCents,
+      items: order.items,
+      trackingNumber: order.shipment?.trackingNumber ?? null,
+      carrier: order.shipment?.carrierCode ?? null,
+    };
+  }
+
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {
     const page = filter.page ?? 1;
     const limit = Math.min(filter.limit ?? 20, 100);
@@ -246,6 +292,77 @@ export class OrdersService {
     return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
+  async cancelByUser(orderId: string, userId: string, reason?: string): Promise<void> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED) {
+      throw new BadRequestException('This order has already been cancelled or refunded.');
+    }
+
+    if (order.status === OrderStatus.SHIPPED || order.status === OrderStatus.DELIVERED) {
+      throw new BadRequestException(
+        'Your order has already been shipped. Please contact us to arrange a return.',
+      );
+    }
+
+    const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+
+    if (order.status === OrderStatus.PENDING_PAYMENT) {
+      // No payment made — expire the Stripe session (best-effort) and cancel
+      await this.paymentsService.expirePendingCheckoutSession(orderId);
+
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+        await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'CUSTOMER',
+            note: reason
+              ? `Cancelled by customer before payment. Reason: ${reason}`
+              : 'Cancelled by customer before payment',
+          },
+        });
+      });
+    } else {
+      // PAID or PROCESSING — issue a full Stripe refund (handles stock + event)
+      await this.paymentsService.refundPayment(orderId, 'CUSTOMER');
+      if (reason) {
+        await this.prisma.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.REFUNDED,
+            toStatus: OrderStatus.REFUNDED,
+            actor: 'CUSTOMER',
+            note: `Withdrawal reason: ${reason}`,
+          },
+        });
+      }
+    }
+
+    // Cancellation / withdrawal confirmation email (fire-and-forget)
+    this.emailService
+      .sendOrderCancellation({
+        to: order.snapshotEmail,
+        orderNumber: order.orderNumber,
+        firstName: order.snapshotFirstName,
+        totalInCents: order.totalInCents,
+        isRefund,
+      })
+      .catch(() => undefined);
+  }
+
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
     const current = await this.prisma.order.findUniqueOrThrow({
       where: { id },
@@ -257,6 +374,39 @@ export class OrdersService {
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       }),
     ]);
+  }
+
+  private async sendStockAlertIfNeeded(
+    orderNumber: string,
+    variantIds: string[],
+  ): Promise<void> {
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+
+    if (!adminEmail) return;
+
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: variantIds } },
+      include: { product: { select: { name: true } } },
+    });
+
+    const alertItems = variants
+      .filter((v) => v.stock <= LOW_STOCK_THRESHOLD)
+      .map((v) => ({
+        sku: v.sku,
+        name: `${v.product.name} – ${v.label}`,
+        stock: v.stock,
+        isOutOfStock: v.stock === 0,
+      }));
+
+    if (alertItems.length === 0) return;
+
+    this.logger.warn(
+      `Stock alert for order #${orderNumber}: ${alertItems.map((i) => `${i.sku}=${i.stock}`).join(', ')}`,
+    );
+
+    await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
   }
 
   /**

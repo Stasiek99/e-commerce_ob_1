@@ -20,6 +20,20 @@ import { ToastService } from '../../../core/services/toast.service';
         </button>
       </div>
 
+      @if (!isVerified()) {
+        <div class="verify-banner">
+          <tui-icon icon="@tui.mail" class="verify-banner__icon" />
+          <div class="verify-banner__body">
+            <strong>Potwierdź swój adres email</strong>
+            <span>Sprawdź skrzynkę odbiorczą i kliknij link aktywacyjny, który wysłaliśmy przy rejestracji.</span>
+          </div>
+          <button tuiButton appearance="outline" size="s" type="button"
+                  [disabled]="resending" (click)="resend()">
+            {{ resending ? 'Wysyłanie…' : 'Wyślij ponownie' }}
+          </button>
+        </div>
+      }
+
       <div class="grid">
 
         <a routerLink="orders" class="card">
@@ -48,6 +62,21 @@ import { ToastService } from '../../../core/services/toast.service';
     .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 32px; }
     h1 { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
     .subtitle { color: var(--color-secondary); font-size: 15px; margin: 0; }
+
+    .verify-banner {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      margin-bottom: 28px;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: var(--border-radius-md);
+    }
+    .verify-banner__icon { font-size: 22px; color: #b45309; flex-shrink: 0; }
+    .verify-banner__body { display: flex; flex-direction: column; gap: 2px; flex: 1; font-size: 14px; }
+    .verify-banner__body strong { color: #92400e; }
+    .verify-banner__body span { color: #78350f; }
 
     .grid {
       display: grid;
@@ -85,14 +114,35 @@ import { ToastService } from '../../../core/services/toast.service';
     @media (max-width: 768px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 16px; } }
     @media (max-width: 480px) { .grid { grid-template-columns: 1fr; gap: 12px; } }
     @media (max-width: 480px) { h1 { font-size: 22px; } }
+    @media (max-width: 640px) { .verify-banner { flex-wrap: wrap; } }
   `],
 })
 export class DashboardComponent {
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
 
+  resending = false;
+
   firstName(): string {
     return this.auth.currentUser()?.firstName || 'Użytkowniku';
+  }
+
+  isVerified(): boolean {
+    return this.auth.currentUser()?.isEmailVerified ?? true;
+  }
+
+  resend(): void {
+    this.resending = true;
+    this.auth.resendVerification().subscribe({
+      next: () => {
+        this.toast.success('Link weryfikacyjny został wysłany na Twój adres email.');
+        this.resending = false;
+      },
+      error: () => {
+        this.toast.error('Nie udało się wysłać emaila. Spróbuj ponownie za chwilę.');
+        this.resending = false;
+      },
+    });
   }
 
   logout(): void {

@@ -16,6 +16,7 @@ export interface InvoiceOrder {
   snapshotFirstName: string;
   snapshotLastName: string;
   snapshotCompany?: string | null;
+  snapshotNip?: string | null;
   snapshotStreet: string;
   snapshotCity: string;
   snapshotPostalCode: string;
@@ -131,6 +132,7 @@ export class InvoiceService {
     if (order.snapshotCompany) doc.text(order.snapshotCompany, colR);
     doc.text(order.snapshotStreet, colR);
     doc.text(`${order.snapshotPostalCode} ${order.snapshotCity}`, colR);
+    if (order.snapshotNip) doc.text(`NIP: ${order.snapshotNip}`, colR);
 
     // Advance past the taller column
     doc.moveDown(3);

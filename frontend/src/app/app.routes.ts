@@ -85,6 +85,27 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'auth/verify-email',
+    loadComponent: () =>
+      import('./features/auth/verify-email/verify-email.component').then(
+        (m) => m.VerifyEmailComponent,
+      ),
+  },
+  {
+    path: 'auth/forgot-password',
+    loadComponent: () =>
+      import('./features/auth/forgot-password/forgot-password.component').then(
+        (m) => m.ForgotPasswordComponent,
+      ),
+  },
+  {
+    path: 'auth/reset-password',
+    loadComponent: () =>
+      import('./features/auth/reset-password/reset-password.component').then(
+        (m) => m.ResetPasswordComponent,
+      ),
+  },
+  {
     path: 'account',
     canActivate: [authGuard],
     children: [
@@ -125,6 +146,13 @@ export const routes: Routes = [
           ),
       },
     ],
+  },
+  {
+    path: 'orders/track',
+    loadComponent: () =>
+      import('./features/orders/track-order/track-order.component').then(
+        (m) => m.TrackOrderComponent,
+      ),
   },
   {
     path: 'wishlist',

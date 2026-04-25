@@ -4,10 +4,8 @@ import { HttpClient } from '@angular/common/http';
 import { Location } from '@angular/common';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
-import {
-  TuiInputPhoneInternational,
-  tuiInputPhoneInternationalOptionsProvider,
-} from '@taiga-ui/kit';
+import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
+import { tuiInputPhoneInternationalOptionsProvider } from '@taiga-ui/kit';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
 import { getCountries } from 'libphonenumber-js/min';
 import { parsePhoneNumber } from 'libphonenumber-js';
@@ -49,7 +47,7 @@ function formatPhone(raw: string): string {
 
       <!-- ── View mode ─────────────────────────────────── -->
       @if (!editing()) {
-        <div tuiCardLarge appearance="elevated" class="profile-card">
+        <div tuiCardLarge class="profile-card">
           <header tuiHeader>
             <h2 tuiTitle>Dane konta</h2>
             <button tuiButton appearance="secondary" size="s" type="button" (click)="startEdit()">
@@ -73,12 +71,16 @@ function formatPhone(raw: string): string {
             <span class="info-label">Telefon</span>
             <span class="info-value">{{ formatPhone(auth.currentUser()?.phone ?? '') }}</span>
           </div>
+          <div class="info-row">
+            <span class="info-label">NIP (firma)</span>
+            <span class="info-value">{{ auth.currentUser()?.nip || '—' }}</span>
+          </div>
         </div>
       }
 
       <!-- ── Edit mode ──────────────────────────────────── -->
       @if (editing()) {
-        <form tuiCardLarge tuiForm appearance="elevated" class="profile-edit-card" [formGroup]="form" (ngSubmit)="save()">
+        <form tuiCardLarge tuiForm class="profile-edit-card" [formGroup]="form" (ngSubmit)="save()">
           <div class="info-row info-row--top">
             <span class="info-label">Email</span>
             <span class="info-value info-value--muted">{{ auth.currentUser()?.email ?? '—' }}</span>
@@ -105,18 +107,28 @@ function formatPhone(raw: string): string {
             </div>
           </div>
 
-          <tui-input-phone-international
-            formControlName="phone"
-            [countries]="countries"
-            [countryIsoCode]="countryIsoCode"
-            [countrySearch]="true"
-            (countryIsoCodeChange)="countryIsoCode = $event"
-          >
-            Telefon
-          </tui-input-phone-international>
+          <tui-textfield>
+            <label tuiLabel>Telefon</label>
+            <input
+              tuiInputPhoneInternational
+              formControlName="phone"
+              [countries]="countries"
+              [countryIsoCode]="countryIsoCode"
+              [countrySearch]="true"
+              (countryIsoCodeChange)="countryIsoCode = $event"
+            />
+          </tui-textfield>
 
           @if (form.controls.phone.errors?.['invalidPhone'] && (form.controls.phone.dirty || form.controls.phone.touched)) {
             <p class="field-error">Wprowadź poprawny numer telefonu</p>
+          }
+
+          <tui-textfield>
+            <label tuiLabel>NIP (opcjonalnie, dla faktur firmowych)</label>
+            <input tuiTextfield type="text" formControlName="nip" autocomplete="off" placeholder="10 cyfr" />
+          </tui-textfield>
+          @if (form.controls.nip.errors?.['pattern'] && (form.controls.nip.dirty || form.controls.nip.touched)) {
+            <p class="field-error">NIP musi zawierać dokładnie 10 cyfr</p>
           }
 
           <div class="form-actions">
@@ -183,13 +195,14 @@ export class ProfileComponent {
     firstName: [this.auth.currentUser()?.firstName ?? '', [Validators.maxLength(50), nameValidator]],
     lastName:  [this.auth.currentUser()?.lastName  ?? '', [Validators.maxLength(50), nameValidator]],
     phone:     [this.auth.currentUser()?.phone     ?? '', [phoneValidator]],
+    nip:       [this.auth.currentUser()?.nip       ?? '', [Validators.pattern(/^\d{10}$/)]],
   });
 
   back(): void { this.location.back(); }
 
   startEdit(): void {
     const u = this.auth.currentUser();
-    this.form.setValue({ firstName: u?.firstName ?? '', lastName: u?.lastName ?? '', phone: u?.phone ?? '' });
+    this.form.setValue({ firstName: u?.firstName ?? '', lastName: u?.lastName ?? '', phone: u?.phone ?? '', nip: u?.nip ?? '' });
     this.editing.set(true);
   }
 

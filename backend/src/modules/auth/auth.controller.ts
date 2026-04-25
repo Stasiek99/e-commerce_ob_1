@@ -16,6 +16,9 @@ import { User } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -101,6 +104,37 @@ export class AuthController {
       await this.authService.logout(rawRefreshToken);
     }
     res.clearCookie(REFRESH_COOKIE, { path: '/' });
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 3600000, limit: 10 } })
+  @Post('verify-email')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async verifyEmail(@Body() dto: VerifyEmailDto) {
+    await this.authService.verifyEmail(dto.token);
+  }
+
+  @Throttle({ default: { ttl: 3600000, limit: 3 } })  // 3 resends per hour
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resendVerification(@CurrentUser() user: User) {
+    await this.authService.resendVerificationEmail(user.id);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 3600000, limit: 3 } })  // 3 requests per hour
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.requestPasswordReset(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 3600000, limit: 5 } })  // 5 attempts per hour
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto.token, dto.password);
   }
 
   @Public()

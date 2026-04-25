@@ -59,14 +59,17 @@ model User {
   lastName        String?
   phone           String?
   googleId        String?  @unique
+  nip             String?
   isEmailVerified Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  addresses     Address[]
-  orders        Order[]
-  refreshTokens RefreshToken[]
-  carts         Cart[]
+  addresses               Address[]
+  orders                  Order[]
+  refreshTokens           RefreshToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  carts                   Cart[]
 
   @@map("users")
 }
@@ -81,6 +84,30 @@ model RefreshToken {
   createdAt DateTime  @default(now())
 
   @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("password_reset_tokens")
 }
 
 model Address {
@@ -230,6 +257,7 @@ model Order {
   snapshotCountry    String
   snapshotPhone      String
   snapshotEmail      String
+  snapshotNip        String?
 
   itemsTotalInCents   Int
   shippingCostInCents Int

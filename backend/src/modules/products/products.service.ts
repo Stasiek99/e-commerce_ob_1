@@ -161,6 +161,24 @@ export class ProductsService {
     return this.prisma.productVariant.update({ where: { id: variantId }, data });
   }
 
+  async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }) {
+    const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
+    if (!variant) throw new NotFoundException('Variant not found');
+
+    if (dto.set !== undefined) {
+      return this.prisma.productVariant.update({
+        where: { id: variantId },
+        data: { stock: dto.set },
+      });
+    }
+
+    const newStock = Math.max(0, variant.stock + (dto.adjustment ?? 0));
+    return this.prisma.productVariant.update({
+      where: { id: variantId },
+      data: { stock: newStock },
+    });
+  }
+
   async addImage(productId: string, url: string, storagePath: string, altText?: string) {
     const count = await this.prisma.productImage.count({ where: { productId } });
     return this.prisma.productImage.create({

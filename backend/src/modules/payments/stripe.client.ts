@@ -95,8 +95,15 @@ export class StripeClient {
     return this.stripe.checkout.sessions.retrieve(sessionId);
   }
 
-  async createRefund(paymentIntentId: string): Promise<Stripe.Refund> {
-    return this.stripe.refunds.create({ payment_intent: paymentIntentId });
+  async expireCheckoutSession(sessionId: string): Promise<void> {
+    await this.stripe.checkout.sessions.expire(sessionId);
+  }
+
+  async createRefund(paymentIntentId: string, idempotencyKey: string): Promise<Stripe.Refund> {
+    return this.stripe.refunds.create(
+      { payment_intent: paymentIntentId },
+      { idempotencyKey: `refund-${idempotencyKey}` },
+    );
   }
 
   constructWebhookEvent(rawBody: Buffer, signatureHeader: string): Stripe.Event {

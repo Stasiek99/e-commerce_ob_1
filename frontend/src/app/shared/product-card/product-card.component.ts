@@ -49,7 +49,9 @@ export class ProductCardComponent {
   }
 
   get outOfStock(): boolean {
-    return (this.firstVariant?.stock ?? 0) === 0;
+    const variants = this.product.variants;
+    if (!variants?.length) return true;
+    return variants.every((v) => v.stock === 0);
   }
 
   onAddToCart(event: Event): void {

@@ -9,6 +9,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateProductDto {
@@ -197,6 +198,17 @@ export class CreateVariantDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+}
+
+export class UpdateVariantStockDto {
+  @ValidateIf((o) => o.adjustment === undefined)
+  @IsInt()
+  @Min(0)
+  set?: number;
+
+  @ValidateIf((o) => o.set === undefined)
+  @IsInt()
+  adjustment?: number;
 }
 
 export class UpdateVariantDto {
