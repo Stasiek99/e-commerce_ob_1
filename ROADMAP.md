@@ -219,6 +219,7 @@ Everything in this phase MUST be done before the first real order.
 | Email verification — `EmailVerificationToken` model, verification email on register (fire-and-forget), `POST /auth/verify-email`, `POST /auth/resend-verification`, `VerifyEmailComponent` (`/auth/verify-email`), unverified-email banner with resend button in account dashboard | ✅ |
 | Race condition fix — `verifyEmail()` checks `isEmailVerified` before validating token, so a double-click returns 204 instead of 400 | ✅ |
 | Expired token cleanup cron — daily job deletes `email_verification_tokens` and `password_reset_tokens` rows where `expiresAt < now()` to prevent table bloat | ⏳ |
+| Low-stock / out-of-stock alert — after each order's stock decrements, query post-decrement levels; email `ADMIN_ALERT_EMAIL` listing any SKU at 0 (out-of-stock) or ≤ 5 (low-stock threshold); one fire-and-forget email per order, no schema change | ✅ |
 | Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel` (PENDING_PAYMENT → expire Stripe session + restore stock + CANCELLED; PAID/PROCESSING → full Stripe refund + REFUNDED), inline confirm UI in order detail with legal note, cancellation/refund email via Resend, Polish status labels on list + detail | ✅ |
 
 **Exit criteria:** Users can recover forgotten passwords via email · New email/password registrations receive a verification email · `isEmailVerified` field is set correctly and reflected in the UI · Expired tokens are purged daily · Buyers can self-serve cancel unpaid orders and withdraw from paid orders before shipment

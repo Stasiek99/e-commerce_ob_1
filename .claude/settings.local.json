@@ -197,7 +197,8 @@
       "Bash(taskkill /PID 12400 /F)",
       "Bash(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"stasiekpilich@gmail.com\"}')",
       "Bash(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/auth/forgot-password -H 'Content-Type: application/json' -d '{\"email\":\"nonexistent@example.com\"}')",
-      "mcp__chrome-devtools__fill"
+      "mcp__chrome-devtools__fill",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

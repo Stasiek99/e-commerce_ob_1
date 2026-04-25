@@ -1,13 +1,17 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
 import { EmailService } from '../email/email.service';
 import { CarrierCode, OrderStatus } from '@prisma/client';
+
+const LOW_STOCK_THRESHOLD = 2;
 
 interface CartItem {
   productVariantId: string;
@@ -29,11 +33,14 @@ const SHIPPING_RATES: Record<CarrierCode, number> = {
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cartService: CartService,
     private readonly paymentsService: PaymentsService,
     private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
 
   async createFromCart(
@@ -194,6 +201,12 @@ export class OrdersService {
       // Fire-and-forget: EmailService.send already logs + reports to Sentry.
       .catch(() => undefined);
 
+    // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
+    this.sendStockAlertIfNeeded(
+      order.orderNumber,
+      cart.items.map((i: CartItem) => i.productVariantId),
+    ).catch(() => undefined);
+
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
   }
 
@@ -328,6 +341,39 @@ export class OrdersService {
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       }),
     ]);
+  }
+
+  private async sendStockAlertIfNeeded(
+    orderNumber: string,
+    variantIds: string[],
+  ): Promise<void> {
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+
+    if (!adminEmail) return;
+
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: variantIds } },
+      include: { product: { select: { name: true } } },
+    });
+
+    const alertItems = variants
+      .filter((v) => v.stock <= LOW_STOCK_THRESHOLD)
+      .map((v) => ({
+        sku: v.sku,
+        name: `${v.product.name} – ${v.label}`,
+        stock: v.stock,
+        isOutOfStock: v.stock === 0,
+      }));
+
+    if (alertItems.length === 0) return;
+
+    this.logger.warn(
+      `Stock alert for order #${orderNumber}: ${alertItems.map((i) => `${i.sku}=${i.stock}`).join(', ')}`,
+    );
+
+    await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
   }
 
   /**

@@ -9,6 +9,7 @@ import { invoiceTemplate } from './templates/invoice.template';
 import { passwordResetTemplate } from './templates/password-reset.template';
 import { emailVerificationTemplate } from './templates/email-verification.template';
 import { orderCancellationTemplate } from './templates/order-cancellation.template';
+import { lowStockAlertTemplate } from './templates/low-stock-alert.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -17,7 +18,8 @@ type EmailKind =
   | 'shipping_notification'
   | 'password_reset'
   | 'email_verification'
-  | 'order_cancellation';
+  | 'order_cancellation'
+  | 'low_stock_alert';
 
 @Injectable()
 export class EmailService {
@@ -99,6 +101,15 @@ export class EmailService {
   async sendPasswordReset(data: { to: string; firstName: string; resetUrl: string }) {
     const { subject, html } = passwordResetTemplate({ firstName: data.firstName, resetUrl: data.resetUrl });
     return this.send('password_reset', data.to, subject, html, { resetUrl: data.resetUrl });
+  }
+
+  async sendLowStockAlert(data: {
+    to: string;
+    orderNumber: string;
+    items: Array<{ sku: string; name: string; stock: number; isOutOfStock: boolean }>;
+  }) {
+    const { subject, html } = lowStockAlertTemplate(data);
+    return this.send('low_stock_alert', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async sendShippingNotification(data: {
