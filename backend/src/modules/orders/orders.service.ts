@@ -246,6 +246,77 @@ export class OrdersService {
     return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
+  async cancelByUser(orderId: string, userId: string, reason?: string): Promise<void> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED) {
+      throw new BadRequestException('This order has already been cancelled or refunded.');
+    }
+
+    if (order.status === OrderStatus.SHIPPED || order.status === OrderStatus.DELIVERED) {
+      throw new BadRequestException(
+        'Your order has already been shipped. Please contact us to arrange a return.',
+      );
+    }
+
+    const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+
+    if (order.status === OrderStatus.PENDING_PAYMENT) {
+      // No payment made — expire the Stripe session (best-effort) and cancel
+      await this.paymentsService.expirePendingCheckoutSession(orderId);
+
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+        await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'CUSTOMER',
+            note: reason
+              ? `Cancelled by customer before payment. Reason: ${reason}`
+              : 'Cancelled by customer before payment',
+          },
+        });
+      });
+    } else {
+      // PAID or PROCESSING — issue a full Stripe refund (handles stock + event)
+      await this.paymentsService.refundPayment(orderId, 'CUSTOMER');
+      if (reason) {
+        await this.prisma.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.REFUNDED,
+            toStatus: OrderStatus.REFUNDED,
+            actor: 'CUSTOMER',
+            note: `Withdrawal reason: ${reason}`,
+          },
+        });
+      }
+    }
+
+    // Cancellation / withdrawal confirmation email (fire-and-forget)
+    this.emailService
+      .sendOrderCancellation({
+        to: order.snapshotEmail,
+        orderNumber: order.orderNumber,
+        firstName: order.snapshotFirstName,
+        totalInCents: order.totalInCents,
+        isRefund,
+      })
+      .catch(() => undefined);
+  }
+
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
     const current = await this.prisma.order.findUniqueOrThrow({
       where: { id },

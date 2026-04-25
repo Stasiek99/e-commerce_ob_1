@@ -209,7 +209,7 @@ Everything in this phase MUST be done before the first real order.
 
 ---
 
-## Phase 5B — CORE LOGIC GAPS (Missing Auth Flows) — ~1 day
+## Phase 5D — CORE LOGIC GAPS (Missing Auth Flows) — ~1 day
 
 **Goal:** Close auth features that existed as stubs or dead code in the codebase.
 
@@ -219,8 +219,9 @@ Everything in this phase MUST be done before the first real order.
 | Email verification — `EmailVerificationToken` model, verification email on register (fire-and-forget), `POST /auth/verify-email`, `POST /auth/resend-verification`, `VerifyEmailComponent` (`/auth/verify-email`), unverified-email banner with resend button in account dashboard | ✅ |
 | Race condition fix — `verifyEmail()` checks `isEmailVerified` before validating token, so a double-click returns 204 instead of 400 | ✅ |
 | Expired token cleanup cron — daily job deletes `email_verification_tokens` and `password_reset_tokens` rows where `expiresAt < now()` to prevent table bloat | ⏳ |
+| Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel` (PENDING_PAYMENT → expire Stripe session + restore stock + CANCELLED; PAID/PROCESSING → full Stripe refund + REFUNDED), inline confirm UI in order detail with legal note, cancellation/refund email via Resend, Polish status labels on list + detail | ✅ |
 
-**Exit criteria:** Users can recover forgotten passwords via email · New email/password registrations receive a verification email · `isEmailVerified` field is set correctly and reflected in the UI · Expired tokens are purged daily
+**Exit criteria:** Users can recover forgotten passwords via email · New email/password registrations receive a verification email · `isEmailVerified` field is set correctly and reflected in the UI · Expired tokens are purged daily · Buyers can self-serve cancel unpaid orders and withdraw from paid orders before shipment
 
 ---
 
@@ -237,9 +238,12 @@ Everything in this phase MUST be done before the first real order.
 - [ ] PWA (offline catalog, push notifications)
 - [ ] DHL/GLS mock modes
 - [ ] Advanced AdminJS views (order timeline, analytics dashboard)
+- [x] Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel`, inline confirm UI in order detail, Polish status labels on list + detail, cancellation email (see Phase 5B)
 - [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
 - [ ] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send
 - [ ] Magic Link login — passwordless flow reusing the `EmailVerificationToken` infrastructure; issue a short-lived token, exchange for a session on click
+- [ ] Partial order cancellation — cancel individual line items rather than the whole order; requires item-selection UI, partial Stripe refund amount calculation, and per-item stock restoration
+- [ ] `refund.succeeded` webhook — currently refunds are confirmed synchronously via Stripe API response (sufficient for cards/BLIK/P24); add webhook handler for async payment methods where refund confirmation may be delayed
 
 ---
 

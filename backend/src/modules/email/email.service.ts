@@ -8,6 +8,7 @@ import { shippingNotificationTemplate } from './templates/shipping-notification.
 import { invoiceTemplate } from './templates/invoice.template';
 import { passwordResetTemplate } from './templates/password-reset.template';
 import { emailVerificationTemplate } from './templates/email-verification.template';
+import { orderCancellationTemplate } from './templates/order-cancellation.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -15,7 +16,8 @@ type EmailKind =
   | 'payment_confirmed_with_invoice'
   | 'shipping_notification'
   | 'password_reset'
-  | 'email_verification';
+  | 'email_verification'
+  | 'order_cancellation';
 
 @Injectable()
 export class EmailService {
@@ -76,6 +78,17 @@ export class EmailService {
       { orderNumber: data.orderNumber },
       [{ filename: `FV-${data.orderNumber}.pdf`, content: data.invoicePdf }],
     );
+  }
+
+  async sendOrderCancellation(data: {
+    to: string;
+    orderNumber: string;
+    firstName: string;
+    totalInCents: number;
+    isRefund: boolean;
+  }) {
+    const { subject, html } = orderCancellationTemplate(data);
+    return this.send('order_cancellation', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async sendEmailVerification(data: { to: string; firstName: string; verifyUrl: string }) {
