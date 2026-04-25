@@ -14,6 +14,31 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
 
+interface ProductVariantDetail {
+  id: string;
+  label: string;
+  priceInCents: number;
+  compareAtPriceInCents?: number | null;
+  stock: number;
+  sku: string;
+  volume?: number | null;
+  weight?: number | null;
+}
+
+interface ProductDetail {
+  id: string;
+  name: string;
+  slug: string;
+  brand?: string | null;
+  shortDescription?: string | null;
+  description?: string | null;
+  concentration?: string | null;
+  gender?: string | null;
+  images: Array<{ url: string; altText?: string | null }>;
+  variants: ProductVariantDetail[];
+  category?: { id: string; name: string; slug: string } | null;
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   perfume: 'Perfumy',
   diffusers: 'Dyfuzory',
@@ -36,7 +61,7 @@ const CATEGORY_LABELS: Record<string, string> = {
           @if (activeImage()) {
             <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img" />
           }
-          @if (product()!.images?.length > 1) {
+          @if ((product()!.images?.length ?? 0) > 1) {
             <div class="detail__thumbs" role="group" aria-label="Miniatury zdjęć">
               @for (img of product()!.images; track img.url; let i = $index) {
                 <button
@@ -75,6 +100,8 @@ const CATEGORY_LABELS: Record<string, string> = {
                     type="button"
                     size="s"
                     [appearance]="selectedVariant()?.id === v.id ? 'primary' : 'outline'"
+                    [class.detail__variant-btn--oos]="v.stock === 0"
+                    [attr.aria-label]="v.label + (v.stock === 0 ? ' – brak w magazynie' : '')"
                     (click)="selectVariant(v)">
                     {{ v.label }}
                   </button>
@@ -154,7 +181,7 @@ const CATEGORY_LABELS: Record<string, string> = {
               @if (product()!.category?.name) {
                 <div class="detail__meta-row">
                   <span class="detail__meta-label">Kategoria</span>
-                  <span>{{ product()!.category.name }}</span>
+                  <span>{{ product()!.category?.name }}</span>
                 </div>
               }
             </div>
@@ -225,6 +252,13 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__variants { margin-bottom: 24px; }
     .detail__variant-btns { display: flex; flex-wrap: wrap; gap: 8px; }
 
+    .detail__variant-btn--oos {
+      opacity: 0.4;
+      text-decoration: line-through;
+      cursor: not-allowed;
+      pointer-events: auto;
+    }
+
     /* Price + stock */
     .detail__price-row { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
@@ -274,8 +308,8 @@ export class ProductDetailComponent implements OnInit {
   private readonly location = inject(Location);
 
   readonly loading = signal(true);
-  readonly product = signal<any>(null);
-  readonly selectedVariant = signal<any>(null);
+  readonly product = signal<ProductDetail | null>(null);
+  readonly selectedVariant = signal<ProductVariantDetail | null>(null);
   readonly activeImage = signal<string | null>(null);
   readonly adding = signal(false);
   quantity = 1;
@@ -286,7 +320,7 @@ export class ProductDetailComponent implements OnInit {
   readonly breadcrumbs = computed<Breadcrumb[]>(() => {
     const p = this.product();
     const catSlug = p?.category?.slug ?? null;
-    const catLabel = catSlug ? (CATEGORY_LABELS[catSlug] ?? p.category?.name ?? catSlug) : null;
+    const catLabel = catSlug ? (CATEGORY_LABELS[catSlug] ?? p?.category?.name ?? catSlug) : null;
     const crumbs: Breadcrumb[] = [{ label: 'Strona główna', link: '/' }];
     if (catSlug && catLabel) crumbs.push({ label: catLabel, link: `/category/${catSlug}` });
     if (p) crumbs.push({ label: p.name });
@@ -296,7 +330,7 @@ export class ProductDetailComponent implements OnInit {
   ngOnInit() {
     const slug = this.route.snapshot.paramMap.get('slug')!;
     this.http
-      .get<any>(`${environment.apiUrl}/products/${slug}`)
+      .get<ProductDetail>(`${environment.apiUrl}/products/${slug}`)
       .subscribe({
         next: (p) => {
           this.product.set(p);
