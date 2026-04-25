@@ -219,7 +219,7 @@ importers:
         version: 5.22.0
       ts-jest:
         specifier: ^29.4.9
-        version: 29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(esbuild@0.27.7)(jest-util@30.3.0)(jest@30.3.0(@types/node@22.19.17)(babel-plugin-macros@3.1.0))(typescript@5.9.3)
+        version: 29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(esbuild@0.27.7)(jest-util@30.3.0)(jest@30.3.0(@types/node@22.19.17)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@types/node@22.19.17)(typescript@5.9.3)))(typescript@5.9.3)
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@22.19.17)(typescript@5.9.3)
@@ -292,6 +292,9 @@ importers:
       '@taiga-ui/event-plugins':
         specifier: ^4.7.0
         version: 4.7.0(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(rxjs@7.8.2)
+      '@taiga-ui/experimental':
+        specifier: ^4.78.0
+        version: 4.80.1(2e5333bc9ee733c3de8a22dae749c375)
       '@taiga-ui/i18n':
         specifier: ^4.80.1
         version: 4.80.1(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@ng-web-apis/common@4.14.0(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(rxjs@7.8.2)
@@ -325,7 +328,7 @@ importers:
     devDependencies:
       '@angular-devkit/build-angular':
         specifier: ^20.3.23
-        version: 20.3.23(64cc569d4c0928e34f85ff0308ab3f63)
+        version: 20.3.23(6cdc11f84b5214ab474eddce4681d59b)
       '@angular/cli':
         specifier: ^20.3.23
         version: 20.3.23(@types/node@22.19.17)
@@ -346,7 +349,7 @@ importers:
         version: 30.3.0
       jest-preset-angular:
         specifier: ^16.1.4
-        version: 16.1.4(52722f08fc15529a2e3497ede8f52cd5)
+        version: 16.1.4(d9abf0aa274a40c089b81d67a93f6b10)
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
@@ -3887,6 +3890,23 @@ packages:
   '@swc/helpers@0.5.21':
     resolution: {integrity: sha512-jI/VAmtdjB/RnI8GTnokyX7Ug8c+g+ffD6QRLa6XQewtnGyukKkKSk3wLTM3b5cjt1jNh9x0jfVlagdN2gDKQg==}
 
+  '@taiga-ui/addon-commerce@4.80.1':
+    resolution: {integrity: sha512-6DPjpeWudKTviCaCjOhnhvPCFNFtAANk3peuC6hi2cwzBWlfbwjUowJDoR3ZSM8zoQ8CulDTlmQJu2NccdDItQ==}
+    peerDependencies:
+      '@angular/common': '>=16.0.0'
+      '@angular/core': '>=16.0.0'
+      '@angular/forms': '>=16.0.0'
+      '@maskito/angular': ^3.11.1
+      '@maskito/core': ^3.11.1
+      '@maskito/kit': ^3.11.1
+      '@ng-web-apis/common': ^4.14.0
+      '@taiga-ui/cdk': 4.80.1
+      '@taiga-ui/core': 4.80.1
+      '@taiga-ui/i18n': 4.80.1
+      '@taiga-ui/kit': 4.80.1
+      '@taiga-ui/polymorpheus': ^4.9.0
+      rxjs: '>=7.0.0'
+
   '@taiga-ui/cdk@4.78.1':
     resolution: {integrity: sha512-tVOVnabF6svRC7kjSlx5KMPSChnjNPg4gOatfR0jkkjAXJW8hTTcrAx7X3t9hTrwN2KJcs3nBCPnguU9K9r3nA==}
     peerDependencies:
@@ -3927,6 +3947,19 @@ packages:
     peerDependencies:
       '@angular/core': '>=16.0.0'
       '@angular/platform-browser': '>=16.0.0'
+      rxjs: '>=7.0.0'
+
+  '@taiga-ui/experimental@4.80.1':
+    resolution: {integrity: sha512-Lfos3sLe3uQWDtPq1rxslpv+tE5ppJgqHTyEe0Y8rbNYTiEIA05Sl/5GMRX913oLQiN92wipBU4l4Cz89qJVhg==}
+    peerDependencies:
+      '@angular/common': '>=16.0.0'
+      '@angular/core': '>=16.0.0'
+      '@taiga-ui/addon-commerce': 4.80.1
+      '@taiga-ui/cdk': 4.80.1
+      '@taiga-ui/core': 4.80.1
+      '@taiga-ui/kit': 4.80.1
+      '@taiga-ui/layout': 4.80.1
+      '@taiga-ui/polymorpheus': ^4.9.0
       rxjs: '>=7.0.0'
 
   '@taiga-ui/font-watcher@0.3.0':
@@ -9357,7 +9390,7 @@ snapshots:
     transitivePeerDependencies:
       - chokidar
 
-  '@angular-devkit/build-angular@20.3.23(64cc569d4c0928e34f85ff0308ab3f63)':
+  '@angular-devkit/build-angular@20.3.23(6cdc11f84b5214ab474eddce4681d59b)':
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@angular-devkit/architect': 0.2003.23
@@ -13587,6 +13620,23 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
+  '@taiga-ui/addon-commerce@4.80.1(ff6680e0cf29665586667c4c814681a0)':
+    dependencies:
+      '@angular/common': 20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2)
+      '@angular/core': 20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)
+      '@angular/forms': 20.3.18(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(rxjs@7.8.2)
+      '@maskito/angular': 3.11.1(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/forms@20.3.18(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(rxjs@7.8.2))(@maskito/core@3.11.1)
+      '@maskito/core': 3.11.1
+      '@maskito/kit': 3.11.1(@maskito/core@3.11.1)
+      '@ng-web-apis/common': 4.14.0(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2)
+      '@taiga-ui/cdk': 4.78.1(e1f28dcd5112f5fee56e6d135bcbd27d)
+      '@taiga-ui/core': 4.78.1(807c85d76276a6e9c04d0d23b91c0512)
+      '@taiga-ui/i18n': 4.80.1(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@ng-web-apis/common@4.14.0(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(rxjs@7.8.2)
+      '@taiga-ui/kit': 4.78.1(60b404199173e047eab7b94b7357aa81)
+      '@taiga-ui/polymorpheus': 4.9.0(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))
+      rxjs: 7.8.2
+      tslib: 2.8.1
+
   '@taiga-ui/cdk@4.78.1(e1f28dcd5112f5fee56e6d135bcbd27d)':
     dependencies:
       '@angular/animations': 20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))
@@ -13634,6 +13684,19 @@ snapshots:
     dependencies:
       '@angular/core': 20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)
       '@angular/platform-browser': 20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))
+      rxjs: 7.8.2
+      tslib: 2.8.1
+
+  '@taiga-ui/experimental@4.80.1(2e5333bc9ee733c3de8a22dae749c375)':
+    dependencies:
+      '@angular/common': 20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2)
+      '@angular/core': 20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)
+      '@taiga-ui/addon-commerce': 4.80.1(ff6680e0cf29665586667c4c814681a0)
+      '@taiga-ui/cdk': 4.78.1(e1f28dcd5112f5fee56e6d135bcbd27d)
+      '@taiga-ui/core': 4.78.1(807c85d76276a6e9c04d0d23b91c0512)
+      '@taiga-ui/kit': 4.78.1(60b404199173e047eab7b94b7357aa81)
+      '@taiga-ui/layout': 4.78.1(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@taiga-ui/cdk@4.78.1(e1f28dcd5112f5fee56e6d135bcbd27d))(@taiga-ui/core@4.78.1(807c85d76276a6e9c04d0d23b91c0512))(@taiga-ui/kit@4.78.1(60b404199173e047eab7b94b7357aa81))(@taiga-ui/polymorpheus@4.9.0(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))))(rxjs@7.8.2)
+      '@taiga-ui/polymorpheus': 4.9.0(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@20.3.18(@angular/animations@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@20.3.18(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)))
       rxjs: 7.8.2
       tslib: 2.8.1
 
@@ -16591,7 +16654,7 @@ snapshots:
     optionalDependencies:
       jest-resolve: 30.3.0
 
-  jest-preset-angular@16.1.4(52722f08fc15529a2e3497ede8f52cd5):
+  jest-preset-angular@16.1.4(d9abf0aa274a40c089b81d67a93f6b10):
     dependencies:
       '@angular/compiler-cli': 20.3.18(@angular/compiler@20.3.18)(typescript@5.9.3)
       '@angular/core': 20.3.18(@angular/compiler@20.3.18)(rxjs@7.8.2)(zone.js@0.15.1)
@@ -16604,7 +16667,7 @@ snapshots:
       jest-util: 30.3.0
       jsdom: 29.0.2(@noble/hashes@1.8.0)
       pretty-format: 30.3.0
-      ts-jest: 29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(esbuild@0.27.7)(jest-util@30.3.0)(jest@30.3.0(@types/node@22.19.17)(babel-plugin-macros@3.1.0))(typescript@5.9.3)
+      ts-jest: 29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(esbuild@0.27.7)(jest-util@30.3.0)(jest@30.3.0(@types/node@22.19.17)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@types/node@22.19.17)(typescript@5.9.3)))(typescript@5.9.3)
       typescript: 5.9.3
     optionalDependencies:
       esbuild: 0.27.7
@@ -19161,7 +19224,7 @@ snapshots:
 
   tree-kill@1.2.2: {}
 
-  ts-jest@29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(esbuild@0.27.7)(jest-util@30.3.0)(jest@30.3.0(@types/node@22.19.17)(babel-plugin-macros@3.1.0))(typescript@5.9.3):
+  ts-jest@29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(esbuild@0.27.7)(jest-util@30.3.0)(jest@30.3.0(@types/node@22.19.17)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@types/node@22.19.17)(typescript@5.9.3)))(typescript@5.9.3):
     dependencies:
       bs-logger: 0.2.6
       fast-json-stable-stringify: 2.1.0

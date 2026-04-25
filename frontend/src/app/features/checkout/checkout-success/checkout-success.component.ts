@@ -47,6 +47,9 @@ interface PaymentStatusResponse {
             Strona główna
           </a>
         </div>
+        <p class="page__track-hint">
+          Gość? <a routerLink="/orders/track">Sprawdź status zamówienia</a> podając email i numer zamówienia.
+        </p>
       } @else {
         <tui-icon icon="@tui.clock" class="page__icon page__icon--pending" />
         <h1>Płatność w toku…</h1>
@@ -141,6 +144,13 @@ interface PaymentStatusResponse {
       flex-wrap: wrap;
       justify-content: center;
     }
+
+    .page__track-hint {
+      font-size: 13px;
+      color: var(--color-secondary);
+      margin: 0;
+    }
+    .page__track-hint a { color: var(--color-primary); font-weight: 500; text-decoration: underline; }
   `],
 })
 export class CheckoutSuccessComponent implements OnInit {

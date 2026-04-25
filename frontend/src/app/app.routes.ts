@@ -148,6 +148,13 @@ export const routes: Routes = [
     ],
   },
   {
+    path: 'orders/track',
+    loadComponent: () =>
+      import('./features/orders/track-order/track-order.component').then(
+        (m) => m.TrackOrderComponent,
+      ),
+  },
+  {
     path: 'wishlist',
     loadComponent: () =>
       import('./features/wishlist/wishlist.component').then((m) => m.WishlistComponent),

@@ -159,6 +159,27 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
+    // Internal admin notification (fire-and-forget)
+    const adminEmail = this.configService.get<string>('ADMIN_ALERT_EMAIL');
+    if (adminEmail) {
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+      this.emailService
+        .sendNewOrderNotification({
+          to: adminEmail,
+          orderNumber: payment.order.orderNumber,
+          customerEmail: payment.order.snapshotEmail,
+          totalInCents: payment.order.totalInCents,
+          items: payment.order.items.map((i) => ({
+            name: i.snapshotName,
+            quantity: i.quantity,
+            price: i.snapshotPrice,
+          })),
+          carrierCode: payment.order.carrierCode,
+          adminUrl: frontendUrl ? `${frontendUrl}/admin` : undefined,
+        })
+        .catch(() => undefined);
+    }
+
     // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
     // Falls back to a plain payment confirmation if invoice generation fails.
     this.invoiceService

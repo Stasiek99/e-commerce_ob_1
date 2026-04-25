@@ -1,5 +1,4 @@
 import { Component } from '@angular/core';
-import { RouterLink } from '@angular/router';
 
 @Component({
   selector: 'app-privacy',
@@ -63,6 +62,14 @@ import { RouterLink } from '@angular/router';
         </ul>
         <p>Wnioski prosimy kierować na adres: <strong>rodo&#64;aromaterie.pl</strong>. Odpowiadamy w terminie 30 dni.</p>
         <p>Masz prawo wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych (ul. Stawki 2, 00-193 Warszawa, <a href="https://uodo.gov.pl" target="_blank" rel="noopener noreferrer">uodo.gov.pl</a>).</p>
+      </section>
+
+      <section>
+        <h2>5a. Procedura usunięcia danych (art. 17 RODO)</h2>
+        <p>Aby skorzystać z prawa do usunięcia danych, prześlij żądanie na adres <strong>rodo&#64;aromaterie.pl</strong> z tytułem <em>„Żądanie usunięcia danych — RODO art. 17"</em>. Podaj adres email powiązany z kontem. Odpowiemy w ciągu 30 dni od daty weryfikacji tożsamości.</p>
+        <p><strong>Co zostaje usunięte:</strong> dane konta (email, imię, nazwisko, telefon, hasło, dane Google OAuth), adresy dostawy, tokeny sesji i weryfikacji, dane osobowe w migawkach zamówień (imię, nazwisko, email, telefon).</p>
+        <p><strong>Co zostaje zachowane:</strong> rekordy zamówień, płatności i przesyłek — bez danych osobowych — przez 5 lat od wystawienia faktury, zgodnie z art. 74 ustawy o rachunkowości i art. 86 Ordynacji podatkowej.</p>
+        <p><strong>Ograniczenie prawa:</strong> usunięcie nie jest możliwe, gdy istnieje nierozliczone zamówienie (PENDING_PAYMENT, PAID, PROCESSING). W takim przypadku prosimy najpierw o anulowanie zamówienia.</p>
       </section>
 
       <section>

@@ -10,6 +10,7 @@ import { passwordResetTemplate } from './templates/password-reset.template';
 import { emailVerificationTemplate } from './templates/email-verification.template';
 import { orderCancellationTemplate } from './templates/order-cancellation.template';
 import { lowStockAlertTemplate } from './templates/low-stock-alert.template';
+import { newOrderNotificationTemplate } from './templates/new-order-notification.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -19,7 +20,8 @@ type EmailKind =
   | 'password_reset'
   | 'email_verification'
   | 'order_cancellation'
-  | 'low_stock_alert';
+  | 'low_stock_alert'
+  | 'new_order_notification';
 
 @Injectable()
 export class EmailService {
@@ -101,6 +103,19 @@ export class EmailService {
   async sendPasswordReset(data: { to: string; firstName: string; resetUrl: string }) {
     const { subject, html } = passwordResetTemplate({ firstName: data.firstName, resetUrl: data.resetUrl });
     return this.send('password_reset', data.to, subject, html, { resetUrl: data.resetUrl });
+  }
+
+  async sendNewOrderNotification(data: {
+    to: string;
+    orderNumber: string;
+    customerEmail: string;
+    totalInCents: number;
+    items: Array<{ name: string; quantity: number; price: number }>;
+    carrierCode: string;
+    adminUrl?: string;
+  }) {
+    const { subject, html } = newOrderNotificationTemplate(data);
+    return this.send('new_order_notification', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async sendLowStockAlert(data: {

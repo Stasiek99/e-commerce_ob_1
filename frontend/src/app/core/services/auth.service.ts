@@ -11,6 +11,7 @@ interface User {
   firstName?: string;
   lastName?: string;
   phone?: string;
+  nip?: string | null;
   isEmailVerified: boolean;
 }
 

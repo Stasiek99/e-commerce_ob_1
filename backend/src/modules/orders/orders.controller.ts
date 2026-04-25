@@ -38,6 +38,14 @@ export class OrdersController {
     return this.ordersService.createFromCart(user?.id, sessionId, userEmail!, dto);
   }
 
+  @Get('track')
+  trackOrder(
+    @Query('email') email: string,
+    @Query('orderNumber') orderNumber: string,
+  ) {
+    return this.ordersService.trackByEmailAndNumber(email, orderNumber);
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard)
   getMyOrders(@CurrentUser() user: User, @Query() query: UserOrdersQueryDto) {

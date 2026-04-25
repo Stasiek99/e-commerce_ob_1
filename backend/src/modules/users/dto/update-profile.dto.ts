@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -15,4 +15,9 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(20)
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{10}$/, { message: 'NIP must be exactly 10 digits' })
+  nip?: string;
 }

@@ -64,6 +64,7 @@ export class OrdersService {
       notes?: string;
       termsVersion?: string;
       termsAcceptedAt?: string;
+      nip?: string;
     },
   ) {
     let cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -104,6 +105,13 @@ export class OrdersService {
     const itemsTotalInCents = cart.totalInCents;
     const totalInCents = itemsTotalInCents + shippingCostInCents;
 
+    // Resolve NIP: DTO value takes priority, else fall back to user's stored NIP
+    let snapshotNip: string | null = dto.nip ?? null;
+    if (!snapshotNip && userId) {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { nip: true } });
+      snapshotNip = user?.nip ?? null;
+    }
+
     // Use the transaction for everything: stock decrement, order creation, cart clearing
     const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number using raw SQL to avoid race conditions
@@ -141,6 +149,7 @@ export class OrdersService {
           snapshotCountry: address!.country,
           snapshotPhone: address!.phone,
           snapshotEmail: userEmail,
+          snapshotNip,
           carrierCode: dto.carrierCode,
           inpostLockerCode: dto.inpostLockerCode,
           itemsTotalInCents,
@@ -236,6 +245,30 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Order not found');
     return order;
+  }
+
+  async trackByEmailAndNumber(email: string, orderNumber: string) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        orderNumber: orderNumber.trim().toUpperCase(),
+        snapshotEmail: { equals: email.trim(), mode: 'insensitive' },
+      },
+      include: {
+        items: { select: { snapshotName: true, quantity: true, snapshotPrice: true } },
+        shipment: { select: { trackingNumber: true, carrierCode: true } },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    return {
+      orderNumber: order.orderNumber,
+      status: order.status,
+      createdAt: order.createdAt,
+      totalInCents: order.totalInCents,
+      items: order.items,
+      trackingNumber: order.shipment?.trackingNumber ?? null,
+      carrier: order.shipment?.carrierCode ?? null,
+    };
   }
 
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {
