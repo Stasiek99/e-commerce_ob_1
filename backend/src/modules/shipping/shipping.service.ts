@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CarrierCode, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -138,6 +138,8 @@ export class ShippingService {
           rawResponse = result;
           break;
         }
+        default:
+          throw new BadRequestException(`Unsupported carrier: ${order.carrierCode}`);
       }
 
       const shipment = await this.prisma.shipment.upsert({
@@ -213,6 +215,8 @@ export class ShippingService {
         return this.dhl.getTrackingUrl(trackingNumber);
       case CarrierCode.GLS:
         return this.gls.getTrackingUrl(trackingNumber);
+      default:
+        throw new BadRequestException(`Unsupported carrier: ${carrier}`);
     }
   }
 }

@@ -5,15 +5,31 @@
   "outputDirectory": "frontend/dist/frontend/browser",
   "framework": null,
   "trailingSlash": false,
+  "functions": {
+    "api/ssr.mjs": {
+      "includeFiles": "frontend/dist/frontend/**",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/index.csr.html"
+      "destination": "/api/ssr"
     }
   ],
   "headers": [
     {
       "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/(.*\\.js|.*\\.css|.*\\.woff2?|.*\\.svg)",
       "headers": [
         {
           "key": "Cache-Control",

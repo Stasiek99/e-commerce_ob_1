@@ -48,6 +48,22 @@ enum CarrierCode {
   GLS
 }
 
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+}
+
+enum CouponType {
+  WELCOME
+  BIRTHDAY
+  CART_ABANDONMENT
+  LOYALTY
+  WIN_BACK
+  SUBSCRIPTION
+  CUSTOM
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
 model User {
@@ -264,6 +280,10 @@ model Order {
   discountInCents     Int         @default(0)
   totalInCents        Int
 
+  couponId   String?
+  coupon     Coupon? @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  couponCode String?
+
   carrierCode      CarrierCode
   inpostLockerCode String?
   notes            String?
@@ -280,6 +300,7 @@ model Order {
   payment  Payment?
   shipment Shipment?
   events   OrderEvent[]
+  couponUse CouponUse?
 
   @@map("orders")
 }
@@ -358,6 +379,46 @@ model OrderEvent {
 
   @@index([orderId])
   @@map("order_events")
+}
+
+// ─── Coupons ─────────────────────────────────────────────────────────────────
+
+model Coupon {
+  id                 String       @id @default(uuid())
+  code               String       @unique
+  discountType       DiscountType
+  value              Int
+  couponType         CouponType   @default(CUSTOM)
+  minSpendInCents    Int?
+  maxUsesTotal       Int?
+  maxUsesPerUser     Int?
+  currentUses        Int          @default(0)
+  isActive           Boolean      @default(true)
+  startsAt           DateTime?
+  expiresAt          DateTime?
+  excludedProductIds String[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  uses   CouponUse[]
+  orders Order[]
+
+  @@map("coupons")
+}
+
+model CouponUse {
+  id                     String   @id @default(uuid())
+  couponId               String
+  coupon                 Coupon   @relation(fields: [couponId], references: [id])
+  orderId                String   @unique
+  order                  Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId                 String?
+  discountAppliedInCents Int
+  createdAt              DateTime @default(now())
+
+  @@index([couponId])
+  @@index([userId])
+  @@map("coupon_uses")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────

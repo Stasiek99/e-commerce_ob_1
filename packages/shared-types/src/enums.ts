@@ -34,3 +34,19 @@ export enum CarrierCode {
   DHL = 'DHL',
   GLS = 'GLS',
 }
+
+export enum DiscountType {
+  PERCENTAGE = 'PERCENTAGE',
+  FIXED_AMOUNT = 'FIXED_AMOUNT',
+  FREE_SHIPPING = 'FREE_SHIPPING',
+}
+
+export enum CouponType {
+  WELCOME = 'WELCOME',
+  BIRTHDAY = 'BIRTHDAY',
+  CART_ABANDONMENT = 'CART_ABANDONMENT',
+  LOYALTY = 'LOYALTY',
+  WIN_BACK = 'WIN_BACK',
+  SUBSCRIPTION = 'SUBSCRIPTION',
+  CUSTOM = 'CUSTOM',
+}

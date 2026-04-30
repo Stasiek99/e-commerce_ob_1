@@ -235,12 +235,12 @@ Everything in this phase MUST be done before the first real order.
 
 **Goal:** Revenue growth features. Prioritize based on customer feedback.
 
-- [ ] Discount/coupon system (Coupon model, validation at checkout) 
+- [x] Discount/coupon system (Coupon model, validation at checkout) 
 - [ ] Wishlist functionality
 - [ ] Product reviews & ratings
 - [ ] Return/withdrawal request flow (consumer-facing form)
 - [ ] i18n/localization (if expanding beyond Poland)
-- [ ] Full SSR (if prerendering proves insufficient)
+- [x] Full SSR (if prerendering proves insufficient)
 - [ ] PWA (offline catalog, push notifications)
 - [ ] DHL/GLS mock modes
 - [ ] Advanced AdminJS views (order timeline, analytics dashboard)
@@ -282,7 +282,7 @@ Everything in this phase MUST be done before the first real order.
 | Atomic stock updates | **CUT** | Already implemented in `orders.service.ts:95-109` |
 | Soft deletes (deletedAt) | **DEFERRED** | <500 products don't need soft deletes. `isActive` flag suffices. |
 | Winston/Pino at Phase 0 | **MOVED to Phase 5** | NestJS logger + Railway stdout sufficient for launch |
-| Full SSR | **REPLACED** | Prerendering sufficient for <500 pages. No Node server needed on Vercel. |
+| Full SSR | **IMPLEMENTED** | Phase 6 — `server.ts` Express entry, `api/ssr.mjs` Vercel Function. Prerendered routes still served from CDN; dynamic routes SSR'd on-demand. |
 | 3 carriers at launch | **InPost only recommended** | ~70% of Polish deliveries. DHL/GLS launch in Phase 3. |
 
 ---

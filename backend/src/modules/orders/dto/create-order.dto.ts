@@ -93,4 +93,9 @@ export class CreateOrderDto {
   @IsString()
   @Matches(/^\d{10}$/, { message: 'NIP must be exactly 10 digits' })
   nip?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  couponCode?: string;
 }
