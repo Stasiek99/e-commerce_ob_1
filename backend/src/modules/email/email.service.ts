@@ -11,6 +11,7 @@ import { emailVerificationTemplate } from './templates/email-verification.templa
 import { orderCancellationTemplate } from './templates/order-cancellation.template';
 import { lowStockAlertTemplate } from './templates/low-stock-alert.template';
 import { newOrderNotificationTemplate } from './templates/new-order-notification.template';
+import { backInStockTemplate } from './templates/back-in-stock.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -21,7 +22,8 @@ type EmailKind =
   | 'email_verification'
   | 'order_cancellation'
   | 'low_stock_alert'
-  | 'new_order_notification';
+  | 'new_order_notification'
+  | 'back_in_stock';
 
 @Injectable()
 export class EmailService {
@@ -125,6 +127,17 @@ export class EmailService {
   }) {
     const { subject, html } = lowStockAlertTemplate(data);
     return this.send('low_stock_alert', data.to, subject, html, { orderNumber: data.orderNumber });
+  }
+
+  async sendBackInStock(data: {
+    to: string;
+    firstName: string;
+    productName: string;
+    variantLabel: string;
+    productUrl: string;
+  }) {
+    const { subject, html } = backInStockTemplate(data);
+    return this.send('back_in_stock', data.to, subject, html, { productName: data.productName });
   }
 
   async sendShippingNotification(data: {

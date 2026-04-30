@@ -23,6 +23,7 @@ import { EmailModule } from './modules/email/email.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { CouponModule } from './modules/coupons/coupon.module';
+import { WishlistModule } from './modules/wishlist/wishlist.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 
@@ -62,6 +63,7 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
     ProductsModule,
     CartModule,
     CouponModule,
+    WishlistModule,
     OrdersModule,
     PaymentsModule,
     ShippingModule,

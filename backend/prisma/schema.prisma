@@ -86,6 +86,7 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   carts                   Cart[]
+  wishlistItems           WishlistItem[]
 
   @@map("users")
 }
@@ -182,8 +183,9 @@ model Product {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  variants ProductVariant[]
-  images   ProductImage[]
+  variants      ProductVariant[]
+  images        ProductImage[]
+  wishlistItems WishlistItem[]
 
   @@map("products")
 }
@@ -379,6 +381,22 @@ model OrderEvent {
 
   @@index([orderId])
   @@map("order_events")
+}
+
+// ─── Wishlist ────────────────────────────────────────────────────────────────
+
+model WishlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  notifyOnRestock Boolean  @default(false)
+  addedAt         DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@map("wishlist_items")
 }
 
 // ─── Coupons ─────────────────────────────────────────────────────────────────

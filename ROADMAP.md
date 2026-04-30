@@ -236,7 +236,7 @@ Everything in this phase MUST be done before the first real order.
 **Goal:** Revenue growth features. Prioritize based on customer feedback.
 
 - [x] Discount/coupon system (Coupon model, validation at checkout) 
-- [ ] Wishlist functionality
+- [x] Wishlist functionality
 - [ ] Product reviews & ratings
 - [ ] Return/withdrawal request flow (consumer-facing form)
 - [ ] i18n/localization (if expanding beyond Poland)
