@@ -6,7 +6,8 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
-import { TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
 import { getCountries } from 'libphonenumber-js/min';
@@ -81,7 +82,6 @@ interface AppliedCoupon {
             <form
               tuiCardLarge
               tuiForm=""
-              appearance="elevated"
               class="checkout-card addr-form"
               [formGroup]="addressForm"
               (ngSubmit)="onNext()"
@@ -193,15 +193,15 @@ interface AppliedCoupon {
               <!-- Phone + email (2-column) -->
               <div class="addr-row-2">
                 <div>
-                  <tui-input-phone-international
-                    formControlName="phone"
-                    [countries]="countries"
-                    [countryIsoCode]="countryIsoCode"
-                    [countrySearch]="true"
-                    (countryIsoCodeChange)="countryIsoCode = $event"
-                  >
-                    Telefon *
-                  </tui-input-phone-international>
+                  <tui-textfield>
+                    <label tuiLabel>Telefon *</label>
+                    <input tuiInputPhoneInternational
+                           formControlName="phone"
+                           [countries]="countries"
+                           [countryIsoCode]="countryIsoCode"
+                           [countrySearch]="true"
+                           (countryIsoCodeChange)="countryIsoCode = $event" />
+                  </tui-textfield>
                   @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
                 <div>
@@ -224,7 +224,7 @@ interface AppliedCoupon {
 
           <!-- Step 1: Carrier -->
           @if (index === 1) {
-            <div tuiCardLarge appearance="elevated" class="step-card checkout-card">
+            <div tuiCardLarge class="step-card checkout-card">
               <header tuiHeader>
                 <h2 tuiTitle>Sposób dostawy</h2>
               </header>
@@ -266,7 +266,7 @@ interface AppliedCoupon {
 
           <!-- Step 2: Summary -->
           @if (index === 2) {
-            <div tuiCardLarge appearance="elevated" class="step-card checkout-card">
+            <div tuiCardLarge class="step-card checkout-card">
               <header tuiHeader>
                 <h2 tuiTitle>Podsumowanie zamówienia</h2>
               </header>
@@ -800,7 +800,15 @@ export class CheckoutPageComponent implements OnInit {
         window.location.href = res.paymentUrl;
       },
       error: (err) => {
-        this.toast.error(err.error?.message ?? 'Błąd tworzenia zamówienia.');
+        const message: string = err.error?.message ?? 'Błąd tworzenia zamówienia.';
+        this.toast.error(message);
+        // Coupon was rejected server-side (expired or limit hit between validate and submit).
+        // Surface the error in the coupon field so the user knows to re-check the code.
+        if (message.toLowerCase().includes('kod')) {
+          this.appliedCoupon.set(null);
+          this.couponError.set(message);
+          this.couponExpanded.set(true);
+        }
         this.placing.set(false);
       },
     });

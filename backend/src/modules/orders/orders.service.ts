@@ -410,12 +410,68 @@ export class OrdersService {
       where: { id },
       select: { status: true },
     });
-    return this.prisma.$transaction([
+    await this.prisma.$transaction([
       this.prisma.order.update({ where: { id }, data: { status } }),
       this.prisma.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       }),
     ]);
+
+    if (status === OrderStatus.DELIVERED) {
+      this.dispatchReviewRequestEmail(id).catch(() => undefined);
+    }
+  }
+
+  private async dispatchReviewRequestEmail(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        snapshotEmail: true,
+        snapshotFirstName: true,
+        items: {
+          include: {
+            productVariant: {
+              include: {
+                product: {
+                  select: {
+                    name: true,
+                    slug: true,
+                    images: { where: { isPrimary: true }, take: 1 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) return;
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+
+    // Deduplicate products (one variant per unique product)
+    const seen = new Set<string>();
+    const products = order.items
+      .filter((item) => {
+        const slug = item.productVariant.product.slug;
+        if (seen.has(slug)) return false;
+        seen.add(slug);
+        return true;
+      })
+      .map((item) => ({
+        name: item.productVariant.product.name,
+        imageUrl: item.productVariant.product.images[0]?.url,
+        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1`,
+      }));
+
+    await this.emailService.sendReviewRequest({
+      to: order.snapshotEmail,
+      firstName: order.snapshotFirstName,
+      orderNumber: order.orderNumber,
+      products,
+    });
   }
 
   private async sendStockAlertIfNeeded(

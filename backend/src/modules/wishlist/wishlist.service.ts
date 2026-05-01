@@ -8,10 +8,14 @@ export class WishlistService {
   async getItems(userId: string) {
     const items = await this.prisma.wishlistItem.findMany({
       where: { userId },
+      take: 200,
       include: {
         product: {
           include: {
-            images: { orderBy: { sortOrder: 'asc' } },
+            images: {
+              where: { isPrimary: true },
+              take: 1,
+            },
             variants: {
               where: { isActive: true },
               select: { id: true, label: true, priceInCents: true, stock: true },

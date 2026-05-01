@@ -40,7 +40,10 @@ export class CouponService {
       return { valid: false, message: 'Ten kod osiągnął limit użyć.' };
     }
 
-    if (coupon.maxUsesPerUser !== null && userId) {
+    if (coupon.maxUsesPerUser !== null) {
+      if (!userId) {
+        return { valid: false, message: 'Zaloguj się, aby użyć tego kodu rabatowego.' };
+      }
       const userUses = await this.prisma.couponUse.count({
         where: { couponId: coupon.id, userId },
       });
@@ -76,7 +79,9 @@ export class CouponService {
     };
   }
 
-  // Used inside the order transaction — validates and records usage atomically.
+  // Used inside the order transaction — atomically reserves one coupon use.
+  // Single SQL UPDATE covers: active, expiry, global cap, and per-user cap.
+  // If 0 rows affected, one of those conditions failed — throw immediately.
   async applyInsideTransaction(
     tx: Prisma.TransactionClient,
     couponId: string,
@@ -84,21 +89,30 @@ export class CouponService {
     userId: string | undefined,
     discountAppliedInCents: number,
   ): Promise<void> {
-    const coupon = await tx.coupon.findUnique({ where: { id: couponId } });
-    if (!coupon || !coupon.isActive) throw new BadRequestException('Kod rabatowy jest nieprawidłowy.');
+    const affected = await tx.$executeRaw`
+      UPDATE coupons
+      SET current_uses = current_uses + 1
+      WHERE id = ${couponId}::uuid
+        AND is_active = true
+        AND (expires_at IS NULL OR expires_at > NOW())
+        AND (max_uses_total IS NULL OR current_uses < max_uses_total)
+        AND (
+          max_uses_per_user IS NULL
+          OR ${userId ?? null}::uuid IS NULL
+          OR (
+            SELECT COUNT(*) FROM coupon_uses
+            WHERE coupon_id = ${couponId}::uuid
+              AND user_id = ${userId ?? null}::uuid
+          ) < max_uses_per_user
+        )
+    `;
 
-    const now = new Date();
-    if (coupon.expiresAt && coupon.expiresAt < now) throw new BadRequestException('Ten kod wygasł.');
-    if (coupon.maxUsesTotal !== null && coupon.currentUses >= coupon.maxUsesTotal) {
-      throw new BadRequestException('Ten kod osiągnął limit użyć.');
+    if (affected === 0) {
+      throw new BadRequestException('Kod rabatowy jest nieważny, wygasł lub osiągnął limit użyć.');
     }
 
     await tx.couponUse.create({
       data: { couponId, orderId, userId: userId ?? null, discountAppliedInCents },
-    });
-    await tx.coupon.update({
-      where: { id: couponId },
-      data: { currentUses: { increment: 1 } },
     });
   }
 
@@ -114,6 +128,10 @@ export class CouponService {
   }
 
   async create(dto: CreateCouponDto) {
+    if (dto.discountType === DiscountType.PERCENTAGE && dto.value > 100) {
+      throw new BadRequestException('PERCENTAGE discount value must be between 0 and 100.');
+    }
+
     const code = dto.code.trim().toUpperCase();
     const existing = await this.prisma.coupon.findUnique({ where: { code } });
     if (existing) throw new ConflictException(`Coupon code "${code}" already exists.`);

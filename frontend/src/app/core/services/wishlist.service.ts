@@ -1,6 +1,6 @@
 import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { switchMap, catchError, EMPTY } from 'rxjs';
+import { switchMap, catchError } from 'rxjs';
 import { ProductCardData } from '../../shared/product-card/product-card.component';
 import { AuthService } from './auth.service';
 import { environment } from '../../../environments/environment';
@@ -19,6 +19,7 @@ export class WishlistService {
 
   readonly items = this._items.asReadonly();
   readonly count = computed(() => this._items().length);
+  readonly loading = signal(false);
 
   constructor() {
     effect(() => {
@@ -78,7 +79,9 @@ export class WishlistService {
   }
 
   private syncFromBackend(guestIds: string[]): void {
-    const fetch$ = this.http.get<ProductCardData[]>(`${environment.apiUrl}/wishlist`);
+    this.loading.set(true);
+
+    const fetch$ = this.http.get<WishlistItemData[]>(`${environment.apiUrl}/wishlist`);
 
     const sync$ = guestIds.length
       ? this.http.post(`${environment.apiUrl}/wishlist/merge`, { productIds: guestIds }).pipe(
@@ -91,6 +94,13 @@ export class WishlistService {
       next: (items) => {
         this._items.set(items);
         localStorage.removeItem(this.STORAGE_KEY);
+        this.loading.set(false);
+      },
+      error: () => {
+        // Always clear localStorage even on total failure — prevents infinite re-merge
+        // on subsequent loads when the guest items were already partially processed.
+        localStorage.removeItem(this.STORAGE_KEY);
+        this.loading.set(false);
       },
     });
   }

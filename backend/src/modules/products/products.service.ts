@@ -203,23 +203,28 @@ export class ProductsService {
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
 
-    for (const item of wishlistItems) {
-      await this.emailService
-        .sendBackInStock({
-          to: item.user.email,
-          firstName: item.user.firstName ?? '',
-          productName: item.product.name,
-          variantLabel,
-          productUrl: `${frontendUrl}/products/${item.product.slug}`,
-        })
-        .catch((err) => this.logger.error(`Back-in-stock email failed for ${item.user.email}: ${err.message}`));
-    }
-
-    // Reset flags so users aren't notified again on the next restock
+    // Reset flags BEFORE sending — prevents duplicate notifications if process
+    // crashes mid-loop; users who miss an email can re-enable the flag manually.
     await this.prisma.wishlistItem.updateMany({
       where: { productId, notifyOnRestock: true },
       data: { notifyOnRestock: false },
     });
+
+    // Fire all emails concurrently — sequential await would block the event loop
+    // for hundreds of ms × N users (e.g. 500 users × 300ms = 150 s blocked).
+    await Promise.allSettled(
+      wishlistItems.map((item) =>
+        this.emailService
+          .sendBackInStock({
+            to: item.user.email,
+            firstName: item.user.firstName ?? '',
+            productName: item.product.name,
+            variantLabel,
+            productUrl: `${frontendUrl}/products/${item.product.slug}`,
+          })
+          .catch((err) => this.logger.error(`Back-in-stock email failed for ${item.user.email}: ${err.message}`)),
+      ),
+    );
 
     this.logger.log(`Back-in-stock: notified ${wishlistItems.length} user(s) for product ${productId}`);
   }

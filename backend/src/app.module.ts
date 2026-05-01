@@ -24,6 +24,7 @@ import { StorageModule } from './modules/storage/storage.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { CouponModule } from './modules/coupons/coupon.module';
 import { WishlistModule } from './modules/wishlist/wishlist.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 
@@ -64,6 +65,7 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
     CartModule,
     CouponModule,
     WishlistModule,
+    ReviewsModule,
     OrdersModule,
     PaymentsModule,
     ShippingModule,

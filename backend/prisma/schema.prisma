@@ -64,6 +64,12 @@ enum CouponType {
   CUSTOM
 }
 
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
 model User {
@@ -87,6 +93,7 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   carts                   Cart[]
   wishlistItems           WishlistItem[]
+  reviews                 Review[]
 
   @@map("users")
 }
@@ -183,9 +190,13 @@ model Product {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  reviewCount  Int     @default(0)
+  avgRating    Float?
+
   variants      ProductVariant[]
   images        ProductImage[]
   wishlistItems WishlistItem[]
+  reviews       Review[]
 
   @@map("products")
 }
@@ -303,6 +314,7 @@ model Order {
   shipment Shipment?
   events   OrderEvent[]
   couponUse CouponUse?
+  reviews   Review[]
 
   @@map("orders")
 }
@@ -437,6 +449,31 @@ model CouponUse {
   @@index([couponId])
   @@index([userId])
   @@map("coupon_uses")
+}
+
+// ─── Reviews ─────────────────────────────────────────────────────────────────
+
+model Review {
+  id           String       @id @default(uuid())
+  productId    String
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId      String?
+  order        Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  rating       Int
+  title        String?
+  body         String?
+  status       ReviewStatus @default(PENDING)
+  adminReply   String?
+  helpfulCount Int          @default(0)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([userId, productId])
+  @@index([productId, status])
+  @@index([userId])
+  @@map("reviews")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────

@@ -1,15 +1,18 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { DatePipe } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
-import { Location } from '@angular/common';
-import { TuiButton, TuiIcon, TuiExpand } from '@taiga-ui/core';
-import { TuiCounter } from '@taiga-ui/kit';
+import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
+import { TuiExpand } from '@taiga-ui/experimental';
+import { TuiCounter, TuiRating, TuiTextarea } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { CartService } from '../../../core/services/cart.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { SeoService } from '../../../core/services/seo.service';
 import { WishlistService } from '../../../core/services/wishlist.service';
+import { AuthService } from '../../../core/services/auth.service';
+import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
@@ -37,6 +40,8 @@ interface ProductDetail {
   images: Array<{ url: string; altText?: string | null }>;
   variants: ProductVariantDetail[];
   category?: { id: string; name: string; slug: string } | null;
+  avgRating?: number | null;
+  reviewCount?: number;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -48,7 +53,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, PricePipe, BreadcrumbComponent],
+  imports: [FormsModule, DatePipe, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent],
   template: `
     @if (loading()) {
       <p class="loading">Ładowanie...</p>
@@ -108,6 +113,21 @@ const CATEGORY_LABELS: Record<string, string> = {
                 }
               </div>
             </div>
+          }
+
+          <!-- Rating summary (above price, clickable anchor) -->
+          @if ((product()!.reviewCount ?? 0) > 0) {
+            <a class="detail__rating-summary" role="button" style="cursor:pointer" aria-label="Przejdź do opinii" (click)="scrollToReviews()">
+              <span class="detail__stars" aria-hidden="true">
+                @for (s of starsArray(product()!.avgRating ?? 0); track $index) {
+                  <tui-icon [icon]="s === 'full' ? '@tui.star' : s === 'half' ? '@tui.star-half' : '@tui.star'"
+                            [class.detail__star--filled]="s !== 'empty'"
+                            [class.detail__star--empty]="s === 'empty'" />
+                }
+              </span>
+              <span class="detail__rating-value">{{ product()!.avgRating?.toFixed(1) }}</span>
+              <span class="detail__rating-count">({{ product()!.reviewCount }} {{ product()!.reviewCount === 1 ? 'opinia' : product()!.reviewCount! <= 4 ? 'opinie' : 'opinii' }})</span>
+            </a>
           }
 
           <!-- Price + stock -->
@@ -205,6 +225,127 @@ const CATEGORY_LABELS: Record<string, string> = {
           }
         </div>
       </div>
+
+      <!-- ─── Reviews section ─────────────────────────────────────── -->
+      <section id="reviews" class="reviews">
+        <h2 class="reviews__heading">Opinie klientów</h2>
+
+        <!-- Submit form (auth + ?review=1 auto-opens) -->
+        @if (auth.isAuthenticated()) {
+          @if (!reviewSubmitted()) {
+            <div class="reviews__form-wrap">
+              <button tuiButton type="button" appearance="flat" size="s"
+                      class="reviews__toggle-btn"
+                      (click)="reviewFormOpen.set(!reviewFormOpen())">
+                <tui-icon [icon]="reviewFormOpen() ? '@tui.chevron-up' : '@tui.chevron-down'" />
+                {{ reviewFormOpen() ? 'Ukryj formularz' : 'Napisz opinię' }}
+              </button>
+              @if (reviewFormOpen()) {
+                <form class="reviews__form" (ngSubmit)="submitReview()">
+                  <div class="reviews__form-rating">
+                    <span class="reviews__form-label">Twoja ocena *</span>
+                    <tui-rating [(ngModel)]="reviewRating" name="rating" [max]="5" />
+                  </div>
+                  <tui-textfield>
+                    <input tuiTextfield [(ngModel)]="reviewTitle" name="title"
+                           placeholder="Tytuł (opcjonalnie)" maxlength="100" />
+                  </tui-textfield>
+                  <tui-textfield>
+                    <textarea tuiTextarea [(ngModel)]="reviewBody" name="body"
+                              maxlength="2000"
+                              placeholder="Twoja opinia (opcjonalnie)…"></textarea>
+                  </tui-textfield>
+                  @if (reviewError()) {
+                    <p class="reviews__form-error">{{ reviewError() }}</p>
+                  }
+                  <div class="reviews__form-actions">
+                    <button tuiButton type="submit" appearance="accent" size="s"
+                            [disabled]="reviewSubmitting() || reviewRating === 0">
+                      {{ reviewSubmitting() ? 'Wysyłanie…' : 'Wyślij opinię' }}
+                    </button>
+                  </div>
+                </form>
+              }
+            </div>
+          } @else {
+            <div class="reviews__submitted">
+              <tui-icon icon="@tui.check-circle" />
+              Dziękujemy! Twoja opinia zostanie opublikowana po moderacji.
+            </div>
+          }
+        }
+
+        <!-- Sort + list -->
+        @if (reviewsLoading()) {
+          <p class="reviews__loading">Ładowanie opinii…</p>
+        } @else if (reviews().length === 0 && (product()!.reviewCount ?? 0) === 0) {
+          <p class="reviews__empty">Bądź pierwszy — oceń ten produkt!</p>
+        } @else {
+          @if (reviews().length > 0) {
+            <div class="reviews__sort">
+              <button tuiButton type="button" size="s"
+                      [appearance]="reviewSort() === 'recent' ? 'primary' : 'outline'"
+                      (click)="setSort('recent')">Najnowsze</button>
+              <button tuiButton type="button" size="s"
+                      [appearance]="reviewSort() === 'helpful' ? 'primary' : 'outline'"
+                      (click)="setSort('helpful')">Najbardziej pomocne</button>
+            </div>
+
+            <ul class="reviews__list">
+              @for (review of reviews(); track review.id) {
+                <li class="review-card">
+                  <div class="review-card__header">
+                    <span class="review-card__stars" aria-hidden="true">
+                      @for (s of starsArray(review.rating); track $index) {
+                        <tui-icon [icon]="'@tui.star'"
+                                  [class.review-card__star--filled]="s !== 'empty'"
+                                  [class.review-card__star--empty]="s === 'empty'" />
+                      }
+                    </span>
+                    <span class="review-card__author">{{ review.authorName }}</span>
+                    @if (review.verifiedPurchase) {
+                      <span class="review-card__verified">
+                        <tui-icon icon="@tui.badge-check" />
+                        Zweryfikowany zakup
+                      </span>
+                    }
+                    <time class="review-card__date">
+                      {{ review.createdAt | date:'d MMM yyyy' : '' : 'pl' }}
+                    </time>
+                  </div>
+                  @if (review.title) {
+                    <p class="review-card__title">{{ review.title }}</p>
+                  }
+                  @if (review.body) {
+                    <p class="review-card__body">{{ review.body }}</p>
+                  }
+                  @if (review.adminReply) {
+                    <div class="review-card__reply">
+                      <span class="review-card__reply-label">Odpowiedź Aromaterie:</span>
+                      <p class="review-card__reply-body">{{ review.adminReply }}</p>
+                    </div>
+                  }
+                  <button type="button" class="review-card__helpful"
+                          (click)="markHelpful(review)">
+                    <tui-icon icon="@tui.thumbs-up" />
+                    Pomocna ({{ review.helpfulCount }})
+                  </button>
+                </li>
+              }
+            </ul>
+
+            @if (reviewsMeta()?.totalPages && reviewsMeta()!.totalPages > reviewsPage()) {
+              <button tuiButton type="button" appearance="outline" size="s"
+                      class="reviews__load-more"
+                      [disabled]="reviewsLoading()"
+                      (click)="loadMoreReviews()">
+                Załaduj więcej opinii
+              </button>
+            }
+          }
+        }
+      </section>
+
     }
   `,
   styles: [`
@@ -288,6 +429,19 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__meta-row:last-child { border-bottom: none; }
     .detail__meta-label { color: var(--color-secondary); font-weight: 500; }
 
+    /* Rating summary link */
+    .detail__rating-summary {
+      display: flex; align-items: center; gap: 6px;
+      text-decoration: none; color: inherit; margin-bottom: 12px;
+      width: fit-content;
+    }
+    .detail__rating-summary:hover .detail__rating-count { text-decoration: underline; }
+    .detail__stars { display: flex; align-items: center; gap: 2px; }
+    .detail__star--filled tui-icon, .detail__star--filled { color: #f5a623; font-size: 16px; }
+    .detail__star--empty tui-icon, .detail__star--empty { color: var(--color-border); font-size: 16px; }
+    .detail__rating-value { font-size: 14px; font-weight: 700; color: var(--color-primary); }
+    .detail__rating-count { font-size: 13px; color: var(--color-secondary); }
+
     @media (max-width: 768px) {
       .detail { grid-template-columns: 1fr; gap: 32px; padding: 24px 0 48px; }
       .detail__gallery { position: static; }
@@ -296,6 +450,87 @@ const CATEGORY_LABELS: Record<string, string> = {
       .detail__cta { flex-wrap: wrap; }
       .detail__add-btn { width: 100%; }
     }
+
+    /* ── Reviews section ───────────────────────────────────────── */
+    .reviews {
+      margin-top: 56px;
+      padding-top: 40px;
+      border-top: 1px solid var(--color-border);
+    }
+    .reviews__heading {
+      font-size: 20px; font-weight: 700; margin: 0 0 24px;
+    }
+
+    /* Submit form */
+    .reviews__form-wrap { margin-bottom: 32px; }
+    .reviews__toggle-btn { margin-bottom: 16px; gap: 6px; }
+    .reviews__form {
+      display: flex; flex-direction: column; gap: 12px;
+      max-width: 560px;
+    }
+    .reviews__form-rating {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .reviews__form-label { font-size: 13px; font-weight: 600; color: var(--color-secondary); }
+    .reviews__form-error { font-size: 13px; color: var(--color-error); margin: 0; }
+    .reviews__form-actions { display: flex; justify-content: flex-end; }
+    .reviews__submitted {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 14px; color: var(--color-success);
+      padding: 12px 0; margin-bottom: 24px;
+    }
+    .reviews__submitted tui-icon { font-size: 18px; }
+
+    /* Sort + list */
+    .reviews__sort { display: flex; gap: 8px; margin-bottom: 20px; }
+    .reviews__loading, .reviews__empty {
+      font-size: 14px; color: var(--color-secondary); padding: 16px 0;
+    }
+    .reviews__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+    .reviews__load-more { display: block; margin: 24px auto 0; }
+
+    /* Review card */
+    .review-card {
+      padding: 20px 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .review-card:last-child { border-bottom: none; }
+    .review-card__header {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
+    }
+    .review-card__stars { display: flex; gap: 2px; }
+    .review-card__star--filled { color: #f5a623; font-size: 14px; }
+    .review-card__star--empty { color: var(--color-border); font-size: 14px; }
+    .review-card__author { font-size: 14px; font-weight: 600; color: var(--color-primary); }
+    .review-card__verified {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-weight: 600; color: var(--color-success);
+      background: rgba(42,157,143,0.08); padding: 2px 6px; border-radius: 3px;
+    }
+    .review-card__verified tui-icon { font-size: 12px; }
+    .review-card__date { font-size: 12px; color: var(--color-secondary); margin-left: auto; }
+    .review-card__title { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+    .review-card__body {
+      font-size: 14px; color: var(--color-secondary); line-height: 1.6;
+      margin: 0 0 10px; white-space: pre-line;
+    }
+    .review-card__reply {
+      background: #fafafa; border-left: 3px solid var(--color-accent);
+      padding: 10px 14px; border-radius: 0 4px 4px 0; margin: 8px 0;
+    }
+    .review-card__reply-label {
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--color-accent); display: block; margin-bottom: 4px;
+    }
+    .review-card__reply-body { font-size: 13px; color: var(--color-secondary); margin: 0; line-height: 1.5; }
+    .review-card__helpful {
+      background: none; border: none; cursor: pointer; padding: 0;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px; color: var(--color-secondary);
+      transition: color 0.15s;
+    }
+    .review-card__helpful:hover { color: var(--color-primary); }
+    .review-card__helpful tui-icon { font-size: 14px; }
   `],
 })
 export class ProductDetailComponent implements OnInit {
@@ -305,7 +540,8 @@ export class ProductDetailComponent implements OnInit {
   private readonly toast = inject(ToastService);
   private readonly seo = inject(SeoService);
   private readonly wishlist = inject(WishlistService);
-  private readonly location = inject(Location);
+  readonly auth = inject(AuthService);
+  private readonly reviewsService = inject(ReviewsService);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -314,6 +550,21 @@ export class ProductDetailComponent implements OnInit {
   readonly adding = signal(false);
   quantity = 1;
   descExpanded = false;
+
+  // ── Reviews ──────────────────────────────────────────────────
+  readonly reviews = signal<ReviewSummary[]>([]);
+  readonly reviewsMeta = signal<{ totalPages: number; total: number } | null>(null);
+  readonly reviewsLoading = signal(false);
+  readonly reviewsPage = signal(1);
+  readonly reviewSort = signal<'recent' | 'helpful'>('recent');
+
+  readonly reviewFormOpen = signal(false);
+  readonly reviewSubmitting = signal(false);
+  readonly reviewSubmitted = signal(false);
+  readonly reviewError = signal<string | null>(null);
+  reviewRating = 0;
+  reviewTitle = '';
+  reviewBody = '';
 
   readonly wishlisted = computed(() => this.wishlist.isInWishlist(this.product()?.id ?? ''));
 
@@ -343,13 +594,105 @@ export class ProductDetailComponent implements OnInit {
             slug: p.slug ?? slug,
             images: p.images,
             variants: p.variants,
+            avgRating: p.avgRating,
+            reviewCount: p.reviewCount,
           };
           this.seo.updateProductMeta(seoInput);
           this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
+          this.loadReviews(p.id);
+
+          if (this.route.snapshot.queryParamMap.get('review') === '1') {
+            this.reviewFormOpen.set(true);
+            setTimeout(() => {
+              document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
+            }, 300);
+          }
         },
         error: () => this.loading.set(false),
       });
+  }
+
+  private loadReviews(productId: string, append = false): void {
+    this.reviewsLoading.set(true);
+    this.reviewsService
+      .getByProduct(productId, this.reviewsPage(), this.reviewSort())
+      .subscribe({
+        next: (res) => {
+          this.reviews.set(append ? [...this.reviews(), ...res.data] : res.data);
+          this.reviewsMeta.set(res.meta);
+          this.reviewsLoading.set(false);
+        },
+        error: () => this.reviewsLoading.set(false),
+      });
+  }
+
+  setSort(sort: 'recent' | 'helpful'): void {
+    if (this.reviewSort() === sort) return;
+    this.reviewSort.set(sort);
+    this.reviewsPage.set(1);
+    const pid = this.product()?.id;
+    if (pid) this.loadReviews(pid);
+  }
+
+  loadMoreReviews(): void {
+    this.reviewsPage.update((p) => p + 1);
+    const pid = this.product()?.id;
+    if (pid) this.loadReviews(pid, true);
+  }
+
+  submitReview(): void {
+    if (this.reviewRating === 0) return;
+    const productId = this.product()?.id;
+    if (!productId) return;
+
+    this.reviewSubmitting.set(true);
+    this.reviewError.set(null);
+
+    this.reviewsService
+      .submit({
+        productId,
+        rating: this.reviewRating,
+        title: this.reviewTitle.trim() || undefined,
+        body: this.reviewBody.trim() || undefined,
+      })
+      .subscribe({
+        next: () => {
+          this.reviewSubmitted.set(true);
+          this.reviewSubmitting.set(false);
+          this.reviewFormOpen.set(false);
+        },
+        error: (err) => {
+          const msg = err?.error?.message;
+          this.reviewError.set(
+            typeof msg === 'string' ? msg : 'Nie udało się wysłać opinii. Spróbuj ponownie.',
+          );
+          this.reviewSubmitting.set(false);
+        },
+      });
+  }
+
+  markHelpful(review: ReviewSummary): void {
+    this.reviewsService.markHelpful(review.id).subscribe({
+      next: (res) => {
+        this.reviews.update((list) =>
+          list.map((r) => (r.id === review.id ? { ...r, helpfulCount: res.helpfulCount } : r)),
+        );
+      },
+    });
+  }
+
+  scrollToReviews(): void {
+    document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  starsArray(rating: number): ('full' | 'half' | 'empty')[] {
+    return Array.from({ length: 5 }, (_, i) => {
+      const val = i + 1;
+      if (rating >= val) return 'full';
+      if (rating >= val - 0.5) return 'half';
+      return 'empty';
+    });
   }
 
   selectVariant(variant: any): void {

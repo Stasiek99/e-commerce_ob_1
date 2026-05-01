@@ -237,7 +237,7 @@ Everything in this phase MUST be done before the first real order.
 
 - [x] Discount/coupon system (Coupon model, validation at checkout) 
 - [x] Wishlist functionality
-- [ ] Product reviews & ratings
+- [x] Product reviews & ratings
 - [ ] Return/withdrawal request flow (consumer-facing form)
 - [ ] i18n/localization (if expanding beyond Poland)
 - [x] Full SSR (if prerendering proves insufficient)

@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Role, User } from '@prisma/client';
 import { CouponService } from './coupon.service';
 import { ValidateCouponDto } from './dto/validate-coupon.dto';
@@ -26,6 +27,7 @@ export class CouponController {
 
   @Post('validate')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @UseGuards(OptionalJwtGuard)
   validate(@Body() dto: ValidateCouponDto, @CurrentUser() user?: User) {
     return this.couponService.validate(

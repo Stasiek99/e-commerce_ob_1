@@ -1,6 +1,6 @@
 import { Component, computed, inject, effect, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { forkJoin } from 'rxjs';
+import { from, mergeMap, toArray } from 'rxjs';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { WishlistService, WishlistItemData } from '../../core/services/wishlist.service';
 import { CartService } from '../../core/services/cart.service';
@@ -131,7 +131,7 @@ export class WishlistComponent {
 
   constructor() {
     effect(() => {
-      if (this.wishlist.items().length === 0) {
+      if (!this.wishlist.loading() && this.wishlist.items().length === 0) {
         this.router.navigate(['/products']);
       }
     });
@@ -146,12 +146,13 @@ export class WishlistComponent {
 
     this.addingAll.set(true);
 
-    const adds$ = inStockProducts.map((product) => {
-      const variant = product.variants!.find((v) => v.stock > 0)!;
-      return this.cart.addItem(variant.id, 1);
-    });
-
-    forkJoin(adds$).subscribe({
+    from(inStockProducts).pipe(
+      mergeMap((product) => {
+        const variant = product.variants!.find((v) => v.stock > 0)!;
+        return this.cart.addItem(variant.id, 1);
+      }, 5),
+      toArray(),
+    ).subscribe({
       next: (carts) => {
         this.cart.refreshFromServer(carts[carts.length - 1]);
         this.toast.success(`Dodano ${inStockProducts.length} ${inStockProducts.length === 1 ? 'produkt' : 'produkty'} do koszyka!`);
