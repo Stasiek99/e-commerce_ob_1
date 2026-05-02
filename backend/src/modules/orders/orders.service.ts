@@ -12,7 +12,6 @@ import { EmailService } from '../email/email.service';
 import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 
-const LOW_STOCK_THRESHOLD = 2;
 
 interface CartItem {
   productVariantId: string;
@@ -491,7 +490,7 @@ export class OrdersService {
     });
 
     const alertItems = variants
-      .filter((v) => v.stock <= LOW_STOCK_THRESHOLD)
+      .filter((v) => v.stock <= v.reorderThreshold)
       .map((v) => ({
         sku: v.sku,
         name: `${v.product.name} – ${v.label}`,

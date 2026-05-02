@@ -226,6 +226,7 @@ model ProductVariant {
   priceInCents         Int
   compareAtPriceInCents Int?
   stock                Int      @default(0)
+  reorderThreshold     Int      @default(5)
   isActive             Boolean  @default(true)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt

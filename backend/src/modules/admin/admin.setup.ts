@@ -83,6 +83,38 @@ export async function setupAdmin(
         resource: { model: getModelByName('ProductVariant'), client: prisma },
         options: {
           navigation: { name: 'Katalog' },
+          sort: { sortBy: 'stock', direction: 'asc' },
+          listProperties: ['sku', 'label', 'stock', 'reorderThreshold', 'isActive', 'productId'],
+          filterProperties: ['isActive', 'productId'],
+          properties: {
+            stock: {
+              isVisible: { list: true, show: true, edit: true, filter: false },
+            },
+            reorderThreshold: {
+              isVisible: { list: true, show: true, edit: true, filter: false },
+              description: 'Wyślij alert gdy stan ≤ tej wartości',
+            },
+          },
+          actions: {
+            list: {
+              after: async (response: any) => {
+                // noinspection SqlNoDataSourceInspection
+                const result = await prisma.$queryRaw<[{ count: number }]>`
+                  SELECT COUNT(*)::int AS count
+                  FROM product_variants
+                  WHERE "isActive" = true AND stock <= "reorderThreshold"
+                `;
+                const count = Number(result[0]?.count ?? 0);
+                if (count > 0) {
+                  response.notice = {
+                    message: `Niski stan: ${count} ${count === 1 ? 'wariant wymaga' : 'warianty wymagają'} uzupełnienia`,
+                    type: 'error',
+                  };
+                }
+                return response;
+              },
+            },
+          },
         },
       },
       {
@@ -110,7 +142,7 @@ export async function setupAdmin(
               icon: 'Download',
               label: 'Pobierz fakturę',
               isVisible: true,
-              handler: async (request: any, response: any, context: any) => {
+              handler: async (_request: any, _response: any, context: any) => {
                 const { record } = context;
                 const orderId: string = record.params.id;
 
