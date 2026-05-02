@@ -108,8 +108,21 @@ model User {
   carts                   Cart[]
   wishlistItems           WishlistItem[]
   reviews                 Review[]
+  customerNotes           CustomerNote[]
 
   @@map("users")
+}
+
+model CustomerNote {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body       String   @db.Text
+  adminEmail String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("customer_notes")
 }
 
 model RefreshToken {

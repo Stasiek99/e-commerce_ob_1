@@ -7,8 +7,103 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { OrdersService } from '../orders/orders.service';
+import { PaymentsService } from '../payments/payments.service';
 
 const logger = new Logger('AdminJS');
+
+async function generatePicklistHtml(prisma: PrismaService): Promise<string> {
+  const esc = (s: unknown) =>
+    String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const orders = await prisma.order.findMany({
+    where: { status: { in: ['PAID', 'PROCESSING'] } },
+    include: {
+      items: {
+        include: { productVariant: { select: { sku: true, label: true, volume: true } } },
+      },
+    },
+    orderBy: [{ carrierCode: 'asc' }, { createdAt: 'asc' }],
+  });
+
+  const rows = orders
+    .map((order, i) => {
+      const itemLines = order.items
+        .map(
+          (item) =>
+            `<li>${esc(item.productVariant.sku)} &mdash; ${esc(item.productVariant.label)}${item.productVariant.volume ? ` (${item.productVariant.volume}ml)` : ''} &times; <strong>${item.quantity}</strong></li>`,
+        )
+        .join('');
+
+      const locker = order.inpostLockerCode
+        ? `<span style="font-size:10px;color:#555">${esc(order.inpostLockerCode)}</span>`
+        : '';
+
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td><strong>${esc(order.orderNumber)}</strong><br><span style="font-size:10px;color:#777">${esc(order.createdAt.toLocaleDateString('pl-PL'))}</span></td>
+          <td>${esc(order.snapshotFirstName)} ${esc(order.snapshotLastName)}<br><span style="font-size:10px;color:#777">${esc(order.snapshotPhone)}</span></td>
+          <td><ul class="items">${itemLines}</ul></td>
+          <td><span class="carrier-badge ${esc(order.carrierCode)}">${esc(order.carrierCode)}</span>${locker}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const now = new Date().toLocaleString('pl-PL');
+
+  return `<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Lista pickingowa</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;font-size:11px;color:#000}
+    .header{padding:12px 16px;border-bottom:2px solid #000;margin-bottom:8px}
+    .header h1{font-size:16px}
+    .header p{font-size:11px;color:#555;margin-top:4px}
+    .actions{padding:8px 16px;margin-bottom:8px}
+    .btn{display:inline-block;padding:7px 14px;background:#333;color:#fff;border:none;cursor:pointer;font-size:12px;margin-right:8px;border-radius:3px;text-decoration:none}
+    table{width:100%;border-collapse:collapse}
+    th{background:#222;color:#fff;padding:6px 8px;text-align:left;font-size:11px}
+    td{border-bottom:1px solid #ddd;padding:5px 8px;vertical-align:top}
+    tr:nth-child(even) td{background:#f9f9f9}
+    ul.items{list-style:none;padding:0}
+    ul.items li{margin-bottom:2px}
+    .carrier-badge{display:inline-block;padding:2px 6px;border-radius:3px;font-weight:bold;font-size:10px;margin-right:4px}
+    .INPOST{background:#ffdd00;color:#000}
+    .DHL{background:#d40511;color:#fff}
+    .GLS{background:#0066cc;color:#fff}
+    .DPD{background:#dc0032;color:#fff}
+    @media print{
+      .actions{display:none}
+      th,.INPOST,.DHL,.GLS,.DPD{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      th{background:#000!important}
+      .INPOST{background:#ffdd00!important;color:#000!important}
+      .DHL{background:#d40511!important;color:#fff!important}
+      .GLS{background:#0066cc!important;color:#fff!important}
+      .DPD{background:#dc0032!important;color:#fff!important}
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Lista pickingowa</h1>
+    <p>Wygenerowano: ${now} &nbsp;|&nbsp; Zamówień do realizacji: <strong>${orders.length}</strong></p>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="window.print()">Drukuj</button>
+    <a class="btn" href="/admin">&#8592; Panel admina</a>
+  </div>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Nr zamówienia</th><th>Klient</th><th>Zawartość</th><th>Kurier / Paczkomat</th></tr>
+    </thead>
+    <tbody>${rows || '<tr><td colspan="5" style="text-align:center;padding:20px;color:#888">Brak zamówień do realizacji</td></tr>'}</tbody>
+  </table>
+</body>
+</html>`;
+}
 
 async function updateReviewStats(prisma: PrismaService, productId: string): Promise<void> {
   await prisma.$executeRaw`
@@ -31,6 +126,7 @@ export async function setupAdmin(
   invoiceService: InvoiceService,
   shippingService: ShippingService,
   ordersService: OrdersService,
+  paymentsService: PaymentsService,
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
@@ -271,6 +367,43 @@ export async function setupAdmin(
                 };
               },
             },
+            refundFull: {
+              actionType: 'record',
+              icon: 'ArrowLeft',
+              label: 'Zwrot środków',
+              isVisible: (context: any) => {
+                const status = context.record?.params?.status;
+                return ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(status);
+              },
+              handler: async (_request: any, _response: any, context: any) => {
+                const { record } = context;
+                const orderId = record.params.id as string;
+                try {
+                  await paymentsService.refundPayment(orderId, 'ADMIN');
+                  return {
+                    record: record.toJSON(),
+                    notice: {
+                      message: 'Zwrot zainicjowany — status → REFUNDED, stan magazynowy przywrócony.',
+                      type: 'success',
+                    },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd zwrotu: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
+            printPicklist: {
+              actionType: 'resource',
+              icon: 'Printer',
+              label: 'Lista pickingowa',
+              isVisible: true,
+              handler: async (_request: any, _response: any, _context: any) => {
+                return { redirectUrl: '/admin/picklist', records: [] };
+              },
+            },
             bulkCancel: {
               actionType: 'bulk',
               icon: 'XCircle',
@@ -338,6 +471,10 @@ export async function setupAdmin(
         resource: { model: getModelByName('User'), client: prisma },
         options: {
           navigation: { name: 'Użytkownicy' },
+          sort: { sortBy: 'createdAt', direction: 'desc' },
+          listProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'createdAt'],
+          showProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'isEmailVerified', 'nip', 'createdAt'],
+          filterProperties: ['email', 'role', 'isEmailVerified'],
           properties: {
             passwordHash: { isVisible: false },
           },
@@ -345,6 +482,59 @@ export async function setupAdmin(
             new: { isAccessible: false },
             edit: { isAccessible: false },
             delete: { isAccessible: false },
+            show: {
+              after: async (response: any, _request: any, context: any) => {
+                const userId: string | undefined = context.record?.params?.id;
+                if (!userId) return response;
+                const [stats, noteCount] = await Promise.all([
+                  prisma.order.aggregate({
+                    where: { userId, status: { notIn: ['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED'] } },
+                    _sum: { totalInCents: true },
+                    _count: true,
+                  }),
+                  prisma.customerNote.count({ where: { userId } }),
+                ]);
+                const totalPln = ((stats._sum.totalInCents ?? 0) / 100).toFixed(2);
+                response.notice = {
+                  message: `Zamówień: ${stats._count} | Wartość: ${totalPln} PLN | Notatki CS: ${noteCount}`,
+                  type: 'info',
+                };
+                return response;
+              },
+            },
+            viewOrders: {
+              actionType: 'record',
+              icon: 'List',
+              label: 'Zamówienia klienta',
+              isVisible: true,
+              handler: async (_request: any, _response: any, context: any) => {
+                const userId = context.record.params.id as string;
+                return {
+                  redirectUrl: `/admin/resources/Order?filters.userId=${userId}`,
+                  record: context.record.toJSON(),
+                };
+              },
+            },
+          },
+        },
+      },
+      // ── Customer Service ──────────────────────────────────────────────
+      {
+        resource: { model: getModelByName('CustomerNote'), client: prisma },
+        options: {
+          navigation: { name: 'Obsługa klienta' },
+          sort: { sortBy: 'createdAt', direction: 'desc' },
+          listProperties: ['userId', 'body', 'adminEmail', 'createdAt'],
+          editProperties: ['userId', 'body', 'adminEmail'],
+          properties: {
+            body: {
+              type: 'textarea',
+              isVisible: { list: false, show: true, edit: true, filter: false },
+              description: 'Wewnętrzna notatka widoczna tylko dla adminów',
+            },
+            adminEmail: {
+              defaultValue: process.env.ADMIN_DEFAULT_EMAIL ?? '',
+            },
           },
         },
       },
@@ -492,6 +682,30 @@ export async function setupAdmin(
     createTableIfMissing: true,
   });
 
+  const sessionOpts = {
+    store,
+    resave: false,
+    saveUninitialized: false,
+    secret: sessionSecret,
+    name: 'adminjs', // must match the cookie name set by buildAuthenticatedRouter
+  };
+
+  // Printer-friendly pick list — session-protected, registered before the AdminJS
+  // router so Express resolves it here instead of handing it to AdminJS's SPA.
+  const sessionMw = session(sessionOpts);
+  (app as any).get('/admin/picklist', sessionMw, async (req: any, res: any) => {
+    if (!req.session?.passport?.user) {
+      return res.redirect('/admin/login');
+    }
+    try {
+      const html = await generatePicklistHtml(prisma);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
+    } catch (err) {
+      res.status(500).send(`<pre>Błąd generowania listy: ${(err as Error).message}</pre>`);
+    }
+  });
+
   const router =
     adminEmail && adminPassword
       ? AdminJSExpress.buildAuthenticatedRouter(
@@ -506,12 +720,7 @@ export async function setupAdmin(
             cookiePassword: sessionSecret,
           },
           null,
-          {
-            store,
-            resave: false,
-            saveUninitialized: false,
-            secret: sessionSecret,
-          },
+          sessionOpts,
         )
       : AdminJSExpress.buildRouter(admin);
 
