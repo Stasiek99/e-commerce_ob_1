@@ -515,5 +515,163 @@ describe('ReviewsService', () => {
 
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
     });
+
+    it('interpolates the productId into the SQL query', async () => {
+      prisma.$executeRaw.mockResolvedValue(1);
+
+      await service.updateProductStats('product-xyz');
+
+      // Tagged template literals are called as (templateStrings, ...values).
+      // productId appears 3 times in the SQL template — first interpolated arg is productId.
+      const rawCallArgs: unknown[] = prisma.$executeRaw.mock.calls[0];
+      const interpolatedValues = rawCallArgs.slice(1);
+      expect(interpolatedValues).toContain('product-xyz');
+    });
+  });
+
+  // ─── create (additional edge cases) ──────────────────────────────────────
+
+  describe('create — additional edge cases', () => {
+    const dto = { productId: 'product-1', rating: 4 };
+
+    it('stores empty string title as-is (not coerced to null)', async () => {
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+      prisma.review.create.mockResolvedValue(makeReview({ title: '' }));
+
+      await service.create('user-1', { ...dto, title: '' });
+
+      // `''.trim() ?? null` returns '' because '' is not null/undefined.
+      // This test documents current behavior; a stricter impl would use `|| null`.
+      expect(prisma.review.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ title: '' }),
+        }),
+      );
+    });
+
+    it('propagates Prisma unique-constraint error for duplicate (userId, productId) review', async () => {
+      const uniqueError = Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+      });
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+      prisma.review.create.mockRejectedValue(uniqueError);
+
+      await expect(service.create('user-1', dto)).rejects.toMatchObject({ code: 'P2002' });
+    });
+  });
+
+  // ─── getByProduct (additional edge cases) ────────────────────────────────
+
+  describe('getByProduct — additional edge cases', () => {
+    it('uses skip=0 for first page', async () => {
+      prisma.review.findMany.mockResolvedValue([]);
+      prisma.review.count.mockResolvedValue(0);
+
+      await service.getByProduct('product-1', 1, 10);
+
+      expect(prisma.review.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0 }),
+      );
+    });
+
+    it('returns empty data and totalPages=0 when product has no approved reviews', async () => {
+      prisma.review.findMany.mockResolvedValue([]);
+      prisma.review.count.mockResolvedValue(0);
+
+      const result = await service.getByProduct('product-1');
+
+      expect(result.data).toHaveLength(0);
+      expect(result.meta.totalPages).toBe(0);
+      expect(result.meta.total).toBe(0);
+    });
+
+    it('formats authorName as "L." when firstName is null but lastName exists', async () => {
+      prisma.review.findMany.mockResolvedValue([
+        {
+          id: 'r-1',
+          rating: 3,
+          title: null,
+          body: null,
+          adminReply: null,
+          helpfulCount: 0,
+          createdAt: new Date(),
+          orderId: null,
+          user: { firstName: null, lastName: 'Smith' },
+        },
+      ]);
+      prisma.review.count.mockResolvedValue(1);
+
+      const result = await service.getByProduct('product-1');
+
+      // Only last-name initial with no first name — documents actual behavior.
+      expect(result.data[0].authorName).toBe('S.');
+    });
+  });
+
+  // ─── getMine (additional edge cases) ─────────────────────────────────────
+
+  describe('getMine — additional edge cases', () => {
+    it('returns empty array when user has no reviews', async () => {
+      prisma.review.findMany.mockResolvedValue([]);
+
+      const result = await service.getMine('user-1');
+
+      expect(result).toEqual([]);
+    });
+
+    it('orders by createdAt descending', async () => {
+      prisma.review.findMany.mockResolvedValue([]);
+
+      await service.getMine('user-1');
+
+      expect(prisma.review.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+  });
+
+  // ─── markHelpful (additional edge cases) ─────────────────────────────────
+
+  describe('markHelpful — additional edge cases', () => {
+    it('returns the updated helpfulCount from Prisma', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ status: 'APPROVED' }));
+      prisma.review.update.mockResolvedValue({ id: 'review-1', helpfulCount: 7 });
+
+      const result = await service.markHelpful('review-1');
+
+      expect(result).toEqual({ id: 'review-1', helpfulCount: 7 });
+    });
+  });
+
+  // ─── adminUpdateStatus (additional edge cases) ────────────────────────────
+
+  describe('adminUpdateStatus — additional edge cases', () => {
+    it("passes the review's own productId to updateProductStats", async () => {
+      const targetProductId = 'product-specific-42';
+      prisma.review.findUnique.mockResolvedValue(makeReview({ productId: targetProductId }));
+      prisma.review.update.mockResolvedValue(makeReview());
+      prisma.$executeRaw.mockResolvedValue(1);
+
+      await service.adminUpdateStatus('review-1', { action: 'approve' });
+
+      const interpolatedValues: unknown[] = prisma.$executeRaw.mock.calls[0].slice(1);
+      expect(interpolatedValues).toContain(targetProductId);
+    });
+  });
+
+  // ─── adminDelete (additional edge cases) ─────────────────────────────────
+
+  describe('adminDelete — additional edge cases', () => {
+    it("passes the review's own productId to updateProductStats after deletion", async () => {
+      const targetProductId = 'product-specific-99';
+      prisma.review.findUnique.mockResolvedValue(makeReview({ productId: targetProductId }));
+      prisma.review.delete.mockResolvedValue(undefined);
+      prisma.$executeRaw.mockResolvedValue(1);
+
+      await service.adminDelete('review-1');
+
+      const interpolatedValues: unknown[] = prisma.$executeRaw.mock.calls[0].slice(1);
+      expect(interpolatedValues).toContain(targetProductId);
+    });
   });
 });

@@ -13,6 +13,8 @@ import { lowStockAlertTemplate } from './templates/low-stock-alert.template';
 import { newOrderNotificationTemplate } from './templates/new-order-notification.template';
 import { backInStockTemplate } from './templates/back-in-stock.template';
 import { reviewRequestTemplate } from './templates/review-request.template';
+import { returnConfirmationTemplate } from './templates/return-confirmation.template';
+import { returnAdminNotificationTemplate } from './templates/return-admin-notification.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -25,7 +27,9 @@ type EmailKind =
   | 'low_stock_alert'
   | 'new_order_notification'
   | 'back_in_stock'
-  | 'review_request';
+  | 'review_request'
+  | 'return_confirmation'
+  | 'return_admin_notification';
 
 @Injectable()
 export class EmailService {
@@ -151,6 +155,42 @@ export class EmailService {
     const { subject, html } = reviewRequestTemplate(data);
     return this.send('review_request', data.to, subject, html, {
       orderNumber: data.orderNumber,
+    });
+  }
+
+  async sendReturnConfirmation(data: {
+    to: string;
+    firstName: string;
+    orderNumber: string;
+    requestId: string;
+    type: 'WITHDRAWAL' | 'COMPLAINT';
+    items: Array<{ productName: string; quantity: number }>;
+  }) {
+    const { subject, html } = returnConfirmationTemplate(data);
+    return this.send('return_confirmation', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      requestId: data.requestId,
+    });
+  }
+
+  async sendReturnAdminNotification(data: {
+    to: string;
+    requestId: string;
+    orderNumber: string;
+    customerName: string;
+    email: string;
+    phone?: string;
+    type: 'WITHDRAWAL' | 'COMPLAINT';
+    deliveryDate?: string;
+    items: Array<{ productName: string; quantity: number }>;
+    reason?: string;
+    requestedResolution?: string;
+    bankAccount?: string;
+  }) {
+    const { subject, html } = returnAdminNotificationTemplate(data);
+    return this.send('return_admin_notification', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      requestId: data.requestId,
     });
   }
 

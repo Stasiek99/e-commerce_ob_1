@@ -70,6 +70,19 @@ enum ReviewStatus {
   REJECTED
 }
 
+enum ReturnType {
+  WITHDRAWAL
+  COMPLAINT
+}
+
+enum ReturnStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
 model User {
@@ -474,6 +487,31 @@ model Review {
   @@index([productId, status])
   @@index([userId])
   @@map("reviews")
+}
+
+// ─── Returns ─────────────────────────────────────────────────────────────────
+
+model ReturnRequest {
+  id                  String       @id @default(cuid())
+  orderNumber         String
+  email               String
+  firstName           String
+  lastName            String
+  phone               String?
+  type                ReturnType   @default(WITHDRAWAL)
+  deliveryDate        DateTime?
+  items               Json
+  reason              String?
+  requestedResolution String?
+  bankAccount         String?
+  status              ReturnStatus @default(PENDING)
+  adminNote           String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([email])
+  @@index([orderNumber])
+  @@map("return_requests")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────
