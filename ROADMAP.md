@@ -242,7 +242,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] Full SSR (if prerendering proves insufficient)
 - [x] PWA (offline catalog, push notifications)
 - [x] DHL/GLS mock modes + DPD carrier stub
-- [ ] Advanced AdminJS views (order timeline, analytics dashboard)
+- [x] Advanced AdminJS views (order timeline, analytics dashboard)
 - [x] Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel`, inline confirm UI in order detail, Polish status labels on list + detail, cancellation email (see Phase 5B)
 - [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
 - [ ] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send

@@ -3,27 +3,42 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
 import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly authService: AuthService,
+  ) {}
 
   @Get('me')
   getMe(@CurrentUser() user: User) {
     const { passwordHash, ...result } = user;
     return result;
+  }
+
+  @Throttle({ default: { ttl: 3600000, limit: 3 } })
+  @Patch('me/email')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changeEmail(@CurrentUser() user: User, @Body() dto: ChangeEmailDto) {
+    await this.authService.requestEmailChange(user.id, dto.email);
   }
 
   @Patch('me')
