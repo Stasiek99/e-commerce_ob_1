@@ -34,6 +34,7 @@ export enum CarrierCode {
   INPOST = 'INPOST',
   DHL = 'DHL',
   GLS = 'GLS',
+  DPD = 'DPD',
 }
 
 export enum DiscountType {

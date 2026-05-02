@@ -93,6 +93,7 @@ describe('OrdersService', () => {
           useValue: {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
             sendOrderCancellation: jest.fn().mockResolvedValue(undefined),
+            sendShippingNotification: jest.fn().mockResolvedValue(undefined),
             sendLowStockAlert: jest.fn().mockResolvedValue(undefined),
             sendReviewRequest: jest.fn().mockResolvedValue(undefined),
           },
@@ -521,7 +522,7 @@ describe('OrdersService', () => {
   });
 
   describe('createFromCart (coupon branches)', () => {
-    const buildTx = (overrides: { couponApply?: jest.Mock } = {}) => ({
+    const buildTx = (_overrides: { couponApply?: jest.Mock } = {}) => ({
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
@@ -783,6 +784,253 @@ describe('OrdersService', () => {
           data: expect.objectContaining({ note: expect.stringContaining('Withdrawal reason') }),
         }),
       );
+    });
+  });
+
+  describe('bulkMarkAsShipped', () => {
+    const makeOrder = (id: string, orderNumber: string, status: OrderStatus, trackingNumber?: string) => ({
+      id,
+      orderNumber,
+      status,
+      snapshotEmail: `${id}@example.com`,
+      snapshotFirstName: 'Jan',
+      carrierCode: CarrierCode.DHL,
+      shipment: trackingNumber ? { trackingNumber } : null,
+    });
+
+    it('marks PAID and PROCESSING orders as SHIPPED and returns correct counts', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.PAID, 'TRK001'),
+        makeOrder('o-2', 'ORD-002', OrderStatus.PROCESSING, 'TRK002'),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
+
+      expect(result.succeeded).toBe(2);
+      expect(result.failed).toHaveLength(0);
+    });
+
+    it('puts non-shippable status orders in failed list', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.SHIPPED),
+        makeOrder('o-2', 'ORD-002', OrderStatus.CANCELLED),
+        makeOrder('o-3', 'ORD-003', OrderStatus.DELIVERED),
+        makeOrder('o-4', 'ORD-004', OrderStatus.REFUNDED),
+        makeOrder('o-5', 'ORD-005', OrderStatus.PENDING_PAYMENT),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.bulkMarkAsShipped(['o-1', 'o-2', 'o-3', 'o-4', 'o-5']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(5);
+      expect(result.failed.map((f) => f.orderNumber)).toEqual(
+        expect.arrayContaining(['ORD-001', 'ORD-002', 'ORD-003', 'ORD-004', 'ORD-005']),
+      );
+    });
+
+    it('sends shipping notification when order has a tracking number', async () => {
+      const emailService = (service as any).emailService;
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID, 'TRK001')];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.bulkMarkAsShipped(['o-1']);
+      await Promise.resolve();
+
+      expect(emailService.sendShippingNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ trackingNumber: 'TRK001' }),
+      );
+    });
+
+    it('skips email when order has no tracking number', async () => {
+      const emailService = (service as any).emailService;
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)]; // no tracking
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.bulkMarkAsShipped(['o-1']);
+      await Promise.resolve();
+
+      expect(emailService.sendShippingNotification).not.toHaveBeenCalled();
+    });
+
+    it('adds order to failed when updateStatus throws', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.order.findUniqueOrThrow.mockRejectedValue(new Error('DB error'));
+
+      const result = await service.bulkMarkAsShipped(['o-1']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed[0]).toEqual({ orderNumber: 'ORD-001', reason: 'DB error' });
+    });
+
+    it('returns empty result for empty input', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      const result = await service.bulkMarkAsShipped([]);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(0);
+    });
+  });
+
+  describe('bulkCancel', () => {
+    const makeOrder = (
+      id: string,
+      orderNumber: string,
+      status: OrderStatus,
+      items = [{ productVariantId: 'pv-1', quantity: 2 }],
+    ) => ({
+      id,
+      orderNumber,
+      status,
+      snapshotEmail: `${id}@example.com`,
+      snapshotFirstName: 'Jan',
+      totalInCents: 10000,
+      items,
+    });
+
+    it('cancels PENDING_PAYMENT orders and restores stock inside transaction', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT)];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const stockRestored: string[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              stockRestored.push(args.where.id);
+            }),
+          },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.succeeded).toBe(1);
+      expect(result.failed).toHaveLength(0);
+      expect(stockRestored).toContain('pv-1');
+    });
+
+    it('adds PAID orders to needsRefund list', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.succeeded).toBe(1);
+      expect(result.needsRefund).toContain('ORD-001');
+    });
+
+    it('adds PROCESSING orders to needsRefund list', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PROCESSING)];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.needsRefund).toContain('ORD-001');
+    });
+
+    it('rejects non-cancellable statuses: CANCELLED, REFUNDED, SHIPPED, DELIVERED', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.CANCELLED),
+        makeOrder('o-2', 'ORD-002', OrderStatus.REFUNDED),
+        makeOrder('o-3', 'ORD-003', OrderStatus.SHIPPED),
+        makeOrder('o-4', 'ORD-004', OrderStatus.DELIVERED),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.bulkCancel(['o-1', 'o-2', 'o-3', 'o-4']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(4);
+      expect(result.needsRefund).toHaveLength(0);
+    });
+
+    it('sends cancellation email for each cancelled order', async () => {
+      const emailService = (service as any).emailService;
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT)];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.bulkCancel(['o-1']);
+      await Promise.resolve();
+
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({ orderNumber: 'ORD-001' }),
+      );
+    });
+
+    it('records OrderEvent with actor="ADMIN" by default', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT)];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      let capturedActor: string | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedActor = args.data.actor;
+            }),
+          },
+        });
+      });
+
+      await service.bulkCancel(['o-1']);
+
+      expect(capturedActor).toBe('ADMIN');
+    });
+
+    it('adds order to failed when transaction throws', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT)];
+      prisma.order.findMany.mockResolvedValue(orders);
+      prisma.$transaction.mockRejectedValue(new Error('DB unavailable'));
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed[0]).toEqual({ orderNumber: 'ORD-001', reason: 'DB unavailable' });
+    });
+
+    it('returns empty result for empty input', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      const result = await service.bulkCancel([]);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(0);
+      expect(result.needsRefund).toHaveLength(0);
     });
   });
 

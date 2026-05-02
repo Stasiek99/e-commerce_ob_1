@@ -1,0 +1,98 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosInstance } from 'axios';
+
+interface DpdShipmentPayload {
+  receiver: {
+    name: string;
+    street: string;
+    city: string;
+    postalCode: string;
+    country: string;
+    phone: string;
+    email: string;
+  };
+  weightKg: number;
+  reference: string;
+}
+
+interface DpdShipmentResult {
+  trackingNumber: string;
+  labelUrl: string;
+}
+
+@Injectable()
+export class DpdClient {
+  private readonly client: AxiosInstance;
+  private readonly senderId: string;
+  private readonly logger = new Logger(DpdClient.name);
+  private readonly mockEnabled: boolean;
+
+  constructor(configService: ConfigService) {
+    this.mockEnabled = configService.get<string>('DPD_MOCK_ENABLED') === 'true';
+
+    this.senderId = configService.getOrThrow<string>('DPD_SENDER_ID');
+
+    this.client = axios.create({
+      baseURL: 'https://cig.dpd.com.pl/services/open/v1',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${configService.getOrThrow<string>('DPD_API_KEY')}`,
+      },
+    });
+
+    if (this.mockEnabled) {
+      this.logger.warn('⚠️  MOCK DPD CLIENT ENABLED - No real shipments will be created.');
+    }
+  }
+
+  async createShipment(data: DpdShipmentPayload): Promise<DpdShipmentResult> {
+    if (this.mockEnabled) {
+      return this.mockCreateShipment(data);
+    }
+
+    const payload = {
+      shipmentDate: new Date().toISOString().split('T')[0],
+      sender: { id: this.senderId },
+      receiver: {
+        name: data.receiver.name,
+        street: data.receiver.street,
+        city: data.receiver.city,
+        postalCode: data.receiver.postalCode,
+        countryCode: data.receiver.country,
+        phone: data.receiver.phone,
+        email: data.receiver.email,
+      },
+      parcels: [
+        {
+          weight: Math.max(1, Math.round(data.weightKg * 100) / 100),
+          reference: data.reference,
+        },
+      ],
+      services: { dox: false },
+    };
+
+    const response = await this.client.post<any>('/shipment', payload);
+    const result = response.data;
+
+    this.logger.log(`DPD shipment created: ${result.trackingNumber}`);
+
+    return {
+      trackingNumber: result.trackingNumber ?? result.parcels?.[0]?.waybill ?? '',
+      labelUrl: result.labelUrl ?? result.parcels?.[0]?.labelUrl ?? '',
+    };
+  }
+
+  getTrackingUrl(trackingNumber: string): string {
+    return `https://tracktrace.dpd.com.pl/findPackage?q=${trackingNumber}`;
+  }
+
+  private mockCreateShipment(data: DpdShipmentPayload): DpdShipmentResult {
+    const trackingNumber = `MOCK_DPD_${Math.random().toString(36).substring(2, 12).toUpperCase()}`;
+    const labelUrl = `mock-label-dpd-${trackingNumber}.pdf`;
+    this.logger.log(
+      `[MOCK] DPD shipment created: tracking=${trackingNumber}, ref=${data.reference}, receiver=${data.receiver.name}`,
+    );
+    return { trackingNumber, labelUrl };
+  }
+}

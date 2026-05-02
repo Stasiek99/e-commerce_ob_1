@@ -210,7 +210,20 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Administrator\\\\Documents\\\\aromaterie\\\\e-commerce_ob_1\\\\frontend\\\\src\\\\app\\\\features\\\\account\" -Recurse)",
       "Bash(Select-Object FullName)",
       "Bash(Format-List)",
-      "PowerShell(ls *)"
+      "PowerShell(ls *)",
+      "Bash(pnpm --filter backend test -- --testPathPattern=\"checkout.integration\" --passWithNoTests)",
+      "Bash(pnpm --filter backend test -- --testPathPattern=\"orders/__tests__\" --passWithNoTests)",
+      "Bash(pnpm --filter backend test -- --passWithNoTests)",
+      "Bash(git *)",
+      "Bash(cat jest.config.js)",
+      "Bash(cat jest.config.ts)",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\(p.jest, null, 2\\)\\)\")",
+      "WebFetch(domain:blog.getbyrd.com)",
+      "WebFetch(domain:www.uke.gov.pl)",
+      "Bash(Get-ChildItem -Path \"E:\\\\repos\\\\e-commerce_ob_1\\\\backend\\\\src\\\\modules\\\\shipping\" -Recurse -File)",
+      "PowerShell($env:PYTHONIOENCODING = \"utf-8\"; python \"C:/Users/Administrator/.claude/skills/stochastic-consensus/stochastic_consensus.py\" \"What are the most valuable improvements and functionalities to implement in an AdminJS admin panel for a premium e-commerce store selling perfumes, diffusers, and body wash gels targeting the Polish market? The store uses NestJS + Prisma + PostgreSQL backend, Angular frontend, Stripe payments, InPost/DHL/GLS shipping. We are currently implementing: order timeline view \\(showing status changes with timestamps\\) and analytics dashboard. What additional advanced admin views, actions, and features should be prioritized after these?\" --agents 5 --model claude-sonnet-4-6 --output-dir .tmp/stochastic-consensus 2>&1)",
+      "Bash(pnpm --filter backend exec prisma migrate dev --name add_reorder_threshold_to_product_variant)",
+      "Bash(pnpm --filter backend exec prisma migrate dev --name add_customer_notes)"
     ]
   },
   "enabledMcpjsonServers": [
