@@ -244,7 +244,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] DHL/GLS mock modes + DPD carrier stub
 - [x] Advanced AdminJS views (order timeline, analytics dashboard)
 - [x] Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel`, inline confirm UI in order detail, Polish status labels on list + detail, cancellation email (see Phase 5B)
-- [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
+- [x] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
 - [ ] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send
 - [ ] Magic Link login — passwordless flow reusing the `EmailVerificationToken` infrastructure; issue a short-lived token, exchange for a session on click
 - [ ] Partial order cancellation — cancel individual line items rather than the whole order; requires item-selection UI, partial Stripe refund amount calculation, and per-item stock restoration

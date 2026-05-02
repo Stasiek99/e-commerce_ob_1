@@ -104,6 +104,9 @@ export const envValidationSchema = Joi.object({
   SELLER_POSTAL_CODE: requiredInProd(Joi.string(), ''),
   INVOICE_FONT_PATH: Joi.string().optional(),
 
+  // ── Redis / BullMQ ──
+  REDIS_URL: requiredInProd(Joi.string().uri(), 'redis://localhost:6379'),
+
   // ── App ──
   PORT: Joi.number().default(3000),
   // Comma-separated list of allowed CORS origins. Required in production so
