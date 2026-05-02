@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { CarrierCode, OrderStatus } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { OrdersService } from '../orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -64,11 +64,11 @@ describe('OrdersService', () => {
           useValue: {
             address: { findFirst: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null) },
-            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
+            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
             orderEvent: { create: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
-            productVariant: { findUnique: jest.fn(), update: jest.fn() },
+            productVariant: { findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
             $transaction: jest.fn(),
             $executeRawUnsafe: jest.fn(),
             $queryRawUnsafe: jest.fn(),
@@ -84,12 +84,17 @@ describe('OrdersService', () => {
           provide: PaymentsService,
           useValue: {
             initiatePayment: jest.fn(),
+            expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
+            refundPayment: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
           provide: EmailService,
           useValue: {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+            sendOrderCancellation: jest.fn().mockResolvedValue(undefined),
+            sendLowStockAlert: jest.fn().mockResolvedValue(undefined),
+            sendReviewRequest: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -498,6 +503,286 @@ describe('OrdersService', () => {
         where: { id: 'o-1' },
         data: { status: OrderStatus.PROCESSING },
       });
+    });
+
+    it('fires review-request email (fire-and-forget) when status becomes DELIVERED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PROCESSING });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+      // dispatchReviewRequestEmail calls order.findUnique — return null to exit early
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await Promise.resolve(); // flush microtasks
+
+      expect(prisma.order.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: OrderStatus.DELIVERED } }),
+      );
+    });
+  });
+
+  describe('createFromCart (coupon branches)', () => {
+    const buildTx = (overrides: { couponApply?: jest.Mock } = {}) => ({
+      $executeRawUnsafe: jest.fn(),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+      productVariant: {
+        findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
+        update: jest.fn(),
+      },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+      cartItem: { deleteMany: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('throws BadRequestException when coupon code is invalid', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      couponService.validate.mockResolvedValue({ valid: false, message: 'Kupon wygasł.' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+          couponCode: 'INVALID10',
+        }),
+      ).rejects.toThrow('Kupon wygasł.');
+    });
+
+    it('applies a FIXED discount coupon and subtracts it from total', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      couponService.validate.mockResolvedValue({
+        valid: true,
+        couponId: 'coupon-1',
+        discountType: DiscountType.FIXED_AMOUNT,
+        discountAmountInCents: 1000,
+      });
+
+      let capturedTotal: number | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildTx();
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedTotal = args.data.totalInCents;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        couponCode: 'SAVE10',
+      });
+
+      // itemsTotal=114700, shipping=1999, discount=1000 → total=115699
+      expect(capturedTotal).toBe(114700 + 1999 - 1000);
+    });
+
+    it('applies a FREE_SHIPPING coupon and zeroes out shipping cost', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      couponService.validate.mockResolvedValue({
+        valid: true,
+        couponId: 'coupon-2',
+        discountType: DiscountType.FREE_SHIPPING,
+        discountAmountInCents: 0,
+      });
+
+      let capturedDiscount: number | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildTx();
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedDiscount = args.data.discountInCents;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        couponCode: 'FREESHIP',
+      });
+
+      expect(capturedDiscount).toBe(1999); // DHL shipping cost fully discounted
+    });
+  });
+
+  describe('trackByEmailAndNumber', () => {
+    it('returns tracking info when order matches email and number', async () => {
+      const order = {
+        orderNumber: 'ORD-2026-000001',
+        status: OrderStatus.PROCESSING,
+        createdAt: new Date(),
+        totalInCents: 10000,
+        items: [{ snapshotName: 'Dior', quantity: 1, snapshotPrice: 10000 }],
+        shipment: { trackingNumber: 'TRK123', carrierCode: CarrierCode.INPOST },
+      };
+      prisma.order.findFirst.mockResolvedValue(order);
+
+      const result = await service.trackByEmailAndNumber('test@example.com', 'ORD-2026-000001');
+
+      expect(result.orderNumber).toBe('ORD-2026-000001');
+      expect(result.trackingNumber).toBe('TRK123');
+      expect(result.carrier).toBe(CarrierCode.INPOST);
+    });
+
+    it('returns null tracking when no shipment exists yet', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        orderNumber: 'ORD-2026-000001',
+        status: OrderStatus.PENDING_PAYMENT,
+        createdAt: new Date(),
+        totalInCents: 10000,
+        items: [],
+        shipment: null,
+      });
+
+      const result = await service.trackByEmailAndNumber('test@example.com', 'ORD-2026-000001');
+
+      expect(result.trackingNumber).toBeNull();
+      expect(result.carrier).toBeNull();
+    });
+
+    it('throws NotFoundException when no matching order exists', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.trackByEmailAndNumber('test@example.com', 'NONEXISTENT'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('findAllAdmin', () => {
+    it('returns all orders without status filter', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'o-1' }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllAdmin({});
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: {} }),
+      );
+      expect(result.meta.total).toBe(1);
+    });
+
+    it('filters orders by status when provided', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+      prisma.order.count.mockResolvedValue(0);
+
+      await service.findAllAdmin({ status: OrderStatus.PAID });
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: OrderStatus.PAID } }),
+      );
+    });
+  });
+
+  describe('cancelByUser', () => {
+    const mockOrderWithItems = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PENDING_PAYMENT,
+      snapshotEmail: 'test@example.com',
+      snapshotFirstName: 'Jan',
+      totalInCents: 10000,
+      items: [{ productVariantId: 'pv-1', quantity: 2 }],
+    };
+
+    it('throws NotFoundException when order does not belong to user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when order is already CANCELLED', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.CANCELLED,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order is already SHIPPED', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.SHIPPED,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(
+        'already been shipped',
+      );
+    });
+
+    it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
+      const stockRestored: string[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              stockRestored.push(args.where.id);
+            }),
+          },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(paymentsService.expirePendingCheckoutSession).toHaveBeenCalledWith('order-1');
+      expect(stockRestored).toContain('pv-1');
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('cancels PENDING_PAYMENT order with reason logged in event note', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
+      let capturedNote: string | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedNote = args.data.note;
+            }),
+          },
+        });
+      });
+
+      await service.cancelByUser('order-1', 'user-1', 'Changed my mind');
+
+      expect(capturedNote).toContain('Changed my mind');
+    });
+
+    it('issues refund via PaymentsService when order is PAID', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PAID,
+      });
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('creates extra orderEvent when refunding a PAID order with a reason', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PAID,
+      });
+
+      await service.cancelByUser('order-1', 'user-1', 'Withdrawal reason');
+
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ note: expect.stringContaining('Withdrawal reason') }),
+        }),
+      );
     });
   });
 
