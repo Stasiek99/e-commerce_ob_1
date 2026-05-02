@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
+import { PwaInstallService } from '../../../core/services/pwa-install.service';
 
 @Component({
   selector: 'app-dashboard',
@@ -30,6 +31,22 @@ import { ToastService } from '../../../core/services/toast.service';
           <button tuiButton appearance="outline" size="s" type="button"
                   [disabled]="resending" (click)="resend()">
             {{ resending ? 'Wysyłanie…' : 'Wyślij ponownie' }}
+          </button>
+        </div>
+      }
+
+      @if (pwa.canInstall()) {
+        <div class="install-banner">
+          <div class="install-banner__icon-wrap">
+            <tui-icon icon="@tui.smartphone" class="install-banner__icon" />
+          </div>
+          <div class="install-banner__body">
+            <strong>Zainstaluj aplikację Aromaterie</strong>
+            <span>Przeglądaj szybciej bez przeglądarki — prosto z ekranu głównego.</span>
+          </div>
+          <button tuiButton appearance="accent" size="s" type="button"
+                  [disabled]="installing" (click)="install()">
+            {{ installing ? 'Instalowanie…' : 'Zainstaluj' }}
           </button>
         </div>
       }
@@ -78,6 +95,31 @@ import { ToastService } from '../../../core/services/toast.service';
     .verify-banner__body strong { color: #92400e; }
     .verify-banner__body span { color: #78350f; }
 
+    .install-banner {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      margin-bottom: 28px;
+      background: linear-gradient(135deg, rgba(201, 169, 110, 0.10) 0%, rgba(201, 169, 110, 0.04) 100%);
+      border: 1px solid rgba(201, 169, 110, 0.35);
+      border-radius: var(--border-radius-md);
+    }
+    .install-banner__icon-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      background: rgba(201, 169, 110, 0.15);
+      border-radius: 10px;
+      flex-shrink: 0;
+    }
+    .install-banner__icon { font-size: 20px; color: var(--color-accent); }
+    .install-banner__body { display: flex; flex-direction: column; gap: 2px; flex: 1; font-size: 14px; }
+    .install-banner__body strong { color: var(--color-primary); font-weight: 600; }
+    .install-banner__body span { color: var(--color-secondary); }
+
     .grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -114,14 +156,19 @@ import { ToastService } from '../../../core/services/toast.service';
     @media (max-width: 768px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 16px; } }
     @media (max-width: 480px) { .grid { grid-template-columns: 1fr; gap: 12px; } }
     @media (max-width: 480px) { h1 { font-size: 22px; } }
-    @media (max-width: 640px) { .verify-banner { flex-wrap: wrap; } }
+    @media (max-width: 640px) {
+      .verify-banner { flex-wrap: wrap; }
+      .install-banner { flex-wrap: wrap; }
+    }
   `],
 })
 export class DashboardComponent {
   private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
+  readonly pwa = inject(PwaInstallService);
 
   resending = false;
+  installing = false;
 
   firstName(): string {
     return this.auth.currentUser()?.firstName || 'Użytkowniku';
@@ -143,6 +190,16 @@ export class DashboardComponent {
         this.resending = false;
       },
     });
+  }
+
+  async install(): Promise<void> {
+    this.installing = true;
+    const outcome = await this.pwa.promptInstall();
+    this.installing = false;
+
+    if (outcome === 'accepted') {
+      this.toast.success('Aplikacja Aromaterie została zainstalowana!');
+    }
   }
 
   logout(): void {
