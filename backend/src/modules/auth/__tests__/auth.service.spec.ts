@@ -7,6 +7,7 @@ import { Role } from '@prisma/client';
 import { AuthService } from '../auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../../users/users.service';
+import { EmailService } from '../../email/email.service';
 
 const mockUser = {
   id: 'user-1',
@@ -62,6 +63,13 @@ describe('AuthService', () => {
           provide: ConfigService,
           useValue: {
             get: jest.fn().mockReturnValue('7d'),
+          },
+        },
+        {
+          provide: EmailService,
+          useValue: {
+            sendEmailVerification: jest.fn().mockResolvedValue(undefined),
+            sendPasswordReset: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],

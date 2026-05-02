@@ -23,6 +23,7 @@ export enum PaymentStatus {
 export enum ShipmentStatus {
   LABEL_PENDING = 'LABEL_PENDING',
   LABEL_GENERATED = 'LABEL_GENERATED',
+  LABEL_ERROR = 'LABEL_ERROR',
   IN_TRANSIT = 'IN_TRANSIT',
   DELIVERED = 'DELIVERED',
   FAILED = 'FAILED',
@@ -49,4 +50,23 @@ export enum CouponType {
   WIN_BACK = 'WIN_BACK',
   SUBSCRIPTION = 'SUBSCRIPTION',
   CUSTOM = 'CUSTOM',
+}
+
+export enum ReviewStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
+export enum ReturnType {
+  WITHDRAWAL = 'WITHDRAWAL',
+  COMPLAINT = 'COMPLAINT',
+}
+
+export enum ReturnStatus {
+  PENDING = 'PENDING',
+  IN_REVIEW = 'IN_REVIEW',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  COMPLETED = 'COMPLETED',
 }

@@ -5,6 +5,8 @@
  *   - PrismaService  (database)
  *   - StripeClient   (Stripe API)
  *   - EmailService   (Resend)
+ *   - InvoiceService (PDF generation + Supabase upload)
+ *   - CouponService  (discount validation)
  *   - ConfigService  (env vars)
  */
 import { Test, TestingModule } from '@nestjs/testing';
@@ -18,6 +20,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../../payments/stripe.client';
 import { EmailService } from '../../email/email.service';
 import { InvoiceService } from '../../invoice/invoice.service';
+import { CouponService } from '../../coupons/coupon.service';
 import { ConfigService } from '@nestjs/config';
 
 // Fixed IDs shared across the test scenarios
@@ -151,6 +154,7 @@ describe('Checkout Integration Flow', () => {
           useValue: {
             cart: { findFirst: jest.fn() },
             cartItem: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), deleteMany: jest.fn() },
+            user: { findUnique: jest.fn().mockResolvedValue(null) },
             productVariant: { findUnique: jest.fn() },
             order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -172,12 +176,20 @@ describe('Checkout Integration Flow', () => {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+            sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
           provide: InvoiceService,
           useValue: {
             processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from('') }),
+          },
+        },
+        {
+          provide: CouponService,
+          useValue: {
+            validate: jest.fn().mockResolvedValue({ valid: false }),
+            applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
           },
         },
         {

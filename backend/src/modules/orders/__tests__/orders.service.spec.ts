@@ -1,11 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { CarrierCode, OrderStatus } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { OrdersService } from '../orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../../cart/cart.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { EmailService } from '../../email/email.service';
+import { CouponService } from '../../coupons/coupon.service';
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -61,6 +63,7 @@ describe('OrdersService', () => {
           provide: PrismaService,
           useValue: {
             address: { findFirst: jest.fn() },
+            user: { findUnique: jest.fn().mockResolvedValue(null) },
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
             orderEvent: { create: jest.fn() },
             cart: { findFirst: jest.fn() },
@@ -87,6 +90,20 @@ describe('OrdersService', () => {
           provide: EmailService,
           useValue: {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: CouponService,
+          useValue: {
+            validate: jest.fn().mockResolvedValue({ valid: false }),
+            applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn().mockReturnValue(undefined),
+            getOrThrow: jest.fn().mockReturnValue('https://example.com'),
           },
         },
       ],
