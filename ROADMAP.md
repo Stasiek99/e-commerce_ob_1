@@ -240,8 +240,8 @@ Everything in this phase MUST be done before the first real order.
 - [x] Product reviews & ratings
 - [ ] i18n/localization (if expanding beyond Poland)
 - [x] Full SSR (if prerendering proves insufficient)
-- [ ] PWA (offline catalog, push notifications)
-- [ ] DHL/GLS mock modes
+- [x] PWA (offline catalog, push notifications)
+- [x] DHL/GLS mock modes + DPD carrier stub
 - [ ] Advanced AdminJS views (order timeline, analytics dashboard)
 - [x] Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel`, inline confirm UI in order detail, Polish status labels on list + detail, cancellation email (see Phase 5B)
 - [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)

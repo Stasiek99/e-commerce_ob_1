@@ -6,11 +6,13 @@ import { StorageService } from '../storage/storage.service';
 import { InpostClient } from './carriers/inpost.client';
 import { DhlClient } from './carriers/dhl.client';
 import { GlsClient } from './carriers/gls.client';
+import { DpdClient } from './carriers/dpd.client';
 
 const CARRIER_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.INPOST]: 'InPost',
   [CarrierCode.DHL]: 'DHL Express',
   [CarrierCode.GLS]: 'GLS',
+  [CarrierCode.DPD]: 'DPD',
 };
 
 const SHIPPING_RATES = [
@@ -19,6 +21,13 @@ const SHIPPING_RATES = [
     name: 'InPost Paczkomat',
     description: 'Dostawa do paczkomatu w 1-2 dni robocze',
     priceInCents: 1499,
+    estimatedDays: '1-2 dni robocze',
+  },
+  {
+    carrier: CarrierCode.DPD,
+    name: 'DPD Kurier',
+    description: 'Dostawa do drzwi w 1-2 dni robocze',
+    priceInCents: 1599,
     estimatedDays: '1-2 dni robocze',
   },
   {
@@ -48,6 +57,7 @@ export class ShippingService {
     private readonly inpost: InpostClient,
     private readonly dhl: DhlClient,
     private readonly gls: GlsClient,
+    private readonly dpd: DpdClient,
   ) {}
 
   getShippingRates() {
@@ -67,6 +77,10 @@ export class ShippingService {
     }, 0.5);
 
     const receiverName = `${order.snapshotFirstName} ${order.snapshotLastName}`;
+
+    if (!Object.values(CarrierCode).includes(order.carrierCode)) {
+      throw new BadRequestException(`Unsupported carrier: ${order.carrierCode}`);
+    }
 
     try {
       let trackingNumber: string;
@@ -138,8 +152,25 @@ export class ShippingService {
           rawResponse = result;
           break;
         }
-        default:
-          throw new BadRequestException(`Unsupported carrier: ${order.carrierCode}`);
+        case CarrierCode.DPD: {
+          const result = await this.dpd.createShipment({
+            receiver: {
+              name: receiverName,
+              street: order.snapshotStreet,
+              city: order.snapshotCity,
+              postalCode: order.snapshotPostalCode,
+              country: order.snapshotCountry,
+              phone: order.snapshotPhone,
+              email: order.snapshotEmail,
+            },
+            weightKg: totalWeightKg,
+            reference: order.orderNumber,
+          });
+          trackingNumber = result.trackingNumber;
+          labelUrl = result.labelUrl;
+          rawResponse = result;
+          break;
+        }
       }
 
       const shipment = await this.prisma.shipment.upsert({
@@ -215,6 +246,8 @@ export class ShippingService {
         return this.dhl.getTrackingUrl(trackingNumber);
       case CarrierCode.GLS:
         return this.gls.getTrackingUrl(trackingNumber);
+      case CarrierCode.DPD:
+        return this.dpd.getTrackingUrl(trackingNumber);
       default:
         throw new BadRequestException(`Unsupported carrier: ${carrier}`);
     }

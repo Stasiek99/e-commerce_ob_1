@@ -26,8 +26,11 @@ export class DhlClient {
   private readonly client: AxiosInstance;
   private readonly accountNumber: string;
   private readonly logger = new Logger(DhlClient.name);
+  private readonly mockEnabled: boolean;
 
   constructor(configService: ConfigService) {
+    this.mockEnabled = configService.get<string>('DHL_MOCK_ENABLED') === 'true';
+
     const sandbox = configService.get<string>('DHL_SANDBOX') === 'true';
     const baseURL = sandbox
       ? 'https://api-sandbox.dhl.com/mydhlapi'
@@ -43,9 +46,17 @@ export class DhlClient {
       },
       headers: { 'Content-Type': 'application/json' },
     });
+
+    if (this.mockEnabled) {
+      this.logger.warn('⚠️  MOCK DHL CLIENT ENABLED - No real shipments will be created.');
+    }
   }
 
   async createShipment(data: DhlShipmentPayload): Promise<DhlShipmentResult> {
+    if (this.mockEnabled) {
+      return this.mockCreateShipment(data);
+    }
+
     const now = new Date();
     const plannedShipping = now.toISOString().split('T')[0];
 
@@ -99,5 +110,14 @@ export class DhlClient {
 
   getTrackingUrl(trackingNumber: string): string {
     return `https://www.dhl.com/pl-pl/home/tracking/tracking-express.html?submit=1&tracking-id=${trackingNumber}`;
+  }
+
+  private mockCreateShipment(data: DhlShipmentPayload): DhlShipmentResult {
+    const trackingNumber = `MOCK_DHL_${Math.random().toString(36).substring(2, 12).toUpperCase()}`;
+    const labelUrl = `mock-label-dhl-${trackingNumber}.pdf`;
+    this.logger.log(
+      `[MOCK] DHL shipment created: tracking=${trackingNumber}, receiver=${data.receiver.name}`,
+    );
+    return { trackingNumber, labelUrl };
   }
 }

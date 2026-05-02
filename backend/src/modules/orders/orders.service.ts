@@ -30,6 +30,7 @@ const SHIPPING_RATES: Record<CarrierCode, number> = {
   [CarrierCode.INPOST]: 1499,  // 14,99 zł
   [CarrierCode.DHL]: 1999,     // 19,99 zł
   [CarrierCode.GLS]: 1799,     // 17,99 zł
+  [CarrierCode.DPD]: 1599,     // 15,99 zł
 };
 
 @Injectable()

@@ -46,6 +46,7 @@ enum CarrierCode {
   INPOST
   DHL
   GLS
+  DPD
 }
 
 enum DiscountType {
