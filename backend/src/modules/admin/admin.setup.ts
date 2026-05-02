@@ -5,6 +5,7 @@ import * as session from 'express-session';
 import connectPgSimple = require('connect-pg-simple');
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceService } from '../invoice/invoice.service';
+import { ShippingService } from '../shipping/shipping.service';
 
 const logger = new Logger('AdminJS');
 
@@ -27,6 +28,7 @@ export async function setupAdmin(
   app: NestExpressApplication,
   prisma: PrismaService,
   invoiceService: InvoiceService,
+  shippingService: ShippingService,
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
@@ -153,6 +155,61 @@ export async function setupAdmin(
                   redirectUrl: invoiceUrl,
                   record: record.toJSON(),
                 };
+              },
+            },
+            generateLabel: {
+              actionType: 'record',
+              icon: 'Truck',
+              label: 'Generuj etykietę',
+              // Only relevant for orders that are in an active fulfillment state
+              isVisible: (context: any) => {
+                const status = context.record?.params?.status;
+                return !['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED', 'DELIVERED'].includes(status);
+              },
+              handler: async (_request: any, _response: any, context: any) => {
+                const { record } = context;
+                const orderId: string = record.params.id;
+
+                try {
+                  // If a label was already generated, redirect to the existing URL rather
+                  // than hitting the carrier API again.
+                  const existing = await prisma.shipment.findUnique({ where: { orderId } });
+                  if (existing?.status === 'LABEL_GENERATED' && existing.labelUrl) {
+                    if (existing.labelUrl.startsWith('http')) {
+                      return { redirectUrl: existing.labelUrl, record: record.toJSON() };
+                    }
+                    return {
+                      record: record.toJSON(),
+                      notice: {
+                        message: `Etykieta już wygenerowana (tryb mock). Nr śledzenia: ${existing.trackingNumber ?? 'N/A'}`,
+                        type: 'success',
+                      },
+                    };
+                  }
+
+                  const shipment = await shippingService.generateLabel(orderId);
+
+                  if (shipment.labelUrl?.startsWith('http')) {
+                    return { redirectUrl: shipment.labelUrl, record: record.toJSON() };
+                  }
+
+                  // Mock mode — no real PDF URL, just surface the tracking number
+                  return {
+                    record: record.toJSON(),
+                    notice: {
+                      message: `Etykieta wygenerowana (tryb mock). Nr śledzenia: ${shipment.trackingNumber ?? 'N/A'}`,
+                      type: 'success',
+                    },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: {
+                      message: `Błąd generowania etykiety: ${(err as Error).message}`,
+                      type: 'error',
+                    },
+                  };
+                }
               },
             },
           },
