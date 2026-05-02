@@ -11,6 +11,10 @@ import { emailVerificationTemplate } from './templates/email-verification.templa
 import { orderCancellationTemplate } from './templates/order-cancellation.template';
 import { lowStockAlertTemplate } from './templates/low-stock-alert.template';
 import { newOrderNotificationTemplate } from './templates/new-order-notification.template';
+import { backInStockTemplate } from './templates/back-in-stock.template';
+import { reviewRequestTemplate } from './templates/review-request.template';
+import { returnConfirmationTemplate } from './templates/return-confirmation.template';
+import { returnAdminNotificationTemplate } from './templates/return-admin-notification.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -21,7 +25,11 @@ type EmailKind =
   | 'email_verification'
   | 'order_cancellation'
   | 'low_stock_alert'
-  | 'new_order_notification';
+  | 'new_order_notification'
+  | 'back_in_stock'
+  | 'review_request'
+  | 'return_confirmation'
+  | 'return_admin_notification';
 
 @Injectable()
 export class EmailService {
@@ -125,6 +133,65 @@ export class EmailService {
   }) {
     const { subject, html } = lowStockAlertTemplate(data);
     return this.send('low_stock_alert', data.to, subject, html, { orderNumber: data.orderNumber });
+  }
+
+  async sendBackInStock(data: {
+    to: string;
+    firstName: string;
+    productName: string;
+    variantLabel: string;
+    productUrl: string;
+  }) {
+    const { subject, html } = backInStockTemplate(data);
+    return this.send('back_in_stock', data.to, subject, html, { productName: data.productName });
+  }
+
+  async sendReviewRequest(data: {
+    to: string;
+    firstName: string;
+    orderNumber: string;
+    products: Array<{ name: string; imageUrl?: string; reviewUrl: string }>;
+  }) {
+    const { subject, html } = reviewRequestTemplate(data);
+    return this.send('review_request', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+    });
+  }
+
+  async sendReturnConfirmation(data: {
+    to: string;
+    firstName: string;
+    orderNumber: string;
+    requestId: string;
+    type: 'WITHDRAWAL' | 'COMPLAINT';
+    items: Array<{ productName: string; quantity: number }>;
+  }) {
+    const { subject, html } = returnConfirmationTemplate(data);
+    return this.send('return_confirmation', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      requestId: data.requestId,
+    });
+  }
+
+  async sendReturnAdminNotification(data: {
+    to: string;
+    requestId: string;
+    orderNumber: string;
+    customerName: string;
+    email: string;
+    phone?: string;
+    type: 'WITHDRAWAL' | 'COMPLAINT';
+    deliveryDate?: string;
+    items: Array<{ productName: string; quantity: number }>;
+    reason?: string;
+    requestedResolution?: string;
+    bankAccount?: string;
+  }) {
+    const { subject, html } = returnAdminNotificationTemplate(data);
+    return this.send('return_admin_notification', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      requestId: data.requestId,
+    });
   }
 
   async sendShippingNotification(data: {

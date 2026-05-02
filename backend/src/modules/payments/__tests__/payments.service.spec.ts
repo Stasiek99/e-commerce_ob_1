@@ -99,6 +99,7 @@ describe('PaymentsService', () => {
           useValue: {
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+            sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -463,7 +464,7 @@ describe('PaymentsService', () => {
 
       await service.refundPayment('order-1');
 
-      expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123');
+      expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123', 'order-1');
       expect(stockRestored).toContain('pv-1');
     });
   });

@@ -22,6 +22,10 @@ import { ShippingModule } from './modules/shipping/shipping.module';
 import { EmailModule } from './modules/email/email.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { CouponModule } from './modules/coupons/coupon.module';
+import { WishlistModule } from './modules/wishlist/wishlist.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
+import { ReturnsModule } from './modules/returns/returns.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 
@@ -60,6 +64,10 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
     CategoriesModule,
     ProductsModule,
     CartModule,
+    CouponModule,
+    WishlistModule,
+    ReviewsModule,
+    ReturnsModule,
     OrdersModule,
     PaymentsModule,
     ShippingModule,

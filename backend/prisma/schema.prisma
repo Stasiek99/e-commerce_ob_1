@@ -48,6 +48,41 @@ enum CarrierCode {
   GLS
 }
 
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+}
+
+enum CouponType {
+  WELCOME
+  BIRTHDAY
+  CART_ABANDONMENT
+  LOYALTY
+  WIN_BACK
+  SUBSCRIPTION
+  CUSTOM
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ReturnType {
+  WITHDRAWAL
+  COMPLAINT
+}
+
+enum ReturnStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
 model User {
@@ -70,6 +105,8 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   carts                   Cart[]
+  wishlistItems           WishlistItem[]
+  reviews                 Review[]
 
   @@map("users")
 }
@@ -166,8 +203,13 @@ model Product {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  variants ProductVariant[]
-  images   ProductImage[]
+  reviewCount  Int     @default(0)
+  avgRating    Float?
+
+  variants      ProductVariant[]
+  images        ProductImage[]
+  wishlistItems WishlistItem[]
+  reviews       Review[]
 
   @@map("products")
 }
@@ -264,6 +306,10 @@ model Order {
   discountInCents     Int         @default(0)
   totalInCents        Int
 
+  couponId   String?
+  coupon     Coupon? @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  couponCode String?
+
   carrierCode      CarrierCode
   inpostLockerCode String?
   notes            String?
@@ -280,6 +326,8 @@ model Order {
   payment  Payment?
   shipment Shipment?
   events   OrderEvent[]
+  couponUse CouponUse?
+  reviews   Review[]
 
   @@map("orders")
 }
@@ -358,6 +406,112 @@ model OrderEvent {
 
   @@index([orderId])
   @@map("order_events")
+}
+
+// ─── Wishlist ────────────────────────────────────────────────────────────────
+
+model WishlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  notifyOnRestock Boolean  @default(false)
+  addedAt         DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@map("wishlist_items")
+}
+
+// ─── Coupons ─────────────────────────────────────────────────────────────────
+
+model Coupon {
+  id                 String       @id @default(uuid())
+  code               String       @unique
+  discountType       DiscountType
+  value              Int
+  couponType         CouponType   @default(CUSTOM)
+  minSpendInCents    Int?
+  maxUsesTotal       Int?
+  maxUsesPerUser     Int?
+  currentUses        Int          @default(0)
+  isActive           Boolean      @default(true)
+  startsAt           DateTime?
+  expiresAt          DateTime?
+  excludedProductIds String[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  uses   CouponUse[]
+  orders Order[]
+
+  @@map("coupons")
+}
+
+model CouponUse {
+  id                     String   @id @default(uuid())
+  couponId               String
+  coupon                 Coupon   @relation(fields: [couponId], references: [id])
+  orderId                String   @unique
+  order                  Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId                 String?
+  discountAppliedInCents Int
+  createdAt              DateTime @default(now())
+
+  @@index([couponId])
+  @@index([userId])
+  @@map("coupon_uses")
+}
+
+// ─── Reviews ─────────────────────────────────────────────────────────────────
+
+model Review {
+  id           String       @id @default(uuid())
+  productId    String
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId      String?
+  order        Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  rating       Int
+  title        String?
+  body         String?
+  status       ReviewStatus @default(PENDING)
+  adminReply   String?
+  helpfulCount Int          @default(0)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([userId, productId])
+  @@index([productId, status])
+  @@index([userId])
+  @@map("reviews")
+}
+
+// ─── Returns ─────────────────────────────────────────────────────────────────
+
+model ReturnRequest {
+  id                  String       @id @default(cuid())
+  orderNumber         String
+  email               String
+  firstName           String
+  lastName            String
+  phone               String?
+  type                ReturnType   @default(WITHDRAWAL)
+  deliveryDate        DateTime?
+  items               Json
+  reason              String?
+  requestedResolution String?
+  bankAccount         String?
+  status              ReturnStatus @default(PENDING)
+  adminNote           String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([email])
+  @@index([orderNumber])
+  @@map("return_requests")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────

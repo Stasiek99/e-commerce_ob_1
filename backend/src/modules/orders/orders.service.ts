@@ -9,7 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
 import { EmailService } from '../email/email.service';
-import { CarrierCode, OrderStatus } from '@prisma/client';
+import { CouponService } from '../coupons/coupon.service';
+import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 
 const LOW_STOCK_THRESHOLD = 2;
 
@@ -40,6 +41,7 @@ export class OrdersService {
     private readonly cartService: CartService,
     private readonly paymentsService: PaymentsService,
     private readonly emailService: EmailService,
+    private readonly couponService: CouponService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -65,6 +67,7 @@ export class OrdersService {
       termsVersion?: string;
       termsAcceptedAt?: string;
       nip?: string;
+      couponCode?: string;
     },
   ) {
     let cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -103,7 +106,32 @@ export class OrdersService {
 
     const shippingCostInCents = SHIPPING_RATES[dto.carrierCode];
     const itemsTotalInCents = cart.totalInCents;
-    const totalInCents = itemsTotalInCents + shippingCostInCents;
+
+    // Resolve coupon discount before entering the transaction
+    let discountInCents = 0;
+    let resolvedCouponId: string | null = null;
+    const resolvedCouponCode = dto.couponCode ? dto.couponCode.trim().toUpperCase() : null;
+
+    if (resolvedCouponCode) {
+      const variantIds = cart.items.map((i: CartItem) => i.productVariantId);
+      const couponResult = await this.couponService.validate(
+        resolvedCouponCode,
+        itemsTotalInCents,
+        userId,
+        variantIds,
+      );
+      if (!couponResult.valid) {
+        throw new BadRequestException(couponResult.message ?? 'Nieprawidłowy kod rabatowy.');
+      }
+      if (couponResult.discountType === DiscountType.FREE_SHIPPING) {
+        discountInCents = shippingCostInCents;
+      } else {
+        discountInCents = couponResult.discountAmountInCents ?? 0;
+      }
+      resolvedCouponId = couponResult.couponId!;
+    }
+
+    const totalInCents = Math.max(0, itemsTotalInCents + shippingCostInCents - discountInCents);
 
     // Resolve NIP: DTO value takes priority, else fall back to user's stored NIP
     let snapshotNip: string | null = dto.nip ?? null;
@@ -154,7 +182,10 @@ export class OrdersService {
           inpostLockerCode: dto.inpostLockerCode,
           itemsTotalInCents,
           shippingCostInCents,
+          discountInCents,
           totalInCents,
+          ...(resolvedCouponId && { couponId: resolvedCouponId }),
+          ...(resolvedCouponCode && { couponCode: resolvedCouponCode }),
           notes: dto.notes,
           termsVersion: dto.termsVersion,
           termsAcceptedAt: dto.termsAcceptedAt ? new Date(dto.termsAcceptedAt) : undefined,
@@ -169,6 +200,17 @@ export class OrdersService {
           },
         },
       });
+
+      // Record coupon usage inside the transaction (TOCTOU-safe)
+      if (resolvedCouponId) {
+        await this.couponService.applyInsideTransaction(
+          tx,
+          resolvedCouponId,
+          newOrder.id,
+          userId,
+          discountInCents,
+        );
+      }
 
       // Clear cart inside the transaction so it rolls back if payment init fails
       const cartRecord = await tx.cart.findFirst({
@@ -368,12 +410,68 @@ export class OrdersService {
       where: { id },
       select: { status: true },
     });
-    return this.prisma.$transaction([
+    await this.prisma.$transaction([
       this.prisma.order.update({ where: { id }, data: { status } }),
       this.prisma.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       }),
     ]);
+
+    if (status === OrderStatus.DELIVERED) {
+      this.dispatchReviewRequestEmail(id).catch(() => undefined);
+    }
+  }
+
+  private async dispatchReviewRequestEmail(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        snapshotEmail: true,
+        snapshotFirstName: true,
+        items: {
+          include: {
+            productVariant: {
+              include: {
+                product: {
+                  select: {
+                    name: true,
+                    slug: true,
+                    images: { where: { isPrimary: true }, take: 1 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) return;
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+
+    // Deduplicate products (one variant per unique product)
+    const seen = new Set<string>();
+    const products = order.items
+      .filter((item) => {
+        const slug = item.productVariant.product.slug;
+        if (seen.has(slug)) return false;
+        seen.add(slug);
+        return true;
+      })
+      .map((item) => ({
+        name: item.productVariant.product.name,
+        imageUrl: item.productVariant.product.images[0]?.url,
+        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1`,
+      }));
+
+    await this.emailService.sendReviewRequest({
+      to: order.snapshotEmail,
+      firstName: order.snapshotFirstName,
+      orderNumber: order.orderNumber,
+      products,
+    });
   }
 
   private async sendStockAlertIfNeeded(
@@ -414,7 +512,7 @@ export class OrdersService {
    * This is race-condition-safe — each call gets a unique incrementing value.
    */
   private async generateOrderNumber(
-    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
+    tx: Prisma.TransactionClient,
   ): Promise<string> {
     const year = new Date().getFullYear();
 

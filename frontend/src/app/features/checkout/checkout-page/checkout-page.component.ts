@@ -1,12 +1,13 @@
-import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
-import { TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
 import { getCountries } from 'libphonenumber-js/min';
@@ -27,6 +28,12 @@ const CARRIERS = [
   { code: CarrierCode.DHL, name: 'DHL Kurier', price: 1999, desc: 'Dostawa pod drzwi 1-2 dni' },
   { code: CarrierCode.GLS, name: 'GLS Kurier', price: 1799, desc: 'Dostawa pod drzwi 2-3 dni' },
 ];
+
+interface AppliedCoupon {
+  code: string;
+  discountAmountInCents: number;
+  isFreeShipping: boolean;
+}
 
 @Component({
   selector: 'app-checkout-page',
@@ -75,7 +82,6 @@ const CARRIERS = [
             <form
               tuiCardLarge
               tuiForm=""
-              appearance="elevated"
               class="checkout-card addr-form"
               [formGroup]="addressForm"
               (ngSubmit)="onNext()"
@@ -187,15 +193,15 @@ const CARRIERS = [
               <!-- Phone + email (2-column) -->
               <div class="addr-row-2">
                 <div>
-                  <tui-input-phone-international
-                    formControlName="phone"
-                    [countries]="countries"
-                    [countryIsoCode]="countryIsoCode"
-                    [countrySearch]="true"
-                    (countryIsoCodeChange)="countryIsoCode = $event"
-                  >
-                    Telefon *
-                  </tui-input-phone-international>
+                  <tui-textfield>
+                    <label tuiLabel>Telefon *</label>
+                    <input tuiInputPhoneInternational
+                           formControlName="phone"
+                           [countries]="countries"
+                           [countryIsoCode]="countryIsoCode"
+                           [countrySearch]="true"
+                           (countryIsoCodeChange)="countryIsoCode = $event" />
+                  </tui-textfield>
                   @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
                 </div>
                 <div>
@@ -218,7 +224,7 @@ const CARRIERS = [
 
           <!-- Step 1: Carrier -->
           @if (index === 1) {
-            <div tuiCardLarge appearance="elevated" class="step-card checkout-card">
+            <div tuiCardLarge class="step-card checkout-card">
               <header tuiHeader>
                 <h2 tuiTitle>Sposób dostawy</h2>
               </header>
@@ -260,7 +266,7 @@ const CARRIERS = [
 
           <!-- Step 2: Summary -->
           @if (index === 2) {
-            <div tuiCardLarge appearance="elevated" class="step-card checkout-card">
+            <div tuiCardLarge class="step-card checkout-card">
               <header tuiHeader>
                 <h2 tuiTitle>Podsumowanie zamówienia</h2>
               </header>
@@ -289,6 +295,50 @@ const CARRIERS = [
                 }
               </div>
 
+              <!-- Coupon -->
+              <div class="coupon-section">
+                @if (!appliedCoupon()) {
+                  @if (!couponExpanded()) {
+                    <button type="button" class="coupon-toggle" (click)="couponExpanded.set(true)">
+                      Masz kod promocyjny?
+                    </button>
+                  } @else {
+                    <tui-textfield>
+                      <label tuiLabel>Kod rabatowy</label>
+                      <input
+                        tuiTextfield
+                        type="text"
+                        [value]="couponCodeInput()"
+                        (input)="couponCodeInput.set($any($event.target).value.toUpperCase())"
+                        (keydown.enter)="applyCoupon()"
+                        placeholder="np. WELCOME15"
+                        autocomplete="off"
+                      />
+                    </tui-textfield>
+                    @if (couponError()) {
+                      <p class="field-error">{{ couponError() }}</p>
+                    }
+                    <div class="coupon-actions">
+                      <button
+                        tuiButton
+                        type="button"
+                        appearance="secondary"
+                        size="s"
+                        [disabled]="couponValidating() || !couponCodeInput()"
+                        (click)="applyCoupon()"
+                      >
+                        {{ couponValidating() ? 'Sprawdzam…' : 'Zastosuj' }}
+                      </button>
+                    </div>
+                  }
+                } @else {
+                  <div class="coupon-applied">
+                    <span class="coupon-applied__badge">✓ {{ appliedCoupon()!.code }}</span>
+                    <button type="button" class="coupon-remove" (click)="removeCoupon()">Usuń</button>
+                  </div>
+                }
+              </div>
+
               <div class="summary-total">
                 <div class="total-row">
                   <span>Produkty</span>
@@ -296,11 +346,21 @@ const CARRIERS = [
                 </div>
                 <div class="total-row">
                   <span>Dostawa</span>
-                  <span>{{ selectedCarrier()?.price | price }}</span>
+                  @if (appliedCoupon()?.isFreeShipping) {
+                    <span class="discount-value">Gratis</span>
+                  } @else {
+                    <span>{{ selectedCarrier()?.price | price }}</span>
+                  }
                 </div>
+                @if (appliedCoupon() && !appliedCoupon()!.isFreeShipping) {
+                  <div class="total-row total-row--discount">
+                    <span>Rabat ({{ appliedCoupon()!.code }})</span>
+                    <span class="discount-value">−{{ appliedCoupon()!.discountAmountInCents | price }}</span>
+                  </div>
+                }
                 <div class="total-row total-row--final">
                   <span>Łącznie</span>
-                  <span>{{ cart.totalInCents() + (selectedCarrier()?.price ?? 0) | price }}</span>
+                  <span>{{ effectiveTotal() | price }}</span>
                 </div>
               </div>
 
@@ -422,6 +482,16 @@ const CARRIERS = [
     .addr-pill__city { color: var(--color-secondary); }
     .addr-pill__badge { color: var(--color-primary); font-size: 10px; }
 
+    /* Coupon — follows the same column+gap pattern as .inpost-section and .form-actions */
+    .coupon-section { margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
+    .coupon-toggle { background: none; border: none; padding: 0; font-size: 13px; color: var(--color-primary); text-decoration: underline; cursor: pointer; align-self: flex-start; }
+    .coupon-actions { display: flex; justify-content: flex-end; }
+    .coupon-applied { display: flex; align-items: center; gap: 12px; }
+    .coupon-applied__badge { background: #e8f5e9; color: #2a9d4e; border: 1px solid #a5d6a7; border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
+    .coupon-remove { background: none; border: none; font-size: 12px; color: var(--color-secondary); text-decoration: underline; cursor: pointer; padding: 0; }
+    .total-row--discount { color: #2a9d4e; }
+    .discount-value { font-weight: 600; color: #2a9d4e; }
+
     /* Footer nav */
     .checkout__nav { display: flex; justify-content: space-between; margin-top: 24px; }
 
@@ -438,6 +508,7 @@ const CARRIERS = [
 export class CheckoutPageComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(FormBuilder);
   private readonly toast = inject(ToastService);
 
@@ -459,6 +530,21 @@ export class CheckoutPageComponent implements OnInit {
   readonly citySuggestions = signal<string[]>([]);
   readonly cityLoading = signal(false);
   readonly streetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+
+  readonly couponExpanded = signal(false);
+  readonly couponCodeInput = signal('');
+  readonly couponValidating = signal(false);
+  readonly couponError = signal<string | null>(null);
+  readonly appliedCoupon = signal<AppliedCoupon | null>(null);
+
+  readonly effectiveTotal = computed(() => {
+    const items = this.cart.totalInCents();
+    const shipping = this.selectedCarrier()?.price ?? 0;
+    const coupon = this.appliedCoupon();
+    if (!coupon) return items + shipping;
+    if (coupon.isFreeShipping) return items;
+    return Math.max(0, items + shipping - coupon.discountAmountInCents);
+  });
 
   readonly carriers = CARRIERS;
 
@@ -525,6 +611,13 @@ export class CheckoutPageComponent implements OnInit {
       takeUntilDestroyed(this.destroyRef),
     ).subscribe(({ exists }) => this.streetStatus.set(exists ? 'found' : 'not-found'));
 
+    // Auto-apply coupon from URL param (?coupon=CODE) for email/influencer links
+    const urlCoupon = this.route.snapshot.queryParamMap.get('coupon');
+    if (urlCoupon) {
+      this.couponCodeInput.set(urlCoupon.toUpperCase());
+      this.couponExpanded.set(true);
+    }
+
     if (!this.auth.currentUser()) return;
     this.http.get<any[]>(`${environment.apiUrl}/users/me/addresses`).subscribe({
       next: (addrs) => {
@@ -533,6 +626,47 @@ export class CheckoutPageComponent implements OnInit {
         if (def) this.selectSavedAddress(def);
       },
     });
+  }
+
+  applyCoupon(): void {
+    const code = this.couponCodeInput().trim();
+    if (!code) return;
+    this.couponValidating.set(true);
+    this.couponError.set(null);
+
+    const variantIds = this.cart.items().map((i) => i.productVariantId);
+
+    this.http.post<any>(`${environment.apiUrl}/coupons/validate`, {
+      code,
+      cartTotalInCents: this.cart.totalInCents(),
+      variantIds,
+    }).subscribe({
+      next: (res) => {
+        this.couponValidating.set(false);
+        if (!res.valid) {
+          this.couponError.set(res.message ?? 'Nieprawidłowy kod rabatowy.');
+          return;
+        }
+        const isFreeShipping = res.discountType === 'FREE_SHIPPING';
+        this.appliedCoupon.set({
+          code,
+          discountAmountInCents: isFreeShipping ? (this.selectedCarrier()?.price ?? 0) : (res.discountAmountInCents ?? 0),
+          isFreeShipping,
+        });
+        this.couponExpanded.set(false);
+      },
+      error: () => {
+        this.couponValidating.set(false);
+        this.couponError.set('Błąd podczas weryfikacji kodu.');
+      },
+    });
+  }
+
+  removeCoupon(): void {
+    this.appliedCoupon.set(null);
+    this.couponCodeInput.set('');
+    this.couponError.set(null);
+    this.couponExpanded.set(false);
   }
 
   selectCity(city: string): void {
@@ -653,6 +787,7 @@ export class CheckoutPageComponent implements OnInit {
         guestEmail: a.email,
         termsVersion: TERMS_VERSION,
         termsAcceptedAt: new Date().toISOString(),
+        couponCode: this.appliedCoupon()?.code ?? undefined,
       },
       { headers: new HttpHeaders({ 'x-session-id': this.cart.getSessionId() }) },
     ).subscribe({
@@ -665,7 +800,15 @@ export class CheckoutPageComponent implements OnInit {
         window.location.href = res.paymentUrl;
       },
       error: (err) => {
-        this.toast.error(err.error?.message ?? 'Błąd tworzenia zamówienia.');
+        const message: string = err.error?.message ?? 'Błąd tworzenia zamówienia.';
+        this.toast.error(message);
+        // Coupon was rejected server-side (expired or limit hit between validate and submit).
+        // Surface the error in the coupon field so the user knows to re-check the code.
+        if (message.toLowerCase().includes('kod')) {
+          this.appliedCoupon.set(null);
+          this.couponError.set(message);
+          this.couponExpanded.set(true);
+        }
         this.placing.set(false);
       },
     });

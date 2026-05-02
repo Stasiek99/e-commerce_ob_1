@@ -5,6 +5,7 @@ import { TuiButton, TuiIcon, TuiTextfield, TuiDropdown, TuiDropdownHover, TuiDat
 import { TuiChevron } from '@taiga-ui/kit';
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
+import { WishlistService } from '../../../core/services/wishlist.service';
 
 @Component({
   selector: 'app-header',
@@ -72,8 +73,11 @@ import { AuthService } from '../../../core/services/auth.service';
 
         <!-- RIGHT: actions -->
         <div class="header__actions">
-          <a routerLink="/wishlist" class="header__action-link" (click)="closeMobileMenu()">
+          <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()">
             <tui-icon icon="@tui.heart" />
+            @if (wishlist.count() > 0) {
+              <span class="header__wishlist-badge">{{ wishlist.count() }}</span>
+            }
             <span>Ulubione</span>
           </a>
 
@@ -205,7 +209,9 @@ import { AuthService } from '../../../core/services/auth.service';
     .header__action-link:hover { color: var(--color-accent); }
     .header__action-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; border-radius: 3px; }
     .header__action-link tui-icon { font-size: 20px; }
-    .header__action-link--cart { position: relative; }
+    .header__action-link--cart,
+    .header__action-link--wishlist { position: relative; }
+    .header__wishlist-badge,
     .header__cart-badge {
       position: absolute;
       top: -7px;
@@ -291,6 +297,7 @@ export class HeaderComponent {
   readonly router = inject(Router);
   readonly cartService = inject(CartService);
   readonly auth = inject(AuthService);
+  readonly wishlist = inject(WishlistService);
 
   dropdownOpen = false;
   mobileMenuOpen = false;

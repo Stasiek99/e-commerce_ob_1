@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 import { Prisma } from '@prisma/client';
 
 const PRODUCT_INCLUDE = {
@@ -10,7 +12,13 @@ const PRODUCT_INCLUDE = {
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ProductsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async findAll(query: {
     page?: number;
@@ -165,18 +173,60 @@ export class ProductsService {
     const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('Variant not found');
 
-    if (dto.set !== undefined) {
-      return this.prisma.productVariant.update({
-        where: { id: variantId },
-        data: { stock: dto.set },
-      });
-    }
+    const wasOutOfStock = variant.stock === 0;
+    const newStock = dto.set !== undefined
+      ? dto.set
+      : Math.max(0, variant.stock + (dto.adjustment ?? 0));
 
-    const newStock = Math.max(0, variant.stock + (dto.adjustment ?? 0));
-    return this.prisma.productVariant.update({
+    const updated = await this.prisma.productVariant.update({
       where: { id: variantId },
       data: { stock: newStock },
     });
+
+    if (wasOutOfStock && newStock > 0) {
+      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch(() => undefined);
+    }
+
+    return updated;
+  }
+
+  private async dispatchBackInStockNotifications(productId: string, variantLabel: string): Promise<void> {
+    const wishlistItems = await this.prisma.wishlistItem.findMany({
+      where: { productId, notifyOnRestock: true },
+      include: {
+        user: { select: { email: true, firstName: true } },
+        product: { select: { name: true, slug: true } },
+      },
+    });
+
+    if (!wishlistItems.length) return;
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+
+    // Reset flags BEFORE sending — prevents duplicate notifications if process
+    // crashes mid-loop; users who miss an email can re-enable the flag manually.
+    await this.prisma.wishlistItem.updateMany({
+      where: { productId, notifyOnRestock: true },
+      data: { notifyOnRestock: false },
+    });
+
+    // Fire all emails concurrently — sequential await would block the event loop
+    // for hundreds of ms × N users (e.g. 500 users × 300ms = 150 s blocked).
+    await Promise.allSettled(
+      wishlistItems.map((item) =>
+        this.emailService
+          .sendBackInStock({
+            to: item.user.email,
+            firstName: item.user.firstName ?? '',
+            productName: item.product.name,
+            variantLabel,
+            productUrl: `${frontendUrl}/products/${item.product.slug}`,
+          })
+          .catch((err) => this.logger.error(`Back-in-stock email failed for ${item.user.email}: ${err.message}`)),
+      ),
+    );
+
+    this.logger.log(`Back-in-stock: notified ${wishlistItems.length} user(s) for product ${productId}`);
   }
 
   async addImage(productId: string, url: string, storagePath: string, altText?: string) {

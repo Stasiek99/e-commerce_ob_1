@@ -2,9 +2,11 @@ import {
   ApplicationConfig,
   ErrorHandler,
   inject,
+  isDevMode,
   provideAppInitializer,
   provideZoneChangeDetection,
 } from '@angular/core';
+import { provideServiceWorker } from '@angular/service-worker';
 import { firstValueFrom, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
@@ -52,5 +54,9 @@ export const appConfig: ApplicationConfig = {
       await firstValueFrom(auth.refresh().pipe(catchError(() => of(null))));
     }),
     ...sentryProviders,
+    provideServiceWorker('ngsw-worker.js', {
+      enabled: !isDevMode(),
+      registrationStrategy: 'registerWhenStable:30000',
+    }),
   ],
 };

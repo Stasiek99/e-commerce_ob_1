@@ -206,7 +206,14 @@
       "Bash(node -e \"require\\('@taiga-ui/experimental'\\); console.log\\('ok'\\)\")",
       "Bash(tasklist)",
       "Bash(node -e \"const p=require\\('./node_modules/@taiga-ui/experimental/package.json'\\); console.log\\(p.version\\)\")",
-      "Bash(node -e \"console.log\\(require\\('e:/repos/e-commerce_ob_1/frontend/node_modules/@taiga-ui/experimental/package.json'\\).version\\)\")"
+      "Bash(node -e \"console.log\\(require\\('e:/repos/e-commerce_ob_1/frontend/node_modules/@taiga-ui/experimental/package.json'\\).version\\)\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Administrator\\\\Documents\\\\aromaterie\\\\e-commerce_ob_1\\\\frontend\\\\src\\\\app\\\\features\\\\account\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "Bash(Format-List)",
+      "PowerShell(ls *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "chrome-devtools"
+  ]
 }

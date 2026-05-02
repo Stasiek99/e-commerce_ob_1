@@ -160,6 +160,13 @@ export const routes: Routes = [
       import('./features/wishlist/wishlist.component').then((m) => m.WishlistComponent),
   },
   {
+    path: 'returns',
+    loadComponent: () =>
+      import('./features/returns/return-request/return-request.component').then(
+        (m) => m.ReturnRequestComponent,
+      ),
+  },
+  {
     path: 'legal/terms',
     loadComponent: () =>
       import('./features/legal/terms/terms.component').then((m) => m.TermsComponent),
