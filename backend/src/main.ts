@@ -13,6 +13,7 @@ import { setupAdmin } from './modules/admin/admin.setup';
 import { PrismaService } from './modules/prisma/prisma.service';
 import { InvoiceService } from './modules/invoice/invoice.service';
 import { ShippingService } from './modules/shipping/shipping.service';
+import { OrdersService } from './modules/orders/orders.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -50,7 +51,8 @@ async function bootstrap() {
   const prisma = app.get(PrismaService);
   const invoiceService = app.get(InvoiceService);
   const shippingService = app.get(ShippingService);
-  await setupAdmin(app, prisma, invoiceService, shippingService);
+  const ordersService = app.get(OrdersService);
+  await setupAdmin(app, prisma, invoiceService, shippingService, ordersService);
 
   app.useLogger(app.get(Logger));
 

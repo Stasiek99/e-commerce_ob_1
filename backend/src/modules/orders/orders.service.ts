@@ -32,6 +32,13 @@ const SHIPPING_RATES: Record<CarrierCode, number> = {
   [CarrierCode.DPD]: 1599,     // 15,99 zł
 };
 
+const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
+  [CarrierCode.INPOST]: 'InPost',
+  [CarrierCode.DHL]: 'DHL Express',
+  [CarrierCode.GLS]: 'GLS',
+  [CarrierCode.DPD]: 'DPD',
+};
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -420,6 +427,135 @@ export class OrdersService {
     if (status === OrderStatus.DELIVERED) {
       this.dispatchReviewRequestEmail(id).catch(() => undefined);
     }
+  }
+
+  async bulkMarkAsShipped(orderIds: string[]): Promise<{
+    succeeded: number;
+    failed: Array<{ orderNumber: string; reason: string }>;
+  }> {
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      include: { shipment: true },
+    });
+
+    const succeeded: string[] = [];
+    const failed: Array<{ orderNumber: string; reason: string }> = [];
+
+    const nonShippableStatuses: OrderStatus[] = [
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.CANCELLED,
+      OrderStatus.REFUNDED,
+      OrderStatus.PENDING_PAYMENT,
+    ];
+
+    await Promise.all(
+      orders.map(async (order) => {
+        if (nonShippableStatuses.includes(order.status)) {
+          failed.push({ orderNumber: order.orderNumber, reason: `Status ${order.status} nie pozwala na wysyłkę` });
+          return;
+        }
+
+        try {
+          await this.updateStatus(order.id, OrderStatus.SHIPPED, 'ADMIN');
+
+          if (order.shipment?.trackingNumber) {
+            this.emailService
+              .sendShippingNotification({
+                to: order.snapshotEmail,
+                orderNumber: order.orderNumber,
+                firstName: order.snapshotFirstName,
+                carrier: CARRIER_DISPLAY_NAMES[order.carrierCode] ?? order.carrierCode,
+                trackingNumber: order.shipment.trackingNumber,
+              })
+              .catch(() => undefined);
+          }
+
+          succeeded.push(order.orderNumber);
+        } catch (err) {
+          failed.push({ orderNumber: order.orderNumber, reason: (err as Error).message });
+        }
+      }),
+    );
+
+    return { succeeded: succeeded.length, failed };
+  }
+
+  async bulkCancel(
+    orderIds: string[],
+    actor = 'ADMIN',
+  ): Promise<{
+    succeeded: number;
+    failed: Array<{ orderNumber: string; reason: string }>;
+    needsRefund: string[];
+  }> {
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      include: { items: true },
+    });
+
+    const succeeded: string[] = [];
+    const failed: Array<{ orderNumber: string; reason: string }> = [];
+    const needsRefund: string[] = [];
+
+    const nonCancellableStatuses: OrderStatus[] = [
+      OrderStatus.CANCELLED,
+      OrderStatus.REFUNDED,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ];
+
+    await Promise.all(
+      orders.map(async (order) => {
+        if (nonCancellableStatuses.includes(order.status)) {
+          failed.push({ orderNumber: order.orderNumber, reason: `Status ${order.status} nie pozwala na anulowanie` });
+          return;
+        }
+
+        try {
+          await this.prisma.$transaction(async (tx) => {
+            for (const item of order.items) {
+              await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: item.quantity } },
+              });
+            }
+            await tx.order.update({
+              where: { id: order.id },
+              data: { status: OrderStatus.CANCELLED },
+            });
+            await tx.orderEvent.create({
+              data: {
+                orderId: order.id,
+                fromStatus: order.status,
+                toStatus: OrderStatus.CANCELLED,
+                actor,
+                note: 'Bulk cancelled by admin',
+              },
+            });
+          });
+
+          const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+
+          this.emailService
+            .sendOrderCancellation({
+              to: order.snapshotEmail,
+              orderNumber: order.orderNumber,
+              firstName: order.snapshotFirstName,
+              totalInCents: order.totalInCents,
+              isRefund,
+            })
+            .catch(() => undefined);
+
+          if (isRefund) needsRefund.push(order.orderNumber);
+          succeeded.push(order.orderNumber);
+        } catch (err) {
+          failed.push({ orderNumber: order.orderNumber, reason: (err as Error).message });
+        }
+      }),
+    );
+
+    return { succeeded: succeeded.length, failed, needsRefund };
   }
 
   private async dispatchReviewRequestEmail(orderId: string): Promise<void> {

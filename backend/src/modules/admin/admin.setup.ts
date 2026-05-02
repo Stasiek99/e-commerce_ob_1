@@ -6,6 +6,7 @@ import connectPgSimple = require('connect-pg-simple');
 import { PrismaService } from '../prisma/prisma.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingService } from '../shipping/shipping.service';
+import { OrdersService } from '../orders/orders.service';
 
 const logger = new Logger('AdminJS');
 
@@ -29,6 +30,7 @@ export async function setupAdmin(
   prisma: PrismaService,
   invoiceService: InvoiceService,
   shippingService: ShippingService,
+  ordersService: OrdersService,
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
@@ -242,6 +244,59 @@ export async function setupAdmin(
                     },
                   };
                 }
+              },
+            },
+            bulkMarkAsShipped: {
+              actionType: 'bulk',
+              icon: 'Truck',
+              label: 'Oznacz jako wysłane',
+              isVisible: true,
+              handler: async (_request: any, _response: any, context: any) => {
+                const { records } = context;
+                const ids: string[] = records.map((r: any) => r.params.id as string);
+                const result = await ordersService.bulkMarkAsShipped(ids);
+
+                const parts: string[] = [];
+                if (result.succeeded > 0) parts.push(`Wysłano: ${result.succeeded}`);
+                if (result.failed.length > 0) {
+                  parts.push(`Błędy (${result.failed.length}): ${result.failed.map((f) => f.orderNumber).join(', ')}`);
+                }
+
+                return {
+                  records: records.map((r: any) => r.toJSON()),
+                  notice: {
+                    message: parts.join(' | '),
+                    type: result.failed.length === 0 ? 'success' : 'error',
+                  },
+                };
+              },
+            },
+            bulkCancel: {
+              actionType: 'bulk',
+              icon: 'XCircle',
+              label: 'Anuluj zamówienia',
+              isVisible: true,
+              handler: async (_request: any, _response: any, context: any) => {
+                const { records } = context;
+                const ids: string[] = records.map((r: any) => r.params.id as string);
+                const result = await ordersService.bulkCancel(ids, 'ADMIN');
+
+                const parts: string[] = [];
+                if (result.succeeded > 0) parts.push(`Anulowano: ${result.succeeded}`);
+                if (result.failed.length > 0) {
+                  parts.push(`Błędy (${result.failed.length}): ${result.failed.map((f) => f.orderNumber).join(', ')}`);
+                }
+                if (result.needsRefund.length > 0) {
+                  parts.push(`Wymagają zwrotu Stripe: ${result.needsRefund.join(', ')}`);
+                }
+
+                return {
+                  records: records.map((r: any) => r.toJSON()),
+                  notice: {
+                    message: parts.join(' | '),
+                    type: result.failed.length === 0 ? 'success' : 'error',
+                  },
+                };
               },
             },
           },
