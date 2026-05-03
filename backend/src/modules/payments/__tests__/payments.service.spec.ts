@@ -5,7 +5,7 @@ import type Stripe from 'stripe';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 
@@ -13,7 +13,7 @@ describe('PaymentsService', () => {
   let service: PaymentsService;
   let prisma: any;
   let stripeClient: jest.Mocked<StripeClient>;
-  let emailService: jest.Mocked<EmailService>;
+  let emailService: jest.Mocked<EmailQueueService>;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
     id: 'cs_test_abc123',
@@ -95,7 +95,7 @@ describe('PaymentsService', () => {
           },
         },
         {
-          provide: EmailService,
+          provide: EmailQueueService,
           useValue: {
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
@@ -123,7 +123,7 @@ describe('PaymentsService', () => {
     service = module.get(PaymentsService);
     prisma = module.get(PrismaService);
     stripeClient = module.get(StripeClient);
-    emailService = module.get(EmailService);
+    emailService = module.get(EmailQueueService);
   });
 
   describe('handleWebhookEvent', () => {

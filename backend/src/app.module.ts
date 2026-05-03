@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { BullModule } from '@nestjs/bullmq';
+import IORedis from 'ioredis';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
@@ -57,6 +59,14 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
       limit: 60,   // 60 requests/min default
     }]),
     ScheduleModule.forRoot(),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
+          maxRetriesPerRequest: null,
+        }),
+      }),
+    }),
     CorrelationModule,
     PrismaModule,
     AuthModule,

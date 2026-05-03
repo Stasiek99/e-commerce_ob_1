@@ -3,7 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { CarrierCode, ShipmentStatus } from '@prisma/client';
 import { ShippingService } from '../shipping.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { StorageService } from '../../storage/storage.service';
 import { InpostClient } from '../carriers/inpost.client';
 import { DhlClient } from '../carriers/dhl.client';
@@ -18,7 +18,7 @@ describe('ShippingService', () => {
   let gls: jest.Mocked<GlsClient>;
   let dpd: jest.Mocked<DpdClient>;
   let storage: jest.Mocked<StorageService>;
-  let emailService: jest.Mocked<EmailService>;
+  let emailService: jest.Mocked<EmailQueueService>;
 
   const mockOrderBase = {
     id: 'order-1',
@@ -55,7 +55,7 @@ describe('ShippingService', () => {
           },
         },
         {
-          provide: EmailService,
+          provide: EmailQueueService,
           useValue: {
             sendShippingNotification: jest.fn().mockResolvedValue(undefined),
           },
@@ -105,7 +105,7 @@ describe('ShippingService', () => {
     gls = module.get(GlsClient);
     dpd = module.get(DpdClient);
     storage = module.get(StorageService);
-    emailService = module.get(EmailService);
+    emailService = module.get(EmailQueueService);
   });
 
   describe('getShippingRates', () => {

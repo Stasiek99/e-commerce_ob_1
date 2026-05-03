@@ -15,6 +15,7 @@ import { backInStockTemplate } from './templates/back-in-stock.template';
 import { reviewRequestTemplate } from './templates/review-request.template';
 import { returnConfirmationTemplate } from './templates/return-confirmation.template';
 import { returnAdminNotificationTemplate } from './templates/return-admin-notification.template';
+import { emailChangeTemplate } from './templates/email-change.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -29,7 +30,8 @@ type EmailKind =
   | 'back_in_stock'
   | 'review_request'
   | 'return_confirmation'
-  | 'return_admin_notification';
+  | 'return_admin_notification'
+  | 'email_change';
 
 @Injectable()
 export class EmailService {
@@ -101,6 +103,11 @@ export class EmailService {
   }) {
     const { subject, html } = orderCancellationTemplate(data);
     return this.send('order_cancellation', data.to, subject, html, { orderNumber: data.orderNumber });
+  }
+
+  async sendEmailChangeVerification(data: { to: string; firstName: string; newEmail: string; verifyUrl: string }) {
+    const { subject, html } = emailChangeTemplate({ firstName: data.firstName, newEmail: data.newEmail, verifyUrl: data.verifyUrl });
+    return this.send('email_change', data.to, subject, html, { verifyUrl: data.verifyUrl });
   }
 
   async sendEmailVerification(data: { to: string; firstName: string; verifyUrl: string }) {

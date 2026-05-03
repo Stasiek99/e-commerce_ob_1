@@ -6,7 +6,7 @@ import { OrdersService } from '../orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../../cart/cart.service';
 import { PaymentsService } from '../../payments/payments.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
 
 describe('OrdersService', () => {
@@ -89,7 +89,7 @@ describe('OrdersService', () => {
           },
         },
         {
-          provide: EmailService,
+          provide: EmailQueueService,
           useValue: {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
             sendOrderCancellation: jest.fn().mockResolvedValue(undefined),

@@ -97,6 +97,7 @@ model User {
   googleId        String?  @unique
   nip             String?
   isEmailVerified Boolean  @default(false)
+  pendingEmail    String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

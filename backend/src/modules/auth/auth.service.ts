@@ -12,7 +12,7 @@ import { createHash } from 'crypto';
 import { User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { RegisterDto } from './dto/register.dto';
 
 const BCRYPT_ROUNDS = 12;
@@ -24,7 +24,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly emailService: EmailService,
+    private readonly emailService: EmailQueueService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -153,6 +153,43 @@ export class AuthService {
     await this.issueAndSendVerification(user);
   }
 
+  async requestEmailChange(userId: string, newEmail: string): Promise<void> {
+    const existing = await this.usersService.findByEmail(newEmail);
+    if (existing && existing.id !== userId) {
+      throw new ConflictException('Email already in use');
+    }
+
+    const user = await this.usersService.findById(userId);
+    if (!user) throw new BadRequestException('User not found');
+
+    // Invalidate any existing unused verification tokens
+    await this.prisma.emailVerificationToken.updateMany({
+      where: { userId, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    // Stage the new email and issue a verification token for it
+    await this.usersService.update(userId, { pendingEmail: newEmail });
+
+    const rawToken = uuidv4();
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await this.prisma.emailVerificationToken.create({
+      data: { tokenHash, userId, expiresAt },
+    });
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
+    const verifyUrl = `${frontendUrl}/auth/verify-email?token=${rawToken}`;
+
+    await this.emailService.sendEmailChangeVerification({
+      to: newEmail,
+      firstName: user.firstName ?? 'Kliencie',
+      newEmail,
+      verifyUrl,
+    });
+  }
+
   async verifyEmail(rawToken: string): Promise<void> {
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     const stored = await this.prisma.emailVerificationToken.findUnique({
@@ -160,23 +197,52 @@ export class AuthService {
       include: { user: true },
     });
 
-    // If the user already verified (e.g. double-click), treat as success
-    if (stored?.user?.isEmailVerified) return;
+    // Idempotent double-click for normal registration verification
+    if (stored?.user?.isEmailVerified && !stored?.user?.pendingEmail) return;
 
     if (!stored || stored.usedAt || stored.expiresAt < new Date()) {
       throw new BadRequestException('Invalid or expired verification link');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.emailVerificationToken.update({
-        where: { id: stored.id },
-        data: { usedAt: new Date() },
-      }),
-      this.prisma.user.update({
-        where: { id: stored.userId },
-        data: { isEmailVerified: true },
-      }),
-    ]);
+    if (stored.user.pendingEmail) {
+      // Email-change flow: promote pendingEmail → email, revoke all sessions
+      const newEmail = stored.user.pendingEmail;
+
+      // Guard against race: another user may have claimed this email after the
+      // request was issued. If so, abandon the change rather than overwriting.
+      const taken = await this.prisma.user.findUnique({ where: { email: newEmail } });
+      if (taken && taken.id !== stored.userId) {
+        throw new ConflictException('The requested email address is no longer available');
+      }
+
+      await this.prisma.$transaction([
+        this.prisma.emailVerificationToken.update({
+          where: { id: stored.id },
+          data: { usedAt: new Date() },
+        }),
+        this.prisma.user.update({
+          where: { id: stored.userId },
+          data: { email: newEmail, pendingEmail: null, isEmailVerified: true },
+        }),
+        // Revoke all refresh tokens — JWT encodes email, so all devices must re-login
+        this.prisma.refreshToken.updateMany({
+          where: { userId: stored.userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        }),
+      ]);
+    } else {
+      // Normal registration verification
+      await this.prisma.$transaction([
+        this.prisma.emailVerificationToken.update({
+          where: { id: stored.id },
+          data: { usedAt: new Date() },
+        }),
+        this.prisma.user.update({
+          where: { id: stored.userId },
+          data: { isEmailVerified: true },
+        }),
+      ]);
+    }
   }
 
   async requestPasswordReset(email: string): Promise<void> {
@@ -239,15 +305,10 @@ export class AuthService {
   }
 
   async generateTokenPair(user: User) {
-    const jti = uuidv4();
     const payload = { sub: user.id, email: user.email, role: user.role };
 
     const accessToken = this.jwtService.sign(payload);
 
-    const refreshExpiresIn = this.configService.get<string>(
-      'JWT_REFRESH_EXPIRES_IN',
-      '7d',
-    );
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 

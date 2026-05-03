@@ -7,7 +7,7 @@ import { Role } from '@prisma/client';
 import { AuthService } from '../auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../../users/users.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 
 const mockUser = {
   id: 'user-1',
@@ -84,7 +84,7 @@ describe('AuthService', () => {
           },
         },
         {
-          provide: EmailService,
+          provide: EmailQueueService,
           useValue: {
             sendEmailVerification: jest.fn().mockResolvedValue(undefined),
             sendPasswordReset: jest.fn().mockResolvedValue(undefined),
@@ -97,7 +97,7 @@ describe('AuthService', () => {
     prisma = module.get(PrismaService);
     usersService = module.get(UsersService);
     jwtService = module.get(JwtService);
-    emailService = module.get(EmailService);
+    emailService = module.get(EmailQueueService);
   });
 
   describe('register', () => {
@@ -278,7 +278,7 @@ describe('AuthService', () => {
       usersService.findByEmail.mockResolvedValue(mockUser as any);
       usersService.update.mockResolvedValue({ ...mockUser, googleId: 'gid-1' } as any);
 
-      const result = await service.findOrCreateGoogleUser({
+      await service.findOrCreateGoogleUser({
         googleId: 'gid-1',
         email: 'test@example.com',
       });

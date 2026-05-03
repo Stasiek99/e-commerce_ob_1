@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CarrierCode, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
 import { InpostClient } from './carriers/inpost.client';
 import { DhlClient } from './carriers/dhl.client';
@@ -52,7 +52,7 @@ export class ShippingService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly emailService: EmailService,
+    private readonly emailService: EmailQueueService,
     private readonly storage: StorageService,
     private readonly inpost: InpostClient,
     private readonly dhl: DhlClient,
