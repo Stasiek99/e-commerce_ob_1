@@ -163,4 +163,8 @@ export class EmailQueueService {
   }) {
     return this.enqueue({ type: 'return_admin_notification', payload: data });
   }
+
+  sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {
+    return this.enqueue({ type: 'magic_link_login', payload: data });
+  }
 }

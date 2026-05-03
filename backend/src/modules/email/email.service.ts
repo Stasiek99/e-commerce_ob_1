@@ -16,6 +16,7 @@ import { reviewRequestTemplate } from './templates/review-request.template';
 import { returnConfirmationTemplate } from './templates/return-confirmation.template';
 import { returnAdminNotificationTemplate } from './templates/return-admin-notification.template';
 import { emailChangeTemplate } from './templates/email-change.template';
+import { magicLinkTemplate } from './templates/magic-link.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -31,7 +32,8 @@ type EmailKind =
   | 'review_request'
   | 'return_confirmation'
   | 'return_admin_notification'
-  | 'email_change';
+  | 'email_change'
+  | 'magic_link_login';
 
 @Injectable()
 export class EmailService {
@@ -199,6 +201,11 @@ export class EmailService {
       orderNumber: data.orderNumber,
       requestId: data.requestId,
     });
+  }
+
+  async sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {
+    const { subject, html } = magicLinkTemplate({ firstName: data.firstName, magicUrl: data.magicUrl });
+    return this.send('magic_link_login', data.to, subject, html, { magicUrl: data.magicUrl });
   }
 
   async sendShippingNotification(data: {

@@ -131,4 +131,8 @@ export type EmailJobData =
         requestedResolution?: string;
         bankAccount?: string;
       };
+    }
+  | {
+      type: 'magic_link_login';
+      payload: { to: string; firstName: string; magicUrl: string };
     };

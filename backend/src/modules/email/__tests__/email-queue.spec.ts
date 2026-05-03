@@ -140,6 +140,30 @@ describe('EmailQueueService', () => {
     });
   });
 
+  describe('sendMagicLink', () => {
+    it('enqueues job with type magic_link_login and correct payload', async () => {
+      const data = { to: 'user@test.com', firstName: 'Jan', magicUrl: 'https://store.pl/auth/magic-login?token=abc' };
+
+      await service.sendMagicLink(data);
+
+      expect(queueAdd).toHaveBeenCalledWith(
+        'magic_link_login',
+        { type: 'magic_link_login', payload: data },
+        expect.any(Object),
+      );
+    });
+
+    it('enqueues with the same persistence guarantees as other critical-path emails', async () => {
+      await service.sendMagicLink({ to: 'u@t.com', firstName: 'Jan', magicUrl: 'https://x' });
+
+      expect(queueAdd).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Object),
+        expect.objectContaining({ attempts: 3, backoff: { type: 'exponential', delay: 5_000 } }),
+      );
+    });
+  });
+
   // ── order-lifecycle emails ───────────────────────────────────────────────────
 
   describe('sendOrderConfirmation', () => {
@@ -347,6 +371,7 @@ describe('EmailQueueProcessor', () => {
             sendReviewRequest: jest.fn().mockResolvedValue(undefined),
             sendReturnConfirmation: jest.fn().mockResolvedValue(undefined),
             sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
+            sendMagicLink: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],
@@ -522,6 +547,18 @@ describe('EmailQueueProcessor', () => {
     await processor.process(makeJob({ type: 'return_admin_notification' as const, payload }));
 
     expect(emailService.sendReturnAdminNotification).toHaveBeenCalledWith(payload);
+  });
+
+  it('routes magic_link_login to emailService.sendMagicLink', async () => {
+    const payload = {
+      to: 'user@test.com',
+      firstName: 'Jan',
+      magicUrl: 'https://store.pl/auth/magic-login?token=abc123',
+    };
+
+    await processor.process(makeJob({ type: 'magic_link_login' as const, payload }));
+
+    expect(emailService.sendMagicLink).toHaveBeenCalledWith(payload);
   });
 
   // ── Buffer base64 round-trip ─────────────────────────────────────────────────

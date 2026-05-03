@@ -9,7 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
-import { User } from '@prisma/client';
+import { EmailTokenType, User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { EmailQueueService } from '../email/email-queue.service';
@@ -125,7 +125,7 @@ export class AuthService {
 
   private async issueAndSendVerification(user: User): Promise<void> {
     await this.prisma.emailVerificationToken.updateMany({
-      where: { userId: user.id, usedAt: null },
+      where: { userId: user.id, type: EmailTokenType.EMAIL_VERIFICATION, usedAt: null },
       data: { usedAt: new Date() },
     });
 
@@ -162,9 +162,9 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
     if (!user) throw new BadRequestException('User not found');
 
-    // Invalidate any existing unused verification tokens
+    // Invalidate any existing unused email verification tokens (not magic links)
     await this.prisma.emailVerificationToken.updateMany({
-      where: { userId, usedAt: null },
+      where: { userId, type: EmailTokenType.EMAIL_VERIFICATION, usedAt: null },
       data: { usedAt: new Date() },
     });
 
@@ -196,6 +196,11 @@ export class AuthService {
       where: { tokenHash },
       include: { user: true },
     });
+
+    // Reject magic link tokens used on the wrong endpoint
+    if (stored?.type === EmailTokenType.MAGIC_LINK) {
+      throw new BadRequestException('Invalid or expired verification link');
+    }
 
     // Idempotent double-click for normal registration verification
     if (stored?.user?.isEmailVerified && !stored?.user?.pendingEmail) return;
@@ -302,6 +307,68 @@ export class AuthService {
         data: { revokedAt: new Date() },
       }),
     ]);
+  }
+
+  async requestMagicLink(email: string): Promise<void> {
+    const user = await this.usersService.findByEmail(email);
+    // Always silent — prevents email enumeration
+    if (!user) return;
+
+    // Invalidate any outstanding magic link tokens for this user
+    await this.prisma.emailVerificationToken.updateMany({
+      where: { userId: user.id, type: EmailTokenType.MAGIC_LINK, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    const rawToken = uuidv4();
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    await this.prisma.emailVerificationToken.create({
+      data: { tokenHash, userId: user.id, expiresAt, type: EmailTokenType.MAGIC_LINK },
+    });
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
+    const magicUrl = `${frontendUrl}/auth/magic-login?token=${rawToken}`;
+
+    await this.emailService.sendMagicLink({
+      to: user.email,
+      firstName: user.firstName ?? 'Kliencie',
+      magicUrl,
+    });
+  }
+
+  async consumeMagicLink(rawToken: string) {
+    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const stored = await this.prisma.emailVerificationToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (
+      !stored ||
+      stored.type !== EmailTokenType.MAGIC_LINK ||
+      stored.usedAt ||
+      stored.expiresAt < new Date()
+    ) {
+      throw new BadRequestException('Invalid or expired magic link');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.emailVerificationToken.update({
+        where: { id: stored.id },
+        data: { usedAt: new Date() },
+      });
+      // Magic link click implicitly proves email ownership
+      if (!stored.user.isEmailVerified) {
+        await tx.user.update({
+          where: { id: stored.userId },
+          data: { isEmailVerified: true },
+        });
+      }
+    });
+
+    return this.generateTokenPair(stored.user);
   }
 
   async generateTokenPair(user: User) {

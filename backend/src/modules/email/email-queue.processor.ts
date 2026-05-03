@@ -79,6 +79,10 @@ export class EmailQueueProcessor extends WorkerHost {
         await this.emailService.sendReturnAdminNotification(payload);
         break;
 
+      case 'magic_link_login':
+        await this.emailService.sendMagicLink(payload);
+        break;
+
       default: {
         const _exhaustive: never = job.data;
         this.logger.warn(`Unknown email job type received: ${(_exhaustive as any).type}`);
