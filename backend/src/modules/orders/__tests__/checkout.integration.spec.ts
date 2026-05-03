@@ -4,7 +4,7 @@
  * wired together. Only the external boundaries are mocked:
  *   - PrismaService  (database)
  *   - StripeClient   (Stripe API)
- *   - EmailService   (Resend)
+ *   - EmailQueueService (BullMQ queue — no Redis in tests)
  *   - InvoiceService (PDF generation + Supabase upload)
  *   - CouponService  (discount validation)
  *   - ConfigService  (env vars)
@@ -18,7 +18,7 @@ import { OrdersService } from '../orders.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../../payments/stripe.client';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { ConfigService } from '@nestjs/config';
@@ -31,27 +31,6 @@ const IDS = {
   paymentIntentId: 'pi_test_integration',
   cartId: 'cart-integration-1',
   variantId: 'pv-integration-1',
-};
-
-const mockCartItems = [
-  {
-    productVariantId: IDS.variantId,
-    quantity: 2,
-    productName: 'Dior Sauvage',
-    variantLabel: '100ml',
-    priceInCents: 34900,
-    sku: 'DS-100',
-    stock: 10,
-    imageUrl: null,
-    slug: 'dior-sauvage',
-  },
-];
-
-const mockCart = {
-  id: IDS.cartId,
-  items: mockCartItems,
-  totalInCents: 69800,
-  itemCount: 2,
 };
 
 const mockOrder = {
@@ -107,12 +86,11 @@ const buildStripeEvent = (
   ({ id: `evt_${type}`, type, data: { object } }) as unknown as Stripe.Event;
 
 describe('Checkout Integration Flow', () => {
-  let cartService: CartService;
   let ordersService: OrdersService;
   let paymentsService: PaymentsService;
   let prisma: any;
   let stripeClient: jest.Mocked<StripeClient>;
-  let emailService: jest.Mocked<EmailService>;
+  let emailService: jest.Mocked<EmailQueueService>;
 
   const buildTransactionMock = (overrides: {
     stock?: number;
@@ -171,7 +149,7 @@ describe('Checkout Integration Flow', () => {
           },
         },
         {
-          provide: EmailService,
+          provide: EmailQueueService,
           useValue: {
             sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
@@ -202,12 +180,11 @@ describe('Checkout Integration Flow', () => {
       ],
     }).compile();
 
-    cartService = module.get(CartService);
     ordersService = module.get(OrdersService);
     paymentsService = module.get(PaymentsService);
     prisma = module.get(PrismaService);
     stripeClient = module.get(StripeClient);
-    emailService = module.get(EmailService);
+    emailService = module.get(EmailQueueService);
   });
 
   describe('happy path: cart → order → payment initiated', () => {
@@ -318,7 +295,7 @@ describe('Checkout Integration Flow', () => {
       );
     });
 
-    it('sends order confirmation email as fire-and-forget', async () => {
+    it('enqueues order confirmation email job', async () => {
       await ordersService.createFromCart(
         'user-1',
         undefined,
