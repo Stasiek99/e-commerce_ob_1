@@ -231,7 +231,8 @@
       "WebFetch(domain:api.github.com)",
       "Bash(node --experimental-vm-modules register-migration.mjs)",
       "Bash(node register-migration.mjs)",
-      "Bash(pnpm --filter backend exec jest --no-coverage)"
+      "Bash(pnpm --filter backend exec jest --no-coverage)",
+      "Bash(pnpm --filter backend exec jest \"payments.service.spec\" --no-coverage)"
     ]
   },
   "enabledMcpjsonServers": [

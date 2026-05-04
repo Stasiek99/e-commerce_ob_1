@@ -155,7 +155,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `NODE_ENV` | `production` | Railway auto-sets, but verify |
 | `STRIPE_SECRET_KEY` | must start with `sk_live_` | Stripe Dashboard → Developers → API keys, **flip the "Test mode" toggle off first** |
 | `STRIPE_PUBLISHABLE_KEY` | must start with `pk_live_` | same page as above |
-| `STRIPE_WEBHOOK_SECRET` | required (non-empty) | Stripe Dashboard → Developers → Webhooks → Add endpoint → URL `https://<railway>/payments/webhook`, events `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_failed` → copy "Signing secret" (`whsec_…`). **Each webhook endpoint has its own secret — test-mode and live-mode secrets are different, don't mix them up.** |
+| `STRIPE_WEBHOOK_SECRET` | required (non-empty) | Stripe Dashboard → Developers → Webhooks → Add endpoint → URL `https://<railway>/payments/webhook`, events `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_failed`, `charge.refund.updated` → copy "Signing secret" (`whsec_…`). **Each webhook endpoint has its own secret — test-mode and live-mode secrets are different, don't mix them up.** |
 | `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` | must point at the Vercel frontend, not localhost | e.g. `https://<vercel>/checkout/success` |
 | `RESEND_API_KEY` | required (no `re_mock` fallback) | Resend Dashboard → API Keys |
 | `EMAIL_FROM` | must be an address on a **verified** domain | see Resend domain verification below |

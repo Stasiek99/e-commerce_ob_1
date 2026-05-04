@@ -99,6 +99,11 @@ export class PaymentsService {
         );
         break;
 
+      case 'charge.refund.updated':
+      case 'refund.updated':
+        await this.handleRefundUpdate(event.data.object as Stripe.Refund);
+        break;
+
       default:
         // Stripe sends ~100 event types. We only react to the ones we care
         // about; everything else is ACKed with 200 so Stripe doesn't retry.
@@ -239,6 +244,114 @@ export class PaymentsService {
       payment.order.items,
       `Stripe event: ${reasonType}`,
     );
+  }
+
+  /**
+   * Handles `charge.refund.updated` and `refund.updated` webhook events.
+   *
+   * Acts as a safety net for async payment methods (e.g. bank transfers) where
+   * Stripe may return a `pending` refund from the API call and only later confirm
+   * it via webhook — or for rare server-crash scenarios where the sync DB update
+   * never completed.
+   *
+   * For full refunds: idempotently applies REFUNDED state + stock restoration.
+   * For partial refunds: the sync path in `partialRefund()` is authoritative;
+   * the webhook validates state consistency and logs if something looks wrong.
+   */
+  private async handleRefundUpdate(refund: Stripe.Refund): Promise<void> {
+    if (refund.status !== 'succeeded' && refund.status !== 'failed') {
+      this.logger.debug(`Skipping refund ${refund.id} with transitional status "${refund.status}"`);
+      return;
+    }
+
+    const paymentIntentId =
+      typeof refund.payment_intent === 'string'
+        ? refund.payment_intent
+        : (refund.payment_intent?.id ?? null);
+
+    if (!paymentIntentId) {
+      this.logger.warn(`Refund ${refund.id} has no payment_intent — cannot reconcile`);
+      return;
+    }
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+      include: { order: { include: { items: true } } },
+    });
+
+    if (!payment) {
+      this.logger.warn(`No payment found for PaymentIntent ${paymentIntentId} (refund ${refund.id})`);
+      return;
+    }
+
+    if (refund.status === 'failed') {
+      this.logger.error(
+        `Stripe refund ${refund.id} FAILED for order ${payment.order.orderNumber} — manual review required`,
+      );
+      return;
+    }
+
+    // status === 'succeeded' ────────────────────────────────────────────────
+
+    if (payment.status === PaymentStatus.REFUNDED) {
+      this.logger.debug(`Payment ${payment.id} already REFUNDED — refund webhook is a no-op`);
+      return;
+    }
+
+    const isFullRefund = refund.amount >= payment.amountInCents;
+
+    if (isFullRefund) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.REFUNDED },
+        });
+        await tx.order.update({
+          where: { id: payment.orderId },
+          data: { status: OrderStatus.REFUNDED },
+        });
+        // Restore stock only for units not already restored by a prior partial cancel
+        for (const item of payment.order.items) {
+          const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+          if (activeQty > 0) {
+            await tx.productVariant.update({
+              where: { id: item.productVariantId },
+              data: { stock: { increment: activeQty } },
+            });
+          }
+        }
+        await tx.orderEvent.create({
+          data: {
+            orderId: payment.orderId,
+            fromStatus: payment.order.status,
+            toStatus: OrderStatus.REFUNDED,
+            actor: 'SYSTEM:stripe-webhook',
+            note: `Async refund ${refund.id} confirmed succeeded`,
+          },
+        });
+      });
+
+      this.logger.log(
+        `Async full refund ${refund.id} applied for order ${payment.order.orderNumber}`,
+      );
+    } else {
+      // Partial refund: `partialRefund()` is the authoritative sync path and updates
+      // cancelledQuantity + stock + order status atomically. The webhook just validates.
+      const alreadyHandled =
+        payment.order.status === OrderStatus.PARTIALLY_REFUNDED ||
+        payment.order.status === OrderStatus.REFUNDED;
+
+      if (!alreadyHandled) {
+        this.logger.error(
+          `Partial refund ${refund.id} succeeded for order ${payment.order.orderNumber} ` +
+            `but order is still ${payment.order.status} — sync path may have failed. Manual review required.`,
+        );
+      } else {
+        this.logger.log(
+          `Partial refund ${refund.id} confirmed for order ${payment.order.orderNumber} (sync path already applied)`,
+        );
+      }
+    }
   }
 
   async getPaymentStatus(orderId: string, requestingUserId: string) {

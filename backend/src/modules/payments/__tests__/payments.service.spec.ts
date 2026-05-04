@@ -785,6 +785,271 @@ describe('PaymentsService', () => {
     });
   });
 
+  describe('handleRefundUpdate (via charge.refund.updated / refund.updated)', () => {
+    const buildRefund = (overrides: Partial<Stripe.Refund> = {}): Stripe.Refund =>
+      ({
+        id: 're_test_123',
+        object: 'refund',
+        amount: 14999,
+        status: 'succeeded',
+        payment_intent: 'pi_test_abc123',
+        ...overrides,
+      }) as unknown as Stripe.Refund;
+
+    const refundPayment = {
+      id: 'payment-1',
+      orderId: 'order-1',
+      status: PaymentStatus.COMPLETED,
+      stripePaymentIntentId: 'pi_test_abc123',
+      amountInCents: 14999,
+      order: {
+        orderNumber: 'ORD-2026-000001',
+        status: OrderStatus.PAID,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 },
+          { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 },
+        ],
+      },
+    };
+
+    const buildFullRefundTx = (capturedState: {
+      paymentStatus?: PaymentStatus;
+      orderStatus?: OrderStatus;
+      stockRestored?: Array<{ id: string; increment: number }>;
+      eventData?: any;
+    }) =>
+      async (fn: any) => {
+        capturedState.stockRestored = [];
+        await fn({
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.paymentStatus = args.data.status;
+            }),
+          },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.orderStatus = args.data.status;
+            }),
+          },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.stockRestored!.push({
+                id: args.where.id,
+                increment: args.data.stock.increment,
+              });
+            }),
+          },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedState.eventData = args.data;
+            }),
+          },
+        });
+      };
+
+    it('routes charge.refund.updated to the refund handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('charge.refund.updated', buildRefund()));
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_test_abc123' } }),
+      );
+    });
+
+    it('routes refund.updated to the refund handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_test_abc123' } }),
+      );
+    });
+
+    it('skips "pending" transitional status without touching the DB', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefund({ status: 'pending' as any })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips "canceled" transitional status without touching the DB', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefund({ status: 'canceled' as any })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('warns and returns when refund has no payment_intent', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefund({ payment_intent: null as any })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('extracts payment_intent.id when payment_intent is an object', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefund({ payment_intent: { id: 'pi_nested_id' } as any })),
+      );
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_nested_id' } }),
+      );
+    });
+
+    it('warns and returns when no payment found for the PaymentIntent ID', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('charge.refund.updated', buildRefund()));
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('logs error and returns without DB changes when refund.status is "failed"', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPayment);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefund({ status: 'failed' })),
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: skips when payment is already REFUNDED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        status: PaymentStatus.REFUNDED,
+      });
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('marks payment and order REFUNDED on a full async refund', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPayment);
+      const state: { paymentStatus?: PaymentStatus; orderStatus?: OrderStatus } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(buildEvent('charge.refund.updated', buildRefund()));
+
+      expect(state.paymentStatus).toBe(PaymentStatus.REFUNDED);
+      expect(state.orderStatus).toBe(OrderStatus.REFUNDED);
+    });
+
+    it('restores stock for active items (quantity - cancelledQuantity) on full refund', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: {
+          ...refundPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+            { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      expect(state.stockRestored).toEqual(
+        expect.arrayContaining([
+          { id: 'pv-1', increment: 2 },
+          { id: 'pv-2', increment: 2 },
+        ]),
+      );
+    });
+
+    it('does not restore stock for items that were already fully cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: {
+          ...refundPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — skip
+            { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 }, // activeQty = 1 — restore
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      const restoredIds = state.stockRestored!.map((s) => s.id);
+      expect(restoredIds).not.toContain('pv-1');
+      expect(restoredIds).toContain('pv-2');
+    });
+
+    it('creates an OrderEvent referencing the refund id and SYSTEM:stripe-webhook actor', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPayment);
+      const state: { eventData?: any } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefund({ id: 're_test_123' })),
+      );
+
+      expect(state.eventData.actor).toBe('SYSTEM:stripe-webhook');
+      expect(state.eventData.toStatus).toBe(OrderStatus.REFUNDED);
+      expect(state.eventData.note).toContain('re_test_123');
+    });
+
+    it('logs confirmation (no DB change) when partial refund arrives and sync path already applied (PARTIALLY_REFUNDED)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: { ...refundPayment.order, status: OrderStatus.PARTIALLY_REFUNDED },
+      });
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('refund.updated', buildRefund({ amount: 5000 })), // partial: 5000 < 14999
+        ),
+      ).resolves.not.toThrow();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('logs confirmation (no DB change) when partial refund arrives and order is already REFUNDED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: { ...refundPayment.order, status: OrderStatus.REFUNDED },
+      });
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('charge.refund.updated', buildRefund({ amount: 5000 })),
+        ),
+      ).resolves.not.toThrow();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('logs error (no DB change) when partial refund arrives but order is still in unexpected status (sync path failed)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: { ...refundPayment.order, status: OrderStatus.PAID }, // sync path never ran
+      });
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('refund.updated', buildRefund({ amount: 5000 })),
+        ),
+      ).resolves.not.toThrow();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
   describe('refundPayment', () => {
     it('throws NotFoundException when no payment exists for the order', async () => {
       prisma.payment.findUnique.mockResolvedValue(null);
