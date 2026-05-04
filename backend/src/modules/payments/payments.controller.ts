@@ -19,8 +19,11 @@ import { User } from '@prisma/client';
 import { PaymentsService } from './payments.service';
 import { StripeClient } from './stripe.client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Role } from '@fragrance-store/shared-types';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard)
@@ -79,6 +82,8 @@ export class PaymentsController {
   }
 
   @Post(':orderId/refund')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
   @HttpCode(HttpStatus.OK)
   async refund(@Param('orderId', ParseUUIDPipe) orderId: string) {
     await this.paymentsService.refundPayment(orderId);
