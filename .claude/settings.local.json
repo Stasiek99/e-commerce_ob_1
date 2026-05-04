@@ -232,7 +232,13 @@
       "Bash(node --experimental-vm-modules register-migration.mjs)",
       "Bash(node register-migration.mjs)",
       "Bash(pnpm --filter backend exec jest --no-coverage)",
-      "Bash(pnpm --filter backend exec jest \"payments.service.spec\" --no-coverage)"
+      "Bash(pnpm --filter backend exec jest \"payments.service.spec\" --no-coverage)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Out-Null *)",
+      "PowerShell(claude *)",
+      "PowerShell(winget install *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Test-Path *)"
     ]
   },
   "enabledMcpjsonServers": [

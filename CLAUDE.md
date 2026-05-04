@@ -138,7 +138,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 - **Build:** `pnpm --filter backend exec prisma generate && pnpm --filter backend build`
 - **Start:** `node backend/dist/main`
 - **Pre-deploy:** `pnpm --filter backend exec prisma migrate deploy` — runs after build, before traffic is shifted. Blocks the deploy if migrations fail, which is what we want (no half-migrated prod).
-- **Healthcheck:** `GET /health` (wired to `HealthController`, does a `SELECT 1` against Postgres). Timeout 300s.
+- **Healthcheck:** `GET /health` (wired to `HealthController`, runs `SELECT 1` against Postgres + `PING` against Redis in parallel; returns `{ status, db, redis, timestamp }`). Timeout 300s.
 - **Restart policy:** `ON_FAILURE`.
 - **Watch patterns:** limit rebuilds to `backend/**`, `packages/shared-types/**`, `pnpm-lock.yaml`, `package.json`, `railway.json` — frontend changes don't redeploy the backend.
 
@@ -159,6 +159,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` | must point at the Vercel frontend, not localhost | e.g. `https://<vercel>/checkout/success` |
 | `RESEND_API_KEY` | required (no `re_mock` fallback) | Resend Dashboard → API Keys |
 | `EMAIL_FROM` | must be an address on a **verified** domain | see Resend domain verification below |
+| `REDIS_URL` | required — **hard gate**: BullMQ email queue (order confirmation, invoice, payment failure, shipping notification) silently never processes without a real Redis instance; `redis://localhost:6379` is the dev default but does not exist on Railway | Railway Dashboard → New Service → Redis → copy the connection URL |
 | `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
 | `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
 

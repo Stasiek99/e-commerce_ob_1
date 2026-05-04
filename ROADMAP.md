@@ -330,6 +330,7 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Register business domain + point DNS
 - [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
 - [ ] Resend Dashboard → Webhooks → Add endpoint: URL `https://<railway>/email/webhook`, events `email.sent`, `email.delivered`, `email.bounced`, `email.complained` → copy Signing Secret → set `RESEND_WEBHOOK_SECRET` in Railway
+- [ ] **[HARD GATE] Provision Railway Redis service → copy the `REDIS_URL` → set it in Railway backend service env vars.** Without a real Redis instance, BullMQ silently never processes jobs — 100% of transactional emails (order confirmation, invoice, payment failure, shipping notification) queue and never send. Verify by hitting `GET /health` and confirming `"redis": "connected"` alongside `"db": "connected"`.
 - [ ] Stripe: update statement descriptor to real business name
 - [ ] Seed real product catalog (products, variants, images, categories) — see field guide below
 - [ ] Upload product images to Supabase `product-images` bucket
@@ -341,7 +342,7 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
 
-**Exit criteria:** Real domain live · Emails sending from verified domain · Real products visible · Stripe live checkout works · Backups configured
+**Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · Backups configured
 
 ---
 
