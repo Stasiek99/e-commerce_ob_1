@@ -19,6 +19,7 @@ import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { MagicLinkRequestDto, MagicLinkVerifyDto } from './dto/magic-link.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -135,6 +136,27 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.token, dto.password);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 3600000, limit: 5 } })  // 5 requests per hour per IP
+  @Post('magic-link')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async requestMagicLink(@Body() dto: MagicLinkRequestDto) {
+    await this.authService.requestMagicLink(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 3600000, limit: 10 } })  // 10 attempts per hour
+  @Post('magic-link/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMagicLink(
+    @Body() dto: MagicLinkVerifyDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { accessToken, refreshToken } = await this.authService.consumeMagicLink(dto.token);
+    res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+    return { accessToken };
   }
 
   @Public()
