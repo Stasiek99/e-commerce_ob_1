@@ -86,7 +86,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] Vercel frontend — prerendered build, `environment.prod.ts` API URL updated
 - [x] Supabase — RLS on product-images bucket, verify connection limits
 - [x] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
-- [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
+- [ ] **[HARD GATE — Phase 7]** Database backups — deferred to Phase 7 where it is a go-live hard gate (see Phase 7 checklist). Resolving here marks it acknowledged; action required before Stripe live mode.
 
 ### 1D. Smoke Testing (Days 6-7)
 
@@ -334,7 +334,7 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Stripe: update statement descriptor to real business name
 - [ ] Seed real product catalog (products, variants, images, categories) — see field guide below
 - [ ] Upload product images to Supabase `product-images` bucket
-- [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
+- [ ] **[HARD GATE] Configure database backups before enabling Stripe live mode.** Supabase free tier has no PITR — a bad migration or accidental bulk-delete before backups are enabled is unrecoverable and constitutes a potential GDPR Art. 33 breach notification. Options: (a) upgrade to Supabase Pro (enables automatic PITR + daily snapshots, simplest), or (b) set up a weekly `pg_dump` job to S3/R2 (e.g. Railway cron → `pg_dump $DATABASE_URL | gzip | aws s3 cp - s3://<bucket>/backup-$(date +%Y%m%d).sql.gz`). Verify by confirming at least one successful backup exists before flipping Stripe to live mode.
 - [ ] Switch Stripe to live mode in Railway (`sk_live_` / `pk_live_`) — verify checkout end-to-end with a real card (refund immediately)
 - [ ] Google Search Console: submit sitemap, verify indexability
 - [ ] Final CORS check — `FRONTEND_URL` matches production domain
@@ -342,7 +342,7 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
 
-**Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · Backups configured
+**Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · **At least one verified DB backup exists before Stripe live mode**
 
 ---
 

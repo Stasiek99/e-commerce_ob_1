@@ -219,14 +219,6 @@ export class OrdersService {
         );
       }
 
-      // Clear cart inside the transaction so it rolls back if payment init fails
-      const cartRecord = await tx.cart.findFirst({
-        where: userId ? { userId } : { sessionId },
-      });
-      if (cartRecord) {
-        await tx.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
-      }
-
       await tx.orderEvent.create({
         data: {
           orderId: newOrder.id,
@@ -240,8 +232,52 @@ export class OrdersService {
       return newOrder;
     });
 
-    // Initiate payment (outside transaction — P24 API call)
-    const { paymentUrl } = await this.paymentsService.initiatePayment(order.id);
+    // Initiate Stripe Checkout Session outside the transaction (external API call).
+    // If Stripe throws, the committed order is cancelled and stock + coupon are restored
+    // atomically so the customer's cart remains intact and they can retry immediately.
+    let paymentUrl: string;
+    try {
+      ({ paymentUrl } = await this.paymentsService.initiatePayment(order.id));
+    } catch (stripeErr) {
+      this.logger.error(
+        `Payment initiation failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
+      );
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of cart.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+        await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+        if (resolvedCouponId) {
+          await tx.$executeRaw`
+            UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+            WHERE id = ${resolvedCouponId}::uuid
+          `;
+          await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+        }
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM',
+            note: `Payment initiation failed: ${(stripeErr as Error).message}`,
+          },
+        });
+      });
+      throw stripeErr;
+    }
+
+    // Clear cart only after the Stripe session is confirmed — if Stripe had thrown above,
+    // the cart is still intact and the customer can retry.
+    const cartRecord = await this.prisma.cart.findFirst({
+      where: userId ? { userId } : { sessionId },
+    });
+    if (cartRecord) {
+      await this.prisma.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
+    }
 
     // Send confirmation email (fire-and-forget)
     this.emailService
@@ -256,7 +292,6 @@ export class OrdersService {
         })),
         totalInCents,
       })
-      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
       .catch(() => undefined);
 
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants

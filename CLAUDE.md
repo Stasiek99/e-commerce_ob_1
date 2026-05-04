@@ -139,6 +139,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 - **Start:** `node backend/dist/main`
 - **Pre-deploy:** `pnpm --filter backend exec prisma migrate deploy` — runs after build, before traffic is shifted. Blocks the deploy if migrations fail, which is what we want (no half-migrated prod).
 - **Healthcheck:** `GET /health` (wired to `HealthController`, runs `SELECT 1` against Postgres + `PING` against Redis in parallel; returns `{ status, db, redis, timestamp }`). Timeout 300s.
+- **Database backups (HARD GATE — required before Stripe live mode):** Supabase free tier has no PITR. Options: (a) upgrade to Supabase Pro (automatic PITR + daily snapshots), or (b) weekly `pg_dump` to S3/R2 via a Railway cron job. A missing backup before the first real customer order is a potential GDPR Art. 33 breach on data loss.
 - **Restart policy:** `ON_FAILURE`.
 - **Watch patterns:** limit rebuilds to `backend/**`, `packages/shared-types/**`, `pnpm-lock.yaml`, `package.json`, `railway.json` — frontend changes don't redeploy the backend.
 
