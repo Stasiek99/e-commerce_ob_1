@@ -21,6 +21,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { UserOrdersQueryDto } from './dto/user-orders-query.dto';
+import { CancelItemsDto } from './dto/cancel-items.dto';
 import { SessionId } from '../../common/decorators/session-id.decorator';
 
 @Controller('orders')
@@ -63,6 +64,13 @@ export class OrdersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   cancelOrder(@CurrentUser() user: User, @Param('id') id: string, @Body() body: { reason?: string }) {
     return this.ordersService.cancelByUser(id, user.id, body.reason);
+  }
+
+  @Post(':id/cancel-items')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  cancelItems(@CurrentUser() user: User, @Param('id') id: string, @Body() dto: CancelItemsDto) {
+    return this.ordersService.cancelItemsByUser(id, user.id, dto);
   }
 
   // ── Admin ────────────────────────────────────────────────────────────────

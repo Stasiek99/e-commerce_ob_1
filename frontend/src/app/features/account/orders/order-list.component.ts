@@ -22,8 +22,9 @@ const STATUS_LABELS: Record<string, string> = {
   PROCESSING:      'W realizacji',
   SHIPPED:         'Wysłane',
   DELIVERED:       'Dostarczone',
-  CANCELLED:       'Anulowane',
-  REFUNDED:        'Zwrócone',
+  CANCELLED:          'Anulowane',
+  REFUNDED:           'Zwrócone',
+  PARTIALLY_REFUNDED: 'Częściowo zwrócone',
 };
 
 const PAGE_SIZE = 20;
@@ -89,22 +90,6 @@ const PAGE_SIZE = 20;
 
     .order-cell { border-bottom: 1px solid var(--color-border); }
     .order-cell:last-child { border-bottom: none; }
-
-    .status {
-      padding: 3px 10px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 600;
-      background: var(--color-border);
-      white-space: nowrap;
-    }
-    .status--paid            { background: var(--color-status-paid-bg);      color: var(--color-status-paid-text); }
-    .status--pending_payment { background: var(--color-status-pending-bg);   color: var(--color-status-pending-text); }
-    .status--cancelled       { background: var(--color-status-cancelled-bg); color: var(--color-status-cancelled-text); }
-    .status--shipped         { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
-    .status--refunded        { background: #f3f4f6; color: #6b7280; }
-    .status--processing      { background: #eff6ff; color: #1d4ed8; }
-    .status--delivered       { background: #f0fdf4; color: #166534; }
 
     .order-total { font-size: 14px; white-space: nowrap; }
     .empty { padding: 32px; color: var(--color-secondary); text-align: center; }

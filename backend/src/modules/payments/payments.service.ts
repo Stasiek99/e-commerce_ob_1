@@ -318,7 +318,7 @@ export class PaymentsService {
   async refundPayment(orderId: string, actor = 'ADMIN'): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      include: { order: { include: { items: true } } },
+      include: { order: { select: { orderNumber: true, status: true, items: true } } },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -349,17 +349,21 @@ export class PaymentsService {
         data: { status: OrderStatus.REFUNDED },
       });
 
+      // Only restore units not already returned by a prior partial refund
       for (const item of payment.order.items) {
-        await tx.productVariant.update({
-          where: { id: item.productVariantId },
-          data: { stock: { increment: item.quantity } },
-        });
+        const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
+        if (activeQuantity > 0) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: activeQuantity } },
+          });
+        }
       }
 
       await tx.orderEvent.create({
         data: {
           orderId,
-          fromStatus: OrderStatus.PAID,
+          fromStatus: payment.order.status,
           toStatus: OrderStatus.REFUNDED,
           actor,
           note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
@@ -369,6 +373,79 @@ export class PaymentsService {
 
     this.logger.log(
       `Refund issued for order ${payment.order.orderNumber} — stock restored`,
+    );
+  }
+
+  /**
+   * Issues a Stripe partial refund for specific order items, restores their stock,
+   * and transitions the order to PARTIALLY_REFUNDED (or REFUNDED if all items are cancelled).
+   */
+  async partialRefund(
+    orderId: string,
+    items: Array<{ orderItemId: string; productVariantId: string; quantity: number; priceInCents: number }>,
+    currentOrderStatus: OrderStatus,
+    actor: string,
+  ): Promise<void> {
+    const payment = await this.prisma.payment.findUnique({
+      where: { orderId },
+      select: { id: true, status: true, stripePaymentIntentId: true, order: { select: { orderNumber: true } } },
+    });
+
+    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+    if (payment.status !== PaymentStatus.COMPLETED) {
+      throw new Error(`Cannot issue a partial refund for payment with status ${payment.status}`);
+    }
+    if (!payment.stripePaymentIntentId) {
+      throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
+    }
+
+    const refundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const idempotencyKey = `${orderId}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
+
+    await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of items) {
+        await tx.orderItem.update({
+          where: { id: item.orderItemId },
+          data: { cancelledQuantity: { increment: item.quantity } },
+        });
+        await tx.productVariant.update({
+          where: { id: item.productVariantId },
+          data: { stock: { increment: item.quantity } },
+        });
+      }
+
+      const updatedItems = await tx.orderItem.findMany({ where: { orderId } });
+      const allCancelled = updatedItems.every(i => i.cancelledQuantity >= i.quantity);
+      const newOrderStatus = allCancelled ? OrderStatus.REFUNDED : OrderStatus.PARTIALLY_REFUNDED;
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: newOrderStatus },
+      });
+
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          refundedAmountInCents: { increment: refundAmountInCents },
+          ...(allCancelled && { status: PaymentStatus.REFUNDED }),
+        },
+      });
+
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: currentOrderStatus,
+          toStatus: newOrderStatus,
+          actor,
+          note: `Partial refund of ${refundAmountInCents} gr for ${items.length} item line(s)`,
+        },
+      });
+    });
+
+    this.logger.log(
+      `Partial refund of ${refundAmountInCents} gr issued for order ${payment.order.orderNumber}`,
     );
   }
 

@@ -86,6 +86,7 @@ describe('OrdersService', () => {
             initiatePayment: jest.fn(),
             expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
             refundPayment: jest.fn().mockResolvedValue(undefined),
+            partialRefund: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -1031,6 +1032,235 @@ describe('OrdersService', () => {
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(0);
       expect(result.needsRefund).toHaveLength(0);
+    });
+  });
+
+  describe('cancelItemsByUser', () => {
+    const mockOrderItems = [
+      {
+        id: 'item-1',
+        productVariantId: 'pv-1',
+        quantity: 3,
+        cancelledQuantity: 0,
+        snapshotName: 'Dior Sauvage 100ml',
+        snapshotSku: 'DS-100',
+        snapshotPrice: 34900,
+      },
+      {
+        id: 'item-2',
+        productVariantId: 'pv-2',
+        quantity: 2,
+        cancelledQuantity: 1,
+        snapshotName: 'Chanel No 5 50ml',
+        snapshotSku: 'CN5-50',
+        snapshotPrice: 44900,
+      },
+    ];
+
+    const mockPaidOrder = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotEmail: 'test@example.com',
+      snapshotFirstName: 'Jan',
+      totalInCents: 100000,
+      items: mockOrderItems,
+    };
+
+    it('throws BadRequestException when dto.items is empty', async () => {
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', { items: [] }),
+      ).rejects.toThrow('No items provided for cancellation');
+    });
+
+    it('throws NotFoundException when order not found for user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException for PENDING_PAYMENT status', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        status: OrderStatus.PENDING_PAYMENT,
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow('Cannot partially cancel an order with status PENDING_PAYMENT');
+    });
+
+    it('throws BadRequestException for SHIPPED status', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        status: OrderStatus.SHIPPED,
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow('Cannot partially cancel an order with status SHIPPED');
+    });
+
+    it('throws BadRequestException for CANCELLED status', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        status: OrderStatus.CANCELLED,
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow('Cannot partially cancel an order with status CANCELLED');
+    });
+
+    it('throws BadRequestException when orderItemId not found in order', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'nonexistent-item', quantity: 1 }],
+        }),
+      ).rejects.toThrow('Item nonexistent-item not found in this order');
+    });
+
+    it('throws BadRequestException when quantity exceeds remaining quantity', async () => {
+      // item-2 has quantity=2, cancelledQuantity=1 → remaining=1
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-2', quantity: 2 }],
+        }),
+      ).rejects.toThrow('Invalid quantity 2');
+    });
+
+    it('throws BadRequestException when quantity is 0', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 0 }],
+        }),
+      ).rejects.toThrow('Invalid quantity 0');
+    });
+
+    it('delegates to paymentsService.partialRefund with resolved items and CUSTOMER actor', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [
+          {
+            orderItemId: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            priceInCents: 34900,
+          },
+        ],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('resolves remaining quantity correctly accounting for already-cancelled items', async () => {
+      // item-2: quantity=2, cancelledQuantity=1 → remaining=1 → quantity=1 should succeed
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-2', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-2', quantity: 1, priceInCents: 44900 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('sends cancellation email with correct refund amount (fire-and-forget)', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+      const emailService = (service as any).emailService;
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      // 2 × 34900 = 69800
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'test@example.com',
+          orderNumber: 'ORD-2026-000001',
+          firstName: 'Jan',
+          totalInCents: 69800,
+          isRefund: true,
+        }),
+      );
+    });
+
+    it('accepts PROCESSING status as valid for partial cancellation', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        status: OrderStatus.PROCESSING,
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(paymentsService.partialRefund).toHaveBeenCalled();
+    });
+
+    it('accepts PARTIALLY_REFUNDED status as valid for partial cancellation', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(paymentsService.partialRefund).toHaveBeenCalled();
+    });
+
+    it('handles multiple items in a single request', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 2 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        expect.arrayContaining([
+          expect.objectContaining({ orderItemId: 'item-1', quantity: 2 }),
+          expect.objectContaining({ orderItemId: 'item-2', quantity: 1 }),
+        ]),
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
     });
   });
 

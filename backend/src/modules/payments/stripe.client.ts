@@ -106,6 +106,17 @@ export class StripeClient {
     );
   }
 
+  async createPartialRefund(
+    paymentIntentId: string,
+    amountInCents: number,
+    idempotencyKey: string,
+  ): Promise<Stripe.Refund> {
+    return this.stripe.refunds.create(
+      { payment_intent: paymentIntentId, amount: amountInCents },
+      { idempotencyKey: `partial-refund-${idempotencyKey}` },
+    );
+  }
+
   constructWebhookEvent(rawBody: Buffer, signatureHeader: string): Stripe.Event {
     if (!this.webhookSecret) {
       throw new Error(
