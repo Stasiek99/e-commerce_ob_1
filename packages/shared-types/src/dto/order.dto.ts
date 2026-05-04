@@ -39,7 +39,12 @@ export interface OrderItemDto {
   snapshotSku: string;
   snapshotPrice: number;
   quantity: number;
+  cancelledQuantity: number;
   totalPrice: number;
+}
+
+export interface CancelItemsDto {
+  items: Array<{ orderItemId: string; quantity: number }>;
 }
 
 export interface OrderDto {
@@ -61,6 +66,7 @@ export interface OrderDto {
   shippingCostInCents: number;
   discountInCents: number;
   totalInCents: number;
+  refundedAmountInCents: number;
   notes?: string;
   payment?: {
     status: PaymentStatus;

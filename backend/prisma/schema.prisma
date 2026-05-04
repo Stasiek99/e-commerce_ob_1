@@ -23,6 +23,7 @@ enum OrderStatus {
   DELIVERED
   CANCELLED
   REFUNDED
+  PARTIALLY_REFUNDED
 }
 
 enum PaymentStatus {
@@ -361,10 +362,11 @@ model OrderItem {
   productVariantId String
   productVariant   ProductVariant @relation(fields: [productVariantId], references: [id])
 
-  snapshotName  String
-  snapshotSku   String
-  snapshotPrice Int
-  quantity      Int
+  snapshotName      String
+  snapshotSku       String
+  snapshotPrice     Int
+  quantity          Int
+  cancelledQuantity Int @default(0)
 
   @@map("order_items")
 }
@@ -380,6 +382,7 @@ model Payment {
   stripeCheckoutSessionId  String?       @unique
   stripePaymentIntentId    String?       @unique
   amountInCents            Int
+  refundedAmountInCents    Int           @default(0)
   currency                 String        @default("PLN")
   paidAt                   DateTime?
   failureReason            String?

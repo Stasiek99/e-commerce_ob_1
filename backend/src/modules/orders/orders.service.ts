@@ -358,7 +358,7 @@ export class OrdersService {
       );
     }
 
-    const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+    const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.PARTIALLY_REFUNDED] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {
       // No payment made — expire the Stripe session (best-effort) and cancel
@@ -408,6 +408,70 @@ export class OrdersService {
         firstName: order.snapshotFirstName,
         totalInCents: order.totalInCents,
         isRefund,
+      })
+      .catch(() => undefined);
+  }
+
+  async cancelItemsByUser(
+    orderId: string,
+    userId: string,
+    dto: { items: Array<{ orderItemId: string; quantity: number }> },
+  ): Promise<void> {
+    if (!dto.items.length) throw new BadRequestException('No items provided for cancellation');
+
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const cancellableStatuses: OrderStatus[] = [
+      OrderStatus.PAID,
+      OrderStatus.PROCESSING,
+      OrderStatus.PARTIALLY_REFUNDED,
+    ];
+    if (!cancellableStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        `Cannot partially cancel an order with status ${order.status}`,
+      );
+    }
+
+    const resolvedItems: Array<{
+      orderItemId: string;
+      productVariantId: string;
+      quantity: number;
+      priceInCents: number;
+    }> = [];
+
+    for (const line of dto.items) {
+      const item = order.items.find(i => i.id === line.orderItemId);
+      if (!item) throw new BadRequestException(`Item ${line.orderItemId} not found in this order`);
+
+      const remaining = item.quantity - item.cancelledQuantity;
+      if (line.quantity < 1 || line.quantity > remaining) {
+        throw new BadRequestException(
+          `Invalid quantity ${line.quantity} for "${item.snapshotName}" — remaining: ${remaining}`,
+        );
+      }
+
+      resolvedItems.push({
+        orderItemId: item.id,
+        productVariantId: item.productVariantId,
+        quantity: line.quantity,
+        priceInCents: item.snapshotPrice,
+      });
+    }
+
+    await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
+
+    const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    this.emailService
+      .sendOrderCancellation({
+        to: order.snapshotEmail,
+        orderNumber: order.orderNumber,
+        firstName: order.snapshotFirstName,
+        totalInCents: refundAmountInCents,
+        isRefund: true,
       })
       .catch(() => undefined);
   }

@@ -228,7 +228,10 @@
       "Bash(gh run *)",
       "Bash(where gh *)",
       "Bash(C:/Program Files/GitHub CLI/gh.exe run *)",
-      "WebFetch(domain:api.github.com)"
+      "WebFetch(domain:api.github.com)",
+      "Bash(node --experimental-vm-modules register-migration.mjs)",
+      "Bash(node register-migration.mjs)",
+      "Bash(pnpm --filter backend exec jest --no-coverage)"
     ]
   },
   "enabledMcpjsonServers": [
