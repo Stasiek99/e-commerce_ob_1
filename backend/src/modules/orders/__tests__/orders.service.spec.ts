@@ -313,10 +313,10 @@ describe('OrdersService', () => {
       expect(capturedOrderData.termsAcceptedAt).toEqual(new Date('2026-04-09T12:00:00.000Z'));
     });
 
-    it('should clear cart within the same transaction', async () => {
+    it('should clear cart after payment session is confirmed', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.cart.findFirst.mockResolvedValue({ id: 'cart-1' });
 
-      let cartCleared = false;
       prisma.$transaction.mockImplementation(async (fn: any) => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
@@ -327,11 +327,7 @@ describe('OrdersService', () => {
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
-          cartItem: {
-            deleteMany: jest.fn().mockImplementation(() => {
-              cartCleared = true;
-            }),
-          },
+          cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
         };
         return fn(tx);
@@ -344,7 +340,7 @@ describe('OrdersService', () => {
         carrierCode: CarrierCode.DHL,
       });
 
-      expect(cartCleared).toBe(true);
+      expect(prisma.cartItem.deleteMany).toHaveBeenCalled();
     });
 
     it('resolves address by saved addressId', async () => {

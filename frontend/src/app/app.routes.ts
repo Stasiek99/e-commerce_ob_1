@@ -184,6 +184,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'partnership',
+    loadComponent: () =>
+      import('./features/partnership/partnership.component').then(
+        (m) => m.PartnershipComponent,
+      ),
+  },
+  {
     path: '**',
     redirectTo: '',
   },

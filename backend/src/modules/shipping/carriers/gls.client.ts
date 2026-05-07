@@ -32,13 +32,13 @@ export class GlsClient {
   constructor(configService: ConfigService) {
     this.mockEnabled = configService.get<string>('GLS_MOCK_ENABLED') === 'true';
 
-    this.senderId = configService.getOrThrow<string>('GLS_SENDER_ID');
+    this.senderId = this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_SENDER_ID');
 
     this.client = axios.create({
       baseURL: 'https://adeplus.gls-poland.com/adeplus/pm1/ade_webapi2.php',
       auth: {
-        username: configService.getOrThrow<string>('GLS_USERNAME'),
-        password: configService.getOrThrow<string>('GLS_PASSWORD'),
+        username: this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_USERNAME'),
+        password: this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_PASSWORD'),
       },
       headers: { 'Content-Type': 'application/json' },
     });

@@ -1034,7 +1034,7 @@ describe('PaymentsService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('logs error (no DB change) when partial refund arrives but order is still in unexpected status (sync path failed)', async () => {
+    it('applies best-effort recovery via $transaction when partial refund arrives but order is still PAID (sync path failed)', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         ...refundPayment,
         order: { ...refundPayment.order, status: OrderStatus.PAID }, // sync path never ran
@@ -1046,7 +1046,7 @@ describe('PaymentsService', () => {
         ),
       ).resolves.not.toThrow();
 
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
   });
 
