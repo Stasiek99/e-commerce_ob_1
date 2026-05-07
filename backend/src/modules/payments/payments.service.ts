@@ -342,10 +342,34 @@ export class PaymentsService {
         payment.order.status === OrderStatus.REFUNDED;
 
       if (!alreadyHandled) {
+        // Sync path failed (likely a DB crash after Stripe succeeded). Apply best-effort
+        // recovery: mark the order PARTIALLY_REFUNDED and record the refunded amount so
+        // financials are correct. cancelledQuantity per item cannot be reconstructed here —
+        // it requires manual correction in the admin panel.
         this.logger.error(
-          `Partial refund ${refund.id} succeeded for order ${payment.order.orderNumber} ` +
-            `but order is still ${payment.order.status} — sync path may have failed. Manual review required.`,
+          `[CRITICAL] Partial refund ${refund.id} succeeded for order ${payment.order.orderNumber} ` +
+            `but order is still ${payment.order.status} — sync path failed. ` +
+            `Applying best-effort recovery; cancelledQuantity requires manual correction.`,
         );
+        await this.prisma.$transaction([
+          this.prisma.order.update({
+            where: { id: payment.orderId },
+            data: { status: OrderStatus.PARTIALLY_REFUNDED },
+          }),
+          this.prisma.payment.update({
+            where: { id: payment.id },
+            data: { refundedAmountInCents: { increment: refund.amount } },
+          }),
+          this.prisma.orderEvent.create({
+            data: {
+              orderId: payment.orderId,
+              fromStatus: payment.order.status,
+              toStatus: OrderStatus.PARTIALLY_REFUNDED,
+              actor: 'SYSTEM:stripe-webhook',
+              note: `Async partial refund ${refund.id} — cancelledQuantity requires manual correction`,
+            },
+          }),
+        ]);
       } else {
         this.logger.log(
           `Partial refund ${refund.id} confirmed for order ${payment.order.orderNumber} (sync path already applied)`,
@@ -451,38 +475,50 @@ export class PaymentsService {
 
     await this.stripeClient.createRefund(payment.stripePaymentIntentId, orderId);
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: { status: PaymentStatus.REFUNDED },
-      });
+    // Stripe refund is now in flight. If the DB transaction below fails or the process
+    // crashes, the charge.refund.updated webhook will fire and handleRefundUpdate() will
+    // apply this state idempotently.
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.REFUNDED },
+        });
 
-      await tx.order.update({
-        where: { id: orderId },
-        data: { status: OrderStatus.REFUNDED },
-      });
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: OrderStatus.REFUNDED },
+        });
 
-      // Only restore units not already returned by a prior partial refund
-      for (const item of payment.order.items) {
-        const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
-        if (activeQuantity > 0) {
-          await tx.productVariant.update({
-            where: { id: item.productVariantId },
-            data: { stock: { increment: activeQuantity } },
-          });
+        // Only restore units not already returned by a prior partial refund
+        for (const item of payment.order.items) {
+          const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
+          if (activeQuantity > 0) {
+            await tx.productVariant.update({
+              where: { id: item.productVariantId },
+              data: { stock: { increment: activeQuantity } },
+            });
+          }
         }
-      }
 
-      await tx.orderEvent.create({
-        data: {
-          orderId,
-          fromStatus: payment.order.status,
-          toStatus: OrderStatus.REFUNDED,
-          actor,
-          note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
-        },
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: payment.order.status,
+            toStatus: OrderStatus.REFUNDED,
+            actor,
+            note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
+          },
+        });
       });
-    });
+    } catch (dbErr) {
+      this.logger.error(
+        `[CRITICAL] Full refund DB update failed for order ${payment.order.orderNumber} after Stripe refund succeeded. ` +
+          `PaymentIntent: ${payment.stripePaymentIntentId}. ` +
+          `charge.refund.updated webhook will recover automatically. DB error: ${(dbErr as Error).message}`,
+      );
+      throw dbErr;
+    }
 
     this.logger.log(
       `Refund issued for order ${payment.order.orderNumber} — stock restored`,
@@ -517,6 +553,11 @@ export class PaymentsService {
 
     await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
 
+    // Stripe partial refund is now in flight. If the DB transaction below fails or the
+    // process crashes, the charge.refund.updated webhook fires and handleRefundUpdate()
+    // will apply best-effort recovery (order → PARTIALLY_REFUNDED; cancelledQuantity
+    // may need manual correction since per-item details aren't available to the webhook).
+    try {
     await this.prisma.$transaction(async (tx) => {
       for (const item of items) {
         await tx.orderItem.update({
@@ -556,6 +597,16 @@ export class PaymentsService {
         },
       });
     });
+    } catch (dbErr) {
+      this.logger.error(
+        `[CRITICAL] Partial refund DB update failed for order ${payment.order.orderNumber} after Stripe refund succeeded. ` +
+          `PaymentIntent: ${payment.stripePaymentIntentId}. ` +
+          `Refund: ${refundAmountInCents} gr. ` +
+          `Items: ${JSON.stringify(items.map(i => ({ orderItemId: i.orderItemId, qty: i.quantity })))}. ` +
+          `charge.refund.updated webhook will attempt best-effort recovery. DB error: ${(dbErr as Error).message}`,
+      );
+      throw dbErr;
+    }
 
     this.logger.log(
       `Partial refund of ${refundAmountInCents} gr issued for order ${payment.order.orderNumber}`,
