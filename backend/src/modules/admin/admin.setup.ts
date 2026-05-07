@@ -693,7 +693,8 @@ export async function setupAdmin(
   // Printer-friendly pick list — session-protected, registered before the AdminJS
   // router so Express resolves it here instead of handing it to AdminJS's SPA.
   const sessionMw = session(sessionOpts);
-  (app as any).get('/admin/picklist', sessionMw, async (req: any, res: any) => {
+  const expressApp = app.getHttpAdapter().getInstance();
+  expressApp.get('/admin/picklist', sessionMw, async (req: any, res: any) => {
     if (!req.session?.passport?.user) {
       return res.redirect('/admin/login');
     }

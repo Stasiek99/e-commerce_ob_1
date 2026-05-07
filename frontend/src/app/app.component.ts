@@ -6,14 +6,16 @@ import { TuiRoot } from '@taiga-ui/core';
 import { HeaderComponent } from './shared/components/header/header.component';
 import { FooterComponent } from './shared/components/footer/footer.component';
 import { CookieConsentComponent } from './shared/components/cookie-consent/cookie-consent.component';
+import { AnnouncementBannerComponent } from './shared/components/announcement-banner/announcement-banner.component';
 import { SeoService } from './core/services/seo.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, TuiRoot, HeaderComponent, FooterComponent, CookieConsentComponent],
+  imports: [RouterOutlet, TuiRoot, HeaderComponent, FooterComponent, CookieConsentComponent, AnnouncementBannerComponent],
   template: `
     <tui-root>
+      <app-announcement-banner />
       <app-header />
       <main>
         <router-outlet />

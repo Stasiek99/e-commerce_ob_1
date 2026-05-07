@@ -36,13 +36,13 @@ export class DhlClient {
       ? 'https://api-sandbox.dhl.com/mydhlapi'
       : 'https://express.api.dhl.com/mydhlapi';
 
-    this.accountNumber = configService.getOrThrow<string>('DHL_ACCOUNT_NUMBER');
+    this.accountNumber = this.mockEnabled ? '' : configService.getOrThrow<string>('DHL_ACCOUNT_NUMBER');
 
     this.client = axios.create({
       baseURL,
       auth: {
-        username: configService.getOrThrow<string>('DHL_API_KEY'),
-        password: configService.getOrThrow<string>('DHL_API_SECRET'),
+        username: this.mockEnabled ? '' : configService.getOrThrow<string>('DHL_API_KEY'),
+        password: this.mockEnabled ? '' : configService.getOrThrow<string>('DHL_API_SECRET'),
       },
       headers: { 'Content-Type': 'application/json' },
     });

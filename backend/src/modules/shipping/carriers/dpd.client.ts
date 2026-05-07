@@ -31,13 +31,13 @@ export class DpdClient {
   constructor(configService: ConfigService) {
     this.mockEnabled = configService.get<string>('DPD_MOCK_ENABLED') === 'true';
 
-    this.senderId = configService.getOrThrow<string>('DPD_SENDER_ID');
+    this.senderId = this.mockEnabled ? '' : configService.getOrThrow<string>('DPD_SENDER_ID');
 
     this.client = axios.create({
       baseURL: 'https://cig.dpd.com.pl/services/open/v1',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${configService.getOrThrow<string>('DPD_API_KEY')}`,
+        Authorization: `Bearer ${this.mockEnabled ? '' : configService.getOrThrow<string>('DPD_API_KEY')}`,
       },
     });
 
