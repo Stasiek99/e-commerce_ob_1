@@ -95,7 +95,7 @@ const CATEGORY_LABELS: Record<string, string> = {
           }
 
           <!-- Variant selection -->
-          @if (product()!.variants?.length) {
+          @if (product()!.variants.length) {
             <div class="detail__variants">
               <p class="detail__label">Rozmiar</p>
               <div class="detail__variant-btns">

@@ -238,7 +238,8 @@
       "PowerShell(claude *)",
       "PowerShell(winget install *)",
       "PowerShell(Get-ChildItem *)",
-      "PowerShell(Test-Path *)"
+      "PowerShell(Test-Path *)",
+      "Bash(act --version)"
     ]
   },
   "enabledMcpjsonServers": [
