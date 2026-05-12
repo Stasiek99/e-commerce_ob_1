@@ -33,7 +33,6 @@ import { RouterLink } from '@angular/router';
       background: var(--color-primary);
       color: rgba(255,255,255,0.7);
       padding: 48px 0 24px;
-      margin-top: 64px;
     }
     .footer__inner {
       max-width: var(--max-width);
