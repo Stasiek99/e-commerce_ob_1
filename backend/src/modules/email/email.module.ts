@@ -9,15 +9,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Module({
   imports: [
     PrismaModule,
-    BullModule.registerQueue({
-      name: 'email',
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5_000 },
-        removeOnComplete: { age: 86_400 },
-        removeOnFail: { age: 604_800 },
-      },
-    }),
+    BullModule.registerQueue({ name: 'email' }),
   ],
   controllers: [EmailWebhookController],
   providers: [EmailService, EmailQueueService, EmailQueueProcessor],
