@@ -1,6 +1,5 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { DatePipe } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
 import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
@@ -53,30 +52,30 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, DatePipe, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent],
+  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent],
   template: `
     @if (loading()) {
       <p class="loading">Ładowanie...</p>
     } @else if (product()) {
-      <app-breadcrumb [crumbs]="breadcrumbs()" />
+      <app-breadcrumb [crumbs]="breadcrumbs()"/>
       <div class="detail">
 
         <!-- Gallery -->
         <div class="detail__gallery">
           @if (activeImage()) {
-            <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img" />
+            <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img"/>
           }
           @if ((product()!.images?.length ?? 0) > 1) {
             <div class="detail__thumbs" role="group" aria-label="Miniatury zdjęć">
               @for (img of product()!.images; track img.url; let i = $index) {
                 <button
-                  type="button"
-                  class="detail__thumb-btn"
-                  [class.detail__thumb-btn--active]="activeImage() === img.url"
-                  [attr.aria-label]="'Zdjęcie ' + (i + 1)"
-                  [attr.aria-pressed]="activeImage() === img.url"
-                  (click)="activeImage.set(img.url)">
-                  <img [src]="img.url" [alt]="" class="detail__thumb" />
+                    type="button"
+                    class="detail__thumb-btn"
+                    [class.detail__thumb-btn--active]="activeImage() === img.url"
+                    [attr.aria-label]="'Zdjęcie ' + (i + 1)"
+                    [attr.aria-pressed]="activeImage() === img.url"
+                    (click)="activeImage.set(img.url)">
+                  <img [src]="img.url" [alt]="" class="detail__thumb"/>
                 </button>
               }
             </div>
@@ -101,13 +100,13 @@ const CATEGORY_LABELS: Record<string, string> = {
               <div class="detail__variant-btns">
                 @for (v of product()!.variants; track v.id) {
                   <button
-                    tuiButton
-                    type="button"
-                    size="s"
-                    [appearance]="selectedVariant()?.id === v.id ? 'primary' : 'outline'"
-                    [class.detail__variant-btn--oos]="v.stock === 0"
-                    [attr.aria-label]="v.label + (v.stock === 0 ? ' – brak w magazynie' : '')"
-                    (click)="selectVariant(v)">
+                      tuiButton
+                      type="button"
+                      size="s"
+                      [appearance]="selectedVariant()?.id === v.id ? 'primary' : 'outline'"
+                      [class.detail__variant-btn--oos]="v.stock === 0"
+                      [attr.aria-label]="v.label + (v.stock === 0 ? ' – brak w magazynie' : '')"
+                      (click)="selectVariant(v)">
                     {{ v.label }}
                   </button>
                 }
@@ -117,16 +116,19 @@ const CATEGORY_LABELS: Record<string, string> = {
 
           <!-- Rating summary (above price, clickable anchor) -->
           @if ((product()!.reviewCount ?? 0) > 0) {
-            <a class="detail__rating-summary" role="button" style="cursor:pointer" aria-label="Przejdź do opinii" (click)="scrollToReviews()">
+            <a class="detail__rating-summary" role="button" style="cursor:pointer" aria-label="Przejdź do opinii"
+               (click)="scrollToReviews()">
               <span class="detail__stars" aria-hidden="true">
                 @for (s of starsArray(product()!.avgRating ?? 0); track $index) {
                   <tui-icon [icon]="s === 'full' ? '@tui.star' : s === 'half' ? '@tui.star-half' : '@tui.star'"
                             [class.detail__star--filled]="s !== 'empty'"
-                            [class.detail__star--empty]="s === 'empty'" />
+                            [class.detail__star--empty]="s === 'empty'"></tui-icon>
                 }
               </span>
               <span class="detail__rating-value">{{ product()!.avgRating?.toFixed(1) }}</span>
-              <span class="detail__rating-count">({{ product()!.reviewCount }} {{ product()!.reviewCount === 1 ? 'opinia' : product()!.reviewCount! <= 4 ? 'opinie' : 'opinii' }})</span>
+              <span
+                  class="detail__rating-count">({{ product()!.reviewCount }} {{ product()!.reviewCount === 1 ? 'opinia' : product()!.reviewCount! <= 4 ? 'opinie' : 'opinii' }}
+                )</span>
             </a>
           }
 
@@ -136,12 +138,12 @@ const CATEGORY_LABELS: Record<string, string> = {
               <span class="detail__price">{{ selectedVariant()!.priceInCents | price }}</span>
               @if (selectedVariant()!.stock > 0) {
                 <span class="detail__stock detail__stock--ok">
-                  <tui-icon icon="@tui.check-circle" />
+                  <tui-icon icon="@tui.check-circle"></tui-icon>
                   Dostępny · {{ selectedVariant()!.stock }} szt.
                 </span>
               } @else {
                 <span class="detail__stock detail__stock--out">
-                  <tui-icon icon="@tui.x-circle" />
+                  <tui-icon icon="@tui.x-circle"></tui-icon>
                   Brak w magazynie
                 </span>
               }
@@ -150,35 +152,36 @@ const CATEGORY_LABELS: Record<string, string> = {
             <!-- Quantity + Add to cart + Wishlist -->
             <div class="detail__cta">
               <tui-counter
-                [(ngModel)]="quantity"
-                [min]="1"
-                [max]="selectedVariant()!.stock || 1"
-                appearance="secondary"
-                size="m"
+                  [(ngModel)]="quantity"
+                  [min]="1"
+                  [max]="selectedVariant()!.stock || 1"
+                  appearance="secondary"
+                  size="m"
               ></tui-counter>
               <button
-                tuiButton
-                type="button"
-                appearance="primary"
-                size="l"
-                class="detail__add-btn"
-                [disabled]="adding() || selectedVariant()!.stock === 0"
-                (click)="addToCart()">
+                  tuiButton
+                  type="button"
+                  appearance="primary"
+                  size="l"
+                  class="detail__add-btn"
+                  [disabled]="adding() || selectedVariant()!.stock === 0"
+                  (click)="addToCart()">
                 {{ adding() ? 'Dodawanie…' : 'Dodaj do koszyka' }}
               </button>
               <button
-                tuiButton
-                type="button"
-                appearance="secondary"
-                size="l"
-                class="detail__wishlist-btn"
-                [class.detail__wishlist-btn--active]="wishlisted()"
-                [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
-                (click)="toggleWishlist()">
+                  tuiButton
+                  type="button"
+                  appearance="secondary"
+                  size="l"
+                  class="detail__wishlist-btn"
+                  [class.detail__wishlist-btn--active]="wishlisted()"
+                  [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
+                  (click)="toggleWishlist()">
                 <tui-icon
-                  icon="@tui.heart"
-                  [style.color]="wishlisted() ? 'var(--color-error)' : null"
-                  aria-hidden="true" />
+                    icon="@tui.heart"
+                    [style.color]="wishlisted() ? 'var(--color-error)' : null"
+                    aria-hidden="true">
+                </tui-icon>
               </button>
             </div>
           }
@@ -211,12 +214,12 @@ const CATEGORY_LABELS: Record<string, string> = {
           @if (product()!.description) {
             <div class="detail__desc-section">
               <button tuiButton type="button" appearance="flat" size="s"
-                class="detail__expand-btn"
-                [attr.aria-expanded]="descExpanded"
-                aria-controls="product-description"
-                (click)="descExpanded = !descExpanded">
+                      class="detail__expand-btn"
+                      [attr.aria-expanded]="descExpanded"
+                      aria-controls="product-description"
+                      (click)="descExpanded = !descExpanded">
                 {{ descExpanded ? 'Zwiń opis' : 'Rozwiń opis' }}
-                <tui-icon [icon]="descExpanded ? '@tui.chevron-up' : '@tui.chevron-down'" aria-hidden="true" />
+                <tui-icon [icon]="descExpanded ? '@tui.chevron-up' : '@tui.chevron-down'" aria-hidden="true"></tui-icon>
               </button>
               <tui-expand [expanded]="descExpanded">
                 <div id="product-description" class="detail__desc-body">{{ product()!.description }}</div>
@@ -237,18 +240,18 @@ const CATEGORY_LABELS: Record<string, string> = {
               <button tuiButton type="button" appearance="flat" size="s"
                       class="reviews__toggle-btn"
                       (click)="reviewFormOpen.set(!reviewFormOpen())">
-                <tui-icon [icon]="reviewFormOpen() ? '@tui.chevron-up' : '@tui.chevron-down'" />
+                <tui-icon [icon]="reviewFormOpen() ? '@tui.chevron-up' : '@tui.chevron-down'"></tui-icon>
                 {{ reviewFormOpen() ? 'Ukryj formularz' : 'Napisz opinię' }}
               </button>
               @if (reviewFormOpen()) {
                 <form class="reviews__form" (ngSubmit)="submitReview()">
                   <div class="reviews__form-rating">
                     <span class="reviews__form-label">Twoja ocena *</span>
-                    <tui-rating [(ngModel)]="reviewRating" name="rating" [max]="5" />
+                    <tui-rating [(ngModel)]="reviewRating" name="rating" [max]="5"></tui-rating>
                   </div>
                   <tui-textfield>
                     <input tuiTextfield [(ngModel)]="reviewTitle" name="title"
-                           placeholder="Tytuł (opcjonalnie)" maxlength="100" />
+                           placeholder="Tytuł (opcjonalnie)" maxlength="100"/>
                   </tui-textfield>
                   <tui-textfield>
                     <textarea tuiTextarea [(ngModel)]="reviewBody" name="body"
@@ -269,7 +272,7 @@ const CATEGORY_LABELS: Record<string, string> = {
             </div>
           } @else {
             <div class="reviews__submitted">
-              <tui-icon icon="@tui.check-circle" />
+              <tui-icon icon="@tui.check-circle"></tui-icon>
               Dziękujemy! Twoja opinia zostanie opublikowana po moderacji.
             </div>
           }
@@ -285,10 +288,12 @@ const CATEGORY_LABELS: Record<string, string> = {
             <div class="reviews__sort">
               <button tuiButton type="button" size="s"
                       [appearance]="reviewSort() === 'recent' ? 'primary' : 'outline'"
-                      (click)="setSort('recent')">Najnowsze</button>
+                      (click)="setSort('recent')">Najnowsze
+              </button>
               <button tuiButton type="button" size="s"
                       [appearance]="reviewSort() === 'helpful' ? 'primary' : 'outline'"
-                      (click)="setSort('helpful')">Najbardziej pomocne</button>
+                      (click)="setSort('helpful')">Najbardziej pomocne
+              </button>
             </div>
 
             <ul class="reviews__list">
@@ -299,18 +304,18 @@ const CATEGORY_LABELS: Record<string, string> = {
                       @for (s of starsArray(review.rating); track $index) {
                         <tui-icon [icon]="'@tui.star'"
                                   [class.review-card__star--filled]="s !== 'empty'"
-                                  [class.review-card__star--empty]="s === 'empty'" />
+                                  [class.review-card__star--empty]="s === 'empty'"></tui-icon>
                       }
                     </span>
                     <span class="review-card__author">{{ review.authorName }}</span>
                     @if (review.verifiedPurchase) {
                       <span class="review-card__verified">
-                        <tui-icon icon="@tui.badge-check" />
+                        <tui-icon icon="@tui.badge-check"></tui-icon>
                         Zweryfikowany zakup
                       </span>
                     }
                     <time class="review-card__date">
-                      {{ review.createdAt | date:'d MMM yyyy' : '' : 'pl' }}
+                      {{ formatDate(review.createdAt) }}
                     </time>
                   </div>
                   @if (review.title) {
@@ -327,7 +332,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                   }
                   <button type="button" class="review-card__helpful"
                           (click)="markHelpful(review)">
-                    <tui-icon icon="@tui.thumbs-up" />
+                    <tui-icon icon="@tui.thumbs-up"></tui-icon>
                     Pomocna ({{ review.helpfulCount }})
                   </button>
                 </li>
@@ -549,7 +554,7 @@ export class ProductDetailComponent implements OnInit {
   readonly activeImage = signal<string | null>(null);
   readonly adding = signal(false);
   quantity = 1;
-  descExpanded = false;
+  descExpanded = true;
 
   // ── Reviews ──────────────────────────────────────────────────
   readonly reviews = signal<ReviewSummary[]>([]);
@@ -684,6 +689,10 @@ export class ProductDetailComponent implements OnInit {
 
   scrollToReviews(): void {
     document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  formatDate(value: string | Date): string {
+    return new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value));
   }
 
   starsArray(rating: number): ('full' | 'half' | 'empty')[] {

@@ -1,170 +1,75 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
-import { EmailJobData } from './email-queue.types';
-
-const DEFAULT_JOB_OPTIONS = {
-  attempts: 3,
-  backoff: { type: 'exponential' as const, delay: 5_000 },
-  removeOnComplete: { age: 86_400 },  // keep 24 h
-  removeOnFail: { age: 604_800 },     // keep 7 d for debugging
-} as const;
+import { EmailService } from './email.service';
 
 @Injectable()
 export class EmailQueueService {
   private readonly logger = new Logger(EmailQueueService.name);
 
-  constructor(@InjectQueue('email') private readonly queue: Queue<EmailJobData>) {}
+  constructor(private readonly emailService: EmailService) {}
 
-  private enqueue(data: EmailJobData) {
-    return this.queue.add(data.type, data, DEFAULT_JOB_OPTIONS).catch((err: Error) => {
-      this.logger.error(`Failed to enqueue email job [${data.type}]: ${err.message}`);
-      throw err;
+  private fire(label: string, fn: () => Promise<unknown>): Promise<void> {
+    return fn().then(() => undefined, (err: Error) => {
+      this.logger.error(`Email send failed [${label}]: ${err.message}`);
     });
   }
 
-  sendOrderConfirmation(data: {
-    to: string;
-    orderNumber: string;
-    firstName: string;
-    items: Array<{ name: string; quantity: number; price: number }>;
-    totalInCents: number;
-  }) {
-    return this.enqueue({ type: 'order_confirmation', payload: data });
+  sendOrderConfirmation(data: Parameters<EmailService['sendOrderConfirmation']>[0]) {
+    return this.fire('order_confirmation', () => this.emailService.sendOrderConfirmation(data));
   }
 
-  sendPaymentConfirmed(data: {
-    to: string;
-    orderNumber: string;
-    firstName: string;
-    totalInCents: number;
-  }) {
-    return this.enqueue({ type: 'payment_confirmed', payload: data });
+  sendPaymentConfirmed(data: Parameters<EmailService['sendPaymentConfirmed']>[0]) {
+    return this.fire('payment_confirmed', () => this.emailService.sendPaymentConfirmed(data));
   }
 
-  sendPaymentConfirmedWithInvoice(data: {
-    to: string;
-    orderNumber: string;
-    firstName: string;
-    items: Array<{ name: string; quantity: number; price: number }>;
-    shippingCostInCents: number;
-    totalInCents: number;
-    invoiceUrl: string;
-    invoicePdf: Buffer;
-  }) {
-    const { invoicePdf, ...rest } = data;
-    return this.enqueue({
-      type: 'payment_confirmed_with_invoice',
-      payload: { ...rest, invoicePdfBase64: invoicePdf.toString('base64') },
-    });
+  sendPaymentConfirmedWithInvoice(data: Parameters<EmailService['sendPaymentConfirmedWithInvoice']>[0]) {
+    return this.fire('payment_confirmed_with_invoice', () => this.emailService.sendPaymentConfirmedWithInvoice(data));
   }
 
-  sendOrderCancellation(data: {
-    to: string;
-    orderNumber: string;
-    firstName: string;
-    totalInCents: number;
-    isRefund: boolean;
-  }) {
-    return this.enqueue({ type: 'order_cancellation', payload: data });
+  sendOrderCancellation(data: Parameters<EmailService['sendOrderCancellation']>[0]) {
+    return this.fire('order_cancellation', () => this.emailService.sendOrderCancellation(data));
   }
 
-  sendShippingNotification(data: {
-    to: string;
-    orderNumber: string;
-    firstName: string;
-    carrier: string;
-    trackingNumber: string;
-    trackingUrl?: string;
-  }) {
-    return this.enqueue({ type: 'shipping_notification', payload: data });
+  sendShippingNotification(data: Parameters<EmailService['sendShippingNotification']>[0]) {
+    return this.fire('shipping_notification', () => this.emailService.sendShippingNotification(data));
   }
 
-  sendEmailVerification(data: { to: string; firstName: string; verifyUrl: string }) {
-    return this.enqueue({ type: 'email_verification', payload: data });
+  sendEmailVerification(data: Parameters<EmailService['sendEmailVerification']>[0]) {
+    return this.emailService.sendEmailVerification(data);
   }
 
-  sendEmailChangeVerification(data: {
-    to: string;
-    firstName: string;
-    newEmail: string;
-    verifyUrl: string;
-  }) {
-    return this.enqueue({ type: 'email_change', payload: data });
+  sendEmailChangeVerification(data: Parameters<EmailService['sendEmailChangeVerification']>[0]) {
+    return this.emailService.sendEmailChangeVerification(data);
   }
 
-  sendPasswordReset(data: { to: string; firstName: string; resetUrl: string }) {
-    return this.enqueue({ type: 'password_reset', payload: data });
+  sendPasswordReset(data: Parameters<EmailService['sendPasswordReset']>[0]) {
+    return this.emailService.sendPasswordReset(data);
   }
 
-  sendNewOrderNotification(data: {
-    to: string;
-    orderNumber: string;
-    customerEmail: string;
-    totalInCents: number;
-    items: Array<{ name: string; quantity: number; price: number }>;
-    carrierCode: string;
-    adminUrl?: string;
-  }) {
-    return this.enqueue({ type: 'new_order_notification', payload: data });
+  sendMagicLink(data: Parameters<EmailService['sendMagicLink']>[0]) {
+    return this.emailService.sendMagicLink(data);
   }
 
-  sendLowStockAlert(data: {
-    to: string;
-    orderNumber: string;
-    items: Array<{ sku: string; name: string; stock: number; isOutOfStock: boolean }>;
-  }) {
-    return this.enqueue({ type: 'low_stock_alert', payload: data });
+  sendNewOrderNotification(data: Parameters<EmailService['sendNewOrderNotification']>[0]) {
+    return this.fire('new_order_notification', () => this.emailService.sendNewOrderNotification(data));
   }
 
-  sendBackInStock(data: {
-    to: string;
-    firstName: string;
-    productName: string;
-    variantLabel: string;
-    productUrl: string;
-  }) {
-    return this.enqueue({ type: 'back_in_stock', payload: data });
+  sendLowStockAlert(data: Parameters<EmailService['sendLowStockAlert']>[0]) {
+    return this.fire('low_stock_alert', () => this.emailService.sendLowStockAlert(data));
   }
 
-  sendReviewRequest(data: {
-    to: string;
-    firstName: string;
-    orderNumber: string;
-    products: Array<{ name: string; imageUrl?: string; reviewUrl: string }>;
-  }) {
-    return this.enqueue({ type: 'review_request', payload: data });
+  sendBackInStock(data: Parameters<EmailService['sendBackInStock']>[0]) {
+    return this.fire('back_in_stock', () => this.emailService.sendBackInStock(data));
   }
 
-  sendReturnConfirmation(data: {
-    to: string;
-    firstName: string;
-    orderNumber: string;
-    requestId: string;
-    type: 'WITHDRAWAL' | 'COMPLAINT';
-    items: Array<{ productName: string; quantity: number }>;
-  }) {
-    return this.enqueue({ type: 'return_confirmation', payload: data });
+  sendReviewRequest(data: Parameters<EmailService['sendReviewRequest']>[0]) {
+    return this.fire('review_request', () => this.emailService.sendReviewRequest(data));
   }
 
-  sendReturnAdminNotification(data: {
-    to: string;
-    requestId: string;
-    orderNumber: string;
-    customerName: string;
-    email: string;
-    phone?: string;
-    type: 'WITHDRAWAL' | 'COMPLAINT';
-    deliveryDate?: string;
-    items: Array<{ productName: string; quantity: number }>;
-    reason?: string;
-    requestedResolution?: string;
-    bankAccount?: string;
-  }) {
-    return this.enqueue({ type: 'return_admin_notification', payload: data });
+  sendReturnConfirmation(data: Parameters<EmailService['sendReturnConfirmation']>[0]) {
+    return this.fire('return_confirmation', () => this.emailService.sendReturnConfirmation(data));
   }
 
-  sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {
-    return this.enqueue({ type: 'magic_link_login', payload: data });
+  sendReturnAdminNotification(data: Parameters<EmailService['sendReturnAdminNotification']>[0]) {
+    return this.fire('return_admin_notification', () => this.emailService.sendReturnAdminNotification(data));
   }
 }

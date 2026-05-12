@@ -1,8 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { BullModule } from '@nestjs/bullmq';
-import IORedis from 'ioredis';
+import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
@@ -59,22 +57,6 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
       limit: 60,   // 60 requests/min default
     }]),
     ScheduleModule.forRoot(),
-    BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const isDev = config.get<string>('NODE_ENV') !== 'production';
-        const redis = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
-          maxRetriesPerRequest: null,
-          // In dev, give up after 3 attempts (prevents console spam when Redis isn't running).
-          // In production, keep retrying with exponential backoff up to 30 s.
-          retryStrategy: isDev
-            ? (times) => (times > 3 ? null : Math.min(times * 1_000, 5_000))
-            : (times) => Math.min(times * 200, 30_000),
-        });
-        redis.on('error', () => { /* ioredis error events are logged by retryStrategy — suppress unhandled event crash */ });
-        return { connection: redis };
-      },
-    }),
     CorrelationModule,
     PrismaModule,
     AuthModule,

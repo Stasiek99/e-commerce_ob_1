@@ -5,9 +5,12 @@
   "scripts": {
     "test": "playwright test",
     "test:ui": "playwright test --ui",
-    "install:browsers": "playwright install --with-deps chromium"
+    "install:browsers": "playwright install --with-deps chromium",
+    "scrape": "ts-node --project tsconfig.json scrape-chogan.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0"
+    "@playwright/test": "^1.48.0",
+    "ts-node": "^10.9.2",
+    "@types/node": "^22.0.0"
   }
 }

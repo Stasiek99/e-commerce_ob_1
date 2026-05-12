@@ -239,7 +239,9 @@
       "PowerShell(winget install *)",
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Test-Path *)",
-      "Bash(act --version)"
+      "Bash(act --version)",
+      "Bash(findstr \":3000\")",
+      "Bash(node -e \"const IORedis = require\\('ioredis'\\); console.log\\(IORedis.prototype.constructor.length\\); const r = new IORedis.default || new IORedis; \")"
     ]
   },
   "enabledMcpjsonServers": [
