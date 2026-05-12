@@ -1,75 +1,89 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { EmailService } from './email.service';
+import { EmailJobData } from './email-queue.types';
+
+const JOB_OPTIONS = {
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 5_000 },
+  removeOnComplete: { age: 86_400 },
+  removeOnFail: { age: 604_800 },
+} as const;
+
+type Payload<T extends EmailJobData['type']> = Extract<EmailJobData, { type: T }>['payload'];
 
 @Injectable()
 export class EmailQueueService {
-  private readonly logger = new Logger(EmailQueueService.name);
+  constructor(@InjectQueue('email') private readonly queue: Queue<EmailJobData>) {}
 
-  constructor(private readonly emailService: EmailService) {}
-
-  private fire(label: string, fn: () => Promise<unknown>): Promise<void> {
-    return fn().then(() => undefined, (err: Error) => {
-      this.logger.error(`Email send failed [${label}]: ${err.message}`);
-    });
+  sendEmailVerification(data: Payload<'email_verification'>) {
+    return this.queue.add('email_verification', { type: 'email_verification', payload: data }, JOB_OPTIONS);
   }
 
-  sendOrderConfirmation(data: Parameters<EmailService['sendOrderConfirmation']>[0]) {
-    return this.fire('order_confirmation', () => this.emailService.sendOrderConfirmation(data));
+  sendPasswordReset(data: Payload<'password_reset'>) {
+    return this.queue.add('password_reset', { type: 'password_reset', payload: data }, JOB_OPTIONS);
   }
 
-  sendPaymentConfirmed(data: Parameters<EmailService['sendPaymentConfirmed']>[0]) {
-    return this.fire('payment_confirmed', () => this.emailService.sendPaymentConfirmed(data));
+  sendEmailChangeVerification(data: Payload<'email_change'>) {
+    return this.queue.add('email_change', { type: 'email_change', payload: data }, JOB_OPTIONS);
   }
 
-  sendPaymentConfirmedWithInvoice(data: Parameters<EmailService['sendPaymentConfirmedWithInvoice']>[0]) {
-    return this.fire('payment_confirmed_with_invoice', () => this.emailService.sendPaymentConfirmedWithInvoice(data));
+  sendMagicLink(data: Payload<'magic_link_login'>) {
+    return this.queue.add('magic_link_login', { type: 'magic_link_login', payload: data }, JOB_OPTIONS);
   }
 
-  sendOrderCancellation(data: Parameters<EmailService['sendOrderCancellation']>[0]) {
-    return this.fire('order_cancellation', () => this.emailService.sendOrderCancellation(data));
+  sendOrderConfirmation(data: Payload<'order_confirmation'>) {
+    return this.queue.add('order_confirmation', { type: 'order_confirmation', payload: data }, JOB_OPTIONS);
   }
 
-  sendShippingNotification(data: Parameters<EmailService['sendShippingNotification']>[0]) {
-    return this.fire('shipping_notification', () => this.emailService.sendShippingNotification(data));
+  sendPaymentConfirmed(data: Payload<'payment_confirmed'>) {
+    return this.queue.add('payment_confirmed', { type: 'payment_confirmed', payload: data }, JOB_OPTIONS);
   }
 
-  sendEmailVerification(data: Parameters<EmailService['sendEmailVerification']>[0]) {
-    return this.emailService.sendEmailVerification(data);
+  sendPaymentConfirmedWithInvoice(
+    data: Parameters<EmailService['sendPaymentConfirmedWithInvoice']>[0],
+  ) {
+    const { invoicePdf, ...rest } = data;
+    return this.queue.add(
+      'payment_confirmed_with_invoice',
+      {
+        type: 'payment_confirmed_with_invoice',
+        payload: { ...rest, invoicePdfBase64: invoicePdf.toString('base64') },
+      },
+      JOB_OPTIONS,
+    );
   }
 
-  sendEmailChangeVerification(data: Parameters<EmailService['sendEmailChangeVerification']>[0]) {
-    return this.emailService.sendEmailChangeVerification(data);
+  sendOrderCancellation(data: Payload<'order_cancellation'>) {
+    return this.queue.add('order_cancellation', { type: 'order_cancellation', payload: data }, JOB_OPTIONS);
   }
 
-  sendPasswordReset(data: Parameters<EmailService['sendPasswordReset']>[0]) {
-    return this.emailService.sendPasswordReset(data);
+  sendShippingNotification(data: Payload<'shipping_notification'>) {
+    return this.queue.add('shipping_notification', { type: 'shipping_notification', payload: data }, JOB_OPTIONS);
   }
 
-  sendMagicLink(data: Parameters<EmailService['sendMagicLink']>[0]) {
-    return this.emailService.sendMagicLink(data);
+  sendNewOrderNotification(data: Payload<'new_order_notification'>) {
+    return this.queue.add('new_order_notification', { type: 'new_order_notification', payload: data }, JOB_OPTIONS);
   }
 
-  sendNewOrderNotification(data: Parameters<EmailService['sendNewOrderNotification']>[0]) {
-    return this.fire('new_order_notification', () => this.emailService.sendNewOrderNotification(data));
+  sendLowStockAlert(data: Payload<'low_stock_alert'>) {
+    return this.queue.add('low_stock_alert', { type: 'low_stock_alert', payload: data }, JOB_OPTIONS);
   }
 
-  sendLowStockAlert(data: Parameters<EmailService['sendLowStockAlert']>[0]) {
-    return this.fire('low_stock_alert', () => this.emailService.sendLowStockAlert(data));
+  sendBackInStock(data: Payload<'back_in_stock'>) {
+    return this.queue.add('back_in_stock', { type: 'back_in_stock', payload: data }, JOB_OPTIONS);
   }
 
-  sendBackInStock(data: Parameters<EmailService['sendBackInStock']>[0]) {
-    return this.fire('back_in_stock', () => this.emailService.sendBackInStock(data));
+  sendReviewRequest(data: Payload<'review_request'>) {
+    return this.queue.add('review_request', { type: 'review_request', payload: data }, JOB_OPTIONS);
   }
 
-  sendReviewRequest(data: Parameters<EmailService['sendReviewRequest']>[0]) {
-    return this.fire('review_request', () => this.emailService.sendReviewRequest(data));
+  sendReturnConfirmation(data: Payload<'return_confirmation'>) {
+    return this.queue.add('return_confirmation', { type: 'return_confirmation', payload: data }, JOB_OPTIONS);
   }
 
-  sendReturnConfirmation(data: Parameters<EmailService['sendReturnConfirmation']>[0]) {
-    return this.fire('return_confirmation', () => this.emailService.sendReturnConfirmation(data));
-  }
-
-  sendReturnAdminNotification(data: Parameters<EmailService['sendReturnAdminNotification']>[0]) {
-    return this.fire('return_admin_notification', () => this.emailService.sendReturnAdminNotification(data));
+  sendReturnAdminNotification(data: Payload<'return_admin_notification'>) {
+    return this.queue.add('return_admin_notification', { type: 'return_admin_notification', payload: data }, JOB_OPTIONS);
   }
 }
