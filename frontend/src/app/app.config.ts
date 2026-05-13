@@ -14,6 +14,7 @@ import {
   Router,
   provideRouter,
   withComponentInputBinding,
+  withInMemoryScrolling,
   withViewTransitions,
 } from '@angular/router';
 import {
@@ -42,7 +43,12 @@ const sentryProviders = environment.sentryDsn
 export const appConfig: ApplicationConfig = {
   providers: [
     provideZoneChangeDetection({ eventCoalescing: true }),
-    provideRouter(routes, withComponentInputBinding(), withViewTransitions()),
+    provideRouter(
+      routes,
+      withComponentInputBinding(),
+      withViewTransitions(),
+      withInMemoryScrolling({ scrollPositionRestoration: 'top' }),
+    ),
     provideHttpClient(
       withFetch(),
       withInterceptors([authInterceptor, errorInterceptor]),

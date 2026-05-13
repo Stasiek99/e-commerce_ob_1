@@ -49,7 +49,7 @@ import { TuiButton } from '@taiga-ui/core';
             <span class="feature__eyebrow">Kolekcja Dla Niej</span>
             <h2 class="feature__title">Elegancja<br>zamknięta we flakonie.</h2>
             <p class="feature__subtitle">Delikatne, zmysłowe i niezapomniane. Odkryj zapachy, które podkreślą Twoją wyjątkowość.</p>
-            <a routerLink="/products" [queryParams]="{gender:'women'}" tuiButton appearance="outline" size="m" type="button">Przeglądaj</a>
+            <a routerLink="/category/perfume" [queryParams]="{gender: ['Kobieta', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Przeglądaj</a>
           </div>
           <div class="feature__media">
             <img class="feature__image"
@@ -63,7 +63,7 @@ import { TuiButton } from '@taiga-ui/core';
             <span class="feature__eyebrow">Kolekcja Dla Niego</span>
             <h2 class="feature__title">Charakter<br>bez kompromisów.</h2>
             <p class="feature__subtitle">Intensywne, wyraziste, niezapomniane. Zapachy dla mężczyzny, który wie, czego chce.</p>
-            <a routerLink="/products" [queryParams]="{gender:'men'}" tuiButton appearance="outline" size="m" type="button">Odkryj kolekcję</a>
+            <a routerLink="/category/perfume" [queryParams]="{gender: ['Mężczyzna', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Odkryj kolekcję</a>
           </div>
           <div class="feature__media">
             <img class="feature__image"
@@ -85,7 +85,7 @@ import { TuiButton } from '@taiga-ui/core';
           <span class="showcase__eyebrow">Dom, który pachnie</span>
           <h2 class="showcase__title">Dyfuzory<br>zapachowe.</h2>
           <p class="showcase__subtitle">Stwórz wyjątkowy klimat w każdym pomieszczeniu. Eleganckie kompozycje, które trwają tygodniami i zachwycają każdego gościa.</p>
-          <a routerLink="/products" [queryParams]="{category:'diffuser'}" tuiButton appearance="outline" size="m" type="button">Zobacz dyfuzory</a>
+          <a routerLink="/category/diffusers" tuiButton appearance="outline" size="m" type="button">Zobacz dyfuzory</a>
         </div>
       </section>
 
@@ -95,7 +95,7 @@ import { TuiButton } from '@taiga-ui/core';
           <span class="showcase__eyebrow">Rytuał pielęgnacji</span>
           <h2 class="showcase__title">Żele pod<br>prysznic.</h2>
           <p class="showcase__subtitle">Poczuj luksus podczas każdej kąpieli. Nasze żele otulają skórę pięknym zapachem, który utrzymuje się przez cały dzień.</p>
-          <a routerLink="/products" [queryParams]="{category:'shower_gel'}" tuiButton appearance="outline" size="m" type="button">Zobacz żele</a>
+          <a routerLink="/category/gels" tuiButton appearance="outline" size="m" type="button">Zobacz żele</a>
         </div>
         <div class="showcase__media">
           <img class="showcase__image"
@@ -117,7 +117,7 @@ import { TuiButton } from '@taiga-ui/core';
             <span class="category-card__eyebrow">Odkryj</span>
             <h3 class="category-card__title">Bestsellery</h3>
             <p class="category-card__sub">Zapachy, po które się wraca.</p>
-            <a routerLink="/products" [queryParams]="{bestseller:'true'}" tuiButton appearance="outline" size="m" type="button">Przeglądaj</a>
+            <a routerLink="/products" [queryParams]="{featured: true}" tuiButton appearance="outline" size="m" type="button">Przeglądaj</a>
           </div>
         </div>
 
@@ -567,6 +567,7 @@ get overlayOpacity() { return Math.max(0, 0.5 - this.scrollProgress * 0.35); }
   ngOnInit() {
     if (!this.isBrowser) return;
     this.isMobile = window.innerWidth < 768;
+    window.scrollTo(0, 0);
     this.ngZone.runOutsideAngular(() => {
       window.addEventListener('wheel', this.wheelHandler as EventListener, { passive: false });
       window.addEventListener('scroll', this.scrollHandler);

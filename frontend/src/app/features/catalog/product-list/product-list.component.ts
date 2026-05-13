@@ -11,6 +11,7 @@ import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/brea
 
 const CATEGORY_LABELS: Record<string, string> = {
   perfume: 'Perfumy',
+  'perfume-luxury': 'Perfumy Luksusowe',
   diffusers: 'Dyfuzory',
   gels: 'Żele pod prysznic',
 };
@@ -24,24 +25,93 @@ interface FilterGroup {
 }
 
 const VOLUME_OPTIONS: Record<string, string[]> = {
-  perfume:   ['30ml', '50ml', '70ml'],
-  diffusers: ['100ml', '200ml', '500ml'],
-  gels:      ['250ml'],
+  perfume:           ['30ml', '50ml', '70ml'],
+  'perfume-luxury':  ['50ml'],
+  diffusers:         ['100ml', '200ml', '500ml'],
+  gels:              ['250ml'],
 };
 const ALL_VOLUMES = ['30ml', '50ml', '70ml', '100ml', '200ml', '250ml', '500ml'];
 
-function buildFilterGroups(slug: string | null): FilterGroup[] {
-  return [
-    { label: 'Płeć',                key: 'gender',      options: ['Kobieta', 'Mężczyzna', 'Unisex'] },
-    { label: 'Pojemność',           key: 'volume',      options: slug ? (VOLUME_OPTIONS[slug] ?? []) : ALL_VOLUMES },
-    { label: 'Linia',               key: 'line',        options: ['Millesime', 'Luxury'] },
-    { label: 'Grupa olfaktoryczna', key: 'scentFamily', options: [] },
+const LINE_OPTIONS: Record<string, string[]> = {
+  perfume:          ['Millesime', 'Luxury'],
+  'perfume-luxury': ['Luxury'],
+};
+const ALL_LINE_OPTIONS = ['Millesime', 'Luxury'];
+
+const LINE_VOLUMES: Record<string, string[]> = {
+  Millesime: ['30ml', '70ml'],
+  Luxury:    ['50ml'],
+};
+
+function getVolumeOptions(slug: string | null, stagedLines: string[]): string[] {
+  if (slug === 'perfume' && stagedLines.length > 0) {
+    const allowed = [...new Set(stagedLines.flatMap(l => LINE_VOLUMES[l] ?? []))];
+    if (allowed.length > 0) return allowed.sort((a, b) => parseInt(a) - parseInt(b));
+  }
+  return slug ? (VOLUME_OPTIONS[slug] ?? []) : ALL_VOLUMES;
+}
+
+const VOLUME_LINES: Record<string, string[]> = {
+  '30ml': ['Millesime'],
+  '50ml': ['Luxury'],
+  '70ml': ['Millesime'],
+};
+
+function getLineOptions(slug: string | null, stagedVolumes: string[]): string[] {
+  if (slug === 'perfume' && stagedVolumes.length > 0) {
+    const allowed = [...new Set(stagedVolumes.flatMap(v => VOLUME_LINES[v] ?? []))];
+    if (allowed.length > 0) return allowed;
+  }
+  return slug ? (LINE_OPTIONS[slug] ?? []) : ALL_LINE_OPTIONS;
+}
+
+const APPLICABLE_FILTERS: Record<string, Set<string>> = {
+  'perfume':         new Set(['gender', 'volume', 'line', 'scentFamily']),
+  'perfume-luxury':  new Set(['gender', 'scentFamily']),
+  'diffusers':       new Set(['volume']),
+  'gels':            new Set(['gender', 'scentFamily']),
+};
+
+const SCENT_FAMILY_OPTIONS = [
+  'Ambra', 'Aromatyczny', 'Chypre', 'Cytrusowy', 'Kwiatowy',
+  'Fougère', 'Owocowy', 'Skórzany', 'Piżmowy', 'Korzenny', 'Drzewny',
+];
+
+interface CategoryFacets {
+  scentFamilies: string[];
+  genders: string[];
+}
+
+function buildFilterGroups(
+  slug: string | null,
+  staged: FilterState = {},
+  facets?: CategoryFacets | null,
+): FilterGroup[] {
+  const stagedLines   = staged['line']   ?? [];
+  const stagedVolumes = staged['volume'] ?? [];
+  const applicable    = slug ? APPLICABLE_FILTERS[slug] : null;
+
+  const genderOptions = facets?.genders?.length
+    ? ['Kobieta', 'Mężczyzna', 'Unisex'].filter(o => facets.genders.includes(o))
+    : ['Kobieta', 'Mężczyzna', 'Unisex'];
+
+  const scentOptions = facets?.scentFamilies?.length
+    ? SCENT_FAMILY_OPTIONS.filter(o => facets.scentFamilies.includes(o))
+    : SCENT_FAMILY_OPTIONS;
+
+  const all: FilterGroup[] = [
+    { label: 'Płeć',                key: 'gender',      options: genderOptions },
+    { label: 'Pojemność',           key: 'volume',      options: getVolumeOptions(slug, stagedLines) },
+    { label: 'Linia',               key: 'line',        options: getLineOptions(slug, stagedVolumes) },
+    { label: 'Grupa olfaktoryczna', key: 'scentFamily', options: scentOptions },
   ];
+
+  return applicable ? all.filter(g => applicable.has(g.key)) : all;
 }
 
 type FilterState = Record<string, string[]>;
 const emptyFilters = (): FilterState =>
-  Object.fromEntries(buildFilterGroups(null).map((g: FilterGroup) => [g.key, []]));
+  Object.fromEntries(buildFilterGroups(null, {}).map((g: FilterGroup) => [g.key, []]));
 
 type SortOption = 'newest' | 'price_asc' | 'price_desc';
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
@@ -372,12 +442,14 @@ export class ProductListComponent implements OnInit {
 
   readonly loading = signal(true);
   readonly products = signal<ProductCardData[]>([]);
+  readonly facets = signal<CategoryFacets | null>(null);
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
   readonly skeletons = Array(8);
 
   readonly slug = signal<string | null>(null);
   readonly drawerOpen = signal(false);
+  readonly featuredMode = signal(false);
 
   // staged = what's being edited in the drawer; applied = what drives the fetch
   readonly staged = signal<FilterState>(emptyFilters());
@@ -394,18 +466,19 @@ export class ProductListComponent implements OnInit {
   readonly sortBy = signal<SortOption>('newest');
   sortOpen = false;
 
-  // In-stock toggle — staged with the rest of the drawer filters, default ON
-  readonly stagedInStock = signal(true);
-  readonly appliedInStock = signal(true);
+  // In-stock toggle — staged with the rest of the drawer filters, default OFF (show all)
+  readonly stagedInStock = signal(false);
+  readonly appliedInStock = signal(false);
 
   readonly sortLabel = computed(
     () => SORT_OPTIONS.find(o => o.value === this.sortBy())?.label ?? 'Sortuj',
   );
 
-  // Filter groups are slug-aware: Pojemność options change per category
-  readonly filterGroups = computed(() => buildFilterGroups(this.slug()));
+  // Filter groups are slug-, staged-, and facets-aware: options narrow to what exists in the category
+  readonly filterGroups = computed(() => buildFilterGroups(this.slug(), this.staged(), this.facets()));
 
   readonly pageTitle = computed(() => {
+    if (this.featuredMode()) return 'Bestsellery';
     const s = this.slug();
     return s ? (CATEGORY_LABELS[s] ?? s) : 'Wszystkie produkty';
   });
@@ -424,9 +497,19 @@ export class ProductListComponent implements OnInit {
       const slug = params.get('slug');
       this.slug.set(slug);
       this.pageIndex.set(0);
-      this.appliedFilters.set(emptyFilters());
 
-      const label = slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
+      const qp = this.route.snapshot.queryParamMap;
+      const genders = qp.getAll('gender');
+      const featured = qp.get('featured') === 'true';
+      const initialFilters = emptyFilters();
+      if (genders.length) initialFilters['gender'] = genders;
+      this.appliedFilters.set(initialFilters);
+      this.staged.set({ ...initialFilters });
+      this.featuredMode.set(featured);
+      this.appliedInStock.set(false);
+      this.stagedInStock.set(false);
+
+      const label = featured ? 'Bestsellery' : slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
       this.seo.updatePageMeta({
         title: label,
         description: slug
@@ -434,6 +517,7 @@ export class ProductListComponent implements OnInit {
           : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
       });
 
+      this.loadFacets(slug);
       this.loadProducts(1);
     });
   }
@@ -480,12 +564,34 @@ export class ProductListComponent implements OnInit {
   }
 
   onCheckboxChange(key: string, option: string, checked: boolean): void {
-    this.staged.update(s => ({
-      ...s,
-      [key]: checked
-        ? [...(s[key] ?? []), option]
-        : (s[key] ?? []).filter(v => v !== option),
-    }));
+    this.staged.update(s => {
+      const updated = {
+        ...s,
+        [key]: checked
+          ? [...(s[key] ?? []), option]
+          : (s[key] ?? []).filter(v => v !== option),
+      };
+      if (this.slug() === 'perfume') {
+        if (key === 'line') {
+          const newLines = updated['line'] ?? [];
+          const allowed = new Set(
+            newLines.length > 0
+              ? newLines.flatMap(l => LINE_VOLUMES[l] ?? [])
+              : VOLUME_OPTIONS['perfume'] ?? [],
+          );
+          updated['volume'] = (updated['volume'] ?? []).filter(v => allowed.has(v));
+        } else if (key === 'volume') {
+          const newVols = updated['volume'] ?? [];
+          const allowed = new Set(
+            newVols.length > 0
+              ? newVols.flatMap(v => VOLUME_LINES[v] ?? [])
+              : LINE_OPTIONS['perfume'] ?? [],
+          );
+          updated['line'] = (updated['line'] ?? []).filter(l => allowed.has(l));
+        }
+      }
+      return updated;
+    });
   }
 
   goToPage(index: number): void {
@@ -494,19 +600,37 @@ export class ProductListComponent implements OnInit {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  private loadFacets(slug: string | null): void {
+    if (!slug) { this.facets.set(null); return; }
+    const params = new URLSearchParams({ category: slug });
+    this.http
+      .get<CategoryFacets>(`${environment.apiUrl}/products/facets?${params.toString()}`)
+      .subscribe({ next: (res) => this.facets.set(res), error: () => this.facets.set(null) });
+  }
+
   private loadProducts(page: number): void {
     this.loading.set(true);
     const slug = this.slug();
     const filters = this.appliedFilters();
+    const inStock = this.appliedInStock();
+    const sortBy = this.sortBy();
+    const featured = this.featuredMode();
 
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('limit', String(PAGE_SIZE));
     if (slug) params.set('category', slug);
+    if (featured) params.set('featured', 'true');
 
-    // Wire up backend-supported params; volume + line added after backend step
     filters['gender']?.forEach(v => params.append('gender', v));
     filters['scentFamily']?.forEach(v => params.append('scentFamily', v));
+    filters['line']?.forEach(v => params.append('line', v));
+    filters['volume']?.forEach(v => {
+      const ml = parseInt(v, 10);
+      if (!isNaN(ml)) params.append('volumes', String(ml));
+    });
+    if (inStock) params.set('inStock', 'true');
+    if (sortBy !== 'newest') params.set('sortBy', sortBy);
 
     this.http
       .get<{ data: ProductCardData[]; meta: { totalPages: number } }>(

@@ -25,8 +25,12 @@ export class ProductsService {
     limit?: number;
     category?: string;
     brand?: string;
-    gender?: string;
-    scentFamily?: string;
+    gender?: string[];
+    scentFamily?: string[];
+    line?: string[];
+    volumes?: string[];
+    inStock?: boolean;
+    sortBy?: 'newest' | 'price_asc' | 'price_desc';
     minPrice?: number;
     maxPrice?: number;
     search?: string;
@@ -36,12 +40,40 @@ export class ProductsService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
+    const variantWhere: Prisma.ProductVariantWhereInput = { isActive: true };
+    if (query.volumes?.length) {
+      variantWhere.volume = { in: query.volumes.map((v) => parseInt(v, 10)).filter(Number.isFinite) };
+    }
+    if (query.inStock) {
+      variantWhere.stock = { gt: 0 };
+    }
+    if (query.minPrice !== undefined) {
+      variantWhere.priceInCents = { ...variantWhere.priceInCents as object, gte: query.minPrice };
+    }
+    if (query.maxPrice !== undefined) {
+      variantWhere.priceInCents = { ...variantWhere.priceInCents as object, lte: query.maxPrice };
+    }
+    const hasVariantFilter =
+      query.volumes?.length || query.inStock || query.minPrice !== undefined || query.maxPrice !== undefined;
+
+    let categorySlugs: string[] | undefined;
+    if (query.category) {
+      const cat = await this.prisma.category.findUnique({
+        where: { slug: query.category },
+        include: { children: { select: { slug: true } } },
+      });
+      if (cat) {
+        categorySlugs = [cat.slug, ...cat.children.map((c) => c.slug)];
+      }
+    }
+
     const where: Prisma.ProductWhereInput = {
       isActive: true,
-      ...(query.category && { category: { slug: query.category } }),
+      ...(categorySlugs && { category: { slug: { in: categorySlugs } } }),
       ...(query.brand && { brand: { equals: query.brand, mode: 'insensitive' } }),
-      ...(query.gender && { gender: query.gender }),
-      ...(query.scentFamily && { scentFamily: query.scentFamily }),
+      ...(query.gender?.length && { gender: { in: query.gender } }),
+      ...(query.scentFamily?.length && { scentFamily: { in: query.scentFamily } }),
+      ...(query.line?.length && { line: { in: query.line } }),
       ...(query.featured !== undefined && { isFeatured: query.featured }),
       ...(query.search && {
         OR: [
@@ -50,20 +82,19 @@ export class ProductsService {
           { shortDescription: { contains: query.search, mode: 'insensitive' } },
         ],
       }),
-      ...(query.minPrice !== undefined || query.maxPrice !== undefined
-        ? {
-            variants: {
-              some: {
-                isActive: true,
-                priceInCents: {
-                  ...(query.minPrice !== undefined && { gte: query.minPrice }),
-                  ...(query.maxPrice !== undefined && { lte: query.maxPrice }),
-                },
-              },
-            },
-          }
-        : {}),
+      ...(hasVariantFilter ? { variants: { some: variantWhere } } : {}),
     };
+
+    // Prisma TS types only expose _count for relation orderBy, but _min is supported
+    // at runtime (generates MIN() subquery). Cast bypasses the type gap.
+    const orderBy: Prisma.ProductOrderByWithRelationInput =
+      query.sortBy === 'price_asc' || query.sortBy === 'price_desc'
+        ? ({
+            variants: {
+              _min: { priceInCents: query.sortBy === 'price_asc' ? 'asc' : 'desc' },
+            },
+          } as Prisma.ProductOrderByWithRelationInput)
+        : { createdAt: 'desc' };
 
     const [products, total] = await Promise.all([
       this.prisma.product.findMany({
@@ -71,7 +102,7 @@ export class ProductsService {
         include: PRODUCT_INCLUDE,
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
       }),
       this.prisma.product.count({ where }),
     ]);
@@ -80,6 +111,37 @@ export class ProductsService {
       data: products,
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  async getFacets(query: { category?: string }) {
+    let categorySlugs: string[] | undefined;
+    if (query.category) {
+      const cat = await this.prisma.category.findUnique({
+        where: { slug: query.category },
+        include: { children: { select: { slug: true } } },
+      });
+      if (cat) {
+        categorySlugs = [cat.slug, ...cat.children.map((c) => c.slug)];
+      }
+    }
+
+    const products = await this.prisma.product.findMany({
+      where: {
+        isActive: true,
+        ...(categorySlugs && { category: { slug: { in: categorySlugs } } }),
+      },
+      select: { scentFamily: true, gender: true },
+    });
+
+    const scentFamilies = [...new Set(
+      products.map((p) => p.scentFamily).filter((s): s is string => s != null),
+    )].sort();
+
+    const genders = [...new Set(
+      products.map((p) => p.gender).filter((g): g is string => g != null),
+    )];
+
+    return { scentFamilies, genders };
   }
 
   async findBySlug(slug: string) {

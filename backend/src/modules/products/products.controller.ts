@@ -43,6 +43,12 @@ export class ProductsController {
   }
 
   @Public()
+  @Get('facets')
+  getFacets(@Query('category') category?: string) {
+    return this.productsService.getFacets({ category });
+  }
+
+  @Public()
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
     return this.productsService.findBySlug(slug);

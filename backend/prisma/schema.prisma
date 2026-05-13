@@ -222,6 +222,7 @@ model Product {
   scentFamily      String?
   notes            String[]
   gender           String?
+  line             String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

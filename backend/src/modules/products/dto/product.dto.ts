@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -11,6 +12,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateProductDto {
   @IsString()
@@ -62,6 +64,11 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(20)
   gender?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  line?: string;
 }
 
 export class UpdateProductDto {
@@ -115,6 +122,11 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(20)
   gender?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  line?: string;
 }
 
 export class ProductQueryDto {
@@ -138,12 +150,37 @@ export class ProductQueryDto {
   brand?: string;
 
   @IsOptional()
-  @IsString()
-  gender?: string;
+  @IsArray()
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  gender?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  scentFamily?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  line?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  volumes?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  inStock?: boolean;
 
   @IsOptional()
   @IsString()
-  scentFamily?: string;
+  @IsIn(['newest', 'price_asc', 'price_desc'])
+  sortBy?: 'newest' | 'price_asc' | 'price_desc';
 
   @IsOptional()
   @IsString()
