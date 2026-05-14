@@ -24,6 +24,7 @@ export class EmailQueueService {
       await this.queue.add(name, data, JOB_OPTIONS);
     } catch (err: unknown) {
       this.logger.warn(`Email job "${name}" not queued: ${(err as Error).message}`);
+      throw err;
     }
   }
 
