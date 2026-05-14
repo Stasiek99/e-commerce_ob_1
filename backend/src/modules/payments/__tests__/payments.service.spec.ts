@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus } from '@prisma/client';
-import type Stripe from 'stripe';
+import type { Stripe } from 'stripe/cjs/stripe.core';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';

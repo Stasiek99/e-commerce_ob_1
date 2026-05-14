@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Stripe from 'stripe';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const StripeSDK = require('stripe') as { new(key: string): import('stripe/cjs/stripe.core').Stripe };
+import type { Stripe } from 'stripe/cjs/stripe.core';
 
 export interface CreateCheckoutSessionInput {
   orderId: string;
@@ -22,7 +24,6 @@ export class StripeClient {
   private readonly logger = new Logger(StripeClient.name);
   private readonly stripe: Stripe;
   private readonly webhookSecret: string;
-  private readonly paymentMethods: Stripe.Checkout.SessionCreateParams.PaymentMethodType[];
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.getOrThrow<string>('STRIPE_SECRET_KEY');
@@ -33,10 +34,7 @@ export class StripeClient {
 
     // Omit apiVersion to pin to the account default — avoids hardcoding a
     // version string that rots and requires manual bumps every few months.
-    this.stripe = new Stripe(apiKey, { typescript: true });
-
-    // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
-    this.paymentMethods = ['card'];
+    this.stripe = new StripeSDK(apiKey);
 
     if (!this.webhookSecret) {
       this.logger.warn(
@@ -50,7 +48,8 @@ export class StripeClient {
   ): Promise<Stripe.Checkout.Session> {
     const session = await this.stripe.checkout.sessions.create({
       mode: 'payment',
-      payment_method_types: this.paymentMethods,
+      // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
+      payment_method_types: ['card'],
       customer_email: input.customerEmail,
       line_items: input.lineItems.map((item) => ({
         quantity: item.quantity,

@@ -1,11 +1,25 @@
-import { Component, inject } from '@angular/core';
+import { Component, DestroyRef, ElementRef, OnInit, inject, signal } from '@angular/core';
 import { RouterLink, Router } from '@angular/router';
-import { ReactiveFormsModule, FormControl, FormGroup } from '@angular/forms';
+import { ReactiveFormsModule, FormControl } from '@angular/forms';
+import { HttpClient } from '@angular/common/http';
+import { debounceTime, distinctUntilChanged, switchMap, catchError, of } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { TuiButton, TuiIcon, TuiTextfield, TuiDropdown, TuiDropdownHover, TuiDataList } from '@taiga-ui/core';
 import { TuiChevron } from '@taiga-ui/kit';
+import { TuiList } from '@taiga-ui/layout';
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { WishlistService } from '../../../core/services/wishlist.service';
+import { PricePipe } from '../../pipes/price.pipe';
+import { environment } from '../../../../environments/environment';
+
+interface SuggestResult {
+  id: string;
+  name: string;
+  slug: string;
+  images: Array<{ url: string }>;
+  variants: Array<{ priceInCents: number; label: string }>;
+}
 
 @Component({
   selector: 'app-header',
@@ -20,6 +34,8 @@ import { WishlistService } from '../../../core/services/wishlist.service';
     TuiDropdownHover,
     TuiDataList,
     TuiChevron,
+    TuiList,
+    PricePipe,
   ],
   template: `
     <header class="header">
@@ -58,17 +74,59 @@ import { WishlistService } from '../../../core/services/wishlist.service';
 
         <!-- CENTER: search (hidden on mobile, lives in mobile menu instead) -->
         <div class="header__search">
-          <form class="header__search-form" [formGroup]="searchForm" (ngSubmit)="onSearch()">
-            <tui-textfield iconStart="@tui.search" class="header__search-field" tuiTextfieldSize="s">
-              <input
-                formControlName="q"
-                placeholder="Szukaj produktów…"
-                aria-label="Szukaj produktów"
-                tuiTextfield
-              />
-            </tui-textfield>
-            <button size="s" tuiButton type="submit" appearance="primary" class="header__search-btn">Szukaj</button>
-          </form>
+          <div class="header__search-container">
+            <form class="header__search-form" (submit)="onSearch()">
+              <tui-textfield iconStart="@tui.search" class="header__search-field" tuiTextfieldSize="s">
+                <input
+                  [formControl]="searchControl"
+                  placeholder="Szukaj produktów…"
+                  aria-label="Szukaj produktów"
+                  tuiTextfield
+                  autocomplete="off"
+                  role="combobox"
+                  aria-haspopup="listbox"
+                  [attr.aria-expanded]="showAutocomplete && autocomplete().length > 0"
+                  [attr.aria-activedescendant]="activeIndex() >= 0 ? 'ac-item-' + activeIndex() : null"
+                  (focus)="onInputFocus()"
+                  (blur)="onInputBlur()"
+                  (keydown)="onKeydown($event)"
+                />
+              </tui-textfield>
+              <button size="s" tuiButton type="submit" appearance="primary" class="header__search-btn">Szukaj</button>
+            </form>
+
+            @if (showAutocomplete && autocomplete().length > 0) {
+              <ul tuiList="s" class="autocomplete-list" role="listbox" aria-label="Wyniki wyszukiwania">
+                @for (item of autocomplete(); track item.id; let i = $index) {
+                  <li
+                    [id]="'ac-item-' + i"
+                    class="autocomplete-item"
+                    [class.is-active]="activeIndex() === i"
+                    role="option"
+                    [attr.aria-selected]="activeIndex() === i"
+                    (mousedown)="selectSuggestion(item)"
+                    (mouseenter)="activeIndex.set(i)"
+                    (mouseleave)="activeIndex.set(-1)"
+                  >
+                    @if (item.images[0]?.url) {
+                      <img
+                        class="autocomplete-img"
+                        [src]="item.images[0].url"
+                        [alt]="item.name"
+                        width="40"
+                        height="40"
+                        loading="lazy"
+                      />
+                    } @else {
+                      <div class="autocomplete-img autocomplete-img--placeholder"></div>
+                    }
+                    <span class="autocomplete-name">{{ item.name }}</span>
+                    <span class="autocomplete-price">{{ item.variants[0]?.priceInCents | price }}</span>
+                  </li>
+                }
+              </ul>
+            }
+          </div>
         </div>
 
         <!-- RIGHT: actions -->
@@ -117,9 +175,9 @@ import { WishlistService } from '../../../core/services/wishlist.service';
             <a routerLink="/category/diffusers" class="mobile-nav__link" (click)="closeMobileMenu()">Dyfuzory</a>
             <a routerLink="/category/gels" class="mobile-nav__link" (click)="closeMobileMenu()">Żele pod prysznic</a>
             <hr class="mobile-nav__divider" />
-            <form class="mobile-nav__search" [formGroup]="searchForm" (ngSubmit)="onMobileSearch()">
+            <form class="mobile-nav__search" (submit)="onMobileSearch()">
               <tui-textfield iconStart="@tui.search" tuiTextfieldSize="s" class="mobile-nav__search-field">
-                <input formControlName="q" placeholder="Szukaj produktów…" aria-label="Szukaj produktów" tuiTextfield />
+                <input [formControl]="searchControl" placeholder="Szukaj produktów…" aria-label="Szukaj produktów" tuiTextfield />
               </tui-textfield>
               <button tuiButton type="submit" appearance="primary" size="s">Szukaj</button>
             </form>
@@ -171,7 +229,7 @@ import { WishlistService } from '../../../core/services/wishlist.service';
       color: var(--color-primary);
       font-size: 13px;
       font-weight: 400;
-      font-family: var(--tui-font-text);
+      font-family: var(--tui-font-text), sans-serif;
       transition: color 0.15s;
       white-space: nowrap;
     }
@@ -182,17 +240,80 @@ import { WishlistService } from '../../../core/services/wishlist.service';
     .header__dropdown-divider { border: none; border-top: 1px solid var(--color-border); margin: 4px 0; }
     .header__dropdown-item--all { font-weight: 600; }
 
-    /* ── Center ─────────────────────────────── */
+    /* ── Center: search ─────────────────────── */
     .header__search { display: flex; justify-content: center; }
+    .header__search-container {
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+    }
     .header__search-form {
       display: flex;
       align-items: center;
       gap: 8px;
       width: 100%;
-      max-width: 480px;
     }
     .header__search-field { flex: 1; min-width: 0; }
     .header__search-btn { flex-shrink: 0; }
+
+    /* ── Autocomplete dropdown ──────────────── */
+    /* tuiList adds margin-inline-start and li::before bullets — reset both */
+    .autocomplete-list {
+      position: absolute;
+      top: calc(100% + 2px);
+      left: 0;
+      right: 0;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+      z-index: 200;
+      margin-inline-start: 0;
+      padding: 0;
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .autocomplete-list > li {
+      margin: 0;
+    }
+    .autocomplete-list > li::before {
+      display: none;
+    }
+    .autocomplete-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: background 0.12s;
+      max-width: none;
+    }
+    .autocomplete-item:hover,
+    .autocomplete-item.is-active { background: var(--tui-background-neutral-1-hover, rgba(0, 0, 0, 0.04)); }
+    .autocomplete-img {
+      width: 40px;
+      height: 40px;
+      border-radius: 4px;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .autocomplete-img--placeholder { background: var(--tui-background-neutral-1, #f5f5f5); }
+    .autocomplete-name {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .autocomplete-price {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-accent);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
 
     /* ── Right ──────────────────────────────── */
     .header__actions { display: flex; align-items: center; gap: 20px; }
@@ -293,18 +414,61 @@ import { WishlistService } from '../../../core/services/wishlist.service';
     }
   `],
 })
-export class HeaderComponent {
+export class HeaderComponent implements OnInit {
   readonly router = inject(Router);
   readonly cartService = inject(CartService);
   readonly auth = inject(AuthService);
   readonly wishlist = inject(WishlistService);
+  private readonly http = inject(HttpClient);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly elRef = inject(ElementRef);
 
   dropdownOpen = false;
   mobileMenuOpen = false;
+  showAutocomplete = false;
 
-  readonly searchForm = new FormGroup({
-    q: new FormControl(''),
-  });
+  readonly autocomplete = signal<SuggestResult[]>([]);
+  readonly activeIndex = signal(-1);
+
+  readonly searchControl = new FormControl<string>('');
+
+  ngOnInit(): void {
+    // Autocomplete pipeline — 250ms, hits cached suggest endpoint
+    this.searchControl.valueChanges.pipe(
+      debounceTime(250),
+      distinctUntilChanged(),
+      switchMap(q => {
+        const term = q?.trim() ?? '';
+        if (term.length < 2) {
+          this.autocomplete.set([]);
+          return of([]);
+        }
+        return this.http
+          .get<SuggestResult[]>(`${environment.apiUrl}/products/suggest`, { params: { q: term } })
+          .pipe(catchError(() => of([])));
+      }),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(results => {
+      this.autocomplete.set(results);
+      this.activeIndex.set(-1);
+    });
+
+    // Search-as-you-type pipeline — 400ms, updates catalog URL only when already on /products
+    this.searchControl.valueChanges.pipe(
+      debounceTime(400),
+      distinctUntilChanged(),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(q => {
+      const currentPath = this.router.url.split('?')[0];
+      if (currentPath !== '/products') return;
+      const term = q?.trim() ?? '';
+      this.router.navigate(['/products'], {
+        queryParams: { q: term || null },
+        queryParamsHandling: 'merge',
+        replaceUrl: true,
+      });
+    });
+  }
 
   isCategoryActive(): boolean {
     return this.router.url.startsWith('/category/');
@@ -318,11 +482,69 @@ export class HeaderComponent {
     this.mobileMenuOpen = false;
   }
 
+  onInputFocus(): void {
+    this.showAutocomplete = true;
+  }
+
+  onInputBlur(): void {
+    // Delay allows (mousedown) on suggestion items to fire before the dropdown hides
+    setTimeout(() => {
+      this.showAutocomplete = false;
+      this.activeIndex.set(-1);
+    }, 150);
+  }
+
+  onKeydown(event: KeyboardEvent): void {
+    const items = this.autocomplete();
+    if (!this.showAutocomplete || items.length === 0) return;
+
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        this.activeIndex.update(i => Math.min(i + 1, items.length - 1));
+        this.scrollActiveIntoView();
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        this.activeIndex.update(i => Math.max(i - 1, -1));
+        this.scrollActiveIntoView();
+        break;
+      case 'Enter':
+        if (this.activeIndex() >= 0) {
+          event.preventDefault();
+          this.selectSuggestion(items[this.activeIndex()]);
+        }
+        break;
+      case 'Escape':
+        this.showAutocomplete = false;
+        this.activeIndex.set(-1);
+        break;
+    }
+  }
+
+  private scrollActiveIntoView(): void {
+    setTimeout(() => {
+      const el = this.elRef.nativeElement.querySelector('.autocomplete-item.is-active') as HTMLElement | null;
+      el?.scrollIntoView({ block: 'nearest' });
+    }, 0);
+  }
+
+  selectSuggestion(item: SuggestResult): void {
+    this.showAutocomplete = false;
+    this.autocomplete.set([]);
+    this.activeIndex.set(-1);
+    this.searchControl.setValue('', { emitEvent: false });
+    this.closeMobileMenu();
+    this.router.navigate(['/products', item.slug]);
+  }
+
   onSearch(): void {
-    const q = this.searchForm.value.q?.trim();
+    const q = this.searchControl.value?.trim();
+    this.showAutocomplete = false;
+    this.autocomplete.set([]);
     if (!q) return;
+    this.searchControl.setValue('', { emitEvent: false });
     this.router.navigate(['/products'], { queryParams: { q } });
-    this.searchForm.reset();
   }
 
   onMobileSearch(): void {

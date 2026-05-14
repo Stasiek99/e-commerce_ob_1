@@ -1,13 +1,54 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { Prisma } from '@prisma/client';
 
-const PRODUCT_INCLUDE = {
+// Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
+// from public API responses to avoid leaking the inspiration mapping table.
+const PRODUCT_SELECT = {
+  id: true,
+  name: true,
+  slug: true,
+  description: true,
+  shortDescription: true,
+  brand: true,
+  isActive: true,
+  isFeatured: true,
+  scentFamily: true,
+  notes: true,
+  pyramidTop: true,
+  pyramidHeart: true,
+  pyramidBase: true,
+  gender: true,
+  line: true,
+  sortOrder: true,
+  createdAt: true,
+  updatedAt: true,
+  reviewCount: true,
+  avgRating: true,
   variants: { where: { isActive: true }, orderBy: { priceInCents: 'asc' as const } },
   images: { orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }] },
   category: { select: { id: true, name: true, slug: true } },
+};
+
+type FindAllQuery = {
+  page?: number;
+  limit?: number;
+  category?: string;
+  brand?: string;
+  gender?: string[];
+  scentFamily?: string[];
+  line?: string[];
+  volumes?: string[];
+  inStock?: boolean;
+  sortBy?: 'relevance' | 'price_asc' | 'price_desc';
+  minPrice?: number;
+  maxPrice?: number;
+  search?: string;
+  featured?: boolean;
 };
 
 @Injectable()
@@ -18,24 +59,23 @@ export class ProductsService {
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
-  async findAll(query: {
-    page?: number;
-    limit?: number;
-    category?: string;
-    brand?: string;
-    gender?: string[];
-    scentFamily?: string[];
-    line?: string[];
-    volumes?: string[];
-    inStock?: boolean;
-    sortBy?: 'relevance' | 'price_asc' | 'price_desc';
-    minPrice?: number;
-    maxPrice?: number;
-    search?: string;
-    featured?: boolean;
-  }) {
+  async findAll(query: FindAllQuery) {
+    const key = this.searchCacheKey(query);
+    try {
+      const cached = await this.redis.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    const result = await this._executeFindAll(query);
+    try {
+      await this.redis.setex(key, query.search ? 120 : 300, JSON.stringify(result));
+    } catch {}
+    return result;
+  }
+
+  private async _executeFindAll(query: FindAllQuery) {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
@@ -67,6 +107,8 @@ export class ProductsService {
       }
     }
 
+    // Search handled via raw query below — excluded from Prisma where so filters
+    // (category, gender, etc.) can be applied on top of the ranked ID set.
     const where: Prisma.ProductWhereInput = {
       isActive: true,
       ...(categorySlugs && { category: { slug: { in: categorySlugs } } }),
@@ -75,39 +117,101 @@ export class ProductsService {
       ...(query.scentFamily?.length && { scentFamily: { in: query.scentFamily } }),
       ...(query.line?.length && { line: { in: query.line } }),
       ...(query.featured !== undefined && { isFeatured: query.featured }),
-      ...(query.search && {
-        OR: [
-          { name: { contains: query.search, mode: 'insensitive' } },
-          { brand: { contains: query.search, mode: 'insensitive' } },
-          { shortDescription: { contains: query.search, mode: 'insensitive' } },
-        ],
-      }),
       ...(hasVariantFilter ? { variants: { some: variantWhere } } : {}),
     };
 
-    if (query.sortBy === 'price_asc' || query.sortBy === 'price_desc') {
-      const all = await this.prisma.product.findMany({
-        where,
-        include: PRODUCT_INCLUDE,
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+    // ── Full-text + inspiration search ────────────────────────────────────────
+    // Level 1 — exact alias match:  'YSL' = ANY(lr.aliases)
+    // Level 2 — brand/name ILIKE:   lr.brand ILIKE '%Xerjoff%'
+    // Level 3 — inspiredBy ILIKE:   p."inspiredBy" ILIKE '%Sauvage%'
+    // Level 4 — product name ILIKE: p.name ILIKE '%Chlorophyll%'
+    // Level 5 — trigram fallback:   'Xerjoffe' <% p."inspiredBy"  (typo tolerance)
+    // Within the same rank bucket: sortOrder asc, then Millesime before Luxury.
+    if (query.search) {
+      const term = query.search;
+
+      const ranked = await this.prisma.$queryRaw<Array<{ id: string; rank: number }>>`
+        SELECT p.id,
+          CAST(
+            CASE WHEN ${term} = ANY(lr.aliases)                           THEN 100 ELSE 0 END +
+            CASE WHEN lr.brand    ILIKE '%' || ${term} || '%'             THEN  50 ELSE 0 END +
+            CASE WHEN lr.name     ILIKE '%' || ${term} || '%'             THEN  40 ELSE 0 END +
+            CASE WHEN p."inspiredBy" ILIKE '%' || ${term} || '%'          THEN  30 ELSE 0 END +
+            CASE WHEN p.name      ILIKE '%' || ${term} || '%'             THEN  20 ELSE 0 END +
+            CASE WHEN p."shortDescription" ILIKE '%' || ${term} || '%'    THEN  10 ELSE 0 END +
+            CASE WHEN ${term} <% COALESCE(p."inspiredBy", '')             THEN   5 ELSE 0 END +
+            CASE WHEN ${term} <% p.name                                   THEN   3 ELSE 0 END
+          AS INTEGER) AS rank
+        FROM products p
+        LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
+        WHERE p."isActive" = true
+          AND (
+            ${term} = ANY(lr.aliases)
+            OR lr.brand    ILIKE '%' || ${term} || '%'
+            OR lr.name     ILIKE '%' || ${term} || '%'
+            OR p."inspiredBy"      ILIKE '%' || ${term} || '%'
+            OR p.name              ILIKE '%' || ${term} || '%'
+            OR p."shortDescription" ILIKE '%' || ${term} || '%'
+            OR ${term} <% COALESCE(p."inspiredBy", '')
+            OR ${term} <% p.name
+          )
+        ORDER BY rank DESC
+        LIMIT 500
+      `;
+
+      if (!ranked.length) {
+        return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+      }
+
+      const rankMap = new Map(ranked.map(r => [r.id, Number(r.rank)]));
+      const rankedIds = ranked.map(r => r.id);
+
+      // Apply facet filters on top of the ranked ID set via Prisma
+      const products = await this.prisma.product.findMany({
+        where: { ...where, id: { in: rankedIds } },
+        select: PRODUCT_SELECT,
       });
 
-      const minPrice = (p: (typeof all)[0]) =>
-        p.variants.length ? Math.min(...p.variants.map((v) => v.priceInCents)) : Infinity;
+      const lineOrder = (l: string | null | undefined) =>
+        l === 'Millesime' ? 1 : l === 'Luxury' ? 2 : 3;
 
-      all.sort((a, b) =>
-        query.sortBy === 'price_asc' ? minPrice(a) - minPrice(b) : minPrice(b) - minPrice(a),
-      );
+      products.sort((a, b) => {
+        const rankDiff = (rankMap.get(b.id) ?? 0) - (rankMap.get(a.id) ?? 0);
+        if (rankDiff !== 0) return rankDiff;
+        const sortDiff = a.sortOrder - b.sortOrder;
+        if (sortDiff !== 0) return sortDiff;
+        return lineOrder(a.line) - lineOrder(b.line);
+      });
 
+      const total = products.length;
       return {
-        data: all.slice(skip, skip + limit),
-        meta: { total: all.length, page, limit, totalPages: Math.ceil(all.length / limit) },
+        data: products.slice(skip, skip + limit),
+        meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      };
+    }
+
+    if (query.sortBy === 'price_asc' || query.sortBy === 'price_desc') {
+      const direction = query.sortBy === 'price_asc' ? 'asc' : 'desc';
+      const [products, total] = await Promise.all([
+        this.prisma.product.findMany({
+          where,
+          select: PRODUCT_SELECT,
+          skip,
+          take: limit,
+          // @ts-expect-error — Prisma types lag behind runtime support for _min relation aggregates
+          orderBy: [{ variants: { _min: { priceInCents: direction } } }],
+        }),
+        this.prisma.product.count({ where }),
+      ]);
+      return {
+        data: products,
+        meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
       };
     }
 
     // Curated interleaving for the perfumes parent category:
-    // 5 Millesime → 5 Luxury per round. Skipped when any filter is active — narrowed results
-    // are already specific enough that round-robin adds no value.
+    // 5 Millesime → 5 Luxury per round. Skipped when any filter is active.
+    // Slim query for ordering, full includes only for the current page.
     if (
       query.category === 'perfumes' &&
       !query.featured &&
@@ -115,70 +219,85 @@ export class ProductsService {
       !query.brand && !query.gender?.length && !query.scentFamily?.length &&
       !query.line?.length && !hasVariantFilter && !query.search
     ) {
-      const all = await this.prisma.product.findMany({
+      const slim = await this.prisma.product.findMany({
         where,
-        include: PRODUCT_INCLUDE,
+        select: { id: true, line: true, category: { select: { slug: true } } },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
       });
 
-      type P = (typeof all)[0];
-      const millesime: P[] = [], luxury: P[] = [], other: P[] = [];
+      type Slim = (typeof slim)[0];
+      const millesime: Slim[] = [], luxury: Slim[] = [], other: Slim[] = [];
 
-      for (const p of all) {
-        if (p.line === 'Millesime')                            millesime.push(p);
+      for (const p of slim) {
+        if (p.line === 'Millesime')                                            millesime.push(p);
         else if (p.line === 'Luxury' || p.category?.slug === 'perfume-luxury') luxury.push(p);
-        else                                                   other.push(p);
+        else                                                                   other.push(p);
       }
 
       const CHUNK = 5;
       const groups = [millesime, luxury];
       const rounds = Math.max(...groups.map(g => Math.ceil(g.length / CHUNK)), 0);
-      const interleaved: P[] = [];
+      const interleaved: Slim[] = [];
 
       for (let r = 0; r < rounds; r++) {
         for (const g of groups) interleaved.push(...g.slice(r * CHUNK, (r + 1) * CHUNK));
       }
       interleaved.push(...other);
 
+      const pageIds = interleaved.slice(skip, skip + limit).map(p => p.id);
+      const products = await this.prisma.product.findMany({
+        where: { id: { in: pageIds } },
+        select: PRODUCT_SELECT,
+      });
+      const byId = new Map(products.map(p => [p.id, p]));
+
       return {
-        data: interleaved.slice(skip, skip + limit),
+        data: pageIds.map(id => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null),
         meta: { total: interleaved.length, page, limit, totalPages: Math.ceil(interleaved.length / limit) },
       };
     }
 
     // Curated interleaving for the default all-products view:
-    // 5 Millesime → 5 Luxury → 5 Gels → 5 Diffusers per page, repeating across pages.
+    // 5 Millesime → 5 Luxury → 5 Gels → 5 Diffusers per round.
+    // Slim query for ordering, full includes only for the current page.
     if (!query.category && !query.featured && (!query.sortBy || query.sortBy === 'relevance')) {
-      const all = await this.prisma.product.findMany({
+      const slim = await this.prisma.product.findMany({
         where,
-        include: PRODUCT_INCLUDE,
+        select: { id: true, line: true, category: { select: { slug: true } } },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
       });
 
-      type P = (typeof all)[0];
-      const millesime: P[] = [], luxury: P[] = [], gels: P[] = [], diffusers: P[] = [], other: P[] = [];
+      type Slim = (typeof slim)[0];
+      const millesime: Slim[] = [], luxury: Slim[] = [], gels: Slim[] = [], diffusers: Slim[] = [], other: Slim[] = [];
 
-      for (const p of all) {
+      for (const p of slim) {
         const slug = p.category?.slug;
-        if (slug === 'diffusers')                              diffusers.push(p);
-        else if (slug === 'gels')                              gels.push(p);
-        else if (p.line === 'Millesime')                       millesime.push(p);
-        else if (p.line === 'Luxury' || slug === 'perfume-luxury') luxury.push(p);
-        else                                                   other.push(p);
+        if (slug === 'diffusers')                                              diffusers.push(p);
+        else if (slug === 'gels')                                              gels.push(p);
+        else if (p.line === 'Millesime')                                       millesime.push(p);
+        else if (p.line === 'Luxury' || slug === 'perfume-luxury')             luxury.push(p);
+        else                                                                   other.push(p);
       }
 
       const CHUNK = 5;
       const groups = [millesime, luxury, gels, diffusers];
       const rounds = Math.max(...groups.map(g => Math.ceil(g.length / CHUNK)), 0);
-      const interleaved: P[] = [];
+      const interleaved: Slim[] = [];
 
       for (let r = 0; r < rounds; r++) {
         for (const g of groups) interleaved.push(...g.slice(r * CHUNK, (r + 1) * CHUNK));
       }
       interleaved.push(...other);
 
+      const pageIds = interleaved.slice(skip, skip + limit).map(p => p.id);
+      const products = await this.prisma.product.findMany({
+        where: { id: { in: pageIds } },
+        select: PRODUCT_SELECT,
+      });
+      const byId = new Map(products.map(p => [p.id, p]));
+
       return {
-        data: interleaved.slice(skip, skip + limit),
+        data: pageIds.map(id => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null),
         meta: { total: interleaved.length, page, limit, totalPages: Math.ceil(interleaved.length / limit) },
       };
     }
@@ -186,7 +305,7 @@ export class ProductsService {
     const [products, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
-        include: PRODUCT_INCLUDE,
+        select: PRODUCT_SELECT,
         skip,
         take: limit,
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
@@ -201,6 +320,12 @@ export class ProductsService {
   }
 
   async getFacets(query: { category?: string }) {
+    const key = `facets:${query.category ?? 'all'}`;
+    try {
+      const cached = await this.redis.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+
     let categorySlugs: string[] | undefined;
     if (query.category) {
       const cat = await this.prisma.category.findUnique({
@@ -228,19 +353,23 @@ export class ProductsService {
       products.map((p) => p.gender).filter((g): g is string => g != null),
     )];
 
-    return { scentFamilies, genders };
+    const result = { scentFamilies, genders };
+    try {
+      await this.redis.setex(key, 600, JSON.stringify(result));
+    } catch {}
+    return result;
   }
 
   async findBySlug(slug: string) {
     const product = await this.prisma.product.findUnique({
       where: { slug },
-      include: PRODUCT_INCLUDE,
+      select: PRODUCT_SELECT,
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
     return product;
   }
 
-  create(data: {
+  async create(data: {
     name: string;
     slug: string;
     categoryId: string;
@@ -249,16 +378,22 @@ export class ProductsService {
     brand?: string;
     isActive?: boolean;
     isFeatured?: boolean;
+    inspiredBy?: string;
     scentFamily?: string;
     notes?: string[];
+    pyramidTop?: string;
+    pyramidHeart?: string;
+    pyramidBase?: string;
     gender?: string;
     sortOrder?: number;
   }) {
     const { categoryId, ...rest } = data;
-    return this.prisma.product.create({
+    const product = await this.prisma.product.create({
       data: { ...rest, category: { connect: { id: categoryId } } },
-      include: PRODUCT_INCLUDE,
+      select: PRODUCT_SELECT,
     });
+    this.invalidateProductCaches();
+    return product;
   }
 
   async update(id: string, data: {
@@ -270,8 +405,12 @@ export class ProductsService {
     brand?: string;
     isActive?: boolean;
     isFeatured?: boolean;
+    inspiredBy?: string;
     scentFamily?: string;
     notes?: string[];
+    pyramidTop?: string;
+    pyramidHeart?: string;
+    pyramidBase?: string;
     gender?: string;
     sortOrder?: number;
   }) {
@@ -281,15 +420,19 @@ export class ProductsService {
     if (categoryId) {
       prismaData.category = { connect: { id: categoryId } };
     }
-    return this.prisma.product.update({ where: { id }, data: prismaData, include: PRODUCT_INCLUDE });
+    const product = await this.prisma.product.update({ where: { id }, data: prismaData, select: PRODUCT_SELECT });
+    this.invalidateProductCaches();
+    return product;
   }
 
   async remove(id: string) {
     await this.ensureExists(id);
-    return this.prisma.product.update({
+    const product = await this.prisma.product.update({
       where: { id },
       data: { isActive: false },
     });
+    this.invalidateProductCaches();
+    return product;
   }
 
   createVariant(productId: string, data: {
@@ -338,6 +481,7 @@ export class ProductsService {
       this.dispatchBackInStockNotifications(variant.productId, variant.label).catch(() => undefined);
     }
 
+    this.invalidateProductCaches();
     return updated;
   }
 
@@ -401,9 +545,100 @@ export class ProductsService {
     return image;
   }
 
+  async suggest(q: string): Promise<SuggestResult[]> {
+    const term = q.trim();
+
+    const cacheKey = `suggest:${term.toLowerCase()}`;
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached) as SuggestResult[];
+    } catch {}
+
+    // Raw SQL — needs alias lookup (Prisma can't query lr.aliases[] via relation where)
+    // Name-prefix rows sort first; within the same bucket, sortOrder wins.
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT p.id
+      FROM products p
+      LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
+      WHERE p."isActive" = true AND (
+        p.name            ILIKE '%' || ${term} || '%'
+        OR lr.brand       ILIKE '%' || ${term} || '%'
+        OR ${term}        = ANY(lr.aliases)
+        OR p."inspiredBy" ILIKE '%' || ${term} || '%'
+      )
+      ORDER BY
+        CASE WHEN p.name ILIKE ${term} || '%' THEN 0 ELSE 1 END,
+        p."sortOrder" ASC
+      LIMIT 6
+    `;
+
+    if (!rows.length) return [];
+
+    const ids = rows.map(r => r.id);
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        images: {
+          orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }],
+          take: 1,
+          select: { url: true },
+        },
+        variants: {
+          where: { isActive: true },
+          orderBy: { priceInCents: 'asc' as const },
+          take: 1,
+          select: { priceInCents: true, label: true },
+        },
+      },
+    });
+
+    const byId = new Map(products.map(p => [p.id, p]));
+    const results = ids
+      .map(id => byId.get(id))
+      .filter((p): p is NonNullable<typeof p> => p != null);
+
+    try {
+      await this.redis.setex(cacheKey, 600, JSON.stringify(results));
+    } catch {}
+
+    return results;
+  }
+
+  private searchCacheKey(query: FindAllQuery): string {
+    const params = Object.entries(query)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : v}`)
+      .join('&');
+    return `search:${createHash('sha256').update(params).digest('hex').slice(0, 16)}`;
+  }
+
+  private invalidateProductCaches(): void {
+    for (const pattern of ['search:*', 'facets:*']) {
+      try {
+        const stream = this.redis.scanStream({ match: pattern, count: 100 });
+        const pipeline = this.redis.pipeline();
+        stream.on('data', (keys: string[]) => keys.forEach(k => pipeline.del(k)));
+        stream.on('end', () => { pipeline.exec().catch(() => undefined); });
+        stream.on('error', () => undefined);
+      } catch { /* redis unavailable — invalidation is best-effort */ }
+    }
+  }
+
   private async ensureExists(id: string) {
     const product = await this.prisma.product.findUnique({ where: { id } });
     if (!product) throw new NotFoundException('Product not found');
     return product;
   }
+}
+
+export interface SuggestResult {
+  id: string;
+  name: string;
+  slug: string;
+  images: Array<{ url: string }>;
+  variants: Array<{ priceInCents: number; label: string }>;
 }

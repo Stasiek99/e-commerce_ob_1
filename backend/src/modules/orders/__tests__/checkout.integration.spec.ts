@@ -12,7 +12,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { CarrierCode, OrderStatus, PaymentStatus } from '@prisma/client';
-import type Stripe from 'stripe';
+import type { Stripe } from 'stripe/cjs/stripe.core';
 import { CartService } from '../../cart/cart.service';
 import { OrdersService } from '../orders.service';
 import { PaymentsService } from '../../payments/payments.service';

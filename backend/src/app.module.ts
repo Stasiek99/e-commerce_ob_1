@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import IORedis from 'ioredis';
@@ -54,10 +55,28 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: true },
     }),
-    ThrottlerModule.forRoot([{
-      ttl: 60000,  // 1 minute window
-      limit: 60,   // 60 requests/min default
-    }]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const isProd = config.get<string>('NODE_ENV') === 'production';
+        return {
+          throttlers: [
+            { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+            { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
+          ],
+          // Redis-backed in prod (distributed, survives restarts); in-memory in dev
+          // so local dev doesn't require a running Redis instance.
+          ...(isProd && {
+            storage: new ThrottlerStorageRedisService(
+              config.getOrThrow<string>('REDIS_URL'),
+            ),
+          }),
+          // Honour X-Forwarded-For behind Railway's proxy
+          getTracker: (req: Record<string, unknown>) =>
+            String((req['ips'] as string[] | undefined)?.[0] ?? req['ip'] ?? ''),
+        };
+      },
+    }),
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
       inject: [ConfigService],

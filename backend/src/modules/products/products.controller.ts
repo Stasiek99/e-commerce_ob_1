@@ -12,6 +12,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
 import { ProductsService } from './products.service';
 import { StorageService } from '../storage/storage.service';
@@ -37,6 +38,7 @@ export class ProductsController {
   ) {}
 
   @Public()
+  @Throttle({ burst: { ttl: 1_000, limit: 3 }, sustained: { ttl: 60_000, limit: 20 } })
   @Get()
   findAll(@Query() query: ProductQueryDto) {
     return this.productsService.findAll(query);
@@ -46,6 +48,14 @@ export class ProductsController {
   @Get('facets')
   getFacets(@Query('category') category?: string) {
     return this.productsService.getFacets({ category });
+  }
+
+  @Public()
+  @Throttle({ burst: { ttl: 10_000, limit: 15 }, sustained: { ttl: 60_000, limit: 50 } })
+  @Get('suggest')
+  suggest(@Query('q') q: string) {
+    if (!q || q.trim().length < 2 || q.trim().length > 100) return [];
+    return this.productsService.suggest(q);
   }
 
   @Public()

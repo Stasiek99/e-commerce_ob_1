@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
@@ -62,6 +63,21 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  pyramidTop?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidHeart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidBase?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   gender?: string;
 
@@ -120,6 +136,21 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  pyramidTop?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidHeart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidBase?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   gender?: string;
 
@@ -133,6 +164,7 @@ export class ProductQueryDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(50)
   page?: number;
 
   @IsOptional()
@@ -151,24 +183,28 @@ export class ProductQueryDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(10)
   @IsString({ each: true })
   @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
   gender?: string[];
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(10)
   @IsString({ each: true })
   @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
   scentFamily?: string[];
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(10)
   @IsString({ each: true })
   @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
   line?: string[];
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(10)
   @IsString({ each: true })
   @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
   volumes?: string[];
@@ -184,6 +220,8 @@ export class ProductQueryDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   search?: string;
 
   @IsOptional()

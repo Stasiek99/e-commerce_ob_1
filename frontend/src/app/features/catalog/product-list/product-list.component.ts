@@ -1,7 +1,9 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { combineLatest, debounceTime, switchMap, catchError, of } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { TuiButton, TuiDataList, TuiDropdown, TuiIcon, TuiLink, TuiPopup } from '@taiga-ui/core';
 import { TuiAccordion, TuiCheckbox, TuiChevron, TuiChip, TuiDrawer, TuiPagination, TuiSwitch } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
@@ -181,6 +183,21 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
         </tui-data-list>
       </ng-template>
 
+      @if (searchQuery()) {
+        <div class="search-indicator">
+          <tui-icon icon="@tui.search" />
+          <span>Wyniki dla: <strong>{{ searchQuery() }}</strong></span>
+          <button
+            appearance="icon"
+            iconStart="@tui.x"
+            tuiIconButton
+            type="button"
+            size="s"
+            (click)="clearSearch()"
+          >Wyczyść</button>
+        </div>
+      }
+
       @if (activeChips().length > 0 || appliedInStock()) {
         <div class="filter-chips">
           @for (chip of activeChips(); track chip.key + chip.value) {
@@ -348,6 +365,23 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       line-height: 1;
     }
 
+    /* ── Search indicator ────────────────────────────────────── */
+    .search-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: var(--tui-background-neutral-1, #f8f7f4);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: var(--color-secondary);
+    }
+    .search-indicator tui-icon { color: var(--color-accent); font-size: 15px; flex-shrink: 0; }
+    .search-indicator strong { color: var(--color-primary); font-weight: 600; }
+    .search-indicator button { margin-left: auto; }
+
     /* ── Active filter chips ─────────────────────────────────── */
     .filter-chips {
       display: flex;
@@ -489,7 +523,9 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 export class ProductListComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly seo = inject(SeoService);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly loading = signal(true);
   readonly products = signal<ProductCardData[]>([]);
@@ -497,6 +533,7 @@ export class ProductListComponent implements OnInit {
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
   readonly skeletons = Array(8);
+  readonly searchQuery = signal<string>('');
 
   readonly slug = signal<string | null>(null);
   readonly drawerOpen = signal(false);
@@ -552,32 +589,65 @@ export class ProductListComponent implements OnInit {
   });
 
   ngOnInit() {
-    this.route.paramMap.subscribe(params => {
-      const slug = params.get('slug');
-      this.slug.set(slug);
-      this.pageIndex.set(0);
+    combineLatest([this.route.paramMap, this.route.queryParamMap]).pipe(
+      debounceTime(0), // coalesce simultaneous slug + queryParam emissions into one tick
+      switchMap(([pm, qpm]) => {
+        const slug = pm.get('slug');
+        const q = qpm.get('q') ?? '';
+        const sort = (qpm.get('sort') ?? 'relevance') as SortOption;
+        const page = Math.max(1, Math.min(50, parseInt(qpm.get('page') ?? '1', 10)));
+        const inStock = qpm.get('inStock') === 'true';
+        const featured = qpm.get('featured') === 'true';
+        const gender = qpm.getAll('gender');
+        const scentFamily = qpm.getAll('scentFamily');
+        const line = qpm.getAll('line');
+        const volume = qpm.getAll('volume');
 
-      const qp = this.route.snapshot.queryParamMap;
-      const genders = qp.getAll('gender');
-      const featured = qp.get('featured') === 'true';
-      const initialFilters = emptyFilters();
-      if (genders.length) initialFilters['gender'] = genders;
-      this.appliedFilters.set(initialFilters);
-      this.staged.set({ ...initialFilters });
-      this.featuredMode.set(featured);
-      this.appliedInStock.set(false);
-      this.stagedInStock.set(false);
+        // Sync all derived signals from URL
+        this.slug.set(slug);
+        this.searchQuery.set(q);
+        this.sortBy.set(sort);
+        this.pageIndex.set(page - 1);
+        this.appliedInStock.set(inStock);
+        this.featuredMode.set(featured);
+        const filters = emptyFilters();
+        if (gender.length) filters['gender'] = gender;
+        if (scentFamily.length) filters['scentFamily'] = scentFamily;
+        if (line.length) filters['line'] = line;
+        if (volume.length) filters['volume'] = volume;
+        this.appliedFilters.set(filters);
 
-      const label = featured ? 'Bestsellery' : slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
-      this.seo.updatePageMeta({
-        title: label,
-        description: slug
-          ? `${label} — premium zapachy w Aromaterie.`
-          : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
-      });
+        this.updateSeo(slug, featured);
+        this.loadFacets(slug);
+        this.loading.set(true);
 
-      this.loadFacets(slug);
-      this.loadProducts(1);
+        const apiParams = new URLSearchParams();
+        apiParams.set('page', String(page));
+        apiParams.set('limit', String(PAGE_SIZE));
+        if (slug) apiParams.set('category', slug);
+        if (featured) apiParams.set('featured', 'true');
+        if (q) apiParams.set('search', q);
+        gender.forEach(v => apiParams.append('gender', v));
+        scentFamily.forEach(v => apiParams.append('scentFamily', v));
+        line.forEach(v => apiParams.append('line', v));
+        volume.forEach(v => {
+          const ml = parseInt(v, 10);
+          if (!isNaN(ml)) apiParams.append('volumes', String(ml));
+        });
+        if (inStock) apiParams.set('inStock', 'true');
+        if (sort !== 'relevance') apiParams.set('sortBy', sort);
+
+        return this.http
+          .get<{ data: ProductCardData[]; meta: { totalPages: number } }>(
+            `${environment.apiUrl}/products?${apiParams.toString()}`,
+          )
+          .pipe(catchError(() => of({ data: [], meta: { totalPages: 1 } })));
+      }),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(res => {
+      this.products.set(res.data ?? []);
+      this.totalPages.set(res.meta?.totalPages ?? 1);
+      this.loading.set(false);
     });
   }
 
@@ -596,51 +666,38 @@ export class ProductListComponent implements OnInit {
   }
 
   applyFilters(): void {
-    this.appliedFilters.set(
-      Object.fromEntries(
-        Object.entries(this.staged()).map(([k, v]) => [k, [...v]]),
-      ),
-    );
-    this.appliedInStock.set(this.stagedInStock());
+    const f = this.staged();
     this.drawerOpen.set(false);
-    this.pageIndex.set(0);
-    this.loadProducts(1);
+    this.navigate({
+      page: null,
+      gender: f['gender']?.length ? f['gender'] : null,
+      scentFamily: f['scentFamily']?.length ? f['scentFamily'] : null,
+      line: f['line']?.length ? f['line'] : null,
+      volume: f['volume']?.length ? f['volume'] : null,
+      inStock: this.stagedInStock() ? 'true' : null,
+    });
   }
 
   removeFilter(key: string, value: string): void {
-    const updated = Object.fromEntries(
-      Object.entries(this.appliedFilters()).map(([k, v]) =>
-        [k, k === key ? v.filter(x => x !== value) : v],
-      ),
-    );
-    this.appliedFilters.set(updated);
-    this.staged.set(Object.fromEntries(Object.entries(updated).map(([k, v]) => [k, [...v]])));
-    this.pageIndex.set(0);
-    this.loadProducts(1);
+    const updated = (this.appliedFilters()[key] ?? []).filter(x => x !== value);
+    this.navigate({ [key]: updated.length ? updated : null, page: null });
   }
 
   removeInStock(): void {
-    this.appliedInStock.set(false);
-    this.stagedInStock.set(false);
-    this.pageIndex.set(0);
-    this.loadProducts(1);
+    this.navigate({ inStock: null, page: null });
   }
 
   clearAllFilters(): void {
-    const empty = emptyFilters();
-    this.appliedFilters.set(empty);
-    this.staged.set(emptyFilters());
-    this.appliedInStock.set(false);
-    this.stagedInStock.set(false);
-    this.pageIndex.set(0);
-    this.loadProducts(1);
+    this.navigate({ gender: null, scentFamily: null, line: null, volume: null, inStock: null, page: null });
+  }
+
+  clearSearch(): void {
+    this.navigate({ q: null, page: null });
   }
 
   setSortBy(value: SortOption): void {
-    this.sortBy.set(value);
     this.sortOpen = false;
-    this.pageIndex.set(0);
-    this.loadProducts(1);
+    this.navigate({ sort: value !== 'relevance' ? value : null, page: null });
   }
 
   setGroupOpen(key: string, open: boolean): void {
@@ -683,9 +740,22 @@ export class ProductListComponent implements OnInit {
   }
 
   goToPage(index: number): void {
-    this.pageIndex.set(index);
-    this.loadProducts(index + 1);
+    this.navigate({ page: index > 0 ? String(index + 1) : null });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  private navigate(params: Record<string, string | string[] | null>): void {
+    this.router.navigate([], { queryParams: params, queryParamsHandling: 'merge' });
+  }
+
+  private updateSeo(slug: string | null, featured: boolean): void {
+    const label = featured ? 'Bestsellery' : slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
+    this.seo.updatePageMeta({
+      title: label,
+      description: slug
+        ? `${label} — premium zapachy w Aromaterie.`
+        : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
+    });
   }
 
   private loadFacets(slug: string | null): void {
@@ -694,43 +764,5 @@ export class ProductListComponent implements OnInit {
     this.http
       .get<CategoryFacets>(`${environment.apiUrl}/products/facets?${params.toString()}`)
       .subscribe({ next: (res) => this.facets.set(res), error: () => this.facets.set(null) });
-  }
-
-  private loadProducts(page: number): void {
-    this.loading.set(true);
-    const slug = this.slug();
-    const filters = this.appliedFilters();
-    const inStock = this.appliedInStock();
-    const sortBy = this.sortBy();
-    const featured = this.featuredMode();
-
-    const params = new URLSearchParams();
-    params.set('page', String(page));
-    params.set('limit', String(PAGE_SIZE));
-    if (slug) params.set('category', slug);
-    if (featured) params.set('featured', 'true');
-
-    filters['gender']?.forEach(v => params.append('gender', v));
-    filters['scentFamily']?.forEach(v => params.append('scentFamily', v));
-    filters['line']?.forEach(v => params.append('line', v));
-    filters['volume']?.forEach(v => {
-      const ml = parseInt(v, 10);
-      if (!isNaN(ml)) params.append('volumes', String(ml));
-    });
-    if (inStock) params.set('inStock', 'true');
-    if (sortBy !== 'relevance') params.set('sortBy', sortBy);
-
-    this.http
-      .get<{ data: ProductCardData[]; meta: { totalPages: number } }>(
-        `${environment.apiUrl}/products?${params.toString()}`,
-      )
-      .subscribe({
-        next: (res) => {
-          this.products.set(res.data ?? []);
-          this.totalPages.set(res.meta?.totalPages ?? 1);
-          this.loading.set(false);
-        },
-        error: () => this.loading.set(false),
-      });
   }
 }
