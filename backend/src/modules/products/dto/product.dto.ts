@@ -63,6 +63,21 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  pyramidTop?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidHeart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidBase?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   gender?: string;
 
@@ -118,6 +133,21 @@ export class UpdateProductDto {
   @IsArray()
   @IsString({ each: true })
   notes?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidTop?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidHeart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidBase?: string;
 
   @IsOptional()
   @IsString()

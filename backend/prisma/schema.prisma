@@ -234,6 +234,9 @@ model Product {
   isFeatured       Boolean  @default(false)
   scentFamily      String?
   notes            String[]
+  pyramidTop       String?
+  pyramidHeart     String?
+  pyramidBase      String?
   gender           String?
   line             String?
   inspiredBy          String?

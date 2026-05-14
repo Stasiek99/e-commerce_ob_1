@@ -19,6 +19,9 @@ const PRODUCT_SELECT = {
   isFeatured: true,
   scentFamily: true,
   notes: true,
+  pyramidTop: true,
+  pyramidHeart: true,
+  pyramidBase: true,
   gender: true,
   line: true,
   sortOrder: true,
@@ -378,6 +381,9 @@ export class ProductsService {
     inspiredBy?: string;
     scentFamily?: string;
     notes?: string[];
+    pyramidTop?: string;
+    pyramidHeart?: string;
+    pyramidBase?: string;
     gender?: string;
     sortOrder?: number;
   }) {
@@ -402,6 +408,9 @@ export class ProductsService {
     inspiredBy?: string;
     scentFamily?: string;
     notes?: string[];
+    pyramidTop?: string;
+    pyramidHeart?: string;
+    pyramidBase?: string;
     gender?: string;
     sortOrder?: number;
   }) {

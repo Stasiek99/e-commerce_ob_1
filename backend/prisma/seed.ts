@@ -61,10 +61,6 @@ function extractNotes(pyramid?: RawProduct['olfactory_pyramid']): string[] {
 }
 
 function shortDescription(p: RawProduct): string {
-  if (p.olfactory_pyramid) {
-    const parts = [p.olfactory_pyramid.top, p.olfactory_pyramid.heart, p.olfactory_pyramid.base].filter(Boolean);
-    if (parts.length) return parts.join(' · ').substring(0, 200);
-  }
   return p.description_full.split('.')[0].substring(0, 200);
 }
 
@@ -519,6 +515,10 @@ async function main() {
           luxuryReferenceId: p.inspiration ? (luxRefMap.get(p.inspiration) ?? null) : null,
           scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
           sortOrder: p.is_best_seller ? 1 : 10,
+          shortDescription: shortDescription(p),
+          pyramidTop: p.olfactory_pyramid?.top ?? null,
+          pyramidHeart: p.olfactory_pyramid?.heart ?? null,
+          pyramidBase: p.olfactory_pyramid?.base ?? null,
         },
       });
 
@@ -571,6 +571,9 @@ async function main() {
         isFeatured: p.is_best_seller,
         sortOrder: p.is_best_seller ? 1 : 10,
         notes: extractNotes(p.olfactory_pyramid),
+        pyramidTop: p.olfactory_pyramid?.top ?? null,
+        pyramidHeart: p.olfactory_pyramid?.heart ?? null,
+        pyramidBase: p.olfactory_pyramid?.base ?? null,
         gender: GENDER_MAP[p.gender] ?? p.gender,
         line: LINE_MAP[p.category] ?? null,
         inspiredBy: p.inspiration ?? null,

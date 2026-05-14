@@ -36,6 +36,9 @@ interface ProductDetail {
   description?: string | null;
   concentration?: string | null;
   gender?: string | null;
+  pyramidTop?: string | null;
+  pyramidHeart?: string | null;
+  pyramidBase?: string | null;
   images: Array<{ url: string; altText?: string | null }>;
   variants: ProductVariantDetail[];
   category?: { id: string; name: string; slug: string } | null;
@@ -224,6 +227,31 @@ const CATEGORY_LABELS: Record<string, string> = {
               <tui-expand [expanded]="descExpanded">
                 <div id="product-description" class="detail__desc-body">{{ product()!.description }}</div>
               </tui-expand>
+            </div>
+          }
+
+          <!-- Olfactory pyramid -->
+          @if (product()!.pyramidTop || product()!.pyramidHeart || product()!.pyramidBase) {
+            <div class="detail__pyramid">
+              <p class="detail__pyramid-title">Piramida zapachowa</p>
+              @if (product()!.pyramidTop) {
+                <div class="detail__pyramid-row">
+                  <span class="detail__pyramid-label">Głowa</span>
+                  <span class="detail__pyramid-notes">{{ product()!.pyramidTop }}</span>
+                </div>
+              }
+              @if (product()!.pyramidHeart) {
+                <div class="detail__pyramid-row">
+                  <span class="detail__pyramid-label">Serce</span>
+                  <span class="detail__pyramid-notes">{{ product()!.pyramidHeart }}</span>
+                </div>
+              }
+              @if (product()!.pyramidBase) {
+                <div class="detail__pyramid-row">
+                  <span class="detail__pyramid-label">Baza</span>
+                  <span class="detail__pyramid-notes">{{ product()!.pyramidBase }}</span>
+                </div>
+              }
             </div>
           }
         </div>
@@ -423,6 +451,30 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__desc-section { border-top: 1px solid var(--color-border); padding-top: 16px; margin-bottom: 16px; }
     .detail__expand-btn { display: flex; align-items: center; gap: 6px; }
     .detail__desc-body { padding: 16px 0 4px; font-size: 14px; line-height: 1.7; color: var(--color-secondary); white-space: pre-line; }
+
+    /* Olfactory pyramid */
+    .detail__pyramid {
+      border-top: 1px solid var(--color-border);
+      padding-top: 16px;
+      margin-top: 4px;
+    }
+    .detail__pyramid-title {
+      font-size: 12px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--color-secondary);
+      margin: 0 0 12px;
+    }
+    .detail__pyramid-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: 8px 0; border-bottom: 1px solid var(--color-border);
+      font-size: 14px; gap: 16px;
+    }
+    .detail__pyramid-row:last-child { border-bottom: none; }
+    .detail__pyramid-label {
+      flex-shrink: 0; font-weight: 600; color: var(--color-accent);
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+      min-width: 52px;
+    }
+    .detail__pyramid-notes { color: var(--color-secondary); text-align: right; line-height: 1.5; }
 
     /* Meta */
     .detail__meta { border-top: 1px solid var(--color-border); padding-top: 16px; }
