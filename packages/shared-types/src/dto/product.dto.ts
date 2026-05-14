@@ -59,7 +59,7 @@ export interface ProductQueryDto {
   line?: string[];
   volumes?: string[];
   inStock?: boolean;
-  sortBy?: 'newest' | 'price_asc' | 'price_desc';
+  sortBy?: 'relevance' | 'price_asc' | 'price_desc';
   minPrice?: number;
   maxPrice?: number;
   search?: string;

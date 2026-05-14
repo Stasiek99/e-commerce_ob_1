@@ -223,6 +223,7 @@ model Product {
   notes            String[]
   gender           String?
   line             String?
+  sortOrder        Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

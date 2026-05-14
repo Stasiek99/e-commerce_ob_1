@@ -30,7 +30,7 @@ export class ProductsService {
     line?: string[];
     volumes?: string[];
     inStock?: boolean;
-    sortBy?: 'newest' | 'price_asc' | 'price_desc';
+    sortBy?: 'relevance' | 'price_asc' | 'price_desc';
     minPrice?: number;
     maxPrice?: number;
     search?: string;
@@ -85,16 +85,103 @@ export class ProductsService {
       ...(hasVariantFilter ? { variants: { some: variantWhere } } : {}),
     };
 
-    // Prisma TS types only expose _count for relation orderBy, but _min is supported
-    // at runtime (generates MIN() subquery). Cast bypasses the type gap.
-    const orderBy: Prisma.ProductOrderByWithRelationInput =
-      query.sortBy === 'price_asc' || query.sortBy === 'price_desc'
-        ? ({
-            variants: {
-              _min: { priceInCents: query.sortBy === 'price_asc' ? 'asc' : 'desc' },
-            },
-          } as Prisma.ProductOrderByWithRelationInput)
-        : { createdAt: 'desc' };
+    if (query.sortBy === 'price_asc' || query.sortBy === 'price_desc') {
+      const all = await this.prisma.product.findMany({
+        where,
+        include: PRODUCT_INCLUDE,
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+      });
+
+      const minPrice = (p: (typeof all)[0]) =>
+        p.variants.length ? Math.min(...p.variants.map((v) => v.priceInCents)) : Infinity;
+
+      all.sort((a, b) =>
+        query.sortBy === 'price_asc' ? minPrice(a) - minPrice(b) : minPrice(b) - minPrice(a),
+      );
+
+      return {
+        data: all.slice(skip, skip + limit),
+        meta: { total: all.length, page, limit, totalPages: Math.ceil(all.length / limit) },
+      };
+    }
+
+    // Curated interleaving for the perfumes parent category:
+    // 5 Millesime → 5 Luxury per round. Skipped when any filter is active — narrowed results
+    // are already specific enough that round-robin adds no value.
+    if (
+      query.category === 'perfumes' &&
+      !query.featured &&
+      (!query.sortBy || query.sortBy === 'relevance') &&
+      !query.brand && !query.gender?.length && !query.scentFamily?.length &&
+      !query.line?.length && !hasVariantFilter && !query.search
+    ) {
+      const all = await this.prisma.product.findMany({
+        where,
+        include: PRODUCT_INCLUDE,
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+      });
+
+      type P = (typeof all)[0];
+      const millesime: P[] = [], luxury: P[] = [], other: P[] = [];
+
+      for (const p of all) {
+        if (p.line === 'Millesime')                            millesime.push(p);
+        else if (p.line === 'Luxury' || p.category?.slug === 'perfume-luxury') luxury.push(p);
+        else                                                   other.push(p);
+      }
+
+      const CHUNK = 5;
+      const groups = [millesime, luxury];
+      const rounds = Math.max(...groups.map(g => Math.ceil(g.length / CHUNK)), 0);
+      const interleaved: P[] = [];
+
+      for (let r = 0; r < rounds; r++) {
+        for (const g of groups) interleaved.push(...g.slice(r * CHUNK, (r + 1) * CHUNK));
+      }
+      interleaved.push(...other);
+
+      return {
+        data: interleaved.slice(skip, skip + limit),
+        meta: { total: interleaved.length, page, limit, totalPages: Math.ceil(interleaved.length / limit) },
+      };
+    }
+
+    // Curated interleaving for the default all-products view:
+    // 5 Millesime → 5 Luxury → 5 Gels → 5 Diffusers per page, repeating across pages.
+    if (!query.category && !query.featured && (!query.sortBy || query.sortBy === 'relevance')) {
+      const all = await this.prisma.product.findMany({
+        where,
+        include: PRODUCT_INCLUDE,
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+      });
+
+      type P = (typeof all)[0];
+      const millesime: P[] = [], luxury: P[] = [], gels: P[] = [], diffusers: P[] = [], other: P[] = [];
+
+      for (const p of all) {
+        const slug = p.category?.slug;
+        if (slug === 'diffusers')                              diffusers.push(p);
+        else if (slug === 'gels')                              gels.push(p);
+        else if (p.line === 'Millesime')                       millesime.push(p);
+        else if (p.line === 'Luxury' || slug === 'perfume-luxury') luxury.push(p);
+        else                                                   other.push(p);
+      }
+
+      const CHUNK = 5;
+      const groups = [millesime, luxury, gels, diffusers];
+      const rounds = Math.max(...groups.map(g => Math.ceil(g.length / CHUNK)), 0);
+      const interleaved: P[] = [];
+
+      for (let r = 0; r < rounds; r++) {
+        for (const g of groups) interleaved.push(...g.slice(r * CHUNK, (r + 1) * CHUNK));
+      }
+      interleaved.push(...other);
+
+      return {
+        data: interleaved.slice(skip, skip + limit),
+        meta: { total: interleaved.length, page, limit, totalPages: Math.ceil(interleaved.length / limit) },
+      };
+    }
 
     const [products, total] = await Promise.all([
       this.prisma.product.findMany({
@@ -102,7 +189,7 @@ export class ProductsService {
         include: PRODUCT_INCLUDE,
         skip,
         take: limit,
-        orderBy,
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
       }),
       this.prisma.product.count({ where }),
     ]);
@@ -165,6 +252,7 @@ export class ProductsService {
     scentFamily?: string;
     notes?: string[];
     gender?: string;
+    sortOrder?: number;
   }) {
     const { categoryId, ...rest } = data;
     return this.prisma.product.create({
@@ -185,6 +273,7 @@ export class ProductsService {
     scentFamily?: string;
     notes?: string[];
     gender?: string;
+    sortOrder?: number;
   }) {
     await this.ensureExists(id);
     const { categoryId, ...rest } = data;

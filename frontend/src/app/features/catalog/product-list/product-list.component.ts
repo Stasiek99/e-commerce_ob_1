@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { TuiButton, TuiDataList, TuiDropdown, TuiIcon, TuiLink, TuiPopup } from '@taiga-ui/core';
-import { TuiAccordion, TuiCheckbox, TuiChevron, TuiDrawer, TuiPagination, TuiSwitch } from '@taiga-ui/kit';
+import { TuiAccordion, TuiCheckbox, TuiChevron, TuiChip, TuiDrawer, TuiPagination, TuiSwitch } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { SeoService } from '../../../core/services/seo.service';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
@@ -25,22 +25,22 @@ interface FilterGroup {
 }
 
 const VOLUME_OPTIONS: Record<string, string[]> = {
-  perfume:           ['30ml', '50ml', '70ml'],
-  'perfume-luxury':  ['50ml'],
-  diffusers:         ['100ml', '200ml', '500ml'],
-  gels:              ['250ml'],
+  perfume: ['30ml', '50ml', '70ml'],
+  'perfume-luxury': ['50ml'],
+  diffusers: ['100ml', '200ml', '500ml'],
+  gels: ['250ml'],
 };
 const ALL_VOLUMES = ['30ml', '50ml', '70ml', '100ml', '200ml', '250ml', '500ml'];
 
 const LINE_OPTIONS: Record<string, string[]> = {
-  perfume:          ['Millesime', 'Luxury'],
+  perfume: ['Millesime', 'Luxury'],
   'perfume-luxury': ['Luxury'],
 };
 const ALL_LINE_OPTIONS = ['Millesime', 'Luxury'];
 
 const LINE_VOLUMES: Record<string, string[]> = {
   Millesime: ['30ml', '70ml'],
-  Luxury:    ['50ml'],
+  Luxury: ['50ml'],
 };
 
 function getVolumeOptions(slug: string | null, stagedLines: string[]): string[] {
@@ -66,10 +66,10 @@ function getLineOptions(slug: string | null, stagedVolumes: string[]): string[] 
 }
 
 const APPLICABLE_FILTERS: Record<string, Set<string>> = {
-  'perfume':         new Set(['gender', 'volume', 'line', 'scentFamily']),
-  'perfume-luxury':  new Set(['gender', 'scentFamily']),
-  'diffusers':       new Set(['volume']),
-  'gels':            new Set(['gender', 'scentFamily']),
+  'perfume': new Set(['gender', 'volume', 'line', 'scentFamily']),
+  'perfume-luxury': new Set(['gender', 'scentFamily']),
+  'diffusers': new Set(['volume']),
+  'gels': new Set(['gender', 'scentFamily']),
 };
 
 const SCENT_FAMILY_OPTIONS = [
@@ -87,9 +87,9 @@ function buildFilterGroups(
   staged: FilterState = {},
   facets?: CategoryFacets | null,
 ): FilterGroup[] {
-  const stagedLines   = staged['line']   ?? [];
+  const stagedLines = staged['line'] ?? [];
   const stagedVolumes = staged['volume'] ?? [];
-  const applicable    = slug ? APPLICABLE_FILTERS[slug] : null;
+  const applicable = slug ? APPLICABLE_FILTERS[slug] : null;
 
   const genderOptions = facets?.genders?.length
     ? ['Kobieta', 'Mężczyzna', 'Unisex'].filter(o => facets.genders.includes(o))
@@ -100,9 +100,9 @@ function buildFilterGroups(
     : SCENT_FAMILY_OPTIONS;
 
   const all: FilterGroup[] = [
-    { label: 'Płeć',                key: 'gender',      options: genderOptions },
-    { label: 'Pojemność',           key: 'volume',      options: getVolumeOptions(slug, stagedLines) },
-    { label: 'Linia',               key: 'line',        options: getLineOptions(slug, stagedVolumes) },
+    { label: 'Płeć', key: 'gender', options: genderOptions },
+    { label: 'Pojemność', key: 'volume', options: getVolumeOptions(slug, stagedLines) },
+    { label: 'Linia', key: 'line', options: getLineOptions(slug, stagedVolumes) },
     { label: 'Grupa olfaktoryczna', key: 'scentFamily', options: scentOptions },
   ];
 
@@ -113,9 +113,9 @@ type FilterState = Record<string, string[]>;
 const emptyFilters = (): FilterState =>
   Object.fromEntries(buildFilterGroups(null, {}).map((g: FilterGroup) => [g.key, []]));
 
-type SortOption = 'newest' | 'price_asc' | 'price_desc';
+type SortOption = 'relevance' | 'price_asc' | 'price_desc';
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
-  { value: 'newest',    label: 'Najnowsze' },
+  { value: 'relevance', label: 'Polecane' },
   { value: 'price_asc', label: 'Cena: rosnąco' },
   { value: 'price_desc', label: 'Cena: malejąco' },
 ];
@@ -134,6 +134,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
     TuiAccordion,
     TuiCheckbox,
     TuiChevron,
+    TuiChip,
     TuiDrawer,
     TuiPagination,
     TuiSwitch,
@@ -179,6 +180,36 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
           }
         </tui-data-list>
       </ng-template>
+
+      @if (activeChips().length > 0 || appliedInStock()) {
+        <div class="filter-chips">
+          @for (chip of activeChips(); track chip.key + chip.value) {
+            <span tuiChip size="s" appearance="outline">
+              {{ chip.value }}
+              <button
+                iconStart="@tui.x"
+                size="s"
+                tuiIconButton
+                type="button"
+                (click)="removeFilter(chip.key, chip.value)"
+              >Usuń</button>
+            </span>
+          }
+          @if (appliedInStock()) {
+            <span tuiChip size="s">
+              Dostępne
+              <button
+                iconStart="@tui.x"
+                size="s"
+                tuiIconButton
+                type="button"
+                (click)="removeInStock()"
+              >Usuń</button>
+            </span>
+          }
+          <button tuiButton size="s" appearance="outline" type="button" class="clear-chips-btn" (click)="clearAllFilters()">Wyczyść wszystko</button>
+        </div>
+      }
 
       @if (loading()) {
         <div class="grid">
@@ -316,6 +347,26 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       font-weight: 700;
       line-height: 1;
     }
+
+    /* ── Active filter chips ─────────────────────────────────── */
+    .filter-chips {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .clear-chips-btn {
+      padding: 5px 12px;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      background: none;
+      font-size: 13px;
+      color: var(--color-secondary);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .clear-chips-btn:hover { color: var(--color-primary); border-color: var(--color-primary); }
 
     /* ── Grid ────────────────────────────────────────────────── */
     .grid {
@@ -463,7 +514,7 @@ export class ProductListComponent implements OnInit {
   readonly sortOptions = SORT_OPTIONS;
 
   // Sort — applied immediately, backend connection comes in the next step
-  readonly sortBy = signal<SortOption>('newest');
+  readonly sortBy = signal<SortOption>('relevance');
   sortOpen = false;
 
   // In-stock toggle — staged with the rest of the drawer filters, default OFF (show all)
@@ -491,6 +542,14 @@ export class ProductListComponent implements OnInit {
   readonly activeFilterCount = computed(() =>
     Object.values(this.appliedFilters()).reduce((sum, arr) => sum + arr.length, 0),
   );
+
+  readonly activeChips = computed(() => {
+    const chips: { key: string; value: string }[] = [];
+    for (const [key, values] of Object.entries(this.appliedFilters())) {
+      for (const value of values) chips.push({ key, value });
+    }
+    return chips;
+  });
 
   ngOnInit() {
     this.route.paramMap.subscribe(params => {
@@ -544,6 +603,35 @@ export class ProductListComponent implements OnInit {
     );
     this.appliedInStock.set(this.stagedInStock());
     this.drawerOpen.set(false);
+    this.pageIndex.set(0);
+    this.loadProducts(1);
+  }
+
+  removeFilter(key: string, value: string): void {
+    const updated = Object.fromEntries(
+      Object.entries(this.appliedFilters()).map(([k, v]) =>
+        [k, k === key ? v.filter(x => x !== value) : v],
+      ),
+    );
+    this.appliedFilters.set(updated);
+    this.staged.set(Object.fromEntries(Object.entries(updated).map(([k, v]) => [k, [...v]])));
+    this.pageIndex.set(0);
+    this.loadProducts(1);
+  }
+
+  removeInStock(): void {
+    this.appliedInStock.set(false);
+    this.stagedInStock.set(false);
+    this.pageIndex.set(0);
+    this.loadProducts(1);
+  }
+
+  clearAllFilters(): void {
+    const empty = emptyFilters();
+    this.appliedFilters.set(empty);
+    this.staged.set(emptyFilters());
+    this.appliedInStock.set(false);
+    this.stagedInStock.set(false);
     this.pageIndex.set(0);
     this.loadProducts(1);
   }
@@ -630,7 +718,7 @@ export class ProductListComponent implements OnInit {
       if (!isNaN(ml)) params.append('volumes', String(ml));
     });
     if (inStock) params.set('inStock', 'true');
-    if (sortBy !== 'newest') params.set('sortBy', sortBy);
+    if (sortBy !== 'relevance') params.set('sortBy', sortBy);
 
     this.http
       .get<{ data: ProductCardData[]; meta: { totalPages: number } }>(

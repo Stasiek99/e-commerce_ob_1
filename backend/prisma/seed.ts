@@ -432,6 +432,7 @@ async function main() {
           gender: GENDER_MAP[p.gender] ?? p.gender,
           line: LINE_MAP[p.category] ?? null,
           scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
+          sortOrder: p.is_best_seller ? 1 : 10,
         },
       });
 
@@ -482,6 +483,7 @@ async function main() {
         categoryId: categoryIdMap[p.category],
         brand: BRAND_MAP[p.category],
         isFeatured: p.is_best_seller,
+        sortOrder: p.is_best_seller ? 1 : 10,
         notes: extractNotes(p.olfactory_pyramid),
         gender: GENDER_MAP[p.gender] ?? p.gender,
         line: LINE_MAP[p.category] ?? null,
