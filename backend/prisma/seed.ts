@@ -75,6 +75,71 @@ const LINE_MAP: Partial<Record<RawProduct['category'], string>> = {
   perfume_luxury: 'Luxury',
 };
 
+// ─── Luxury reference helpers ────────────────────────────────────────────────
+
+const BRAND_ABBREVS: [string, string[]][] = [
+  ['Yves Saint Laurent', ['YSL', 'Y.S.L.']],
+  ['Jean Paul Gaultier', ['JPG']],
+  ['Maison Francis Kurkdjian', ['MFK']],
+  ['Thierry Mugler', ['Mugler']],
+  ['Giorgio Armani', ['Armani']],
+  ['Dolce & Gabbana', ['D&G', 'Dolce Gabbana']],
+  ['Hugo Boss', ['Boss']],
+  ['Calvin Klein', ['CK']],
+  ['Carolina Herrera', ['CH']],
+  ['Tiziana Terenzi', ['TT']],
+];
+
+function parseInspiration(str: string): { brand: string; name: string; aliases: string[] } {
+  let brand = '';
+  let name = str;
+
+  const emDash = str.match(/^(.+?)\s+–\s+(.+)$/);
+  if (emDash) {
+    brand = emDash[1].trim();
+    name = emDash[2].trim();
+  } else {
+    const hyphen = str.match(/^(.+?)\s+-\s+(.+)$/);
+    if (hyphen) {
+      brand = hyphen[1].trim();
+      name = hyphen[2].trim();
+    } else {
+      const colon = str.match(/^(.+?):\s+(.+)$/);
+      if (colon) {
+        brand = colon[1].trim();
+        name = colon[2].trim();
+      } else {
+        const by = str.match(/^(.+?)\s+by\s+(.+)$/i);
+        if (by) {
+          name = by[1].trim();
+          brand = by[2].trim();
+        }
+      }
+    }
+  }
+
+  // Strip trailing parenthetical garbage ("Burberry for Women (Burberry London" etc.)
+  name = name.replace(/\s*\(.*$/, '').trim();
+
+  const aliases = new Set<string>([str]);
+  aliases.add(name);
+  if (brand) {
+    aliases.add(brand);                  // standalone brand → "Xerjoff" matches all Xerjoff products
+    aliases.add(`${brand} ${name}`);
+    for (const [fullBrand, abbrevs] of BRAND_ABBREVS) {
+      if (brand.toLowerCase().includes(fullBrand.toLowerCase())) {
+        for (const abbrev of abbrevs) {
+          aliases.add(abbrev);           // standalone abbreviation → "YSL" matches all YSL products
+          aliases.add(`${abbrev} ${name}`);
+          aliases.add(`${abbrev} – ${name}`);
+        }
+      }
+    }
+  }
+
+  return { brand, name, aliases: [...aliases].filter((a) => a.length <= 200) };
+}
+
 // ─── Manual olfactory classification by base_code ────────────────────────────
 // Derived from known inspiration fragrances; takes priority over keyword analysis.
 const SCENT_BY_CODE: Record<string, string> = {
@@ -416,6 +481,25 @@ async function main() {
   const removed = await prisma.product.deleteMany({ where: { slug: { in: legacySlugs } } });
   if (removed.count > 0) console.log(`  ✔ Removed ${removed.count} legacy product(s)`);
 
+  // ── Luxury references ─────────────────────────────────────────────────────
+
+  const luxRefMap = new Map<string, number>(); // inspiration string → LuxuryReference.id
+  const uniqueInspirations = [
+    ...new Set(productsData.map((p) => p.inspiration).filter(Boolean) as string[]),
+  ];
+
+  for (const insp of uniqueInspirations) {
+    const { brand, name, aliases } = parseInspiration(insp);
+    const ref = await prisma.luxuryReference.upsert({
+      where: { brand_name: { brand, name } },
+      update: { aliases },
+      create: { brand, name, aliases },
+    });
+    luxRefMap.set(insp, ref.id);
+  }
+
+  console.log(`  ✔ LuxuryReferences: ${luxRefMap.size} upserted`);
+
   // ── Chogan / Cooperativa Perfumieri catalog ───────────────────────────────
 
   let created = 0;
@@ -431,6 +515,8 @@ async function main() {
         data: {
           gender: GENDER_MAP[p.gender] ?? p.gender,
           line: LINE_MAP[p.category] ?? null,
+          inspiredBy: p.inspiration ?? null,
+          luxuryReferenceId: p.inspiration ? (luxRefMap.get(p.inspiration) ?? null) : null,
           scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
           sortOrder: p.is_best_seller ? 1 : 10,
         },
@@ -487,6 +573,8 @@ async function main() {
         notes: extractNotes(p.olfactory_pyramid),
         gender: GENDER_MAP[p.gender] ?? p.gender,
         line: LINE_MAP[p.category] ?? null,
+        inspiredBy: p.inspiration ?? null,
+        luxuryReferenceId: p.inspiration ? (luxRefMap.get(p.inspiration) ?? null) : null,
         scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
         variants: {
           create: p.variants.map((v) => ({

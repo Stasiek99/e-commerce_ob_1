@@ -65,7 +65,7 @@ const CATEGORY_LABELS: Record<string, string> = {
           @if (activeImage()) {
             <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img"/>
           }
-          @if ((product()!.images?.length ?? 0) > 1) {
+          @if (product()!.images.length > 1) {
             <div class="detail__thumbs" role="group" aria-label="Miniatury zdjęć">
               @for (img of product()!.images; track img.url; let i = $index) {
                 <button

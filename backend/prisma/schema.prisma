@@ -208,6 +208,19 @@ model Category {
   @@map("categories")
 }
 
+model LuxuryReference {
+  id       Int       @id @default(autoincrement())
+  brand    String    @default("")
+  name     String
+  aliases  String[]
+
+  products Product[]
+
+  @@unique([brand, name])
+  @@index([brand])
+  @@map("luxury_references")
+}
+
 model Product {
   id               String   @id @default(uuid())
   name             String
@@ -223,6 +236,9 @@ model Product {
   notes            String[]
   gender           String?
   line             String?
+  inspiredBy          String?
+  luxuryReferenceId   Int?
+  luxuryReference     LuxuryReference? @relation(fields: [luxuryReferenceId], references: [id], onDelete: SetNull)
   sortOrder        Int      @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
