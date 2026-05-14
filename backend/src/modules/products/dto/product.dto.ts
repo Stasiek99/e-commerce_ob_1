@@ -179,8 +179,8 @@ export class ProductQueryDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['newest', 'price_asc', 'price_desc'])
-  sortBy?: 'newest' | 'price_asc' | 'price_desc';
+  @IsIn(['relevance', 'price_asc', 'price_desc'])
+  sortBy?: 'relevance' | 'price_asc' | 'price_desc';
 
   @IsOptional()
   @IsString()
