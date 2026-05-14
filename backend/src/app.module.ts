@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
 import IORedis from 'ioredis';
@@ -54,10 +55,21 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: true },
     }),
-    ThrottlerModule.forRoot([{
-      ttl: 60000,  // 1 minute window
-      limit: 60,   // 60 requests/min default
-    }]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [
+          { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+          { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
+        ],
+        storage: new ThrottlerStorageRedisService(
+          config.get<string>('REDIS_URL', 'redis://localhost:6379'),
+        ),
+        // Honour X-Forwarded-For behind Railway's proxy
+        getTracker: (req: Record<string, unknown>) =>
+          String((req['ips'] as string[] | undefined)?.[0] ?? req['ip'] ?? ''),
+      }),
+    }),
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
       inject: [ConfigService],
