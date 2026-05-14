@@ -1591,7 +1591,7 @@
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17629345370uomo70ml.jpg"
       }
     ],
-    "description_full": "Woluptywny zapach stworzony dla wyrafinowanych i intrygujących osobowości, które nie boją się wyróżniać z tłumu. To kompozycja, która urzeka swoimi ciepłymi, mrocznymi nutami, tworząc nowoczesny, a zarazem ponadczasowy aromat o hipnotyzującym sercu z czarnej orchidei. Otwarcie zapachu jest niezwykle bogate i złożone – łączy w sobie świeżość cytrusów z egzotyką ylang-ylang oraz ziemistym, luksusowym akcentem czarnej trufli. W sercu zapachu rozkwita kwiatowa symfonia gardenii, jaśminu i lotosu, doprawiona korzennymi przyprawami i owocowymi niuansami, które nadają całości tajemniczej głębi. Prawdziwa moc zapachu kryje się jednak w jego bazie, gdzie ciemna czekolada i aromatyczne kadzidło splatają się z paczulą, drzewem sandałowym oraz słodyczą wanilii i ambry. To zapach gęsty, zmysłowy i niezwykle trwały, który otacza noszącą go osobę aurą luksusu, mroku i niezaprzeczalnej elegancji.",
+    "description_full": "Zmysłowy zapach stworzony dla wyrafinowanych i intrygujących osobowości, które nie boją się wyróżniać z tłumu. To kompozycja, która urzeka swoimi ciepłymi, mrocznymi nutami, tworząc nowoczesny, a zarazem ponadczasowy aromat o hipnotyzującym sercu z czarnej orchidei. Otwarcie zapachu jest niezwykle bogate i złożone – łączy w sobie świeżość cytrusów z egzotyką ylang-ylang oraz ziemistym, luksusowym akcentem czarnej trufli. W sercu zapachu rozkwita kwiatowa symfonia gardenii, jaśminu i lotosu, doprawiona korzennymi przyprawami i owocowymi niuansami, które nadają całości tajemniczej głębi. Prawdziwa moc zapachu kryje się jednak w jego bazie, gdzie ciemna czekolada i aromatyczne kadzidło splatają się z paczulą, drzewem sandałowym oraz słodyczą wanilii i ambry. To zapach gęsty, zmysłowy i niezwykle trwały, który otacza noszącą go osobę aurą luksusu, mroku i niezaprzeczalnej elegancji.",
     "olfactory_pyramid": {
       "top": "Cytrusy, Ylang-ylang, Czarna trufla",
       "heart": "Gardenia, Jaśmin, Lotos",
@@ -3713,7 +3713,7 @@
       "heart": "Kumaryna, Miód",
       "base": "Wanilia, Białe piżmo"
     },
-    "inspiration": "Bianco Latte marki Giardini Di Toscana"
+    "inspiration": "Bianco Latte - Giardini Di Toscana"
   },
   {
     "base_code": "74M",
@@ -4953,21 +4953,21 @@
       {
         "code": "COP0016",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16869083910.jpeg"
       },
       {
         "code": "COP0017",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16869083911.jpeg"
       },
       {
         "code": "COP0018",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16869083922.jpeg"
       }
@@ -4986,21 +4986,21 @@
       {
         "code": "COP0001",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16655856290.jpg"
       },
       {
         "code": "COP0002",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16655857190.jpg"
       },
       {
         "code": "COP0003",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16655857740.jpg"
       }
@@ -5019,21 +5019,21 @@
       {
         "code": "COP0006",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16836164090.jpg"
       },
       {
         "code": "COP0007",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16836164091.jpg"
       },
       {
         "code": "COP0008",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16836164092.jpg"
       }
@@ -5052,21 +5052,21 @@
       {
         "code": "COP0037",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485308540100.jpg"
       },
       {
         "code": "COP0038",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485308541200.jpg"
       },
       {
         "code": "COP0039",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR174853085425000.jpg"
       }
@@ -5085,21 +5085,21 @@
       {
         "code": "COP0026",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16869184570.jpeg"
       },
       {
         "code": "COP0027",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16869184571.jpeg"
       },
       {
         "code": "COP0028",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16869184572.jpeg"
       }
@@ -5118,21 +5118,21 @@
       {
         "code": "COP0011",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16656450880.jpg"
       },
       {
         "code": "COP0012",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16656450881.jpg"
       },
       {
         "code": "COP0013",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16656450882.jpg"
       }
@@ -5151,21 +5151,21 @@
       {
         "code": "COP0034",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485306200100.jpg"
       },
       {
         "code": "COP0035",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485306201200.jpg"
       },
       {
         "code": "COP0036",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR174853062025000.jpg"
       }
@@ -5184,21 +5184,21 @@
       {
         "code": "COP0021",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16656461050.jpg"
       },
       {
         "code": "COP0022",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16656461051.jpg"
       },
       {
         "code": "COP0023",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR16656461052.jpg"
       }
@@ -5217,21 +5217,21 @@
       {
         "code": "COP0046",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485312430100.jpg"
       },
       {
         "code": "COP0047",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485312431200.jpg"
       },
       {
         "code": "COP0048",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR174853124325000.jpg"
       }
@@ -5250,21 +5250,21 @@
       {
         "code": "COP0031",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485304080100.jpg"
       },
       {
         "code": "COP0032",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485304081200.jpg"
       },
       {
         "code": "COP0033",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR174853040925000.jpg"
       }
@@ -5275,7 +5275,7 @@
     "base_code": "COP0043",
     "name": "Desert Woods",
     "description_raw": "Dyfuzor zapachowy do pomieszczeń 'Desert Woods'",
-    "category": "air_freshener",
+    "category": "diffuser",
     "gender": "unisex",
     "is_best_seller": false,
     "is_new": false,
@@ -5283,21 +5283,21 @@
       {
         "code": "COP0043",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485312250100.jpg"
       },
       {
         "code": "COP0044",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485312251200.jpg"
       },
       {
         "code": "COP0045",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR174853122525000.jpg"
       }
@@ -5308,7 +5308,7 @@
     "base_code": "COP0040",
     "name": "Golden Vanilla",
     "description_raw": "Dyfuzor zapachowy do pomieszczeń 'Golden Vanilla'",
-    "category": "air_freshener",
+    "category": "diffuser",
     "gender": "unisex",
     "is_best_seller": true,
     "is_new": false,
@@ -5316,21 +5316,21 @@
       {
         "code": "COP0040",
         "size": "100ml",
-        "price_pln": 145,
+        "price_pln": 105,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485312140100.jpg"
       },
       {
         "code": "COP0041",
         "size": "200ml",
-        "price_pln": 210,
+        "price_pln": 150,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR17485312151200.jpg"
       },
       {
         "code": "COP0042",
         "size": "500ml",
-        "price_pln": 415,
+        "price_pln": 300,
         "local_image": "dyfuzor.webp",
         "cdn_image": "https://cdn.chogangroupspa.com/images/prodotti/big/PR174853121525000.jpg"
       }

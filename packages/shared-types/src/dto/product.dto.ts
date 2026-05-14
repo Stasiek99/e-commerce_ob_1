@@ -29,6 +29,7 @@ export interface ProductDto {
   scentFamily?: string;
   notes: string[];
   gender?: string;
+  line?: string;
   categoryId: string;
   isActive: boolean;
   isFeatured: boolean;
@@ -53,12 +54,21 @@ export interface ProductQueryDto {
   limit?: number;
   category?: string;
   brand?: string;
-  gender?: string;
-  scentFamily?: string;
+  gender?: string[];
+  scentFamily?: string[];
+  line?: string[];
+  volumes?: string[];
+  inStock?: boolean;
+  sortBy?: 'relevance' | 'price_asc' | 'price_desc';
   minPrice?: number;
   maxPrice?: number;
   search?: string;
   featured?: boolean;
+}
+
+export interface ProductFacetsDto {
+  scentFamilies: string[];
+  genders: string[];
 }
 
 export interface ShippingRateDto {
