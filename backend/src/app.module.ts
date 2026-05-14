@@ -57,18 +57,25 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
     }),
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        throttlers: [
-          { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
-          { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
-        ],
-        storage: new ThrottlerStorageRedisService(
-          config.get<string>('REDIS_URL', 'redis://localhost:6379'),
-        ),
-        // Honour X-Forwarded-For behind Railway's proxy
-        getTracker: (req: Record<string, unknown>) =>
-          String((req['ips'] as string[] | undefined)?.[0] ?? req['ip'] ?? ''),
-      }),
+      useFactory: (config: ConfigService) => {
+        const isProd = config.get<string>('NODE_ENV') === 'production';
+        return {
+          throttlers: [
+            { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+            { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
+          ],
+          // Redis-backed in prod (distributed, survives restarts); in-memory in dev
+          // so local dev doesn't require a running Redis instance.
+          ...(isProd && {
+            storage: new ThrottlerStorageRedisService(
+              config.getOrThrow<string>('REDIS_URL'),
+            ),
+          }),
+          // Honour X-Forwarded-For behind Railway's proxy
+          getTracker: (req: Record<string, unknown>) =>
+            String((req['ips'] as string[] | undefined)?.[0] ?? req['ip'] ?? ''),
+        };
+      },
     }),
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
