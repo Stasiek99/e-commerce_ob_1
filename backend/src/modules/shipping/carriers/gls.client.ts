@@ -30,7 +30,9 @@ export class GlsClient {
   private readonly mockEnabled: boolean;
 
   constructor(configService: ConfigService) {
-    this.mockEnabled = configService.get<string>('GLS_MOCK_ENABLED') === 'true';
+    this.mockEnabled =
+      configService.get<string>('GLS_MOCK_ENABLED') === 'true' ||
+      !configService.get<string>('GLS_SENDER_ID');
 
     this.senderId = this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_SENDER_ID');
 
