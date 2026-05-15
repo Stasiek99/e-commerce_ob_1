@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
+import { Observable } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
@@ -191,20 +192,14 @@ export class ProductsService {
     }
 
     if (query.sortBy === 'price_asc' || query.sortBy === 'price_desc') {
-      const direction = query.sortBy === 'price_asc' ? 'asc' : 'desc';
-      const [products, total] = await Promise.all([
-        this.prisma.product.findMany({
-          where,
-          select: PRODUCT_SELECT,
-          skip,
-          take: limit,
-          // @ts-expect-error — Prisma types lag behind runtime support for _min relation aggregates
-          orderBy: [{ variants: { _min: { priceInCents: direction } } }],
-        }),
-        this.prisma.product.count({ where }),
-      ]);
+      const products = await this.prisma.product.findMany({ where, select: PRODUCT_SELECT });
+      const minPrice = (p: (typeof products)[0]) => p.variants[0]?.priceInCents ?? Infinity;
+      products.sort((a, b) =>
+        query.sortBy === 'price_asc' ? minPrice(a) - minPrice(b) : minPrice(b) - minPrice(a),
+      );
+      const total = products.length;
       return {
-        data: products,
+        data: products.slice(skip, skip + limit),
         meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
       };
     }
@@ -614,6 +609,39 @@ export class ProductsService {
       .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : v}`)
       .join('&');
     return `search:${createHash('sha256').update(params).digest('hex').slice(0, 16)}`;
+  }
+
+  createStockStream(variantIds: string[]): Observable<MessageEvent> {
+    return new Observable((subscriber) => {
+      const seen = new Map<string, number>();
+      let timer: ReturnType<typeof setTimeout>;
+
+      const poll = async () => {
+        try {
+          const rows = await this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, stock: true },
+          });
+
+          const updates = rows.filter(
+            (r) => !seen.has(r.id) || seen.get(r.id) !== r.stock,
+          );
+
+          if (updates.length) {
+            for (const r of updates) seen.set(r.id, r.stock);
+            subscriber.next({ data: updates } as MessageEvent);
+          }
+        } catch (err) {
+          this.logger.warn(`stock-stream poll error: ${(err as Error).message}`);
+        }
+
+        timer = setTimeout(poll, 5_000);
+      };
+
+      poll();
+
+      return () => clearTimeout(timer);
+    });
   }
 
   private invalidateProductCaches(): void {

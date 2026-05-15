@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NavigationStart, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs/operators';
@@ -15,9 +15,7 @@ import { SeoService } from './core/services/seo.service';
   imports: [RouterOutlet, TuiRoot, HeaderComponent, FooterComponent, CookieConsentComponent, AnnouncementBannerComponent],
   template: `
     <tui-root>
-      @if (isHomePage()) {
-        <app-announcement-banner />
-      }
+      <app-announcement-banner />
       <app-header />
       <main>
         <router-outlet />
@@ -39,9 +37,6 @@ export class AppComponent {
   private readonly router = inject(Router);
   private readonly seo = inject(SeoService);
 
-  readonly currentUrl = signal(this.router.url || '/');
-  readonly isHomePage = () => this.currentUrl() === '/';
-
   constructor() {
     this.seo.applyDefaults(this.router.url || '/');
     this.router.events
@@ -49,9 +44,6 @@ export class AppComponent {
         filter((e): e is NavigationStart => e instanceof NavigationStart),
         takeUntilDestroyed(),
       )
-      .subscribe((e) => {
-        this.seo.applyDefaults(e.url);
-        this.currentUrl.set(e.url);
-      });
+      .subscribe((e) => this.seo.applyDefaults(e.url));
   }
 }

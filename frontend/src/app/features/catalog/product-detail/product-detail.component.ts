@@ -1,4 +1,6 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, HostListener, OnDestroy, OnInit, inject, signal, computed } from '@angular/core';
+import { Subscription } from 'rxjs';
+import { Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
@@ -11,6 +13,7 @@ import { ToastService } from '../../../core/services/toast.service';
 import { SeoService } from '../../../core/services/seo.service';
 import { WishlistService } from '../../../core/services/wishlist.service';
 import { AuthService } from '../../../core/services/auth.service';
+import { StockStreamService } from '../../../core/services/stock-stream.service';
 import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardData } from '../../../shared/product-card/product-card.component';
@@ -60,13 +63,22 @@ const CATEGORY_LABELS: Record<string, string> = {
     @if (loading()) {
       <p class="loading">Ładowanie...</p>
     } @else if (product()) {
-      <app-breadcrumb [crumbs]="breadcrumbs()"/>
+      <div class="page">
+        <app-breadcrumb [crumbs]="breadcrumbs()"/>
+        <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
+          <tui-icon icon="@tui.chevron-left" />
+          Wróć
+        </button>
+      </div>
       <div class="detail">
 
         <!-- Gallery -->
         <div class="detail__gallery">
           @if (activeImage()) {
-            <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img"/>
+            <button type="button" class="detail__main-img-btn" (click)="openLightbox(activeImageIndex())" aria-label="Powiększ zdjęcie">
+              <img [src]="activeImage()!" [alt]="product()!.name" class="detail__main-img"/>
+              <span class="detail__zoom-icon" aria-hidden="true"><tui-icon icon="@tui.zoom-in"/></span>
+            </button>
           }
           @if (product()!.images.length > 1) {
             <div class="detail__thumbs" role="group" aria-label="Miniatury zdjęć">
@@ -91,10 +103,6 @@ const CATEGORY_LABELS: Record<string, string> = {
             <p class="detail__brand">{{ product()!.brand }}</p>
           }
           <h1 class="detail__name">{{ product()!.name }}</h1>
-
-          @if (product()!.shortDescription) {
-            <p class="detail__short-desc">{{ product()!.shortDescription }}</p>
-          }
 
           <!-- Variant selection -->
           @if (product()!.variants.length) {
@@ -143,11 +151,21 @@ const CATEGORY_LABELS: Record<string, string> = {
                 <span class="detail__stock detail__stock--ok">
                   <tui-icon icon="@tui.check-circle"></tui-icon>
                   Dostępny · {{ selectedVariant()!.stock }} szt.
+                  @if (stockLive()) {
+                    <span class="detail__live-badge" title="Stan aktualizowany na bieżąco">
+                      <span class="detail__live-dot"></span>live
+                    </span>
+                  }
                 </span>
               } @else {
                 <span class="detail__stock detail__stock--out">
                   <tui-icon icon="@tui.x-circle"></tui-icon>
                   Brak w magazynie
+                  @if (stockLive()) {
+                    <span class="detail__live-badge detail__live-badge--out" title="Stan aktualizowany na bieżąco">
+                      <span class="detail__live-dot"></span>live
+                    </span>
+                  }
                 </span>
               }
             </div>
@@ -310,7 +328,7 @@ const CATEGORY_LABELS: Record<string, string> = {
         @if (reviewsLoading()) {
           <p class="reviews__loading">Ładowanie opinii…</p>
         } @else if (reviews().length === 0 && (product()!.reviewCount ?? 0) === 0) {
-          <p class="reviews__empty">Bądź pierwszy — oceń ten produkt!</p>
+          <p class="reviews__empty">Bądź pierwszy/a — oceń ten produkt!</p>
         } @else {
           @if (reviews().length > 0) {
             <div class="reviews__sort">
@@ -379,16 +397,63 @@ const CATEGORY_LABELS: Record<string, string> = {
         }
       </section>
 
+      <!-- Lightbox -->
+      @if (lightboxOpen()) {
+        <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1">
+          <div class="lightbox__backdrop" (click)="closeLightbox()"></div>
+          <div class="lightbox__ui">
+            <div class="lightbox__header">
+              @if (product()!.images.length > 1) {
+                <span class="lightbox__counter">{{ lightboxIndex() + 1 }} / {{ product()!.images.length }}</span>
+              }
+              <button type="button" class="lightbox__close" (click)="closeLightbox()" aria-label="Zamknij">
+                <tui-icon icon="@tui.x"/>
+              </button>
+            </div>
+            <div class="lightbox__stage">
+              @if (product()!.images.length > 1) {
+                <button type="button" class="lightbox__nav lightbox__nav--prev" (click)="lightboxPrev()" aria-label="Poprzednie zdjęcie">
+                  <tui-icon icon="@tui.chevron-left"/>
+                </button>
+              }
+              <img [src]="product()!.images[lightboxIndex()].url" [alt]="product()!.name" class="lightbox__img"/>
+              @if (product()!.images.length > 1) {
+                <button type="button" class="lightbox__nav lightbox__nav--next" (click)="lightboxNext()" aria-label="Następne zdjęcie">
+                  <tui-icon icon="@tui.chevron-right"/>
+                </button>
+              }
+            </div>
+            @if (product()!.images.length > 1) {
+              <div class="lightbox__thumbs">
+                @for (img of product()!.images; track img.url; let i = $index) {
+                  <button type="button"
+                          class="lightbox__thumb-btn"
+                          [class.lightbox__thumb-btn--active]="i === lightboxIndex()"
+                          [attr.aria-label]="'Zdjęcie ' + (i + 1)"
+                          [attr.aria-pressed]="i === lightboxIndex()"
+                          (click)="lightboxGoTo(i)">
+                    <img [src]="img.url" [alt]="" class="lightbox__thumb"/>
+                  </button>
+                }
+              </div>
+            }
+          </div>
+        </div>
+      }
+
     }
   `,
   styles: [`
     .loading { padding: 32px 0; color: var(--color-secondary); }
 
+    .page { padding: 32px 0 0; }
+    .back-btn { margin-bottom: 8px; }
+
     .detail {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 56px;
-      padding: 32px 0 64px;
+      padding: 0 0 64px;
       align-items: start;
     }
 
@@ -419,7 +484,6 @@ const CATEGORY_LABELS: Record<string, string> = {
       color: var(--color-accent); margin: 0 0 6px; font-weight: 600;
     }
     .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.25; }
-    .detail__short-desc { color: var(--color-secondary); font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
 
     /* Variants */
     .detail__label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-secondary); margin: 0 0 10px; }
@@ -440,6 +504,22 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__stock tui-icon { font-size: 14px; }
     .detail__stock--ok { color: var(--color-success); }
     .detail__stock--out { color: var(--color-error); }
+    .detail__live-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; color: var(--color-success);
+      background: rgba(42,157,143,0.1); padding: 2px 6px; border-radius: 3px;
+    }
+    .detail__live-badge--out { color: var(--color-error); background: rgba(220,53,69,0.08); }
+    .detail__live-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: currentColor; flex-shrink: 0;
+      animation: live-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes live-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.7); }
+    }
 
     /* CTA row */
     .detail__cta { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
@@ -500,7 +580,8 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__rating-count { font-size: 13px; color: var(--color-secondary); }
 
     @media (max-width: 768px) {
-      .detail { grid-template-columns: 1fr; gap: 32px; padding: 24px 0 48px; }
+      .page { padding-top: 24px; }
+      .detail { grid-template-columns: 1fr; gap: 32px; padding: 0 0 48px; }
       .detail__gallery { position: static; }
     }
     @media (max-width: 480px) {
@@ -588,17 +669,103 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .review-card__helpful:hover { color: var(--color-primary); }
     .review-card__helpful tui-icon { font-size: 14px; }
+
+    /* ── Zoom button ───────────────────────────────────────────── */
+    .detail__main-img-btn {
+      position: relative; display: block; padding: 0;
+      background: none; border: none; cursor: zoom-in;
+      width: 100%; border-radius: var(--border-radius-md); overflow: hidden;
+    }
+    .detail__main-img-btn .detail__main-img { transition: transform 0.3s ease; }
+    .detail__main-img-btn:hover .detail__main-img { transform: scale(1.025); }
+    .detail__zoom-icon {
+      position: absolute; bottom: 12px; right: 12px;
+      width: 36px; height: 36px; border-radius: 50%;
+      background: rgba(0,0,0,0.48); color: #fff; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; transition: opacity 0.2s; pointer-events: none;
+    }
+    .detail__main-img-btn:hover .detail__zoom-icon { opacity: 1; }
+
+    /* ── Lightbox ──────────────────────────────────────────────── */
+    @keyframes lb-fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes lb-scale { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+    .lightbox {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      animation: lb-fade 0.2s ease;
+    }
+    .lightbox__backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.92);
+      backdrop-filter: blur(4px);
+    }
+    .lightbox__ui {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column; align-items: center;
+      width: 100%; height: 100%; padding: 16px; box-sizing: border-box;
+    }
+    .lightbox__header {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%; max-width: 1200px; padding-bottom: 12px;
+    }
+    .lightbox__counter { font-size: 13px; color: rgba(255,255,255,0.65); font-weight: 500; }
+    .lightbox__close {
+      margin-left: auto; width: 40px; height: 40px; border-radius: 50%;
+      border: none; background: rgba(255,255,255,0.12); color: #fff;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 18px; transition: background 0.15s;
+    }
+    .lightbox__close:hover { background: rgba(255,255,255,0.22); }
+    .lightbox__stage {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      position: relative; width: 100%; max-width: 1200px; min-height: 0;
+    }
+    .lightbox__img {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      border-radius: var(--border-radius-md);
+      animation: lb-scale 0.25s ease; user-select: none;
+    }
+    .lightbox__nav {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 48px; height: 48px; border-radius: 50%;
+      border: none; background: rgba(255,255,255,0.12); color: #fff;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 20px; transition: background 0.15s; z-index: 2;
+    }
+    .lightbox__nav:hover { background: rgba(255,255,255,0.22); }
+    .lightbox__nav--prev { left: 0; }
+    .lightbox__nav--next { right: 0; }
+    .lightbox__thumbs {
+      display: flex; gap: 8px; padding: 12px 0 4px;
+      overflow-x: auto; justify-content: center; max-width: 100%;
+    }
+    .lightbox__thumb-btn {
+      flex-shrink: 0; padding: 0; background: none;
+      border: 2px solid transparent; border-radius: var(--border-radius-sm);
+      cursor: pointer; opacity: 0.45; transition: opacity 0.15s, border-color 0.15s;
+    }
+    .lightbox__thumb-btn--active { opacity: 1; border-color: #fff; }
+    .lightbox__thumb-btn:hover { opacity: 0.8; }
+    .lightbox__thumb {
+      width: 60px; height: 60px; object-fit: cover;
+      border-radius: calc(var(--border-radius-sm) - 2px); display: block;
+    }
   `],
 })
-export class ProductDetailComponent implements OnInit {
+export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
+  private readonly location = inject(Location);
   private readonly cartService = inject(CartService);
   private readonly toast = inject(ToastService);
   private readonly seo = inject(SeoService);
   private readonly wishlist = inject(WishlistService);
   readonly auth = inject(AuthService);
   private readonly reviewsService = inject(ReviewsService);
+  private readonly stockStream = inject(StockStreamService);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -625,6 +792,18 @@ export class ProductDetailComponent implements OnInit {
 
   readonly wishlisted = computed(() => this.wishlist.isInWishlist(this.product()?.id ?? ''));
 
+  readonly stockLive = signal(false);
+  private stockSub?: Subscription;
+
+  readonly lightboxOpen = signal(false);
+  readonly lightboxIndex = signal(0);
+  readonly activeImageIndex = computed(() => {
+    const url = this.activeImage();
+    const imgs = this.product()?.images ?? [];
+    const idx = imgs.findIndex(i => i.url === url);
+    return idx >= 0 ? idx : 0;
+  });
+
   readonly breadcrumbs = computed<Breadcrumb[]>(() => {
     const p = this.product();
     const catSlug = p?.category?.slug ?? null;
@@ -634,6 +813,52 @@ export class ProductDetailComponent implements OnInit {
     if (p) crumbs.push({ label: p.name });
     return crumbs;
   });
+
+  openLightbox(index: number): void {
+    this.lightboxIndex.set(index);
+    this.lightboxOpen.set(true);
+    document.body.style.overflow = 'hidden';
+  }
+
+  closeLightbox(): void {
+    this.lightboxOpen.set(false);
+    document.body.style.overflow = '';
+  }
+
+  lightboxNext(): void {
+    const imgs = this.product()?.images ?? [];
+    if (!imgs.length) return;
+    const next = (this.lightboxIndex() + 1) % imgs.length;
+    this.lightboxIndex.set(next);
+    this.activeImage.set(imgs[next].url);
+  }
+
+  lightboxPrev(): void {
+    const imgs = this.product()?.images ?? [];
+    if (!imgs.length) return;
+    const prev = (this.lightboxIndex() - 1 + imgs.length) % imgs.length;
+    this.lightboxIndex.set(prev);
+    this.activeImage.set(imgs[prev].url);
+  }
+
+  lightboxGoTo(index: number): void {
+    const imgs = this.product()?.images ?? [];
+    this.lightboxIndex.set(index);
+    this.activeImage.set(imgs[index].url);
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onKeyDown(e: KeyboardEvent): void {
+    if (!this.lightboxOpen()) return;
+    if (e.key === 'Escape') this.closeLightbox();
+    else if (e.key === 'ArrowRight') this.lightboxNext();
+    else if (e.key === 'ArrowLeft') this.lightboxPrev();
+  }
+
+  ngOnDestroy(): void {
+    document.body.style.overflow = '';
+    this.stockSub?.unsubscribe();
+  }
 
   ngOnInit() {
     const slug = this.route.snapshot.paramMap.get('slug')!;
@@ -658,6 +883,7 @@ export class ProductDetailComponent implements OnInit {
           this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
           this.loadReviews(p.id);
+          this.subscribeStockStream(p.variants.map((v) => v.id));
 
           if (this.route.snapshot.queryParamMap.get('review') === '1') {
             this.reviewFormOpen.set(true);
@@ -668,6 +894,31 @@ export class ProductDetailComponent implements OnInit {
         },
         error: () => this.loading.set(false),
       });
+  }
+
+  private subscribeStockStream(variantIds: string[]): void {
+    if (!variantIds.length) return;
+    this.stockSub = this.stockStream.connect(variantIds).subscribe({
+      next: (updates) => {
+        this.stockLive.set(true);
+        this.product.update((prod) => {
+          if (!prod) return prod;
+          return {
+            ...prod,
+            variants: prod.variants.map((v) => {
+              const u = updates.find((u) => u.id === v.id);
+              return u ? { ...v, stock: u.stock } : v;
+            }),
+          };
+        });
+        const sv = this.selectedVariant();
+        if (sv) {
+          const u = updates.find((u) => u.id === sv.id);
+          if (u && u.stock !== sv.stock) this.selectedVariant.set({ ...sv, stock: u.stock });
+        }
+      },
+      error: () => this.stockLive.set(false),
+    });
   }
 
   private loadReviews(productId: string, append = false): void {
@@ -779,6 +1030,8 @@ export class ProductDetailComponent implements OnInit {
         },
       });
   }
+
+  back(): void { this.location.back(); }
 
   toggleWishlist(): void {
     const p = this.product();

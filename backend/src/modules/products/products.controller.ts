@@ -3,14 +3,17 @@ import {
   Controller,
   Delete,
   Get,
+  MessageEvent,
   Param,
   Patch,
   Post,
   Query,
+  Sse,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Observable } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
@@ -56,6 +59,17 @@ export class ProductsController {
   suggest(@Query('q') q: string) {
     if (!q || q.trim().length < 2 || q.trim().length > 100) return [];
     return this.productsService.suggest(q);
+  }
+
+  @Public()
+  @Sse('variants/stock-stream')
+  streamVariantStock(@Query('ids') ids: string): Observable<MessageEvent> {
+    const variantIds = (ids ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+    return this.productsService.createStockStream(variantIds);
   }
 
   @Public()

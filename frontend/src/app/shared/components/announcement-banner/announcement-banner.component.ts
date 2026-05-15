@@ -6,7 +6,7 @@ import { RouterLink } from '@angular/router';
   standalone: true,
   imports: [RouterLink],
   template: `
-    <a class="announcement-banner" routerLink="/partnership">
+    <a class="announcement-banner" routerLink="/">
       <span class="announcement-banner__cta">ZOSTAŃ PARTNEREM CHOGAN JUŻ TERAZ</span>
       <span class="announcement-banner__sep" aria-hidden="true">·</span>
       <span class="announcement-banner__sub">Kliknij i dołącz</span>
