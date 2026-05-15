@@ -30,18 +30,21 @@ export class InpostClient {
   private readonly mockShipments = new Map<string, MockShipment>();
 
   constructor(private readonly configService: ConfigService) {
-    this.mockEnabled = configService.get<string>('INPOST_MOCK_ENABLED') === 'true';
+    this.mockEnabled =
+      configService.get<string>('INPOST_MOCK_ENABLED') === 'true' ||
+      !configService.get<string>('INPOST_ORGANIZATION_ID');
+
     const sandbox = configService.get<string>('INPOST_SANDBOX') === 'true';
     const baseURL = sandbox
       ? 'https://sandbox-api-shipx-pl.easypack24.net/v1'
       : 'https://api-shipx-pl.easypack24.net/v1';
 
-    this.organizationId = configService.getOrThrow<string>('INPOST_ORGANIZATION_ID');
+    this.organizationId = this.mockEnabled ? '' : configService.getOrThrow<string>('INPOST_ORGANIZATION_ID');
 
     this.client = axios.create({
       baseURL,
       headers: {
-        Authorization: `Bearer ${configService.getOrThrow('INPOST_API_TOKEN')}`,
+        Authorization: `Bearer ${this.mockEnabled ? '' : configService.getOrThrow('INPOST_API_TOKEN')}`,
         'Content-Type': 'application/json',
       },
     });
