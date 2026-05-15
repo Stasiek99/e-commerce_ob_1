@@ -8,10 +8,10 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
-import { EmailService } from '../email/email.service';
-import { CarrierCode, OrderStatus } from '@prisma/client';
+import { EmailQueueService } from '../email/email-queue.service';
+import { CouponService } from '../coupons/coupon.service';
+import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 
-const LOW_STOCK_THRESHOLD = 2;
 
 interface CartItem {
   productVariantId: string;
@@ -29,6 +29,14 @@ const SHIPPING_RATES: Record<CarrierCode, number> = {
   [CarrierCode.INPOST]: 1499,  // 14,99 zł
   [CarrierCode.DHL]: 1999,     // 19,99 zł
   [CarrierCode.GLS]: 1799,     // 17,99 zł
+  [CarrierCode.DPD]: 1599,     // 15,99 zł
+};
+
+const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
+  [CarrierCode.INPOST]: 'InPost',
+  [CarrierCode.DHL]: 'DHL Express',
+  [CarrierCode.GLS]: 'GLS',
+  [CarrierCode.DPD]: 'DPD',
 };
 
 @Injectable()
@@ -39,7 +47,8 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly cartService: CartService,
     private readonly paymentsService: PaymentsService,
-    private readonly emailService: EmailService,
+    private readonly emailService: EmailQueueService,
+    private readonly couponService: CouponService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -65,6 +74,7 @@ export class OrdersService {
       termsVersion?: string;
       termsAcceptedAt?: string;
       nip?: string;
+      couponCode?: string;
     },
   ) {
     let cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -103,7 +113,32 @@ export class OrdersService {
 
     const shippingCostInCents = SHIPPING_RATES[dto.carrierCode];
     const itemsTotalInCents = cart.totalInCents;
-    const totalInCents = itemsTotalInCents + shippingCostInCents;
+
+    // Resolve coupon discount before entering the transaction
+    let discountInCents = 0;
+    let resolvedCouponId: string | null = null;
+    const resolvedCouponCode = dto.couponCode ? dto.couponCode.trim().toUpperCase() : null;
+
+    if (resolvedCouponCode) {
+      const variantIds = cart.items.map((i: CartItem) => i.productVariantId);
+      const couponResult = await this.couponService.validate(
+        resolvedCouponCode,
+        itemsTotalInCents,
+        userId,
+        variantIds,
+      );
+      if (!couponResult.valid) {
+        throw new BadRequestException(couponResult.message ?? 'Nieprawidłowy kod rabatowy.');
+      }
+      if (couponResult.discountType === DiscountType.FREE_SHIPPING) {
+        discountInCents = shippingCostInCents;
+      } else {
+        discountInCents = couponResult.discountAmountInCents ?? 0;
+      }
+      resolvedCouponId = couponResult.couponId!;
+    }
+
+    const totalInCents = Math.max(0, itemsTotalInCents + shippingCostInCents - discountInCents);
 
     // Resolve NIP: DTO value takes priority, else fall back to user's stored NIP
     let snapshotNip: string | null = dto.nip ?? null;
@@ -154,7 +189,10 @@ export class OrdersService {
           inpostLockerCode: dto.inpostLockerCode,
           itemsTotalInCents,
           shippingCostInCents,
+          discountInCents,
           totalInCents,
+          ...(resolvedCouponId && { couponId: resolvedCouponId }),
+          ...(resolvedCouponCode && { couponCode: resolvedCouponCode }),
           notes: dto.notes,
           termsVersion: dto.termsVersion,
           termsAcceptedAt: dto.termsAcceptedAt ? new Date(dto.termsAcceptedAt) : undefined,
@@ -170,12 +208,15 @@ export class OrdersService {
         },
       });
 
-      // Clear cart inside the transaction so it rolls back if payment init fails
-      const cartRecord = await tx.cart.findFirst({
-        where: userId ? { userId } : { sessionId },
-      });
-      if (cartRecord) {
-        await tx.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
+      // Record coupon usage inside the transaction (TOCTOU-safe)
+      if (resolvedCouponId) {
+        await this.couponService.applyInsideTransaction(
+          tx,
+          resolvedCouponId,
+          newOrder.id,
+          userId,
+          discountInCents,
+        );
       }
 
       await tx.orderEvent.create({
@@ -191,8 +232,52 @@ export class OrdersService {
       return newOrder;
     });
 
-    // Initiate payment (outside transaction — P24 API call)
-    const { paymentUrl } = await this.paymentsService.initiatePayment(order.id);
+    // Initiate Stripe Checkout Session outside the transaction (external API call).
+    // If Stripe throws, the committed order is cancelled and stock + coupon are restored
+    // atomically so the customer's cart remains intact and they can retry immediately.
+    let paymentUrl: string;
+    try {
+      ({ paymentUrl } = await this.paymentsService.initiatePayment(order.id));
+    } catch (stripeErr) {
+      this.logger.error(
+        `Payment initiation failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
+      );
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of cart.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+        await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+        if (resolvedCouponId) {
+          await tx.$executeRaw`
+            UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+            WHERE id = ${resolvedCouponId}::uuid
+          `;
+          await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+        }
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM',
+            note: `Payment initiation failed: ${(stripeErr as Error).message}`,
+          },
+        });
+      });
+      throw stripeErr;
+    }
+
+    // Clear cart only after the Stripe session is confirmed — if Stripe had thrown above,
+    // the cart is still intact and the customer can retry.
+    const cartRecord = await this.prisma.cart.findFirst({
+      where: userId ? { userId } : { sessionId },
+    });
+    if (cartRecord) {
+      await this.prisma.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
+    }
 
     // Send confirmation email (fire-and-forget)
     this.emailService
@@ -207,7 +292,6 @@ export class OrdersService {
         })),
         totalInCents,
       })
-      // Fire-and-forget: EmailService.send already logs + reports to Sentry.
       .catch(() => undefined);
 
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
@@ -309,7 +393,7 @@ export class OrdersService {
       );
     }
 
-    const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+    const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.PARTIALLY_REFUNDED] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {
       // No payment made — expire the Stripe session (best-effort) and cancel
@@ -363,17 +447,266 @@ export class OrdersService {
       .catch(() => undefined);
   }
 
+  async cancelItemsByUser(
+    orderId: string,
+    userId: string,
+    dto: { items: Array<{ orderItemId: string; quantity: number }> },
+  ): Promise<void> {
+    if (!dto.items.length) throw new BadRequestException('No items provided for cancellation');
+
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const cancellableStatuses: OrderStatus[] = [
+      OrderStatus.PAID,
+      OrderStatus.PROCESSING,
+      OrderStatus.PARTIALLY_REFUNDED,
+    ];
+    if (!cancellableStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        `Cannot partially cancel an order with status ${order.status}`,
+      );
+    }
+
+    const resolvedItems: Array<{
+      orderItemId: string;
+      productVariantId: string;
+      quantity: number;
+      priceInCents: number;
+    }> = [];
+
+    for (const line of dto.items) {
+      const item = order.items.find(i => i.id === line.orderItemId);
+      if (!item) throw new BadRequestException(`Item ${line.orderItemId} not found in this order`);
+
+      const remaining = item.quantity - item.cancelledQuantity;
+      if (line.quantity < 1 || line.quantity > remaining) {
+        throw new BadRequestException(
+          `Invalid quantity ${line.quantity} for "${item.snapshotName}" — remaining: ${remaining}`,
+        );
+      }
+
+      resolvedItems.push({
+        orderItemId: item.id,
+        productVariantId: item.productVariantId,
+        quantity: line.quantity,
+        priceInCents: item.snapshotPrice,
+      });
+    }
+
+    await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
+
+    const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    this.emailService
+      .sendOrderCancellation({
+        to: order.snapshotEmail,
+        orderNumber: order.orderNumber,
+        firstName: order.snapshotFirstName,
+        totalInCents: refundAmountInCents,
+        isRefund: true,
+      })
+      .catch(() => undefined);
+  }
+
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
     const current = await this.prisma.order.findUniqueOrThrow({
       where: { id },
       select: { status: true },
     });
-    return this.prisma.$transaction([
+    await this.prisma.$transaction([
       this.prisma.order.update({ where: { id }, data: { status } }),
       this.prisma.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       }),
     ]);
+
+    if (status === OrderStatus.DELIVERED) {
+      this.dispatchReviewRequestEmail(id).catch(() => undefined);
+    }
+  }
+
+  async bulkMarkAsShipped(orderIds: string[]): Promise<{
+    succeeded: number;
+    failed: Array<{ orderNumber: string; reason: string }>;
+  }> {
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      include: { shipment: true },
+    });
+
+    const succeeded: string[] = [];
+    const failed: Array<{ orderNumber: string; reason: string }> = [];
+
+    const nonShippableStatuses: OrderStatus[] = [
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.CANCELLED,
+      OrderStatus.REFUNDED,
+      OrderStatus.PENDING_PAYMENT,
+    ];
+
+    await Promise.all(
+      orders.map(async (order) => {
+        if (nonShippableStatuses.includes(order.status)) {
+          failed.push({ orderNumber: order.orderNumber, reason: `Status ${order.status} nie pozwala na wysyłkę` });
+          return;
+        }
+
+        try {
+          await this.updateStatus(order.id, OrderStatus.SHIPPED, 'ADMIN');
+
+          if (order.shipment?.trackingNumber) {
+            this.emailService
+              .sendShippingNotification({
+                to: order.snapshotEmail,
+                orderNumber: order.orderNumber,
+                firstName: order.snapshotFirstName,
+                carrier: CARRIER_DISPLAY_NAMES[order.carrierCode] ?? order.carrierCode,
+                trackingNumber: order.shipment.trackingNumber,
+              })
+              .catch(() => undefined);
+          }
+
+          succeeded.push(order.orderNumber);
+        } catch (err) {
+          failed.push({ orderNumber: order.orderNumber, reason: (err as Error).message });
+        }
+      }),
+    );
+
+    return { succeeded: succeeded.length, failed };
+  }
+
+  async bulkCancel(
+    orderIds: string[],
+    actor = 'ADMIN',
+  ): Promise<{
+    succeeded: number;
+    failed: Array<{ orderNumber: string; reason: string }>;
+    needsRefund: string[];
+  }> {
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      include: { items: true },
+    });
+
+    const succeeded: string[] = [];
+    const failed: Array<{ orderNumber: string; reason: string }> = [];
+    const needsRefund: string[] = [];
+
+    const nonCancellableStatuses: OrderStatus[] = [
+      OrderStatus.CANCELLED,
+      OrderStatus.REFUNDED,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+    ];
+
+    await Promise.all(
+      orders.map(async (order) => {
+        if (nonCancellableStatuses.includes(order.status)) {
+          failed.push({ orderNumber: order.orderNumber, reason: `Status ${order.status} nie pozwala na anulowanie` });
+          return;
+        }
+
+        try {
+          await this.prisma.$transaction(async (tx) => {
+            for (const item of order.items) {
+              await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: item.quantity } },
+              });
+            }
+            await tx.order.update({
+              where: { id: order.id },
+              data: { status: OrderStatus.CANCELLED },
+            });
+            await tx.orderEvent.create({
+              data: {
+                orderId: order.id,
+                fromStatus: order.status,
+                toStatus: OrderStatus.CANCELLED,
+                actor,
+                note: 'Bulk cancelled by admin',
+              },
+            });
+          });
+
+          const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+
+          this.emailService
+            .sendOrderCancellation({
+              to: order.snapshotEmail,
+              orderNumber: order.orderNumber,
+              firstName: order.snapshotFirstName,
+              totalInCents: order.totalInCents,
+              isRefund,
+            })
+            .catch(() => undefined);
+
+          if (isRefund) needsRefund.push(order.orderNumber);
+          succeeded.push(order.orderNumber);
+        } catch (err) {
+          failed.push({ orderNumber: order.orderNumber, reason: (err as Error).message });
+        }
+      }),
+    );
+
+    return { succeeded: succeeded.length, failed, needsRefund };
+  }
+
+  private async dispatchReviewRequestEmail(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        snapshotEmail: true,
+        snapshotFirstName: true,
+        items: {
+          include: {
+            productVariant: {
+              include: {
+                product: {
+                  select: {
+                    name: true,
+                    slug: true,
+                    images: { where: { isPrimary: true }, take: 1 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) return;
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+
+    // Deduplicate products (one variant per unique product)
+    const seen = new Set<string>();
+    const products = order.items
+      .filter((item) => {
+        const slug = item.productVariant.product.slug;
+        if (seen.has(slug)) return false;
+        seen.add(slug);
+        return true;
+      })
+      .map((item) => ({
+        name: item.productVariant.product.name,
+        imageUrl: item.productVariant.product.images[0]?.url,
+        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1`,
+      }));
+
+    await this.emailService.sendReviewRequest({
+      to: order.snapshotEmail,
+      firstName: order.snapshotFirstName,
+      orderNumber: order.orderNumber,
+      products,
+    });
   }
 
   private async sendStockAlertIfNeeded(
@@ -392,7 +725,7 @@ export class OrdersService {
     });
 
     const alertItems = variants
-      .filter((v) => v.stock <= LOW_STOCK_THRESHOLD)
+      .filter((v) => v.stock <= v.reorderThreshold)
       .map((v) => ({
         sku: v.sku,
         name: `${v.product.name} – ${v.label}`,
@@ -414,7 +747,7 @@ export class OrdersService {
    * This is race-condition-safe — each call gets a unique incrementing value.
    */
   private async generateOrderNumber(
-    tx: Parameters<Parameters<PrismaService['$transaction']>[0]>[0],
+    tx: Prisma.TransactionClient,
   ): Promise<string> {
     const year = new Date().getFullYear();
 

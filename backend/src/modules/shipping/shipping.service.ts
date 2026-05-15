@@ -1,16 +1,18 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CarrierCode, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
 import { InpostClient } from './carriers/inpost.client';
 import { DhlClient } from './carriers/dhl.client';
 import { GlsClient } from './carriers/gls.client';
+import { DpdClient } from './carriers/dpd.client';
 
 const CARRIER_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.INPOST]: 'InPost',
   [CarrierCode.DHL]: 'DHL Express',
   [CarrierCode.GLS]: 'GLS',
+  [CarrierCode.DPD]: 'DPD',
 };
 
 const SHIPPING_RATES = [
@@ -19,6 +21,13 @@ const SHIPPING_RATES = [
     name: 'InPost Paczkomat',
     description: 'Dostawa do paczkomatu w 1-2 dni robocze',
     priceInCents: 1499,
+    estimatedDays: '1-2 dni robocze',
+  },
+  {
+    carrier: CarrierCode.DPD,
+    name: 'DPD Kurier',
+    description: 'Dostawa do drzwi w 1-2 dni robocze',
+    priceInCents: 1599,
     estimatedDays: '1-2 dni robocze',
   },
   {
@@ -43,11 +52,12 @@ export class ShippingService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly emailService: EmailService,
+    private readonly emailService: EmailQueueService,
     private readonly storage: StorageService,
     private readonly inpost: InpostClient,
     private readonly dhl: DhlClient,
     private readonly gls: GlsClient,
+    private readonly dpd: DpdClient,
   ) {}
 
   getShippingRates() {
@@ -67,6 +77,10 @@ export class ShippingService {
     }, 0.5);
 
     const receiverName = `${order.snapshotFirstName} ${order.snapshotLastName}`;
+
+    if (!Object.values(CarrierCode).includes(order.carrierCode)) {
+      throw new BadRequestException(`Unsupported carrier: ${order.carrierCode}`);
+    }
 
     try {
       let trackingNumber: string;
@@ -121,6 +135,25 @@ export class ShippingService {
         }
         case CarrierCode.GLS: {
           const result = await this.gls.createShipment({
+            receiver: {
+              name: receiverName,
+              street: order.snapshotStreet,
+              city: order.snapshotCity,
+              postalCode: order.snapshotPostalCode,
+              country: order.snapshotCountry,
+              phone: order.snapshotPhone,
+              email: order.snapshotEmail,
+            },
+            weightKg: totalWeightKg,
+            reference: order.orderNumber,
+          });
+          trackingNumber = result.trackingNumber;
+          labelUrl = result.labelUrl;
+          rawResponse = result;
+          break;
+        }
+        case CarrierCode.DPD: {
+          const result = await this.dpd.createShipment({
             receiver: {
               name: receiverName,
               street: order.snapshotStreet,
@@ -213,6 +246,10 @@ export class ShippingService {
         return this.dhl.getTrackingUrl(trackingNumber);
       case CarrierCode.GLS:
         return this.gls.getTrackingUrl(trackingNumber);
+      case CarrierCode.DPD:
+        return this.dpd.getTrackingUrl(trackingNumber);
+      default:
+        throw new BadRequestException(`Unsupported carrier: ${carrier}`);
     }
   }
 }

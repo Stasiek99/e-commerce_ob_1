@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus } from '@prisma/client';
-import type Stripe from 'stripe';
+import type { Stripe } from 'stripe/cjs/stripe.core';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 
@@ -13,7 +13,7 @@ describe('PaymentsService', () => {
   let service: PaymentsService;
   let prisma: any;
   let stripeClient: jest.Mocked<StripeClient>;
-  let emailService: jest.Mocked<EmailService>;
+  let emailService: jest.Mocked<EmailQueueService>;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
     id: 'cs_test_abc123',
@@ -79,6 +79,10 @@ describe('PaymentsService', () => {
             orderEvent: {
               create: jest.fn(),
             },
+            orderItem: {
+              update: jest.fn(),
+              findMany: jest.fn(),
+            },
             productVariant: {
               update: jest.fn(),
             },
@@ -92,13 +96,15 @@ describe('PaymentsService', () => {
             constructWebhookEvent: jest.fn(),
             retrieveCheckoutSession: jest.fn(),
             createRefund: jest.fn(),
+            createPartialRefund: jest.fn(),
           },
         },
         {
-          provide: EmailService,
+          provide: EmailQueueService,
           useValue: {
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+            sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -122,7 +128,7 @@ describe('PaymentsService', () => {
     service = module.get(PaymentsService);
     prisma = module.get(PrismaService);
     stripeClient = module.get(StripeClient);
-    emailService = module.get(EmailService);
+    emailService = module.get(EmailQueueService);
   });
 
   describe('handleWebhookEvent', () => {
@@ -395,6 +401,655 @@ describe('PaymentsService', () => {
     });
   });
 
+  describe('partialRefund', () => {
+    const completedPayment = {
+      id: 'payment-1',
+      status: PaymentStatus.COMPLETED,
+      stripePaymentIntentId: 'pi_test_abc123',
+      order: { orderNumber: 'ORD-2026-000001' },
+    };
+
+    const twoItems = [
+      { orderItemId: 'item-1', productVariantId: 'pv-1', quantity: 2, priceInCents: 34900 },
+      { orderItemId: 'item-2', productVariantId: 'pv-2', quantity: 1, priceInCents: 44900 },
+    ];
+
+    const buildPartialTx = (overrides: {
+      updatedItems?: Array<{ id: string; quantity: number; cancelledQuantity: number }>;
+    } = {}) => {
+      const updatedItems = overrides.updatedItems ?? [
+        { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+        { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
+      ];
+      return async (fn: any) => {
+        const capturedOrderItemUpdates: any[] = [];
+        const capturedVariantUpdates: any[] = [];
+        let capturedOrderUpdate: any;
+        let capturedPaymentUpdate: any;
+        let capturedEventCreate: any;
+
+        await fn({
+          orderItem: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderItemUpdates.push(args);
+            }),
+            findMany: jest.fn().mockResolvedValue(updatedItems),
+          },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedVariantUpdates.push(args);
+            }),
+          },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderUpdate = args;
+            }),
+          },
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedPaymentUpdate = args;
+            }),
+          },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedEventCreate = args;
+            }),
+          },
+        });
+
+        return { capturedOrderItemUpdates, capturedVariantUpdates, capturedOrderUpdate, capturedPaymentUpdate, capturedEventCreate };
+      };
+    };
+
+    it('throws NotFoundException when no payment exists for the order', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws when payment status is not COMPLETED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        status: PaymentStatus.PENDING,
+      });
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow('Cannot issue a partial refund for payment with status PENDING');
+    });
+
+    it('throws when there is no Stripe PaymentIntent ID', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        stripePaymentIntentId: null,
+      });
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow('No Stripe PaymentIntent ID on payment payment-1');
+    });
+
+    it('calls createPartialRefund with correct amount (sum of qty × price)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      // 2×34900 + 1×44900 = 114700
+      expect(stripeClient.createPartialRefund).toHaveBeenCalledWith(
+        'pi_test_abc123',
+        114700,
+        expect.any(String),
+      );
+    });
+
+    it('uses a deterministic, sorted idempotency key', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      const itemsForwardOrder = [
+        { orderItemId: 'item-1', productVariantId: 'pv-1', quantity: 2, priceInCents: 34900 },
+        { orderItemId: 'item-2', productVariantId: 'pv-2', quantity: 1, priceInCents: 44900 },
+      ];
+      const itemsReverseOrder = [...itemsForwardOrder].reverse();
+
+      await service.partialRefund('order-1', itemsForwardOrder, OrderStatus.PAID, 'CUSTOMER');
+      const key1 = (stripeClient.createPartialRefund as jest.Mock).mock.calls[0][2];
+
+      (stripeClient.createPartialRefund as jest.Mock).mockClear();
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', itemsReverseOrder, OrderStatus.PAID, 'CUSTOMER');
+      const key2 = (stripeClient.createPartialRefund as jest.Mock).mock.calls[0][2];
+
+      expect(key1).toBe(key2);
+    });
+
+    it('increments cancelledQuantity for each item', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      const capturedUpdates: any[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedUpdates.push(args);
+            }),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+              { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedUpdates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            where: { id: 'item-1' },
+            data: { cancelledQuantity: { increment: 2 } },
+          }),
+          expect.objectContaining({
+            where: { id: 'item-2' },
+            data: { cancelledQuantity: { increment: 1 } },
+          }),
+        ]),
+      );
+    });
+
+    it('restores stock for each item', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      const stockRestored: Array<{ id: string; increment: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+              { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
+            ]),
+          },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              stockRestored.push({ id: args.where.id, increment: args.data.stock.increment });
+            }),
+          },
+          order: { update: jest.fn() },
+          payment: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(stockRestored).toEqual(
+        expect.arrayContaining([
+          { id: 'pv-1', increment: 2 },
+          { id: 'pv-2', increment: 1 },
+        ]),
+      );
+    });
+
+    it('transitions order to PARTIALLY_REFUNDED when some items remain uncancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedOrderStatus: OrderStatus | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            // item-1 still has 1 remaining (cancelledQuantity=2, quantity=3)
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+              { id: 'item-2', quantity: 2, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderStatus = args.data.status;
+            }),
+          },
+          payment: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedOrderStatus).toBe(OrderStatus.PARTIALLY_REFUNDED);
+    });
+
+    it('transitions order to REFUNDED when all items are fully cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedOrderStatus: OrderStatus | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 3 },
+              { id: 'item-2', quantity: 2, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderStatus = args.data.status;
+            }),
+          },
+          payment: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedOrderStatus).toBe(OrderStatus.REFUNDED);
+    });
+
+    it('marks payment as REFUNDED when all items are fully cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedPaymentData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 2, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedPaymentData = args.data;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedPaymentData.status).toBe(PaymentStatus.REFUNDED);
+    });
+
+    it('does NOT set payment status to REFUNDED when partially cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedPaymentData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedPaymentData = args.data;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedPaymentData.status).toBeUndefined();
+    });
+
+    it('increments refundedAmountInCents on the payment record', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedPaymentData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+              { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedPaymentData = args.data;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedPaymentData.refundedAmountInCents).toEqual({ increment: 114700 });
+    });
+
+    it('creates an OrderEvent with the correct actor and note', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedEventData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedEventData = args.data;
+            }),
+          },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedEventData.actor).toBe('CUSTOMER');
+      expect(capturedEventData.fromStatus).toBe(OrderStatus.PAID);
+      expect(capturedEventData.note).toContain('114700');
+      expect(capturedEventData.note).toContain('2 item line(s)');
+    });
+  });
+
+  describe('handleRefundUpdate (via charge.refund.updated / refund.updated)', () => {
+    const buildRefund = (overrides: Partial<Stripe.Refund> = {}): Stripe.Refund =>
+      ({
+        id: 're_test_123',
+        object: 'refund',
+        amount: 14999,
+        status: 'succeeded',
+        payment_intent: 'pi_test_abc123',
+        ...overrides,
+      }) as unknown as Stripe.Refund;
+
+    const refundPayment = {
+      id: 'payment-1',
+      orderId: 'order-1',
+      status: PaymentStatus.COMPLETED,
+      stripePaymentIntentId: 'pi_test_abc123',
+      amountInCents: 14999,
+      order: {
+        orderNumber: 'ORD-2026-000001',
+        status: OrderStatus.PAID,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 },
+          { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 },
+        ],
+      },
+    };
+
+    const buildFullRefundTx = (capturedState: {
+      paymentStatus?: PaymentStatus;
+      orderStatus?: OrderStatus;
+      stockRestored?: Array<{ id: string; increment: number }>;
+      eventData?: any;
+    }) =>
+      async (fn: any) => {
+        capturedState.stockRestored = [];
+        await fn({
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.paymentStatus = args.data.status;
+            }),
+          },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.orderStatus = args.data.status;
+            }),
+          },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.stockRestored!.push({
+                id: args.where.id,
+                increment: args.data.stock.increment,
+              });
+            }),
+          },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedState.eventData = args.data;
+            }),
+          },
+        });
+      };
+
+    it('routes charge.refund.updated to the refund handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('charge.refund.updated', buildRefund()));
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_test_abc123' } }),
+      );
+    });
+
+    it('routes refund.updated to the refund handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_test_abc123' } }),
+      );
+    });
+
+    it('skips "pending" transitional status without touching the DB', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefund({ status: 'pending' as any })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips "canceled" transitional status without touching the DB', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefund({ status: 'canceled' as any })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('warns and returns when refund has no payment_intent', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefund({ payment_intent: null as any })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('extracts payment_intent.id when payment_intent is an object', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefund({ payment_intent: { id: 'pi_nested_id' } as any })),
+      );
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_nested_id' } }),
+      );
+    });
+
+    it('warns and returns when no payment found for the PaymentIntent ID', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('charge.refund.updated', buildRefund()));
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('logs error and returns without DB changes when refund.status is "failed"', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPayment);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefund({ status: 'failed' })),
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: skips when payment is already REFUNDED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        status: PaymentStatus.REFUNDED,
+      });
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('marks payment and order REFUNDED on a full async refund', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPayment);
+      const state: { paymentStatus?: PaymentStatus; orderStatus?: OrderStatus } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(buildEvent('charge.refund.updated', buildRefund()));
+
+      expect(state.paymentStatus).toBe(PaymentStatus.REFUNDED);
+      expect(state.orderStatus).toBe(OrderStatus.REFUNDED);
+    });
+
+    it('restores stock for active items (quantity - cancelledQuantity) on full refund', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: {
+          ...refundPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+            { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      expect(state.stockRestored).toEqual(
+        expect.arrayContaining([
+          { id: 'pv-1', increment: 2 },
+          { id: 'pv-2', increment: 2 },
+        ]),
+      );
+    });
+
+    it('does not restore stock for items that were already fully cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: {
+          ...refundPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — skip
+            { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 }, // activeQty = 1 — restore
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(buildEvent('refund.updated', buildRefund()));
+
+      const restoredIds = state.stockRestored!.map((s) => s.id);
+      expect(restoredIds).not.toContain('pv-1');
+      expect(restoredIds).toContain('pv-2');
+    });
+
+    it('creates an OrderEvent referencing the refund id and SYSTEM:stripe-webhook actor', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPayment);
+      const state: { eventData?: any } = {};
+      prisma.$transaction.mockImplementation(buildFullRefundTx(state));
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefund({ id: 're_test_123' })),
+      );
+
+      expect(state.eventData.actor).toBe('SYSTEM:stripe-webhook');
+      expect(state.eventData.toStatus).toBe(OrderStatus.REFUNDED);
+      expect(state.eventData.note).toContain('re_test_123');
+    });
+
+    it('logs confirmation (no DB change) when partial refund arrives and sync path already applied (PARTIALLY_REFUNDED)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: { ...refundPayment.order, status: OrderStatus.PARTIALLY_REFUNDED },
+      });
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('refund.updated', buildRefund({ amount: 5000 })), // partial: 5000 < 14999
+        ),
+      ).resolves.not.toThrow();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('logs confirmation (no DB change) when partial refund arrives and order is already REFUNDED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: { ...refundPayment.order, status: OrderStatus.REFUNDED },
+      });
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('charge.refund.updated', buildRefund({ amount: 5000 })),
+        ),
+      ).resolves.not.toThrow();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('applies best-effort recovery via $transaction when partial refund arrives but order is still PAID (sync path failed)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPayment,
+        order: { ...refundPayment.order, status: OrderStatus.PAID }, // sync path never ran
+      });
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('refund.updated', buildRefund({ amount: 5000 })),
+        ),
+      ).resolves.not.toThrow();
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+  });
+
   describe('refundPayment', () => {
     it('throws NotFoundException when no payment exists for the order', async () => {
       prisma.payment.findUnique.mockResolvedValue(null);
@@ -463,7 +1118,7 @@ describe('PaymentsService', () => {
 
       await service.refundPayment('order-1');
 
-      expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123');
+      expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123', 'order-1');
       expect(stockRestored).toContain('pv-1');
     });
   });

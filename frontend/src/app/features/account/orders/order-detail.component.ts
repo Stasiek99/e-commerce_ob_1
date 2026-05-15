@@ -3,8 +3,9 @@ import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
 import { Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { TuiButton, TuiIcon, TuiLabel, TuiTextfield } from '@taiga-ui/core';
-import { TuiNativeSelect } from '@taiga-ui/kit';
+import { TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
+import { TuiCard, TuiHeader } from '@taiga-ui/layout';
+import { TuiCheckbox, TuiNativeSelect } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ToastService } from '../../../core/services/toast.service';
@@ -23,6 +24,7 @@ interface OrderItem {
   snapshotSku: string;
   snapshotPrice: number;
   quantity: number;
+  cancelledQuantity: number;
   productVariantId: string;
 }
 
@@ -33,23 +35,39 @@ interface OrderDetail {
   items: OrderItem[];
   shippingCostInCents: number;
   totalInCents: number;
+  refundedAmountInCents: number;
   shipment?: { trackingNumber?: string } | null;
 }
 
+interface PartialCancelLine {
+  orderItemId: string;
+  name: string;
+  priceInCents: number;
+  maxQuantity: number;
+  selected: boolean;
+  quantity: number;
+}
+
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT: 'Oczekuje na płatność',
-  PAID:            'Opłacone',
-  PROCESSING:      'W realizacji',
-  SHIPPED:         'Wysłane',
-  DELIVERED:       'Dostarczone',
-  CANCELLED:       'Anulowane',
-  REFUNDED:        'Zwrócone',
+  PENDING_PAYMENT:    'Oczekuje na płatność',
+  PAID:               'Opłacone',
+  PROCESSING:         'W realizacji',
+  SHIPPED:            'Wysłane',
+  DELIVERED:          'Dostarczone',
+  CANCELLED:          'Anulowane',
+  REFUNDED:           'Zwrócone',
+  PARTIALLY_REFUNDED: 'Częściowo zwrócone',
 };
 
 @Component({
   selector: 'app-order-detail',
   standalone: true,
-  imports: [PricePipe, FormsModule, TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiNativeSelect],
+  imports: [
+    PricePipe, FormsModule,
+    TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTitle,
+    TuiCard, TuiHeader,
+    TuiCheckbox, TuiNativeSelect,
+  ],
   template: `
     @if (order()) {
       <div class="page">
@@ -67,16 +85,33 @@ const STATUS_LABELS: Record<string, string> = {
           </div>
         </div>
 
+        <!-- ── Items & totals ──────────────────────────────── -->
         <div class="items-card">
           @for (item of order()!.items; track item.id) {
-            <div class="item">
-              <span class="item-name">{{ item.snapshotName }} × {{ item.quantity }}</span>
+            <div class="item" [class.item--cancelled]="item.cancelledQuantity >= item.quantity">
+              <span class="item-name">
+                {{ item.snapshotName }} × {{ item.quantity }}
+                @if (item.cancelledQuantity > 0) {
+                  <span class="item-cancelled-badge">
+                    {{ item.cancelledQuantity === item.quantity ? 'anulowano' : 'anulowano ' + item.cancelledQuantity }}
+                  </span>
+                }
+              </span>
               <span class="item-price">{{ item.snapshotPrice * item.quantity | price }}</span>
             </div>
           }
           <div class="totals">
-            <div class="totals-row">Dostawa: <span>{{ order()!.shippingCostInCents | price }}</span></div>
-            <div class="totals-row totals-total">Łącznie: <span>{{ order()!.totalInCents | price }}</span></div>
+            <div class="totals-row">
+              Dostawa: <span>{{ order()!.shippingCostInCents | price }}</span>
+            </div>
+            @if (order()!.refundedAmountInCents > 0) {
+              <div class="totals-row totals-refund">
+                Zwrócono: <span>−{{ order()!.refundedAmountInCents | price }}</span>
+              </div>
+            }
+            <div class="totals-row totals-total">
+              Łącznie: <span>{{ order()!.totalInCents | price }}</span>
+            </div>
           </div>
         </div>
 
@@ -86,6 +121,7 @@ const STATUS_LABELS: Record<string, string> = {
           </p>
         }
 
+        <!-- ── Full cancel ─────────────────────────────────── -->
         @if (canCancel(order()!.status)) {
           <div class="cancel-zone">
             @if (!confirming()) {
@@ -109,7 +145,7 @@ const STATUS_LABELS: Record<string, string> = {
                   </select>
                 </tui-textfield>
                 <div class="confirm-actions">
-                  <button tuiButton appearance="destructive" size="m" type="button"
+                  <button tuiButton appearance="negative" size="m" type="button"
                           [disabled]="cancelling()" (click)="doCancel()">
                     {{ cancelling() ? 'Anulowanie…' : 'Tak, anuluj' }}
                   </button>
@@ -123,6 +159,64 @@ const STATUS_LABELS: Record<string, string> = {
             @if (order()!.status === 'PAID' || order()!.status === 'PROCESSING') {
               <p class="legal-note">Prawo odstąpienia od umowy (ustawa z dnia 30 maja 2014 r. o prawach konsumenta)</p>
             }
+          </div>
+        }
+
+        <!-- ── Partial cancel ──────────────────────────────── -->
+        @if (canPartialCancel(order()!.status) && !partialCancelling()) {
+          <div class="partial-cancel-trigger">
+            <button tuiButton appearance="secondary" size="m" type="button"
+                    (click)="startPartialCancel()">
+              Anuluj wybrane produkty
+            </button>
+          </div>
+        }
+
+        @if (partialCancelling()) {
+          <div tuiCardLarge class="partial-cancel-card">
+            <header tuiHeader>
+              <h2 tuiTitle>Wybierz produkty do anulowania</h2>
+            </header>
+
+            <div class="partial-items">
+              @for (line of partialLines; track line.orderItemId) {
+                <div class="partial-item">
+                  <label class="partial-item-check">
+                    <input type="checkbox" tuiCheckbox [(ngModel)]="line.selected" />
+                    <span class="partial-item-name">{{ line.name }}</span>
+                  </label>
+                  @if (line.selected) {
+                    <tui-textfield class="partial-qty-field">
+                      <label tuiLabel>Ilość</label>
+                      <input tuiTextfield type="number"
+                             [min]="1" [max]="line.maxQuantity"
+                             [(ngModel)]="line.quantity" />
+                    </tui-textfield>
+                    <span class="partial-item-price">{{ line.priceInCents * line.quantity | price }}</span>
+                  } @else {
+                    <span class="partial-item-max">maks. {{ line.maxQuantity }} szt.</span>
+                  }
+                </div>
+              }
+            </div>
+
+            <div class="partial-summary">
+              <span class="partial-summary-label">Do zwrotu:</span>
+              <strong class="partial-summary-amount">{{ refundPreview() | price }}</strong>
+            </div>
+
+            <div class="partial-actions">
+              <button tuiButton appearance="negative" size="m" type="button"
+                      [disabled]="refundPreview() === 0 || submittingPartial()"
+                      (click)="doPartialCancel()">
+                {{ submittingPartial() ? 'Przetwarzanie…' : 'Zatwierdź zwrot' }}
+              </button>
+              <button tuiButton appearance="secondary" size="m" type="button"
+                      [disabled]="submittingPartial()"
+                      (click)="partialCancelling.set(false)">
+                Anuluj
+              </button>
+            </div>
           </div>
         }
 
@@ -140,22 +234,7 @@ const STATUS_LABELS: Record<string, string> = {
     .order-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
 
-    .status {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-      background: var(--color-border);
-    }
-    .status--paid            { background: var(--color-status-paid-bg);      color: var(--color-status-paid-text); }
-    .status--pending_payment { background: var(--color-status-pending-bg);   color: var(--color-status-pending-text); }
-    .status--cancelled       { background: var(--color-status-cancelled-bg); color: var(--color-status-cancelled-text); }
-    .status--shipped         { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
-    .status--refunded        { background: #f3f4f6; color: #6b7280; }
-    .status--processing      { background: #eff6ff; color: #1d4ed8; }
-    .status--delivered       { background: #f0fdf4; color: #166534; }
-
+    /* ── Items card ─────────────────────────────────────── */
     .items-card {
       background: var(--color-surface);
       border-radius: var(--border-radius-md);
@@ -164,16 +243,40 @@ const STATUS_LABELS: Record<string, string> = {
       overflow: hidden;
       margin-bottom: 20px;
     }
-    .item { display: flex; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--color-border); font-size: 14px; }
+    .item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--color-border);
+      font-size: 14px;
+      gap: 12px;
+    }
     .item:last-child { border-bottom: none; }
-    .item-name { color: var(--color-primary); }
+    .item--cancelled { opacity: 0.45; }
+    .item-name { color: var(--color-primary); flex: 1; }
+    .item-cancelled-badge {
+      margin-left: 8px;
+      font-size: 11px;
+      background: var(--color-status-cancelled-bg);
+      color: var(--color-status-cancelled-text);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-weight: 600;
+    }
     .item-price { font-weight: 500; white-space: nowrap; }
+
+    /* ── Totals ─────────────────────────────────────────── */
     .totals { padding: 12px 16px; background: var(--color-surface); }
     .totals-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; }
-    .totals-total { font-weight: 700; font-size: 15px; margin-bottom: 0; }
+    .totals-row:last-child { margin-bottom: 0; }
+    .totals-total { font-weight: 700; font-size: 15px; }
+    .totals-refund { color: #16a34a; font-weight: 500; }
 
+    /* ── Tracking ───────────────────────────────────────── */
     .tracking { font-size: 14px; color: var(--color-secondary); margin-bottom: 20px; }
 
+    /* ── Full cancel ────────────────────────────────────── */
     .cancel-zone { margin-top: 8px; }
     .confirm-box {
       padding: 20px;
@@ -186,7 +289,65 @@ const STATUS_LABELS: Record<string, string> = {
     .reason-field { display: block; margin-bottom: 16px; }
     .confirm-actions { display: flex; gap: 12px; }
     .legal-note { font-size: 12px; color: var(--color-secondary); margin-top: 10px; }
-    .shipped-note { font-size: 14px; color: var(--color-secondary); margin-top: 16px; padding: 14px 16px; background: var(--color-surface); border-radius: var(--border-radius-md); border: 1px solid var(--color-border); }
+
+    /* ── Partial cancel ─────────────────────────────────── */
+    .partial-cancel-trigger { margin-top: 12px; }
+    .partial-cancel-card { margin-top: 16px; }
+
+    .partial-items { margin-bottom: 4px; }
+
+    .partial-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .partial-item:last-child { border-bottom: none; }
+
+    .partial-item-check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      cursor: pointer;
+      min-width: 0;
+    }
+    .partial-item-name {
+      font-size: 14px;
+      color: var(--color-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .partial-item-max { font-size: 12px; color: var(--color-secondary); white-space: nowrap; }
+    .partial-qty-field { width: 80px; flex-shrink: 0; }
+    .partial-item-price { font-size: 14px; font-weight: 500; white-space: nowrap; min-width: 72px; text-align: right; }
+
+    .partial-summary {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--color-border);
+      font-size: 15px;
+    }
+    .partial-summary-label { color: var(--color-secondary); }
+    .partial-summary-amount { font-size: 16px; }
+
+    .partial-actions { display: flex; gap: 12px; margin-top: 16px; }
+
+    /* ── Shipped note ───────────────────────────────────── */
+    .shipped-note {
+      font-size: 14px;
+      color: var(--color-secondary);
+      margin-top: 16px;
+      padding: 14px 16px;
+      background: var(--color-surface);
+      border-radius: var(--border-radius-md);
+      border: 1px solid var(--color-border);
+    }
   `],
 })
 export class OrderDetailComponent implements OnInit {
@@ -198,9 +359,13 @@ export class OrderDetailComponent implements OnInit {
   readonly order = signal<OrderDetail | null>(null);
   readonly confirming = signal(false);
   readonly cancelling = signal(false);
+  readonly partialCancelling = signal(false);
+  readonly submittingPartial = signal(false);
 
   cancelReason: string | null = null;
   readonly cancelReasonItems = CANCEL_REASON_ITEMS;
+
+  partialLines: PartialCancelLine[] = [];
 
   back(): void { this.location.back(); }
 
@@ -209,7 +374,56 @@ export class OrderDetailComponent implements OnInit {
   }
 
   canCancel(status: string): boolean {
-    return ['PENDING_PAYMENT', 'PAID', 'PROCESSING'].includes(status);
+    return ['PENDING_PAYMENT', 'PAID', 'PROCESSING', 'PARTIALLY_REFUNDED'].includes(status);
+  }
+
+  canPartialCancel(status: string): boolean {
+    return ['PAID', 'PROCESSING', 'PARTIALLY_REFUNDED'].includes(status);
+  }
+
+  startPartialCancel(): void {
+    const o = this.order();
+    if (!o) return;
+    this.partialLines = o.items
+      .filter(i => (i.quantity - (i.cancelledQuantity ?? 0)) > 0)
+      .map(i => ({
+        orderItemId: i.id,
+        name: i.snapshotName,
+        priceInCents: i.snapshotPrice,
+        maxQuantity: i.quantity - (i.cancelledQuantity ?? 0),
+        selected: false,
+        quantity: 1,
+      }));
+    this.partialCancelling.set(true);
+  }
+
+  refundPreview(): number {
+    return this.partialLines
+      .filter(l => l.selected)
+      .reduce((sum, l) => sum + l.quantity * l.priceInCents, 0);
+  }
+
+  doPartialCancel(): void {
+    const id = this.route.snapshot.paramMap.get('id')!;
+    const items = this.partialLines
+      .filter(l => l.selected)
+      .map(l => ({ orderItemId: l.orderItemId, quantity: l.quantity }));
+
+    if (!items.length) return;
+
+    this.submittingPartial.set(true);
+    this.http.post(`${environment.apiUrl}/orders/${id}/cancel-items`, { items }).subscribe({
+      next: () => {
+        this.partialCancelling.set(false);
+        this.submittingPartial.set(false);
+        this.toast.success('Wybrane produkty zostały anulowane. Zwrot pojawi się w ciągu 5–10 dni roboczych.');
+        this.load();
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Nie udało się anulować wybranych produktów.');
+        this.submittingPartial.set(false);
+      },
+    });
   }
 
   ngOnInit() {

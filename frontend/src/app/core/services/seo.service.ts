@@ -16,6 +16,8 @@ export interface ProductSeoInput {
   slug: string;
   images?: { url: string }[] | null;
   variants?: { priceInCents: number }[] | null;
+  avgRating?: number | null;
+  reviewCount?: number;
 }
 
 export interface PageSeoInput {
@@ -134,6 +136,15 @@ export class SeoService {
     }
     if (product.brand) {
       jsonld['brand'] = { '@type': 'Brand', name: product.brand };
+    }
+    if (product.avgRating != null && product.reviewCount && product.reviewCount > 0) {
+      jsonld['aggregateRating'] = {
+        '@type': 'AggregateRating',
+        ratingValue: product.avgRating.toFixed(1),
+        reviewCount: product.reviewCount,
+        bestRating: '5',
+        worstRating: '1',
+      };
     }
 
     this.upsertJsonLd(jsonld);

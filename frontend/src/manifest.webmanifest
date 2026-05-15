@@ -1,0 +1,27 @@
+{
+  "name": "Aromaterie",
+  "short_name": "Aromaterie",
+  "description": "Perfumy, dyfuzory i żele pod prysznic premium",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#c9a96e",
+  "background_color": "#1a1a1a",
+  "categories": ["shopping"],
+  "lang": "pl",
+  "icons": [
+    {
+      "src": "assets/images/logo_square.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/images/logo_square.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

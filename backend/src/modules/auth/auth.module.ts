@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -11,7 +11,7 @@ import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
-    UsersModule,
+    forwardRef(() => UsersModule),
     EmailModule,
     PassportModule,
     JwtModule.registerAsync({
@@ -19,7 +19,8 @@ import { EmailModule } from '../email/email.module';
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_ACCESS_SECRET'),
         signOptions: {
-          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRES_IN', '15m'),
+          // @nestjs/jwt v11 tightened expiresIn to ms.StringValue; config value is a valid ms string at runtime
+          expiresIn: configService.get<string>('JWT_ACCESS_EXPIRES_IN', '15m') as import('ms').StringValue,
         },
       }),
       inject: [ConfigService],

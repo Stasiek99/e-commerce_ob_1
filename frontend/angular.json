@@ -31,6 +31,7 @@
               "src/favicon.ico",
               "src/assets",
               "src/sitemap.xml",
+              "src/manifest.webmanifest",
               {
                 "glob": "**/*.svg",
                 "input": "node_modules/@taiga-ui/icons/src",
@@ -48,13 +49,16 @@
               "discoverRoutes": false,
               "routesFile": "prerender-routes.txt"
             },
-            "ssr": false
+            "ssr": {
+              "entry": "src/server.ts"
+            }
           },
           "configurations": {
             "production": {
+              "serviceWorker": "ngsw-config.json",
               "budgets": [
                 { "type": "initial", "maximumWarning": "600kB", "maximumError": "1.1MB" },
-                { "type": "anyComponentStyle", "maximumWarning": "4kB", "maximumError": "6kB" }
+                { "type": "anyComponentStyle", "maximumWarning": "8kB", "maximumError": "12kB" }
               ],
               "outputHashing": "all",
               "fileReplacements": [

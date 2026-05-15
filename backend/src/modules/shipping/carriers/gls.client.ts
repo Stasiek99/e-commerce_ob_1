@@ -27,26 +27,32 @@ export class GlsClient {
   private readonly client: AxiosInstance;
   private readonly senderId: string;
   private readonly logger = new Logger(GlsClient.name);
+  private readonly mockEnabled: boolean;
 
   constructor(configService: ConfigService) {
-    const sandbox = configService.get<string>('GLS_SANDBOX') === 'true';
-    const baseURL = sandbox
-      ? 'https://adeplus.gls-poland.com/adeplus/pm1/ade_webapi2.php'
-      : 'https://adeplus.gls-poland.com/adeplus/pm1/ade_webapi2.php';
+    this.mockEnabled = configService.get<string>('GLS_MOCK_ENABLED') === 'true';
 
-    this.senderId = configService.getOrThrow<string>('GLS_SENDER_ID');
+    this.senderId = this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_SENDER_ID');
 
     this.client = axios.create({
-      baseURL,
+      baseURL: 'https://adeplus.gls-poland.com/adeplus/pm1/ade_webapi2.php',
       auth: {
-        username: configService.getOrThrow<string>('GLS_USERNAME'),
-        password: configService.getOrThrow<string>('GLS_PASSWORD'),
+        username: this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_USERNAME'),
+        password: this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_PASSWORD'),
       },
       headers: { 'Content-Type': 'application/json' },
     });
+
+    if (this.mockEnabled) {
+      this.logger.warn('⚠️  MOCK GLS CLIENT ENABLED - No real shipments will be created.');
+    }
   }
 
   async createShipment(data: GlsShipmentPayload): Promise<GlsShipmentResult> {
+    if (this.mockEnabled) {
+      return this.mockCreateShipment(data);
+    }
+
     const payload = {
       Shipment: {
         ShipmentDate: new Date().toISOString().split('T')[0],
@@ -73,11 +79,21 @@ export class GlsClient {
     return {
       trackingNumber: parcel?.TrackID ?? '',
       parcelId: parcel?.ParcelNumber ?? '',
-      labelUrl: '',  // GLS labels retrieved separately via GetLabel
+      labelUrl: '',
     };
   }
 
   getTrackingUrl(trackingNumber: string): string {
     return `https://gls-group.eu/PL/pl/sledzenie-paczek?match=${trackingNumber}`;
+  }
+
+  private mockCreateShipment(data: GlsShipmentPayload): GlsShipmentResult {
+    const trackingNumber = `MOCK_GLS_${Math.random().toString(36).substring(2, 12).toUpperCase()}`;
+    const parcelId = Math.random().toString().substring(2, 12);
+    const labelUrl = `mock-label-gls-${trackingNumber}.pdf`;
+    this.logger.log(
+      `[MOCK] GLS shipment created: tracking=${trackingNumber}, ref=${data.reference}`,
+    );
+    return { trackingNumber, parcelId, labelUrl };
   }
 }

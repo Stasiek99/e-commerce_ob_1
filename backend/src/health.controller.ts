@@ -14,11 +14,20 @@ export class HealthController {
 
   @Get()
   async check() {
+    const db = await this.checkDb();
+    return {
+      status: db === 'connected' ? 'ok' : 'error',
+      db,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async checkDb(): Promise<'connected' | 'disconnected'> {
     try {
       await this.prisma.$queryRaw`SELECT 1`;
-      return { status: 'ok', db: 'connected', timestamp: new Date().toISOString() };
+      return 'connected';
     } catch {
-      return { status: 'error', db: 'disconnected', timestamp: new Date().toISOString() };
+      return 'disconnected';
     }
   }
 }

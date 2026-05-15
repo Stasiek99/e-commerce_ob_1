@@ -11,6 +11,7 @@ export enum OrderStatus {
   DELIVERED = 'DELIVERED',
   CANCELLED = 'CANCELLED',
   REFUNDED = 'REFUNDED',
+  PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED',
 }
 
 export enum PaymentStatus {
@@ -23,6 +24,7 @@ export enum PaymentStatus {
 export enum ShipmentStatus {
   LABEL_PENDING = 'LABEL_PENDING',
   LABEL_GENERATED = 'LABEL_GENERATED',
+  LABEL_ERROR = 'LABEL_ERROR',
   IN_TRANSIT = 'IN_TRANSIT',
   DELIVERED = 'DELIVERED',
   FAILED = 'FAILED',
@@ -33,4 +35,40 @@ export enum CarrierCode {
   INPOST = 'INPOST',
   DHL = 'DHL',
   GLS = 'GLS',
+  DPD = 'DPD',
+}
+
+export enum DiscountType {
+  PERCENTAGE = 'PERCENTAGE',
+  FIXED_AMOUNT = 'FIXED_AMOUNT',
+  FREE_SHIPPING = 'FREE_SHIPPING',
+}
+
+export enum CouponType {
+  WELCOME = 'WELCOME',
+  BIRTHDAY = 'BIRTHDAY',
+  CART_ABANDONMENT = 'CART_ABANDONMENT',
+  LOYALTY = 'LOYALTY',
+  WIN_BACK = 'WIN_BACK',
+  SUBSCRIPTION = 'SUBSCRIPTION',
+  CUSTOM = 'CUSTOM',
+}
+
+export enum ReviewStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
+export enum ReturnType {
+  WITHDRAWAL = 'WITHDRAWAL',
+  COMPLAINT = 'COMPLAINT',
+}
+
+export enum ReturnStatus {
+  PENDING = 'PENDING',
+  IN_REVIEW = 'IN_REVIEW',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  COMPLETED = 'COMPLETED',
 }

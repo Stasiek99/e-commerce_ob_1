@@ -138,7 +138,8 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 - **Build:** `pnpm --filter backend exec prisma generate && pnpm --filter backend build`
 - **Start:** `node backend/dist/main`
 - **Pre-deploy:** `pnpm --filter backend exec prisma migrate deploy` — runs after build, before traffic is shifted. Blocks the deploy if migrations fail, which is what we want (no half-migrated prod).
-- **Healthcheck:** `GET /health` (wired to `HealthController`, does a `SELECT 1` against Postgres). Timeout 300s.
+- **Healthcheck:** `GET /health` (wired to `HealthController`, runs `SELECT 1` against Postgres + `PING` against Redis in parallel; returns `{ status, db, redis, timestamp }`). Timeout 300s.
+- **Database backups (HARD GATE — required before Stripe live mode):** Supabase free tier has no PITR. Options: (a) upgrade to Supabase Pro (automatic PITR + daily snapshots), or (b) weekly `pg_dump` to S3/R2 via a Railway cron job. A missing backup before the first real customer order is a potential GDPR Art. 33 breach on data loss.
 - **Restart policy:** `ON_FAILURE`.
 - **Watch patterns:** limit rebuilds to `backend/**`, `packages/shared-types/**`, `pnpm-lock.yaml`, `package.json`, `railway.json` — frontend changes don't redeploy the backend.
 
@@ -155,10 +156,11 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `NODE_ENV` | `production` | Railway auto-sets, but verify |
 | `STRIPE_SECRET_KEY` | must start with `sk_live_` | Stripe Dashboard → Developers → API keys, **flip the "Test mode" toggle off first** |
 | `STRIPE_PUBLISHABLE_KEY` | must start with `pk_live_` | same page as above |
-| `STRIPE_WEBHOOK_SECRET` | required (non-empty) | Stripe Dashboard → Developers → Webhooks → Add endpoint → URL `https://<railway>/payments/webhook`, events `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_failed` → copy "Signing secret" (`whsec_…`). **Each webhook endpoint has its own secret — test-mode and live-mode secrets are different, don't mix them up.** |
+| `STRIPE_WEBHOOK_SECRET` | required (non-empty) | Stripe Dashboard → Developers → Webhooks → Add endpoint → URL `https://<railway>/payments/webhook`, events `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_failed`, `charge.refund.updated` → copy "Signing secret" (`whsec_…`). **Each webhook endpoint has its own secret — test-mode and live-mode secrets are different, don't mix them up.** |
 | `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` | must point at the Vercel frontend, not localhost | e.g. `https://<vercel>/checkout/success` |
 | `RESEND_API_KEY` | required (no `re_mock` fallback) | Resend Dashboard → API Keys |
 | `EMAIL_FROM` | must be an address on a **verified** domain | see Resend domain verification below |
+| `REDIS_URL` | required — **hard gate**: BullMQ email queue (order confirmation, invoice, payment failure, shipping notification) silently never processes without a real Redis instance; `redis://localhost:6379` is the dev default but does not exist on Railway | Railway Dashboard → New Service → Redis → copy the connection URL |
 | `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
 | `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
 
@@ -178,15 +180,20 @@ Until the sender domain is verified, `EMAIL_FROM` can only use Resend's shared s
 
 Verification gotcha: if you're using Cloudflare, DNS records default to "Proxied" (orange cloud). **Switch MX and TXT records to DNS-only (grey cloud)** — Cloudflare's proxy strips the records otherwise and Resend's check fails with no useful error.
 
-### Frontend — Vercel
+### Frontend — Vercel (SSR + hybrid prerender)
 
-Config lives in [`vercel.json`](vercel.json) at the repo root. The project is deployed as a **pure SSG build** (Angular's `@angular/build:application` with `ssr: false` + `prerender`), not SSR — no Node server on Vercel, just static files on the edge.
+Config lives in [`vercel.json`](vercel.json) at the repo root. The project is deployed in **hybrid mode**: known static routes are prerendered at build time and served from Vercel's CDN edge; all other routes are server-side rendered on-demand by a Vercel Serverless Function.
 
 - **Install:** `pnpm install --frozen-lockfile` (from repo root, so the `@fragrance-store/shared-types` workspace package resolves)
-- **Build:** `pnpm --filter frontend build` — runs the `prebuild` sitemap generator then `ng build --configuration production`, which prerenders the 6 static routes listed in [`frontend/prerender-routes.txt`](frontend/prerender-routes.txt).
-- **Output directory:** `frontend/dist/frontend/browser` — contains `index.html`, hashed JS/CSS chunks, prerendered route folders (`cart/`, `products/`, `legal/{terms,privacy,withdrawal}/`), and the generated `sitemap.xml`.
-- **Clean URLs + SPA fallback:** `cleanUrls: true` maps `/products` → `/products/index.html`. A rewrite catches any path that isn't a static asset and routes it to `/index.html` so dynamic routes (e.g. `/products/:slug`) hydrate the SPA shell. Asset globs (`assets/`, `favicon.ico`, `sitemap.xml`, hashed files) are excluded from the fallback so they 404 cleanly if missing instead of returning HTML.
-- **Cache headers:** `/assets/*` and hashed JS/CSS/fonts get `max-age=31536000, immutable`. The HTML itself is intentionally uncached so deploys propagate instantly.
+- **Build:** `pnpm --filter frontend build` — runs the `prebuild` sitemap generator then `ng build --configuration production`, which:
+  - Prerenders the 6 static routes from [`frontend/prerender-routes.txt`](frontend/prerender-routes.txt) into `dist/frontend/browser/`
+  - Emits the SSR server bundle to `dist/frontend/server/server.mjs`
+- **Output directory:** `frontend/dist/frontend/browser` — static assets, hashed JS/CSS, prerendered HTML, `sitemap.xml`.
+- **SSR function:** `api/ssr.mjs` (repo root) — Vercel Serverless Function; imports the Angular `CommonEngine` from `dist/frontend/server/server.mjs`; `includeFiles` in `vercel.json` bundles the full server+browser dist into the Lambda.
+- **Routing:** Vercel checks static files first. Prerendered routes (e.g. `/`, `/products`) are served from the CDN without touching Node. Unmatched paths (e.g. `/products/:slug`, `/account/*`) hit the SSR function.
+- **Cache headers:** `/assets/*` and hashed JS/CSS/fonts get `max-age=31536000, immutable`.
+- **SSR entry files:** `frontend/src/server.ts` (Express server, exports `app(opts?)`), `frontend/src/main.server.ts` (Angular bootstrap + polyfills for localStorage/rAF).
+- **Local SSR server:** `pnpm --filter frontend serve:ssr:frontend` → `node dist/frontend/server/server.mjs` (listens on port 4000).
 
 **Vercel project settings** (set in the dashboard — do NOT override any of these or they clobber `vercel.json`):
 - **Root Directory:** leave unset (= repo root). The monorepo build needs access to `pnpm-workspace.yaml` at the root.

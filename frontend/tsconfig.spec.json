@@ -4,7 +4,7 @@
     "outDir": "./dist/out-tsc",
     "module": "CommonJS",
     "moduleResolution": "node",
-    "types": ["jest"],
+    "types": ["jest", "node"],
     "paths": {
       "@shared/*": ["../packages/shared-types/src/*"]
     }

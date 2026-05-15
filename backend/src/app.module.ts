@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { ScheduleModule } from '@nestjs/schedule';
+import { BullModule } from '@nestjs/bullmq';
+import IORedis from 'ioredis';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { LoggerModule } from 'nestjs-pino';
 import { HealthController } from './health.controller';
@@ -22,6 +25,10 @@ import { ShippingModule } from './modules/shipping/shipping.module';
 import { EmailModule } from './modules/email/email.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { CouponModule } from './modules/coupons/coupon.module';
+import { WishlistModule } from './modules/wishlist/wishlist.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
+import { ReturnsModule } from './modules/returns/returns.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 
@@ -48,11 +55,47 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: true },
     }),
-    ThrottlerModule.forRoot([{
-      ttl: 60000,  // 1 minute window
-      limit: 60,   // 60 requests/min default
-    }]),
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const isProd = config.get<string>('NODE_ENV') === 'production';
+        return {
+          throttlers: [
+            { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+            { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
+          ],
+          // Redis-backed in prod (distributed, survives restarts); in-memory in dev
+          // so local dev doesn't require a running Redis instance.
+          ...(isProd && {
+            storage: new ThrottlerStorageRedisService(
+              config.getOrThrow<string>('REDIS_URL'),
+            ),
+          }),
+          // Honour X-Forwarded-For behind Railway's proxy
+          getTracker: (req: Record<string, unknown>) =>
+            String((req['ips'] as string[] | undefined)?.[0] ?? req['ip'] ?? ''),
+        };
+      },
+    }),
     ScheduleModule.forRoot(),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const isProd = config.get<string>('NODE_ENV') === 'production';
+        const redis = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
+          maxRetriesPerRequest: null,
+          // In dev without Redis: give up after first failure instead of retrying forever.
+          // In prod: exponential backoff up to 5s between retries.
+          retryStrategy: isProd
+            ? (times) => Math.min(times * 500, 5_000)
+            : () => null,
+        });
+        redis.on('error', (err: Error) => {
+          console.warn(`[Redis] ${err.message}`);
+        });
+        return { connection: redis };
+      },
+    }),
     CorrelationModule,
     PrismaModule,
     AuthModule,
@@ -60,6 +103,10 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
     CategoriesModule,
     ProductsModule,
     CartModule,
+    CouponModule,
+    WishlistModule,
+    ReviewsModule,
+    ReturnsModule,
     OrdersModule,
     PaymentsModule,
     ShippingModule,

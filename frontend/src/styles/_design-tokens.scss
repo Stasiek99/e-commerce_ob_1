@@ -74,6 +74,9 @@ $color-status-shipped-text: #1e40af;
   --color-success: #{$color-success};
 
   --max-width: 1280px;
+  --banner-height: 44px;
+  --header-height: 64px;
+  --chrome-height: calc(var(--banner-height) + var(--header-height));
 
   --font-family-base: #{$font-family-base};
 

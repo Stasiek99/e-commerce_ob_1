@@ -86,7 +86,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] Vercel frontend — prerendered build, `environment.prod.ts` API URL updated
 - [x] Supabase — RLS on product-images bucket, verify connection limits
 - [x] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
-- [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
+- [ ] **[HARD GATE — Phase 7]** Database backups — deferred to Phase 7 where it is a go-live hard gate (see Phase 7 checklist). Resolving here marks it acknowledged; action required before Stripe live mode.
 
 ### 1D. Smoke Testing (Days 6-7)
 
@@ -235,21 +235,20 @@ Everything in this phase MUST be done before the first real order.
 
 **Goal:** Revenue growth features. Prioritize based on customer feedback.
 
-- [ ] Discount/coupon system (Coupon model, validation at checkout)
-- [ ] Wishlist functionality
-- [ ] Product reviews & ratings
-- [ ] Return/withdrawal request flow (consumer-facing form)
+- [x] Discount/coupon system (Coupon model, validation at checkout) 
+- [x] Wishlist functionality
+- [x] Product reviews & ratings
 - [ ] i18n/localization (if expanding beyond Poland)
-- [ ] Full SSR (if prerendering proves insufficient)
-- [ ] PWA (offline catalog, push notifications)
-- [ ] DHL/GLS mock modes
-- [ ] Advanced AdminJS views (order timeline, analytics dashboard)
+- [x] Full SSR (if prerendering proves insufficient)
+- [x] PWA (offline catalog, push notifications)
+- [x] DHL/GLS mock modes + DPD carrier stub
+- [x] Advanced AdminJS views (order timeline, analytics dashboard)
 - [x] Consumer-facing order cancel/withdraw — `POST /orders/:id/cancel`, inline confirm UI in order detail, Polish status labels on list + detail, cancellation email (see Phase 5B)
-- [ ] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
-- [ ] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send
-- [ ] Magic Link login — passwordless flow reusing the `EmailVerificationToken` infrastructure; issue a short-lived token, exchange for a session on click
-- [ ] Partial order cancellation — cancel individual line items rather than the whole order; requires item-selection UI, partial Stripe refund amount calculation, and per-item stock restoration
-- [ ] `refund.succeeded` webhook — currently refunds are confirmed synchronously via Stripe API response (sufficient for cards/BLIK/P24); add webhook handler for async payment methods where refund confirmation may be delayed
+- [x] Email address change flow — `PATCH /users/me/email` with re-verification (must invalidate old `EmailVerificationToken` rows and set `isEmailVerified = false` on change)
+- [x] Outbox pattern for transactional emails — replace fire-and-forget with a BullMQ queue (Redis) so verification/reset emails survive server restarts between DB write and send
+- [x] Magic Link login — passwordless flow reusing the `EmailVerificationToken` infrastructure; issue a short-lived token, exchange for a session on click
+- [x] Partial order cancellation — cancel individual line items rather than the whole order; requires item-selection UI, partial Stripe refund amount calculation, and per-item stock restoration
+- [x] `refund.succeeded` webhook — currently refunds are confirmed synchronously via Stripe API response (sufficient for cards/BLIK/P24); add webhook handler for async payment methods where refund confirmation may be delayed
 
 ---
 
@@ -282,7 +281,7 @@ Everything in this phase MUST be done before the first real order.
 | Atomic stock updates | **CUT** | Already implemented in `orders.service.ts:95-109` |
 | Soft deletes (deletedAt) | **DEFERRED** | <500 products don't need soft deletes. `isActive` flag suffices. |
 | Winston/Pino at Phase 0 | **MOVED to Phase 5** | NestJS logger + Railway stdout sufficient for launch |
-| Full SSR | **REPLACED** | Prerendering sufficient for <500 pages. No Node server needed on Vercel. |
+| Full SSR | **IMPLEMENTED** | Phase 6 — `server.ts` Express entry, `api/ssr.mjs` Vercel Function. Prerendered routes still served from CDN; dynamic routes SSR'd on-demand. |
 | 3 carriers at launch | **InPost only recommended** | ~70% of Polish deliveries. DHL/GLS launch in Phase 3. |
 
 ---
@@ -331,10 +330,11 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Register business domain + point DNS
 - [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
 - [ ] Resend Dashboard → Webhooks → Add endpoint: URL `https://<railway>/email/webhook`, events `email.sent`, `email.delivered`, `email.bounced`, `email.complained` → copy Signing Secret → set `RESEND_WEBHOOK_SECRET` in Railway
+- [ ] **[HARD GATE] Provision Railway Redis service → copy the `REDIS_URL` → set it in Railway backend service env vars.** Without a real Redis instance, BullMQ silently never processes jobs — 100% of transactional emails (order confirmation, invoice, payment failure, shipping notification) queue and never send. Verify by hitting `GET /health` and confirming `"redis": "connected"` alongside `"db": "connected"`.
 - [ ] Stripe: update statement descriptor to real business name
 - [ ] Seed real product catalog (products, variants, images, categories) — see field guide below
 - [ ] Upload product images to Supabase `product-images` bucket
-- [ ] Database backups — Supabase Pro plan OR weekly `pg_dump` to S3/R2
+- [ ] **[HARD GATE] Configure database backups before enabling Stripe live mode.** Supabase free tier has no PITR — a bad migration or accidental bulk-delete before backups are enabled is unrecoverable and constitutes a potential GDPR Art. 33 breach notification. Options: (a) upgrade to Supabase Pro (enables automatic PITR + daily snapshots, simplest), or (b) set up a weekly `pg_dump` job to S3/R2 (e.g. Railway cron → `pg_dump $DATABASE_URL | gzip | aws s3 cp - s3://<bucket>/backup-$(date +%Y%m%d).sql.gz`). Verify by confirming at least one successful backup exists before flipping Stripe to live mode.
 - [ ] Switch Stripe to live mode in Railway (`sk_live_` / `pk_live_`) — verify checkout end-to-end with a real card (refund immediately)
 - [ ] Google Search Console: submit sitemap, verify indexability
 - [ ] Final CORS check — `FRONTEND_URL` matches production domain
@@ -342,7 +342,7 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
 
-**Exit criteria:** Real domain live · Emails sending from verified domain · Real products visible · Stripe live checkout works · Backups configured
+**Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · **At least one verified DB backup exists before Stripe live mode**
 
 ---
 

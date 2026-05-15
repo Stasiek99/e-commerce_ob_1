@@ -1,6 +1,8 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -11,6 +13,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateProductDto {
   @IsString()
@@ -60,8 +63,28 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  pyramidTop?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidHeart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidBase?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   gender?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  line?: string;
 }
 
 export class UpdateProductDto {
@@ -113,14 +136,35 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  pyramidTop?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidHeart?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  pyramidBase?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(20)
   gender?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  line?: string;
 }
 
 export class ProductQueryDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(50)
   page?: number;
 
   @IsOptional()
@@ -138,15 +182,46 @@ export class ProductQueryDto {
   brand?: string;
 
   @IsOptional()
-  @IsString()
-  gender?: string;
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  gender?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  scentFamily?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  line?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  volumes?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  inStock?: boolean;
 
   @IsOptional()
   @IsString()
-  scentFamily?: string;
+  @IsIn(['relevance', 'price_asc', 'price_desc'])
+  sortBy?: 'relevance' | 'price_asc' | 'price_desc';
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   search?: string;
 
   @IsOptional()
