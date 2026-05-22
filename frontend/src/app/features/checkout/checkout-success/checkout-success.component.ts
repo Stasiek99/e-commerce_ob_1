@@ -3,6 +3,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
+import { AnalyticsService } from '../../../core/services/analytics.service';
 
 interface PaymentStatusResponse {
   status: string;
@@ -156,6 +157,7 @@ interface PaymentStatusResponse {
 export class CheckoutSuccessComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly http = inject(HttpClient);
+  private readonly analytics = inject(AnalyticsService);
 
   readonly loading = signal(true);
   readonly paid = signal(false);
@@ -175,9 +177,29 @@ export class CheckoutSuccessComponent implements OnInit {
       .subscribe({
         next: (res) => {
           this.paid.set(res.status === 'COMPLETED');
+          if (res.status === 'COMPLETED') {
+            this.firePurchaseEvent(id);
+          }
           this.loading.set(false);
         },
         error: () => this.loading.set(false),
       });
+  }
+
+  private firePurchaseEvent(orderId: string): void {
+    try {
+      const raw = sessionStorage.getItem('_pending_purchase');
+      if (raw) {
+        const data = JSON.parse(raw) as {
+          items: Array<{ productVariantId: string; productName: string; variantLabel: string; priceInCents: number; quantity: number }>;
+          shippingInCents: number;
+        };
+        const totalInCents = data.items.reduce((s, i) => s + i.priceInCents * i.quantity, 0) + data.shippingInCents;
+        this.analytics.trackPurchase({ transactionId: orderId, totalInCents, shippingInCents: data.shippingInCents, items: data.items });
+        sessionStorage.removeItem('_pending_purchase');
+        return;
+      }
+    } catch { /* sessionStorage unavailable */ }
+    this.analytics.push({ event: 'purchase', ecommerce: { transaction_id: orderId, currency: 'PLN' } });
   }
 }

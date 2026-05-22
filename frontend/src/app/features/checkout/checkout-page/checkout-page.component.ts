@@ -17,6 +17,7 @@ import { nameValidator, phoneValidator, streetValidator } from '../../../shared/
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
+import { AnalyticsService } from '../../../core/services/analytics.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
 
@@ -514,6 +515,7 @@ export class CheckoutPageComponent implements OnInit {
 
   readonly cart = inject(CartService);
   readonly auth = inject(AuthService);
+  private readonly analytics = inject(AnalyticsService);
 
   index = 0;
   direction = 0;
@@ -712,6 +714,12 @@ export class CheckoutPageComponent implements OnInit {
     }
     this.direction = 1;
     this.index = Math.min(this.index + 1, 2);
+    if (this.index === 2) {
+      this.analytics.trackBeginCheckout({
+        totalInCents: this.cart.totalInCents(),
+        items: this.cart.items(),
+      });
+    }
   }
 
   isInvalid(field: string): boolean {
@@ -796,6 +804,12 @@ export class CheckoutPageComponent implements OnInit {
           const isDefault = this.savedAddresses().length === 0;
           this.http.post(`${environment.apiUrl}/users/me/addresses`, { ...addrPayload, isDefault }).subscribe();
         }
+        try {
+          sessionStorage.setItem('_pending_purchase', JSON.stringify({
+            items: this.cart.items(),
+            shippingInCents: this.selectedCarrier()?.price ?? 0,
+          }));
+        } catch { /* sessionStorage unavailable (private browsing quota) */ }
         this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
         window.location.href = res.paymentUrl;
       },

@@ -10,6 +10,7 @@ import { TuiCounter, TuiRating, TuiTextarea } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { CartService } from '../../../core/services/cart.service';
 import { ToastService } from '../../../core/services/toast.service';
+import { AnalyticsService } from '../../../core/services/analytics.service';
 import { SeoService } from '../../../core/services/seo.service';
 import { WishlistService } from '../../../core/services/wishlist.service';
 import { AuthService } from '../../../core/services/auth.service';
@@ -766,6 +767,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   readonly auth = inject(AuthService);
   private readonly reviewsService = inject(ReviewsService);
   private readonly stockStream = inject(StockStreamService);
+  private readonly analytics = inject(AnalyticsService);
   private readonly platformId = inject(PLATFORM_ID);
 
   readonly loading = signal(true);
@@ -1024,6 +1026,16 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
       .subscribe({
         next: (cart) => {
           this.cartService.refreshFromServer(cart);
+          const p = this.product();
+          this.analytics.trackAddToCart({
+            itemId: variant.id,
+            name: p?.name ?? '',
+            brand: p?.brand,
+            variantLabel: variant.label,
+            category: p?.category?.name,
+            priceInCents: variant.priceInCents,
+            quantity: this.quantity,
+          });
           this.toast.success('Dodano do koszyka!');
           this.adding.set(false);
         },
