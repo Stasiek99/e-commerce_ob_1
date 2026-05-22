@@ -35,12 +35,12 @@ const makeCartItem = (qty = 2) => ({
   },
 });
 
-// Minimal tx stub reused across addItem tests — mirrors the real PrismaService shape
+// Minimal tx stub reused across transaction-based tests — mirrors the real PrismaService shape
 // that the transaction callback receives.
 const makeTx = (overrides: Record<string, any> = {}) => ({
   $queryRaw: jest.fn(),
-  cart: { findFirst: jest.fn(), create: jest.fn() },
-  cartItem: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+  cart: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+  cartItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
   ...overrides,
 });
 
@@ -208,81 +208,117 @@ describe('CartService', () => {
   });
 
   describe('mergeGuestCart', () => {
-    it('does nothing when no guest cart exists', async () => {
-      prisma.cart.findFirst.mockResolvedValue(null);
+    // Wire $transaction so its callback runs with the provided tx stub.
+    const setupMergeTx = (tx: ReturnType<typeof makeTx>) => {
+      prisma.$transaction.mockImplementation((fn: (tx: any) => Promise<any>) => fn(tx));
+    };
+
+    it('does nothing when no guest cart exists (FOR UPDATE returns no rows)', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([]); // no guest cart locked
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cart.update).not.toHaveBeenCalled();
-      expect(prisma.cartItem.create).not.toHaveBeenCalled();
+      expect(tx.cart.update).not.toHaveBeenCalled();
+      expect(tx.cartItem.create).not.toHaveBeenCalled();
     });
 
-    it('does nothing when guest cart is empty', async () => {
-      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+    it('does nothing when guest cart exists but has no items', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([]); // empty cart
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cart.update).not.toHaveBeenCalled();
+      expect(tx.cart.update).not.toHaveBeenCalled();
     });
 
-    it('claims guest cart by assigning userId when user has no cart', async () => {
-      const guestCart = { ...makeCart(), items: [{ productVariantId: 'pv-1', quantity: 2 }] };
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(guestCart) // guest cart lookup
-        .mockResolvedValueOnce(null); // user cart lookup
-      prisma.cart.update.mockResolvedValue({});
+    it('claims guest cart by assigning userId when user has no existing cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue(null); // no user cart
+      tx.cart.update.mockResolvedValue({});
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cart.update).toHaveBeenCalledWith({
-        where: { id: 'cart-1' },
+      expect(tx.cart.update).toHaveBeenCalledWith({
+        where: { id: 'guest-cart' },
         data: { userId: 'user-1', sessionId: null },
       });
-      expect(prisma.cartItem.create).not.toHaveBeenCalled();
+      expect(tx.cartItem.create).not.toHaveBeenCalled();
     });
 
-    it('merges items into user cart and deletes guest cart', async () => {
-      const guestCart = {
-        id: 'guest-cart',
-        items: [{ productVariantId: 'pv-1', quantity: 2 }],
-      };
-      const userCart = { id: 'user-cart' };
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(guestCart) // guest cart
-        .mockResolvedValueOnce(userCart); // user cart
-      prisma.cartItem.findUnique.mockResolvedValue(null); // variant not in user cart
-      prisma.cartItem.create.mockResolvedValue({});
-      prisma.cart.delete.mockResolvedValue({});
+    it('merges new items into user cart and deletes guest cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue(null); // variant not yet in user cart
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cartItem.create).toHaveBeenCalledWith({
+      expect(tx.cartItem.create).toHaveBeenCalledWith({
         data: { cartId: 'user-cart', productVariantId: 'pv-1', quantity: 2 },
       });
-      expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+      expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
     });
 
-    it('increments existing items in user cart during merge (quantity accumulation)', async () => {
-      const guestCart = {
-        id: 'guest-cart',
-        items: [{ productVariantId: 'pv-1', quantity: 3 }],
-      };
-      const userCart = { id: 'user-cart' };
-      const existingItem = { id: 'ci-1', quantity: 2 };
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(guestCart)
-        .mockResolvedValueOnce(userCart);
-      prisma.cartItem.findUnique.mockResolvedValue(existingItem);
-      prisma.cartItem.update.mockResolvedValue({});
-      prisma.cart.delete.mockResolvedValue({});
+    it('accumulates quantity when item already exists in user cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 3 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
+      tx.cartItem.update.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cartItem.update).toHaveBeenCalledWith({
+      expect(tx.cartItem.update).toHaveBeenCalledWith({
         where: { id: 'ci-1' },
         data: { quantity: 5 },
       });
-      expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+      expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+    });
+
+    it('acquires FOR UPDATE lock on the guest cart row to prevent concurrent item orphaning', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      const rawQuery: string = (tx.$queryRaw.mock.calls[0][0] as string[]).join('');
+      expect(rawQuery).toMatch(/FOR UPDATE/i);
+      expect(rawQuery).toMatch(/carts/i);
+    });
+
+    it('runs the entire merge atomically inside a single $transaction call', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
   });
 

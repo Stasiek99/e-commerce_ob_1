@@ -129,47 +129,58 @@ export class CartService {
   }
 
   async mergeGuestCart(userId: string, sessionId: string) {
-    const guestCart = await this.prisma.cart.findFirst({
-      where: { sessionId, userId: null },
-      include: { items: true },
-    });
-    if (!guestCart || guestCart.items.length === 0) return;
+    await this.prisma.$transaction(async (tx) => {
+      // Lock the guest cart row for the duration of this transaction.
+      // Without FOR UPDATE, a concurrent addItem call can insert a new item
+      // between our read and the delete below, orphaning that item.
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM carts
+        WHERE "sessionId" = ${sessionId} AND "userId" IS NULL
+        FOR UPDATE
+      `;
+      if (rows.length === 0) return;
 
-    let userCart = await this.prisma.cart.findFirst({ where: { userId } });
-    if (!userCart) {
-      await this.prisma.cart.update({
-        where: { id: guestCart.id },
-        data: { userId, sessionId: null },
-      });
-      return;
-    }
+      const guestCartId = rows[0].id;
+      const guestItems = await tx.cartItem.findMany({ where: { cartId: guestCartId } });
+      if (guestItems.length === 0) return;
 
-    for (const item of guestCart.items) {
-      const existing = await this.prisma.cartItem.findUnique({
-        where: {
-          cartId_productVariantId: {
-            cartId: userCart.id,
-            productVariantId: item.productVariantId,
-          },
-        },
-      });
-      if (existing) {
-        await this.prisma.cartItem.update({
-          where: { id: existing.id },
-          data: { quantity: existing.quantity + item.quantity },
+      const userCart = await tx.cart.findFirst({ where: { userId } });
+      if (!userCart) {
+        // Fast path: claim the guest cart directly — no item copying needed
+        await tx.cart.update({
+          where: { id: guestCartId },
+          data: { userId, sessionId: null },
         });
-      } else {
-        await this.prisma.cartItem.create({
-          data: {
-            cartId: userCart.id,
-            productVariantId: item.productVariantId,
-            quantity: item.quantity,
-          },
-        });
+        return;
       }
-    }
 
-    await this.prisma.cart.delete({ where: { id: guestCart.id } });
+      for (const item of guestItems) {
+        const existing = await tx.cartItem.findUnique({
+          where: {
+            cartId_productVariantId: {
+              cartId: userCart.id,
+              productVariantId: item.productVariantId,
+            },
+          },
+        });
+        if (existing) {
+          await tx.cartItem.update({
+            where: { id: existing.id },
+            data: { quantity: existing.quantity + item.quantity },
+          });
+        } else {
+          await tx.cartItem.create({
+            data: {
+              cartId: userCart.id,
+              productVariantId: item.productVariantId,
+              quantity: item.quantity,
+            },
+          });
+        }
+      }
+
+      await tx.cart.delete({ where: { id: guestCartId } });
+    });
   }
 
   async clearCart(cartId: string) {
