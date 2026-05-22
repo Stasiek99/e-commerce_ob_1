@@ -3,8 +3,6 @@
 > Generated via 5-agent stochastic consensus — 2026-05-22
 > Agents: Domain Expert · Security Skeptic · UX Pragmatist · Infrastructure First-Principles · Risk Analyst
 
----
-
 ## Legend
 
 | Label | Meaning |
