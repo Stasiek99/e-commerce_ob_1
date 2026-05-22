@@ -35,6 +35,15 @@ const makeCartItem = (qty = 2) => ({
   },
 });
 
+// Minimal tx stub reused across addItem tests — mirrors the real PrismaService shape
+// that the transaction callback receives.
+const makeTx = (overrides: Record<string, any> = {}) => ({
+  $queryRaw: jest.fn(),
+  cart: { findFirst: jest.fn(), create: jest.fn() },
+  cartItem: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+  ...overrides,
+});
+
 describe('CartService', () => {
   let service: CartService;
   let prisma: any;
@@ -46,6 +55,7 @@ describe('CartService', () => {
         {
           provide: PrismaService,
           useValue: {
+            $transaction: jest.fn(),
             productVariant: { findUnique: jest.fn() },
             cart: {
               findFirst: jest.fn(),
@@ -70,8 +80,16 @@ describe('CartService', () => {
   });
 
   describe('addItem', () => {
+    // Helper: wire $transaction so its callback runs with the provided tx stub.
+    // The outer prisma mock is used only by getOrCreate (called after the transaction).
+    const setupTx = (tx: ReturnType<typeof makeTx>) => {
+      prisma.$transaction.mockImplementation((fn: (tx: any) => Promise<any>) => fn(tx));
+    };
+
     it('throws NotFoundException when variant does not exist', async () => {
-      prisma.productVariant.findUnique.mockResolvedValue(null);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([]); // no rows → variant not found
+      setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         NotFoundException,
@@ -79,7 +97,9 @@ describe('CartService', () => {
     });
 
     it('throws NotFoundException when variant is inactive', async () => {
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ isActive: false }));
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: false, stock: 10 }]);
+      setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         NotFoundException,
@@ -87,9 +107,11 @@ describe('CartService', () => {
     });
 
     it('throws BadRequestException when requested quantity exceeds stock', async () => {
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 3 }));
-      prisma.cart.findFirst.mockResolvedValue(makeCart());
-      prisma.cartItem.findUnique.mockResolvedValue(null);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 3 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 5)).rejects.toThrow(
         BadRequestException,
@@ -97,32 +119,36 @@ describe('CartService', () => {
     });
 
     it('creates a new cart if one does not exist', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(null);
+      tx.cart.create.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      setupTx(tx);
+
       const cartWithItem = { ...makeCart(), items: [makeCartItem(1)] };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant());
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(null) // findCart (addItem)
-        .mockResolvedValueOnce(cartWithItem); // findCart (getOrCreate after add)
-      prisma.cart.create.mockResolvedValue(makeCart());
-      prisma.cartItem.findUnique.mockResolvedValue(null);
-      prisma.cartItem.create.mockResolvedValue({});
+      prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
-      expect(prisma.cart.create).toHaveBeenCalledTimes(1);
+      expect(tx.cart.create).toHaveBeenCalledTimes(1);
     });
 
     it('creates a new cart item when variant is not yet in cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      setupTx(tx);
+
       const cartWithItem = { ...makeCart(), items: [makeCartItem(1)] };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant());
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(makeCart())
-        .mockResolvedValueOnce(cartWithItem);
-      prisma.cartItem.findUnique.mockResolvedValue(null);
-      prisma.cartItem.create.mockResolvedValue({});
+      prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
-      expect(prisma.cartItem.create).toHaveBeenCalledWith(
+      expect(tx.cartItem.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ productVariantId: 'pv-1', quantity: 1 }),
         }),
@@ -131,28 +157,51 @@ describe('CartService', () => {
 
     it('increments quantity when variant is already in cart', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 2 };
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(existing);
+      tx.cartItem.update.mockResolvedValue({});
+      setupTx(tx);
+
       const cartWithItem = { ...makeCart(), items: [makeCartItem(3)] };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 10 }));
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(makeCart())
-        .mockResolvedValueOnce(cartWithItem);
-      prisma.cartItem.findUnique.mockResolvedValue(existing);
-      prisma.cartItem.update.mockResolvedValue({});
+      prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
-      expect(prisma.cartItem.update).toHaveBeenCalledWith(
+      expect(tx.cartItem.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { quantity: 3 } }),
       );
     });
 
     it('throws BadRequestException when cumulative quantity exceeds stock', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 8 };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 10 }));
-      prisma.cart.findFirst.mockResolvedValue(makeCart());
-      prisma.cartItem.findUnique.mockResolvedValue(existing);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(existing);
+      setupTx(tx);
 
+      // existing qty 8 + requested 5 = 13 > stock 10
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 5)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('FOR UPDATE lock serializes concurrent adds: second caller sees updated stock', async () => {
+      // Simulate what happens in production: after the first transaction commits,
+      // the row lock is released and the next caller reads the fresh (decremented) stock.
+      // Here we verify that the service correctly rejects when $queryRaw returns a
+      // stock value that already reflects a prior caller's reservation.
+      const tx = makeTx();
+      // Stock is 0 — a concurrent request already reserved the last unit
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 0 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart()); // reach the stock check
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      setupTx(tx);
+
+      // Requesting qty=1 against stock=0 must be rejected
+      await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         BadRequestException,
       );
     });
