@@ -79,23 +79,10 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
     }),
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const isProd = config.get<string>('NODE_ENV') === 'production';
-        const redis = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
-          maxRetriesPerRequest: null,
-          // In dev without Redis: give up after first failure instead of retrying forever.
-          // In prod: exponential backoff up to 5s between retries.
-          retryStrategy: isProd
-            ? (times) => Math.min(times * 500, 5_000)
-            : () => null,
-        });
-        redis.on('error', (err: Error) => {
-          console.warn(`[Redis] ${err.message}`);
-        });
-        return { connection: redis };
-      },
+      inject: ['REDIS_CLIENT'],
+      useFactory: (redis: IORedis) => ({ connection: redis }),
     }),
+    BullModule.registerQueue({ name: 'email' }),
     CorrelationModule,
     PrismaModule,
     AuthModule,
@@ -121,6 +108,19 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
   providers: [
     { provide: APP_FILTER, useClass: SentryGlobalFilter },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    {
+      provide: 'REDIS_CLIENT',
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const isProd = config.get<string>('NODE_ENV') === 'production';
+        const redis = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
+          maxRetriesPerRequest: null,
+          retryStrategy: isProd ? (times) => Math.min(times * 500, 5_000) : () => null,
+        });
+        redis.on('error', (err: Error) => console.warn(`[Redis] ${err.message}`));
+        return redis;
+      },
+    },
   ],
 })
 export class AppModule {}
