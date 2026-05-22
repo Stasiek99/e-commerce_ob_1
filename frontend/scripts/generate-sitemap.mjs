@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * Build-time sitemap.xml generator.
+ * Build-time sitemap.xml + prerender-routes.txt generator.
  *
- * Fetches product and category slugs from the backend API and writes
- * src/sitemap.xml. The file is picked up by the Angular build as a
- * static asset and served at /sitemap.xml.
+ * Fetches product and category slugs from the backend API and writes:
+ *   - src/sitemap.xml         — submitted to Google Search Console
+ *   - prerender-routes.txt    — Angular static prerender target list
  *
  * Runs automatically as a `prebuild` hook. On fetch failure the script
- * degrades gracefully: it still writes a sitemap containing only the
- * static routes so production builds never hard-fail because the
- * backend happened to be down.
+ * degrades gracefully: it still emits the static routes so production
+ * builds never hard-fail because the backend is temporarily down.
  *
  * Environment overrides:
  *   SITEMAP_BACKEND_URL  default: http://localhost:3000/api
@@ -20,10 +19,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_PATH = resolve(__dirname, '../src/sitemap.xml');
+const SITEMAP_PATH = resolve(__dirname, '../src/sitemap.xml');
+const PRERENDER_PATH = resolve(__dirname, '../prerender-routes.txt');
 const BACKEND_URL = (process.env.SITEMAP_BACKEND_URL || 'http://localhost:3000/api').replace(/\/$/, '');
 const SITE_URL = (process.env.SITEMAP_SITE_URL || 'https://fragrance-store.pl').replace(/\/$/, '');
-const FETCH_TIMEOUT_MS = 5000;
+const FETCH_TIMEOUT_MS = 8000;
+const PAGE_LIMIT = 100; // backend's per-page cap
 
 const STATIC_ROUTES = [
   { path: '', priority: '1.0', changefreq: 'weekly' },
@@ -33,10 +34,22 @@ const STATIC_ROUTES = [
   { path: '/legal/withdrawal', priority: '0.3', changefreq: 'yearly' },
 ];
 
+const STATIC_PRERENDER_ROUTES = [
+  '/',
+  '/products',
+  '/cart',
+  '/legal/terms',
+  '/legal/privacy',
+  '/legal/withdrawal',
+];
+
 async function fetchJson(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      console.warn(`[sitemap] WARN: could not fetch ${url} — HTTP ${res.status}`);
+      return null;
+    }
     return await res.json();
   } catch (err) {
     console.warn(`[sitemap] WARN: could not fetch ${url} — ${err.message}`);
@@ -44,11 +57,42 @@ async function fetchJson(url) {
   }
 }
 
+/** Paginates through all products, respecting the backend's 100-item cap. */
+async function fetchAllProducts() {
+  const all = [];
+  let page = 1;
+
+  while (true) {
+    const payload = await fetchJson(`${BACKEND_URL}/products?page=${page}&limit=${PAGE_LIMIT}`);
+    if (!payload) break;
+
+    const items = Array.isArray(payload.data) ? payload.data
+      : Array.isArray(payload) ? payload
+      : [];
+    all.push(...items);
+
+    const totalPages = payload.meta?.totalPages ?? 1;
+    if (page >= totalPages) break;
+    page++;
+  }
+
+  return all;
+}
+
+/** Recursively flattens a category tree (up to 3 levels). */
+function flattenCategories(categories) {
+  const all = [];
+  for (const cat of categories ?? []) {
+    if (cat?.slug) all.push(cat);
+    if (cat?.children?.length) all.push(...flattenCategories(cat.children));
+  }
+  return all;
+}
+
 function toIsoDate(value) {
   if (!value) return new Date().toISOString().slice(0, 10);
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
-  return d.toISOString().slice(0, 10);
+  return Number.isNaN(d.getTime()) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
 }
 
 function escapeXml(str) {
@@ -70,24 +114,21 @@ function urlEntry({ loc, lastmod, priority, changefreq }) {
   return `  <url>\n${lines.join('\n')}\n  </url>`;
 }
 
-function extractArray(payload) {
-  if (!payload) return [];
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload.data)) return payload.data;
-  return [];
-}
-
 async function main() {
   const today = new Date().toISOString().slice(0, 10);
 
-  const [productsPayload, categoriesPayload] = await Promise.all([
-    fetchJson(`${BACKEND_URL}/products?limit=1000`),
+  const [products, categoriesPayload] = await Promise.all([
+    fetchAllProducts(),
     fetchJson(`${BACKEND_URL}/categories`),
   ]);
 
-  const products = extractArray(productsPayload);
-  const categories = extractArray(categoriesPayload);
+  const categories = flattenCategories(
+    Array.isArray(categoriesPayload) ? categoriesPayload
+      : Array.isArray(categoriesPayload?.data) ? categoriesPayload.data
+      : [],
+  );
 
+  // ── sitemap.xml ──────────────────────────────────────────────────
   const entries = [];
 
   for (const route of STATIC_ROUTES) {
@@ -127,12 +168,19 @@ ${entries.join('\n')}
 </urlset>
 `;
 
-  writeFileSync(OUTPUT_PATH, xml, 'utf8');
+  writeFileSync(SITEMAP_PATH, xml, 'utf8');
+  console.log(`[sitemap] wrote ${SITEMAP_PATH}`);
+  console.log(`[sitemap] ${STATIC_ROUTES.length} static + ${products.length} products + ${categories.length} categories = ${entries.length} urls`);
 
-  console.log(`[sitemap] wrote ${OUTPUT_PATH}`);
-  console.log(
-    `[sitemap] ${STATIC_ROUTES.length} static + ${products.length} products + ${categories.length} categories = ${entries.length} urls`,
-  );
+  // ── prerender-routes.txt ─────────────────────────────────────────
+  const prerenderRoutes = [
+    ...STATIC_PRERENDER_ROUTES,
+    ...products.filter(p => p?.slug).map(p => `/products/${p.slug}`),
+    ...categories.filter(c => c?.slug).map(c => `/category/${c.slug}`),
+  ];
+
+  writeFileSync(PRERENDER_PATH, prerenderRoutes.join('\n') + '\n', 'utf8');
+  console.log(`[sitemap] wrote ${PRERENDER_PATH} (${prerenderRoutes.length} routes to prerender)`);
 }
 
 main().catch((err) => {
