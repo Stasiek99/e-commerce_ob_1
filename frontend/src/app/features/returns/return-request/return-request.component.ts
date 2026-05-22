@@ -1,7 +1,7 @@
 import { Component, inject, signal, computed } from '@angular/core';
-import { ReactiveFormsModule, FormBuilder, FormArray, Validators } from '@angular/forms';
+import { ReactiveFormsModule, FormBuilder, FormControl, FormGroup, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
 import { TuiButton, TuiIcon, TuiLabel, TuiTextfield } from '@taiga-ui/core';
 import { TuiTextarea } from '@taiga-ui/kit';
@@ -217,8 +217,8 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
             <div class="section">
               <h2 class="section__title">Produkty do zwrotu *</h2>
               <div formArrayName="items" class="items-list">
-                @for (_ of items.controls; track $index) {
-                  <div [formGroupName]="$index" class="item-row">
+                @for (group of typedItems; track $index) {
+                  <div [formGroup]="group" class="item-row">
                     <div class="item-row__name">
                       <tui-textfield>
                         <label tuiLabel>Nazwa produktu</label>
@@ -500,6 +500,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
 export class ReturnRequestComponent {
   private readonly http = inject(HttpClient);
   private readonly fb = inject(FormBuilder);
+  private readonly route = inject(ActivatedRoute);
 
   readonly submitted = signal(false);
   readonly submitting = signal(false);
@@ -531,6 +532,16 @@ export class ReturnRequestComponent {
     bankAccount: ['', Validators.maxLength(34)],
     rodoConsent: [false, Validators.requiredTrue],
   });
+
+  constructor() {
+    // Pre-select type from ?type=withdrawal query param (linked from /legal/withdrawal).
+    const typeParam = this.route.snapshot.queryParamMap.get('type');
+    if (typeParam === 'withdrawal') {
+      this.form.patchValue({ type: 'WITHDRAWAL' });
+    } else if (typeParam === 'complaint') {
+      this.form.patchValue({ type: 'COMPLAINT' });
+    }
+  }
 
   // ── Deadline calculation ──────────────────────────────────────────────────
 
@@ -564,8 +575,14 @@ export class ReturnRequestComponent {
 
   // ── FormArray helpers ─────────────────────────────────────────────────────
 
-  get items(): FormArray {
-    return this.form.get('items') as FormArray;
+  get items() {
+    return this.form.controls.items;
+  }
+
+  // Typed view of items.controls — lets the template use [formGroup]="group"
+  // so the Angular Language Service can statically resolve formControlName bindings.
+  get typedItems(): FormGroup<{ productName: FormControl<string | null>; quantity: FormControl<number | null> }>[] {
+    return this.items.controls as FormGroup<{ productName: FormControl<string | null>; quantity: FormControl<number | null> }>[];
   }
 
   createItemGroup() {

@@ -10,8 +10,24 @@ export function returnConfirmationTemplate(data: {
   type: 'WITHDRAWAL' | 'COMPLAINT';
   items: ReturnItem[];
 }): { subject: string; html: string } {
-  const typeLabel = data.type === 'WITHDRAWAL' ? 'odstąpienia od umowy' : 'reklamacji';
+  const typeLabel =
+    data.type === 'WITHDRAWAL'
+      ? 'odstąpienia od umowy (art. 27 UPK)'
+      : 'reklamacji z tytułu rękojmi';
   const subject = `Potwierdzenie zgłoszenia ${typeLabel} – zamówienie #${data.orderNumber}`;
+
+  const typeBadge =
+    data.type === 'WITHDRAWAL'
+      ? `<div style="display:inline-block;background:#dbeafe;border-radius:4px;
+                    padding:5px 12px;font-size:12px;font-weight:700;
+                    color:#1e40af;margin-bottom:20px;letter-spacing:0.03em;">
+           Ustawowe odstąpienie od umowy — art. 27 Ustawy o prawach konsumenta
+         </div>`
+      : `<div style="display:inline-block;background:#fef3c7;border-radius:4px;
+                    padding:5px 12px;font-size:12px;font-weight:700;
+                    color:#92400e;margin-bottom:20px;letter-spacing:0.03em;">
+           Reklamacja z tytułu rękojmi — art. 43a–43g Ustawy o prawach konsumenta
+         </div>`;
 
   const itemRows = data.items
     .map(
@@ -52,6 +68,7 @@ export function returnConfirmationTemplate(data: {
             <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a1a;line-height:1.3;">
               Otrzymaliśmy Twoje zgłoszenie
             </h1>
+            ${typeBadge}
             <p style="margin:0 0 24px;font-size:15px;color:#6b6b6b;line-height:1.6;">
               Drogi/a <strong style="color:#1a1a1a;">${data.firstName}</strong>, zgłoszenie
               ${typeLabel} dotyczące zamówienia
