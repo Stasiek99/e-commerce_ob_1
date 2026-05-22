@@ -39,3 +39,6 @@ backend/prisma/migrations/
 
 # Angular
 frontend/.angular/
+
+# Test coverage reports
+coverage/
