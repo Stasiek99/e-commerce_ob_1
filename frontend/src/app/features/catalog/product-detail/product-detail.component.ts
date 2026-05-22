@@ -1,6 +1,6 @@
-import { Component, HostListener, OnDestroy, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, HostListener, OnDestroy, OnInit, inject, signal, computed, PLATFORM_ID } from '@angular/core';
 import { Subscription } from 'rxjs';
-import { Location } from '@angular/common';
+import { isPlatformBrowser, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
@@ -766,6 +766,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   readonly auth = inject(AuthService);
   private readonly reviewsService = inject(ReviewsService);
   private readonly stockStream = inject(StockStreamService);
+  private readonly platformId = inject(PLATFORM_ID);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -856,7 +857,9 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    document.body.style.overflow = '';
+    if (isPlatformBrowser(this.platformId)) {
+      document.body.style.overflow = '';
+    }
     this.stockSub?.unsubscribe();
   }
 

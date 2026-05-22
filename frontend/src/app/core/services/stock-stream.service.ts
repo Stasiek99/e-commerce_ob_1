@@ -1,5 +1,6 @@
-import { Injectable } from '@angular/core';
-import { Observable } from 'rxjs';
+import { Injectable, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
+import { Observable, EMPTY } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
 export interface StockUpdate {
@@ -9,7 +10,11 @@ export interface StockUpdate {
 
 @Injectable({ providedIn: 'root' })
 export class StockStreamService {
+  private readonly platformId = inject(PLATFORM_ID);
+
   connect(variantIds: string[]): Observable<StockUpdate[]> {
+    if (!isPlatformBrowser(this.platformId)) return EMPTY;
+
     return new Observable<StockUpdate[]>((subscriber) => {
       const url = `${environment.apiUrl}/products/variants/stock-stream?ids=${variantIds.join(',')}`;
       const source = new EventSource(url);

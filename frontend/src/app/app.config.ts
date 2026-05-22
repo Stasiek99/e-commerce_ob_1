@@ -6,6 +6,7 @@ import {
   provideAppInitializer,
   provideZoneChangeDetection,
 } from '@angular/core';
+import { provideClientHydration, withEventReplay } from '@angular/platform-browser';
 import { provideServiceWorker } from '@angular/service-worker';
 import { firstValueFrom, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
@@ -42,6 +43,7 @@ const sentryProviders = environment.sentryDsn
 
 export const appConfig: ApplicationConfig = {
   providers: [
+    provideClientHydration(withEventReplay()),
     provideZoneChangeDetection({ eventCoalescing: true }),
     provideRouter(
       routes,

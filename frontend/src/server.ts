@@ -35,7 +35,7 @@ export function app(opts: AppOptions = {}): express.Express {
 
   // All HTML routes: server-side render via Angular CommonEngine
   server.get('**', (req, res, next) => {
-    const { protocol, originalUrl, baseUrl, headers } = req;
+    const { protocol, originalUrl, headers } = req;
     commonEngine
       .render({
         bootstrap,
@@ -46,6 +46,12 @@ export function app(opts: AppOptions = {}): express.Express {
       })
       .then(html => res.send(html))
       .catch(err => next(err));
+  });
+
+  // SSR error handler — logs and falls back to a bare 500 rather than hanging
+  server.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[SSR render error]', err);
+    res.status(500).send('Internal Server Error');
   });
 
   return server;
