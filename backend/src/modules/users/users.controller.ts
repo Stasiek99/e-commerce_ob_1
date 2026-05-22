@@ -20,6 +20,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangeEmailDto } from './dto/change-email.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 import { Throttle } from '@nestjs/throttler';
 
@@ -52,6 +53,13 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async changeEmail(@CurrentUser() user: User, @Body() dto: ChangeEmailDto) {
     await this.authService.requestEmailChange(user.id, dto.email);
+  }
+
+  @Throttle({ default: { ttl: 3600000, limit: 5 } })
+  @Patch('me/password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changePassword(@CurrentUser() user: User, @Body() dto: ChangePasswordDto) {
+    await this.authService.changePassword(user.id, dto.currentPassword, dto.newPassword);
   }
 
   @Patch('me')

@@ -309,6 +309,28 @@ export class AuthService {
     ]);
   }
 
+  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) throw new UnauthorizedException('Invalid credentials');
+
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash },
+      }),
+      // Revoke all active refresh tokens — forces re-login on all other devices
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+  }
+
   async requestMagicLink(email: string): Promise<void> {
     const user = await this.usersService.findByEmail(email);
     // Always silent — prevents email enumeration
