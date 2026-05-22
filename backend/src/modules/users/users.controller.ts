@@ -8,11 +8,14 @@ import {
   Param,
   Patch,
   Post,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { UsersService } from './users.service';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { REFRESH_COOKIE } from '../auth/auth.constants';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -32,6 +35,16 @@ export class UsersController {
   getMe(@CurrentUser() user: User) {
     const { passwordHash, ...result } = user;
     return result;
+  }
+
+  @Delete('me')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteMe(
+    @CurrentUser() user: User,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    await this.usersService.deleteAccount(user.id);
+    res.clearCookie(REFRESH_COOKIE, { path: '/' });
   }
 
   @Throttle({ default: { ttl: 3600000, limit: 3 } })

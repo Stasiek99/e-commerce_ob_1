@@ -1,12 +1,24 @@
 import { Component } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 @Component({
   selector: 'app-withdrawal',
   standalone: true,
+  imports: [RouterLink],
   template: `
     <div class="legal-page">
       <h1>Prawo odstąpienia od umowy</h1>
       <p class="version">Zgodnie z ustawą z dnia 30 maja 2014&nbsp;r. o prawach konsumenta (Dz.U. 2014 poz. 827)</p>
+
+      <div class="cta-box">
+        <div class="cta-box__text">
+          <strong>Chcesz odstąpić od umowy?</strong>
+          <span>Złóż zgłoszenie online — bez drukowania i wysyłania e-maili.</span>
+        </div>
+        <a [routerLink]="['/returns']" [queryParams]="{ type: 'withdrawal' }" class="cta-box__btn">
+          Złóż odstąpienie online
+        </a>
+      </div>
 
       <section>
         <h2>Prawo do odstąpienia</h2>
@@ -81,6 +93,22 @@ import { Component } from '@angular/core';
     .form-template p { margin: 0; }
     .asterisk { font-style: italic; color: var(--color-secondary); }
     .note { background: #fff8e1; border-left: 3px solid #f59e0b; padding: 10px 14px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-style: italic; }
+    .cta-box {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap;
+      background: #f0f4ff; border: 1px solid #c7d2fe;
+      border-radius: var(--radius-sm); padding: 18px 20px; margin-bottom: 32px;
+    }
+    .cta-box__text { display: flex; flex-direction: column; gap: 4px; }
+    .cta-box__text strong { font-size: 15px; color: #1e3a8a; }
+    .cta-box__text span { font-size: 13px; color: #3730a3; }
+    .cta-box__btn {
+      display: inline-block; background: #3730a3; color: #fff;
+      padding: 10px 22px; border-radius: 6px; font-size: 14px; font-weight: 600;
+      text-decoration: none; white-space: nowrap; transition: background 0.15s;
+      flex-shrink: 0;
+    }
+    .cta-box__btn:hover { background: #1e3a8a; }
   `],
 })
 export class WithdrawalComponent {}

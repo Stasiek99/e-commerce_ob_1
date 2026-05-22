@@ -23,8 +23,12 @@ export function returnAdminNotificationTemplate(data: {
   requestedResolution?: string;
   bankAccount?: string;
 }): { subject: string; html: string } {
-  const typeLabel = data.type === 'WITHDRAWAL' ? 'Odstąpienie od umowy' : 'Reklamacja';
-  const subject = `[${typeLabel}] Zamówienie #${data.orderNumber} – ${data.customerName}`;
+  const typeLabelShort = data.type === 'WITHDRAWAL' ? 'Odstąpienie (art. 27)' : 'Reklamacja';
+  const typeLabel =
+    data.type === 'WITHDRAWAL'
+      ? 'Odstąpienie od umowy (art. 27 UPK)'
+      : 'Reklamacja (rękojmia)';
+  const subject = `[${typeLabelShort}] Zamówienie #${data.orderNumber} – ${data.customerName}`;
 
   const itemRows = data.items
     .map(

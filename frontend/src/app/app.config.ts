@@ -6,10 +6,12 @@ import {
   provideAppInitializer,
   provideZoneChangeDetection,
 } from '@angular/core';
+import { provideClientHydration, withEventReplay } from '@angular/platform-browser';
 import { provideServiceWorker } from '@angular/service-worker';
 import { firstValueFrom, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
+import { AnalyticsService } from './core/services/analytics.service';
 import {
   Router,
   provideRouter,
@@ -42,6 +44,7 @@ const sentryProviders = environment.sentryDsn
 
 export const appConfig: ApplicationConfig = {
   providers: [
+    provideClientHydration(withEventReplay()),
     provideZoneChangeDetection({ eventCoalescing: true }),
     provideRouter(
       routes,
@@ -55,6 +58,9 @@ export const appConfig: ApplicationConfig = {
     ),
     provideAnimationsAsync(),
     NG_EVENT_PLUGINS,
+    provideAppInitializer(() => {
+      inject(AnalyticsService).init(environment.gtmId);
+    }),
     provideAppInitializer(async () => {
       const auth = inject(AuthService);
       await firstValueFrom(auth.refresh().pipe(catchError(() => of(null))));

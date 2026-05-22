@@ -5,6 +5,7 @@ import { PricePipe } from '../pipes/price.pipe';
 import { CartService } from '../../core/services/cart.service';
 import { WishlistService } from '../../core/services/wishlist.service';
 import { ToastService } from '../../core/services/toast.service';
+import { AnalyticsService } from '../../core/services/analytics.service';
 
 export interface ProductCardData {
   id: string;
@@ -26,6 +27,7 @@ export class ProductCardComponent {
   private readonly cart = inject(CartService);
   private readonly wishlist = inject(WishlistService);
   private readonly toast = inject(ToastService);
+  private readonly analytics = inject(AnalyticsService);
 
   @Input({ required: true }) product!: ProductCardData;
 
@@ -65,6 +67,14 @@ export class ProductCardComponent {
     this.cart.addItem(variant.id, 1).subscribe({
       next: (cart) => {
         this.cart.refreshFromServer(cart);
+        this.analytics.trackAddToCart({
+          itemId: variant.id,
+          name: this.product.name,
+          brand: this.product.brand,
+          variantLabel: variant.label,
+          priceInCents: variant.priceInCents,
+          quantity: 1,
+        });
         this.toast.success('Dodano do koszyka!');
         this.adding.set(false);
       },

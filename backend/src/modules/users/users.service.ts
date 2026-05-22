@@ -67,4 +67,25 @@ export class UsersService {
     if (!address) throw new NotFoundException('Address not found');
     return this.prisma.address.delete({ where: { id: addressId } });
   }
+
+  async deleteAccount(userId: string): Promise<void> {
+    await this.prisma.$transaction([
+      // GDPR Art. 17 — scrub PII from order snapshots; the FK is nulled by the
+      // cascade below so orders remain intact for accounting/dispute purposes.
+      this.prisma.order.updateMany({
+        where: { userId },
+        data: {
+          snapshotFirstName: '[usunięto]',
+          snapshotLastName:  '[usunięto]',
+          snapshotEmail:     'deleted@deleted',
+          snapshotPhone:     '',
+          snapshotNip:       null,
+        },
+      }),
+      // Hard-delete — cascade removes addresses, refresh tokens, email tokens,
+      // password-reset tokens, wishlist items, reviews, and customer notes.
+      // Orders.userId is set to NULL by the schema's onDelete: SetNull rule.
+      this.prisma.user.delete({ where: { id: userId } }),
+    ]);
+  }
 }
