@@ -27,7 +27,8 @@ import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { Throttle } from '@nestjs/throttler';
 
-const REFRESH_COOKIE = 'refresh_token';
+import { REFRESH_COOKIE } from './auth.constants';
+
 const OAUTH_EXCHANGE_COOKIE = 'oauth_access_token';
 const CROSS_SITE = (process.env.FRONTEND_URL ?? '').startsWith('https://');
 

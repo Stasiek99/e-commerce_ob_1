@@ -2,6 +2,7 @@ import { Component, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { Location } from '@angular/common';
+import { Router } from '@angular/router';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
@@ -141,6 +142,61 @@ function formatPhone(raw: string): string {
           </div>
         </form>
       }
+
+      <!-- ── Danger zone ─────────────────────────────────── -->
+      <div class="danger-zone">
+        <h3 class="danger-title">Strefa niebezpieczna</h3>
+
+        @if (!confirmingDelete()) {
+          <div class="danger-card">
+            <div class="danger-info">
+              <strong>Usuń konto</strong>
+              <p>Trwale usuwa Twoje konto, dane osobowe i historię zakupów. Tej operacji nie można cofnąć.</p>
+            </div>
+            <button
+              tuiButton
+              appearance="secondary"
+              size="s"
+              type="button"
+              class="btn-danger"
+              (click)="startDeleteConfirm()"
+            >
+              Usuń konto
+            </button>
+          </div>
+        } @else {
+          <div class="danger-card danger-card--warning">
+            <p class="danger-warning">
+              <tui-icon icon="@tui.triangle-alert" class="danger-icon" />
+              <strong>Czy na pewno chcesz usunąć konto?</strong><br>
+              Wszystkie Twoje dane zostaną trwale usunięte. Zamówienia zostaną zanonimizowane zgodnie z RODO.
+            </p>
+            <div class="danger-actions">
+              <button
+                tuiButton
+                appearance="secondary"
+                size="s"
+                type="button"
+                [disabled]="deleting()"
+                (click)="cancelDeleteConfirm()"
+              >
+                Anuluj
+              </button>
+              <button
+                tuiButton
+                appearance="secondary"
+                size="s"
+                type="button"
+                class="btn-danger"
+                [disabled]="deleting()"
+                (click)="deleteAccount()"
+              >
+                {{ deleting() ? 'Usuwanie…' : 'Tak, usuń konto' }}
+              </button>
+            </div>
+          </div>
+        }
+      </div>
     </div>
   `,
   styles: [`
@@ -171,17 +227,39 @@ function formatPhone(raw: string): string {
     .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
 
     .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+
+    .danger-zone { margin-top: 40px; }
+    .danger-title { font-size: 14px; font-weight: 600; color: var(--tui-status-negative); margin-bottom: 12px; }
+    .danger-card {
+      border: 1px solid var(--tui-status-negative);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .danger-card--warning { flex-direction: column; align-items: flex-start; }
+    .danger-info strong { font-size: 14px; display: block; margin-bottom: 4px; }
+    .danger-info p { font-size: 13px; color: var(--color-secondary); margin: 0; }
+    .danger-warning { font-size: 13px; line-height: 1.6; margin: 0 0 16px; display: flex; gap: 8px; align-items: flex-start; }
+    .danger-icon { color: var(--tui-status-negative); flex-shrink: 0; margin-top: 2px; }
+    .danger-actions { display: flex; gap: 12px; }
+    .btn-danger { color: var(--tui-status-negative) !important; border-color: var(--tui-status-negative) !important; }
   `],
 })
 export class ProfileComponent {
   readonly auth = inject(AuthService);
   private readonly http = inject(HttpClient);
+  private readonly router = inject(Router);
   private readonly location = inject(Location);
   private readonly toast = inject(ToastService);
   private readonly fb = inject(FormBuilder);
 
   readonly editing = signal(false);
   readonly saving = signal(false);
+  readonly confirmingDelete = signal(false);
+  readonly deleting = signal(false);
 
   readonly countries: readonly TuiCountryIsoCode[] = [
     'PL',
@@ -233,6 +311,29 @@ export class ProfileComponent {
       error: () => {
         this.toast.error('Błąd zapisu profilu');
         this.saving.set(false);
+      },
+    });
+  }
+
+  startDeleteConfirm(): void {
+    this.confirmingDelete.set(true);
+  }
+
+  cancelDeleteConfirm(): void {
+    this.confirmingDelete.set(false);
+  }
+
+  deleteAccount(): void {
+    this.deleting.set(true);
+    this.http.delete(`${environment.apiUrl}/users/me`).subscribe({
+      next: () => {
+        this.auth.clearSession();
+        this.router.navigate(['/']);
+        this.toast.success('Konto zostało usunięte');
+      },
+      error: () => {
+        this.toast.error('Błąd usuwania konta. Spróbuj ponownie.');
+        this.deleting.set(false);
       },
     });
   }
