@@ -294,6 +294,29 @@ export class OrdersService {
       })
       .catch(() => undefined);
 
+    // Notify admin of new order (fire-and-forget)
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+    if (adminEmail) {
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+      this.emailService
+        .sendNewOrderNotification({
+          to: adminEmail,
+          orderNumber: order.orderNumber,
+          customerEmail: userEmail,
+          totalInCents,
+          items: cart.items.map((i: CartItem) => ({
+            name: `${i.productName} – ${i.variantLabel}`,
+            quantity: i.quantity,
+            price: i.priceInCents,
+          })),
+          carrierCode: dto.carrierCode,
+          adminUrl: frontendUrl ? `${frontendUrl}/admin/orders/${order.id}` : undefined,
+        })
+        .catch(() => undefined);
+    }
+
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
     this.sendStockAlertIfNeeded(
       order.orderNumber,
