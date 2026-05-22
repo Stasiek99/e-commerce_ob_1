@@ -1,8 +1,6 @@
-import { Component, signal, inject, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
+import { Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
-
-const STORAGE_KEY = 'cookie_consent_accepted';
+import { ConsentService } from '../../../core/services/consent.service';
 
 @Component({
   selector: 'app-cookie-consent',
@@ -10,69 +8,113 @@ const STORAGE_KEY = 'cookie_consent_accepted';
   imports: [RouterLink],
   template: `
     @if (visible()) {
-      <div class="cookie-banner" role="dialog" aria-label="Zgoda na pliki cookie" aria-live="polite">
-        <div class="cookie-banner__content">
-          <p>
-            Ta strona używa plików cookie niezbędnych do działania koszyka i sesji użytkownika.
-            Szczegóły w <a routerLink="/legal/privacy">Polityce prywatności</a>.
+      <div class="banner" role="dialog" aria-label="Zgoda na pliki cookie" aria-live="polite">
+        <div class="banner__inner">
+          <p class="banner__text">
+            Używamy plików cookie do analizy ruchu i ulepszania sklepu.
+            Dane są przetwarzane anonimowo — nie sprzedajemy ich osobom trzecim.
+            <a routerLink="/legal/privacy" class="banner__link">Polityka prywatności</a>
           </p>
-          <div class="cookie-banner__actions">
-            <button class="btn-accept" (click)="accept()">Akceptuję</button>
+
+          <div class="banner__actions">
+            <button class="btn-primary" (click)="acceptAll()">
+              Akceptuj wszystkie
+            </button>
+            <button class="btn-minimal" (click)="rejectNonEssential()">
+              Tylko niezbędne
+            </button>
           </div>
         </div>
       </div>
     }
   `,
   styles: [`
-    .cookie-banner {
+    .banner {
       position: fixed;
       bottom: 0;
       left: 0;
       right: 0;
       background: #1a1a1a;
-      color: rgba(255,255,255,0.9);
+      color: rgba(255, 255, 255, 0.88);
       z-index: 9999;
-      padding: 16px;
-      box-shadow: 0 -2px 12px rgba(0,0,0,0.2);
+      padding: 20px 16px;
+      box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.25);
     }
-    .cookie-banner__content {
+
+    .banner__inner {
       max-width: var(--max-width, 1200px);
       margin: 0 auto;
       display: flex;
       align-items: center;
-      gap: 24px;
+      gap: 32px;
       flex-wrap: wrap;
     }
-    p {
-      font-size: 13px;
-      line-height: 1.5;
-      margin: 0;
+
+    .banner__text {
       flex: 1;
-      min-width: 240px;
-    }
-    a { color: #c9a96e; text-decoration: underline; }
-    .cookie-banner__actions { display: flex; gap: 10px; flex-shrink: 0; }
-    .btn-accept {
-      background: var(--color-primary, #2d2d2d);
-      color: white;
-      border: none;
-      padding: 10px 22px;
-      border-radius: 6px;
+      min-width: 260px;
       font-size: 13px;
-      font-weight: 600;
+      line-height: 1.6;
+      margin: 0;
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .banner__link {
+      color: #c9a96e;
+      text-decoration: underline;
+      white-space: nowrap;
+    }
+
+    .banner__actions {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    /* Primary CTA — solid, clearly the "yes" button */
+    .btn-primary {
+      background: #c9a96e;
+      color: #1a1a1a;
+      border: none;
+      padding: 11px 28px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 700;
       cursor: pointer;
       transition: opacity 0.15s;
+      white-space: nowrap;
+      width: 100%;
     }
-    .btn-accept:hover { opacity: 0.85; }
+    .btn-primary:hover { opacity: 0.88; }
+
+    /* Secondary opt-out — visible but low visual weight */
+    .btn-minimal {
+      background: none;
+      border: none;
+      padding: 2px 0;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.42);
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: color 0.15s;
+    }
+    .btn-minimal:hover { color: rgba(255, 255, 255, 0.72); }
   `],
 })
 export class CookieConsentComponent {
-  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
-  readonly visible = signal(this.isBrowser && !localStorage.getItem(STORAGE_KEY));
+  private readonly consent = inject(ConsentService);
 
-  accept(): void {
-    if (!this.isBrowser) return;
-    localStorage.setItem(STORAGE_KEY, '1');
-    this.visible.set(false);
+  // Show until the user has made any choice
+  readonly visible = computed(() => !this.consent.hasDecided());
+
+  acceptAll(): void {
+    this.consent.acceptAll();
+  }
+
+  rejectNonEssential(): void {
+    this.consent.rejectNonEssential();
   }
 }

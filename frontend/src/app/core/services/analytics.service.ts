@@ -1,5 +1,6 @@
-import { Injectable, PLATFORM_ID, inject } from '@angular/core';
+import { Injectable, PLATFORM_ID, effect, inject } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
+import { ConsentService } from './consent.service';
 
 export interface AnalyticsItem {
   item_id: string;
@@ -20,25 +21,34 @@ declare global {
 @Injectable({ providedIn: 'root' })
 export class AnalyticsService {
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+  private readonly consent = inject(ConsentService);
 
+  private gtmId = '';
+  private gtmLoaded = false;
+
+  constructor() {
+    // Load GTM as soon as analytics consent is (or was already) granted.
+    // Runs synchronously on init for returning visitors who already accepted.
+    effect(() => {
+      if (this.consent.analyticsConsented() && this.gtmId && !this.gtmLoaded) {
+        this.loadGtm();
+      }
+    });
+  }
+
+  // Called from app.config.ts — registers the ID and fires GTM immediately
+  // if the user already consented on a prior visit. For new visitors the
+  // effect() above handles loading once they click "Accept all".
   init(gtmId: string): void {
     if (!this.isBrowser || !gtmId) return;
-    window.dataLayer = window.dataLayer || [];
-    const script = document.createElement('script');
-    script.textContent = `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','${gtmId}');`;
-    document.head.appendChild(script);
-    const noscript = document.createElement('noscript');
-    const iframe = document.createElement('iframe');
-    iframe.src = `https://www.googletagmanager.com/ns.html?id=${gtmId}`;
-    iframe.height = '0';
-    iframe.width = '0';
-    iframe.style.cssText = 'display:none;visibility:hidden';
-    noscript.appendChild(iframe);
-    document.body.prepend(noscript);
+    this.gtmId = gtmId;
+    if (this.consent.analyticsConsented() && !this.gtmLoaded) {
+      this.loadGtm();
+    }
   }
 
   push(event: Record<string, unknown>): void {
-    if (!this.isBrowser) return;
+    if (!this.isBrowser || !this.consent.analyticsConsented()) return;
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({ ecommerce: null });
     window.dataLayer.push(event);
@@ -131,5 +141,21 @@ export class AnalyticsService {
         ),
       },
     });
+  }
+
+  private loadGtm(): void {
+    this.gtmLoaded = true;
+    window.dataLayer = window.dataLayer || [];
+    const script = document.createElement('script');
+    script.textContent = `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','${this.gtmId}');`;
+    document.head.appendChild(script);
+    const noscript = document.createElement('noscript');
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://www.googletagmanager.com/ns.html?id=${this.gtmId}`;
+    iframe.height = '0';
+    iframe.width = '0';
+    iframe.style.cssText = 'display:none;visibility:hidden';
+    noscript.appendChild(iframe);
+    document.body.prepend(noscript);
   }
 }

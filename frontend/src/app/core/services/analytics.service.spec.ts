@@ -1,13 +1,27 @@
 import { TestBed } from '@angular/core/testing';
-import { PLATFORM_ID } from '@angular/core';
+import { PLATFORM_ID, computed } from '@angular/core';
 import { AnalyticsService } from './analytics.service';
+import { ConsentService } from './consent.service';
+
+function makeConsentMock(analyticsConsented: boolean) {
+  return {
+    analyticsConsented: computed(() => analyticsConsented),
+    hasDecided: computed(() => true),
+    acceptAll: jest.fn(),
+    rejectNonEssential: jest.fn(),
+  };
+}
 
 describe('AnalyticsService', () => {
-  function setup(platformId: 'browser' | 'server'): AnalyticsService {
+  function setup(
+    platformId: 'browser' | 'server',
+    analyticsConsented = true,
+  ): AnalyticsService {
     TestBed.configureTestingModule({
       providers: [
         AnalyticsService,
         { provide: PLATFORM_ID, useValue: platformId },
+        { provide: ConsentService, useValue: makeConsentMock(analyticsConsented) },
       ],
     });
     return TestBed.inject(AnalyticsService);
@@ -69,6 +83,15 @@ describe('AnalyticsService', () => {
         svc.init('GTM-XYZ');
         expect(Array.isArray(window.dataLayer)).toBe(true);
       });
+
+      it('does not inject GTM script when analytics consent is not granted', () => {
+        const svc = setup('browser', false);
+        svc.init('GTM-BLOCKED');
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('GTM-BLOCKED'),
+        );
+        expect(gtmScript).toBeUndefined();
+      });
     });
 
     // push()
@@ -81,6 +104,12 @@ describe('AnalyticsService', () => {
           event: 'custom_event',
           ecommerce: { items: [] },
         });
+      });
+
+      it('drops events silently when analytics consent is not granted', () => {
+        const svc = setup('browser', false);
+        svc.push({ event: 'add_to_cart' });
+        expect(window.dataLayer).toBeUndefined();
       });
     });
 
