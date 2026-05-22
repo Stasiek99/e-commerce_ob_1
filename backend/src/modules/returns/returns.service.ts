@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
@@ -17,7 +17,16 @@ export class ReturnsService {
     this.adminEmail = this.config.get<string>('ADMIN_DEFAULT_EMAIL', 'admin@aromaterie.pl');
   }
 
-  async create(dto: CreateReturnRequestDto) {
+  async create(dto: CreateReturnRequestDto, userId: string) {
+    const normalizedNumber = dto.orderNumber.trim().toUpperCase();
+    const order = await this.prisma.order.findFirst({
+      where: { orderNumber: normalizedNumber },
+      select: { userId: true },
+    });
+
+    if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
+    if (order.userId !== userId) throw new ForbiddenException();
+
     const request = await (this.prisma as any).returnRequest.create({
       data: {
         orderNumber: dto.orderNumber.trim().toUpperCase(),

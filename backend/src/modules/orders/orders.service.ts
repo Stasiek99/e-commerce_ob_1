@@ -152,20 +152,20 @@ export class OrdersService {
       // Generate order number using raw SQL to avoid race conditions
       const orderNumber = await this.generateOrderNumber(tx);
 
-      // Validate and decrement stock
+      // Atomically check and decrement stock in a single UPDATE statement.
+      // A separate findUnique + update would be a TOCTOU race: two concurrent
+      // transactions can both read stock=1, both pass the check, both decrement
+      // → stock goes to -1. updateMany with WHERE stock >= quantity closes that gap.
       for (const item of cart.items) {
-        const variant = await tx.productVariant.findUnique({
-          where: { id: item.productVariantId },
+        const result = await tx.productVariant.updateMany({
+          where: { id: item.productVariantId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } },
         });
-        if (!variant || variant.stock < item.quantity) {
+        if (result.count === 0) {
           throw new BadRequestException(
             `Insufficient stock for: ${item.productName} ${item.variantLabel}`,
           );
         }
-        await tx.productVariant.update({
-          where: { id: item.productVariantId },
-          data: { stock: { decrement: item.quantity } },
-        });
       }
 
       // Create order with address snapshot

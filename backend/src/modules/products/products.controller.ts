@@ -119,7 +119,7 @@ export class ProductsController {
 
   @Post(':id/images')
   @Roles(Role.ADMIN)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   async uploadImage(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,

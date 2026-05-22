@@ -35,6 +35,15 @@ const makeCartItem = (qty = 2) => ({
   },
 });
 
+// Minimal tx stub reused across transaction-based tests — mirrors the real PrismaService shape
+// that the transaction callback receives.
+const makeTx = (overrides: Record<string, any> = {}) => ({
+  $queryRaw: jest.fn(),
+  cart: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+  cartItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+  ...overrides,
+});
+
 describe('CartService', () => {
   let service: CartService;
   let prisma: any;
@@ -46,6 +55,7 @@ describe('CartService', () => {
         {
           provide: PrismaService,
           useValue: {
+            $transaction: jest.fn(),
             productVariant: { findUnique: jest.fn() },
             cart: {
               findFirst: jest.fn(),
@@ -70,8 +80,16 @@ describe('CartService', () => {
   });
 
   describe('addItem', () => {
+    // Helper: wire $transaction so its callback runs with the provided tx stub.
+    // The outer prisma mock is used only by getOrCreate (called after the transaction).
+    const setupTx = (tx: ReturnType<typeof makeTx>) => {
+      prisma.$transaction.mockImplementation((fn: (tx: any) => Promise<any>) => fn(tx));
+    };
+
     it('throws NotFoundException when variant does not exist', async () => {
-      prisma.productVariant.findUnique.mockResolvedValue(null);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([]); // no rows → variant not found
+      setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         NotFoundException,
@@ -79,7 +97,9 @@ describe('CartService', () => {
     });
 
     it('throws NotFoundException when variant is inactive', async () => {
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ isActive: false }));
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: false, stock: 10 }]);
+      setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         NotFoundException,
@@ -87,9 +107,11 @@ describe('CartService', () => {
     });
 
     it('throws BadRequestException when requested quantity exceeds stock', async () => {
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 3 }));
-      prisma.cart.findFirst.mockResolvedValue(makeCart());
-      prisma.cartItem.findUnique.mockResolvedValue(null);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 3 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 5)).rejects.toThrow(
         BadRequestException,
@@ -97,32 +119,36 @@ describe('CartService', () => {
     });
 
     it('creates a new cart if one does not exist', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(null);
+      tx.cart.create.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      setupTx(tx);
+
       const cartWithItem = { ...makeCart(), items: [makeCartItem(1)] };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant());
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(null) // findCart (addItem)
-        .mockResolvedValueOnce(cartWithItem); // findCart (getOrCreate after add)
-      prisma.cart.create.mockResolvedValue(makeCart());
-      prisma.cartItem.findUnique.mockResolvedValue(null);
-      prisma.cartItem.create.mockResolvedValue({});
+      prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
-      expect(prisma.cart.create).toHaveBeenCalledTimes(1);
+      expect(tx.cart.create).toHaveBeenCalledTimes(1);
     });
 
     it('creates a new cart item when variant is not yet in cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      setupTx(tx);
+
       const cartWithItem = { ...makeCart(), items: [makeCartItem(1)] };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant());
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(makeCart())
-        .mockResolvedValueOnce(cartWithItem);
-      prisma.cartItem.findUnique.mockResolvedValue(null);
-      prisma.cartItem.create.mockResolvedValue({});
+      prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
-      expect(prisma.cartItem.create).toHaveBeenCalledWith(
+      expect(tx.cartItem.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ productVariantId: 'pv-1', quantity: 1 }),
         }),
@@ -131,109 +157,168 @@ describe('CartService', () => {
 
     it('increments quantity when variant is already in cart', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 2 };
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(existing);
+      tx.cartItem.update.mockResolvedValue({});
+      setupTx(tx);
+
       const cartWithItem = { ...makeCart(), items: [makeCartItem(3)] };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 10 }));
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(makeCart())
-        .mockResolvedValueOnce(cartWithItem);
-      prisma.cartItem.findUnique.mockResolvedValue(existing);
-      prisma.cartItem.update.mockResolvedValue({});
+      prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
-      expect(prisma.cartItem.update).toHaveBeenCalledWith(
+      expect(tx.cartItem.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { quantity: 3 } }),
       );
     });
 
     it('throws BadRequestException when cumulative quantity exceeds stock', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 8 };
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 10 }));
-      prisma.cart.findFirst.mockResolvedValue(makeCart());
-      prisma.cartItem.findUnique.mockResolvedValue(existing);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(existing);
+      setupTx(tx);
 
+      // existing qty 8 + requested 5 = 13 > stock 10
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 5)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('FOR UPDATE lock serializes concurrent adds: second caller sees updated stock', async () => {
+      // Simulate what happens in production: after the first transaction commits,
+      // the row lock is released and the next caller reads the fresh (decremented) stock.
+      // Here we verify that the service correctly rejects when $queryRaw returns a
+      // stock value that already reflects a prior caller's reservation.
+      const tx = makeTx();
+      // Stock is 0 — a concurrent request already reserved the last unit
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 0 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart()); // reach the stock check
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      setupTx(tx);
+
+      // Requesting qty=1 against stock=0 must be rejected
+      await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         BadRequestException,
       );
     });
   });
 
   describe('mergeGuestCart', () => {
-    it('does nothing when no guest cart exists', async () => {
-      prisma.cart.findFirst.mockResolvedValue(null);
+    // Wire $transaction so its callback runs with the provided tx stub.
+    const setupMergeTx = (tx: ReturnType<typeof makeTx>) => {
+      prisma.$transaction.mockImplementation((fn: (tx: any) => Promise<any>) => fn(tx));
+    };
+
+    it('does nothing when no guest cart exists (FOR UPDATE returns no rows)', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([]); // no guest cart locked
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cart.update).not.toHaveBeenCalled();
-      expect(prisma.cartItem.create).not.toHaveBeenCalled();
+      expect(tx.cart.update).not.toHaveBeenCalled();
+      expect(tx.cartItem.create).not.toHaveBeenCalled();
     });
 
-    it('does nothing when guest cart is empty', async () => {
-      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+    it('does nothing when guest cart exists but has no items', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([]); // empty cart
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cart.update).not.toHaveBeenCalled();
+      expect(tx.cart.update).not.toHaveBeenCalled();
     });
 
-    it('claims guest cart by assigning userId when user has no cart', async () => {
-      const guestCart = { ...makeCart(), items: [{ productVariantId: 'pv-1', quantity: 2 }] };
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(guestCart) // guest cart lookup
-        .mockResolvedValueOnce(null); // user cart lookup
-      prisma.cart.update.mockResolvedValue({});
+    it('claims guest cart by assigning userId when user has no existing cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue(null); // no user cart
+      tx.cart.update.mockResolvedValue({});
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cart.update).toHaveBeenCalledWith({
-        where: { id: 'cart-1' },
+      expect(tx.cart.update).toHaveBeenCalledWith({
+        where: { id: 'guest-cart' },
         data: { userId: 'user-1', sessionId: null },
       });
-      expect(prisma.cartItem.create).not.toHaveBeenCalled();
+      expect(tx.cartItem.create).not.toHaveBeenCalled();
     });
 
-    it('merges items into user cart and deletes guest cart', async () => {
-      const guestCart = {
-        id: 'guest-cart',
-        items: [{ productVariantId: 'pv-1', quantity: 2 }],
-      };
-      const userCart = { id: 'user-cart' };
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(guestCart) // guest cart
-        .mockResolvedValueOnce(userCart); // user cart
-      prisma.cartItem.findUnique.mockResolvedValue(null); // variant not in user cart
-      prisma.cartItem.create.mockResolvedValue({});
-      prisma.cart.delete.mockResolvedValue({});
+    it('merges new items into user cart and deletes guest cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue(null); // variant not yet in user cart
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cartItem.create).toHaveBeenCalledWith({
+      expect(tx.cartItem.create).toHaveBeenCalledWith({
         data: { cartId: 'user-cart', productVariantId: 'pv-1', quantity: 2 },
       });
-      expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+      expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
     });
 
-    it('increments existing items in user cart during merge (quantity accumulation)', async () => {
-      const guestCart = {
-        id: 'guest-cart',
-        items: [{ productVariantId: 'pv-1', quantity: 3 }],
-      };
-      const userCart = { id: 'user-cart' };
-      const existingItem = { id: 'ci-1', quantity: 2 };
-      prisma.cart.findFirst
-        .mockResolvedValueOnce(guestCart)
-        .mockResolvedValueOnce(userCart);
-      prisma.cartItem.findUnique.mockResolvedValue(existingItem);
-      prisma.cartItem.update.mockResolvedValue({});
-      prisma.cart.delete.mockResolvedValue({});
+    it('accumulates quantity when item already exists in user cart', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 3 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
+      tx.cartItem.update.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      expect(prisma.cartItem.update).toHaveBeenCalledWith({
+      expect(tx.cartItem.update).toHaveBeenCalledWith({
         where: { id: 'ci-1' },
         data: { quantity: 5 },
       });
-      expect(prisma.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+      expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
+    });
+
+    it('acquires FOR UPDATE lock on the guest cart row to prevent concurrent item orphaning', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      const rawQuery: string = (tx.$queryRaw.mock.calls[0][0] as string[]).join('');
+      expect(rawQuery).toMatch(/FOR UPDATE/i);
+      expect(rawQuery).toMatch(/carts/i);
+    });
+
+    it('runs the entire merge atomically inside a single $transaction call', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
   });
 

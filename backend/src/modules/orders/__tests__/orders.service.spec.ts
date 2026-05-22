@@ -68,7 +68,7 @@ describe('OrdersService', () => {
             orderEvent: { create: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
-            productVariant: { findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+            productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
             $transaction: jest.fn(),
             $executeRawUnsafe: jest.fn(),
             $queryRawUnsafe: jest.fn(),
@@ -173,8 +173,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -206,7 +205,7 @@ describe('OrdersService', () => {
       expect(capturedOrderData.totalInCents).toBe(116699);
     });
 
-    it('should decrement stock for each item during order creation', async () => {
+    it('should atomically decrement stock for each item during order creation', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 
       const stockUpdates: Array<{ id: string; decrement: number }> = [];
@@ -215,12 +214,13 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn().mockImplementation((args: any) => {
+            // updateMany with WHERE stock >= qty — returns count=1 on success
+            updateMany: jest.fn().mockImplementation((args: any) => {
               stockUpdates.push({
                 id: args.where.id,
                 decrement: args.data.stock.decrement,
               });
+              return { count: 1 };
             }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
@@ -244,7 +244,7 @@ describe('OrdersService', () => {
       ]);
     });
 
-    it('should throw if stock is insufficient', async () => {
+    it('should throw if stock is insufficient (updateMany returns count=0)', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 
       prisma.$transaction.mockImplementation(async (fn: any) => {
@@ -252,8 +252,8 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 1 }), // only 1 in stock but need 2
-            update: jest.fn(),
+            // count=0 means the WHERE stock >= qty condition was not met
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
           },
           order: { create: jest.fn() },
           cart: { findFirst: jest.fn() },
@@ -280,8 +280,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -322,8 +321,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -355,8 +353,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -404,8 +401,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -433,8 +429,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
@@ -523,8 +518,7 @@ describe('OrdersService', () => {
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
-        findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -1276,8 +1270,7 @@ describe('OrdersService', () => {
         const fullTx = {
           ...tx,
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -1322,8 +1315,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {

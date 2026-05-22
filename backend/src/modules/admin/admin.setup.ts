@@ -134,7 +134,9 @@ export async function setupAdmin(
     process.env.ADMIN_SESSION_SECRET ?? adminPassword ?? 'dev-admin-secret';
 
   if (!adminEmail || !adminPassword) {
-    logger.warn('ADMIN_DEFAULT_EMAIL / ADMIN_DEFAULT_PASSWORD not set — /admin is UNPROTECTED');
+    throw new Error(
+      'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set — refusing to boot with an unprotected admin panel',
+    );
   }
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
@@ -707,23 +709,20 @@ export async function setupAdmin(
     }
   });
 
-  const router =
-    adminEmail && adminPassword
-      ? AdminJSExpress.buildAuthenticatedRouter(
-          admin,
-          {
-            authenticate: async (email: string, password: string) => {
-              if (email !== adminEmail) return null;
-              const valid = await bcrypt.compare(password, adminPassword);
-              return valid ? { email } : null;
-            },
-            cookieName: 'adminjs',
-            cookiePassword: sessionSecret,
-          },
-          null,
-          sessionOpts,
-        )
-      : AdminJSExpress.buildRouter(admin);
+  const router = AdminJSExpress.buildAuthenticatedRouter(
+    admin,
+    {
+      authenticate: async (email: string, password: string) => {
+        if (email !== adminEmail) return null;
+        const valid = await bcrypt.compare(password, adminPassword);
+        return valid ? { email } : null;
+      },
+      cookieName: 'adminjs',
+      cookiePassword: sessionSecret,
+    },
+    null,
+    sessionOpts,
+  );
 
   app.use(admin.options.rootPath, router);
 

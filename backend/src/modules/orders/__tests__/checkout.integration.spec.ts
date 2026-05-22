@@ -93,7 +93,7 @@ describe('Checkout Integration Flow', () => {
   let emailService: jest.Mocked<EmailQueueService>;
 
   const buildTransactionMock = (overrides: {
-    stock?: number;
+    insufficientStock?: boolean;
     orderResult?: any;
   } = {}) =>
     jest.fn().mockImplementation(async (fn: any) => {
@@ -101,11 +101,9 @@ describe('Checkout Integration Flow', () => {
         $executeRawUnsafe: jest.fn(),
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
         productVariant: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: IDS.variantId,
-            stock: overrides.stock ?? 10,
+          updateMany: jest.fn().mockResolvedValue({
+            count: overrides.insufficientStock ? 0 : 1,
           }),
-          update: jest.fn(),
         },
         order: {
           create: jest.fn().mockResolvedValue(
@@ -450,7 +448,7 @@ describe('Checkout Integration Flow', () => {
       });
 
       prisma.$transaction.mockImplementation(
-        buildTransactionMock({ stock: 2 }), // only 2 in stock, but 5 requested
+        buildTransactionMock({ insufficientStock: true }),
       );
 
       await expect(

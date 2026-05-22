@@ -541,6 +541,82 @@ describe('AuthService', () => {
     });
   });
 
+  // ─── Change Password ──────────────────────────────────────────────────────────
+
+  describe('changePassword', () => {
+    it('throws UnauthorizedException when user is not found', async () => {
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(service.changePassword('user-1', 'currentPass', 'newPass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws UnauthorizedException when user is OAuth-only (no passwordHash)', async () => {
+      usersService.findById.mockResolvedValue({ ...mockUser, passwordHash: null } as any);
+
+      await expect(service.changePassword('user-1', 'currentPass', 'newPass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws UnauthorizedException when current password is wrong', async () => {
+      const hash = await bcrypt.hash('correctpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+      await expect(service.changePassword('user-1', 'wrongpass', 'newpass12345')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('updates passwordHash with a valid bcrypt hash of newPassword', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user-1' } }),
+      );
+      const newHash = prisma.user.update.mock.calls[0][0].data.passwordHash as string;
+      expect(await bcrypt.compare('brandnewpass', newHash)).toBe(true);
+      expect(await bcrypt.compare('currentpass', newHash)).toBe(false);
+    });
+
+    it('revokes all active refresh tokens for the user in the same transaction', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-1', revokedAt: null }),
+          data: { revokedAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('performs the password update and token revocation atomically (single $transaction call)', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      // Both operations must be batched — the mock captures the array passed to $transaction
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.user.update).toHaveBeenCalledTimes(1);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ─── Magic Link ───────────────────────────────────────────────────────────────
 
   describe('requestMagicLink', () => {
