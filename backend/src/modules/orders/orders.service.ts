@@ -11,6 +11,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
+import { InvoiceService } from '../invoice/invoice.service';
 
 
 interface CartItem {
@@ -50,6 +51,7 @@ export class OrdersService {
     private readonly emailService: EmailQueueService,
     private readonly couponService: CouponService,
     private readonly configService: ConfigService,
+    private readonly invoiceService: InvoiceService,
   ) {}
 
   async createFromCart(
@@ -294,6 +296,29 @@ export class OrdersService {
       })
       .catch(() => undefined);
 
+    // Notify admin of new order (fire-and-forget)
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+    if (adminEmail) {
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+      this.emailService
+        .sendNewOrderNotification({
+          to: adminEmail,
+          orderNumber: order.orderNumber,
+          customerEmail: userEmail,
+          totalInCents,
+          items: cart.items.map((i: CartItem) => ({
+            name: `${i.productName} – ${i.variantLabel}`,
+            quantity: i.quantity,
+            price: i.priceInCents,
+          })),
+          carrierCode: dto.carrierCode,
+          adminUrl: frontendUrl ? `${frontendUrl}/admin/orders/${order.id}` : undefined,
+        })
+        .catch(() => undefined);
+    }
+
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
     this.sendStockAlertIfNeeded(
       order.orderNumber,
@@ -329,6 +354,64 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Order not found');
     return order;
+  }
+
+  async findEventsForUser(orderId: string, userId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    return this.prisma.orderEvent.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        fromStatus: true,
+        toStatus: true,
+        actor: true,
+        note: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async generateInvoice(orderId: string): Promise<{ invoiceUrl: string }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        snapshotFirstName: true,
+        snapshotLastName: true,
+        snapshotCompany: true,
+        snapshotNip: true,
+        snapshotStreet: true,
+        snapshotCity: true,
+        snapshotPostalCode: true,
+        itemsTotalInCents: true,
+        shippingCostInCents: true,
+        totalInCents: true,
+        createdAt: true,
+        items: {
+          select: { snapshotName: true, snapshotPrice: true, quantity: true },
+        },
+      },
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+
+    const nonInvoiceable: OrderStatus[] = [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED];
+    if (nonInvoiceable.includes(order.status)) {
+      throw new BadRequestException(
+        `Cannot generate invoice for an order with status ${order.status}`,
+      );
+    }
+
+    const { url } = await this.invoiceService.processInvoice(order);
+    return { invoiceUrl: url };
   }
 
   async trackByEmailAndNumber(email: string, orderNumber: string) {

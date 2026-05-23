@@ -8,12 +8,14 @@ import { CartService } from '../../cart/cart.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
+import { InvoiceService } from '../../invoice/invoice.service';
 
 describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: any;
   let cartService: jest.Mocked<CartService>;
   let paymentsService: jest.Mocked<PaymentsService>;
+  let invoiceService: jest.Mocked<InvoiceService>;
 
   const mockAddress = {
     firstName: 'Jan',
@@ -65,7 +67,7 @@ describe('OrdersService', () => {
             address: { findFirst: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null) },
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
-            orderEvent: { create: jest.fn() },
+            orderEvent: { create: jest.fn(), findMany: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -113,6 +115,12 @@ describe('OrdersService', () => {
             getOrThrow: jest.fn().mockReturnValue('https://example.com'),
           },
         },
+        {
+          provide: InvoiceService,
+          useValue: {
+            processInvoice: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -120,6 +128,7 @@ describe('OrdersService', () => {
     prisma = module.get(PrismaService);
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
+    invoiceService = module.get(InvoiceService);
   });
 
   describe('createFromCart', () => {
@@ -482,6 +491,202 @@ describe('OrdersService', () => {
       await expect(service.findOneForUser('o-1', 'user-1')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('findEventsForUser', () => {
+    const mockEvents = [
+      {
+        id: 'evt-1',
+        fromStatus: null,
+        toStatus: OrderStatus.PENDING_PAYMENT,
+        actor: 'CUSTOMER',
+        note: 'Order created from cart',
+        createdAt: new Date('2026-05-01T10:00:00Z'),
+      },
+      {
+        id: 'evt-2',
+        fromStatus: OrderStatus.PENDING_PAYMENT,
+        toStatus: OrderStatus.PAID,
+        actor: 'SYSTEM',
+        note: null,
+        createdAt: new Date('2026-05-01T10:05:00Z'),
+      },
+    ];
+
+    it('throws NotFoundException when order does not exist for this user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.findEventsForUser('order-1', 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('does not leak events from another user — findFirst returns null for wrong owner', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.findEventsForUser('order-1', 'other-user-id')).rejects.toThrow(
+        NotFoundException,
+      );
+
+      expect(prisma.orderEvent.findMany).not.toHaveBeenCalled();
+    });
+
+    it('returns events sorted ascending by createdAt for the owning user', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result).toEqual(mockEvents);
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { orderId: 'order-1' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
+    });
+
+    it('queries ownership with both orderId and userId in the where clause', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsForUser('order-1', 'user-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'order-1', userId: 'user-1' },
+        }),
+      );
+    });
+
+    it('returns only the allowed fields via select', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+
+      await service.findEventsForUser('order-1', 'user-1');
+
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: {
+            id: true,
+            fromStatus: true,
+            toStatus: true,
+            actor: true,
+            note: true,
+            createdAt: true,
+          },
+        }),
+      );
+    });
+
+    it('returns an empty array when the order has no events yet', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('generateInvoice', () => {
+    const mockOrderRow = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Marszałkowska 1',
+      snapshotCity: 'Warszawa',
+      snapshotPostalCode: '00-001',
+      itemsTotalInCents: 34900,
+      shippingCostInCents: 1999,
+      totalInCents: 36899,
+      createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, quantity: 1 }],
+    };
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.generateInvoice('nonexistent-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when order status is PENDING_PAYMENT', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.PENDING_PAYMENT,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is CANCELLED', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.CANCELLED,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('returns invoiceUrl for a PAID order', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      const result = await service.generateInvoice('order-1');
+
+      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+    });
+
+    it.each([
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.PARTIALLY_REFUNDED,
+      OrderStatus.REFUNDED,
+    ])('allows invoice generation for status %s', async (status) => {
+      prisma.order.findUnique.mockResolvedValue({ ...mockOrderRow, status });
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/invoice.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
+        invoiceUrl: expect.any(String),
+      });
+    });
+
+    it('delegates to InvoiceService with the full order payload', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'order-1',
+          orderNumber: 'ORD-2026-000001',
+          totalInCents: 36899,
+          items: [expect.objectContaining({ snapshotName: 'Dior Sauvage 100ml' })],
+        }),
+      );
+    });
+
+    it('propagates errors thrown by InvoiceService', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockRejectedValue(new Error('Supabase upload failed'));
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow('Supabase upload failed');
     });
   });
 
@@ -1250,6 +1455,185 @@ describe('OrdersService', () => {
         ]),
         OrderStatus.PAID,
         'CUSTOMER',
+      );
+    });
+  });
+
+  describe('new_order_notification', () => {
+    let svc: OrdersService;
+    let emailService: any;
+    let configGetMock: jest.Mock;
+
+    const buildTx = () => ({
+      $executeRawUnsafe: jest.fn(),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+      cartItem: { deleteMany: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    const DHL_DTO = { newAddress: mockAddress, carrierCode: CarrierCode.DHL };
+
+    beforeEach(async () => {
+      configGetMock = jest.fn().mockReturnValue(undefined);
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          OrdersService,
+          {
+            provide: PrismaService,
+            useValue: {
+              address: { findFirst: jest.fn() },
+              user: { findUnique: jest.fn().mockResolvedValue(null) },
+              order: { create: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn() },
+              orderEvent: { create: jest.fn() },
+              cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+              cartItem: { deleteMany: jest.fn() },
+              productVariant: { findMany: jest.fn().mockResolvedValue([]) },
+              $transaction: jest.fn().mockImplementation(async (fn: any) => fn(buildTx())),
+              $executeRawUnsafe: jest.fn(),
+              $queryRawUnsafe: jest.fn(),
+            },
+          },
+          { provide: CartService, useValue: { getOrCreate: jest.fn().mockResolvedValue(mockCart) } },
+          {
+            provide: PaymentsService,
+            useValue: {
+              initiatePayment: jest.fn().mockResolvedValue({ paymentUrl: 'https://stripe.mock/pay' }),
+              expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
+              refundPayment: jest.fn().mockResolvedValue(undefined),
+              partialRefund: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: EmailQueueService,
+            useValue: {
+              sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+              sendOrderCancellation: jest.fn().mockResolvedValue(undefined),
+              sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+              sendLowStockAlert: jest.fn().mockResolvedValue(undefined),
+              sendReviewRequest: jest.fn().mockResolvedValue(undefined),
+              sendShippingNotification: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: CouponService,
+            useValue: {
+              validate: jest.fn().mockResolvedValue({ valid: false }),
+              applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          { provide: ConfigService, useValue: { get: configGetMock, getOrThrow: jest.fn() } },
+          { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
+        ],
+      }).compile();
+
+      svc = module.get(OrdersService);
+      emailService = module.get(EmailQueueService);
+    });
+
+    it('sends notification to ADMIN_ALERT_EMAIL when configured', async () => {
+      configGetMock.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'admin@store.com',
+          customerEmail: 'customer@example.com',
+          orderNumber: 'ORD-2026-000001',
+          carrierCode: CarrierCode.DHL,
+        }),
+      );
+    });
+
+    it('falls back to EMAIL_FROM when ADMIN_ALERT_EMAIL is absent', async () => {
+      configGetMock.mockImplementation((key: string) => {
+        if (key === 'EMAIL_FROM') return 'noreply@store.com';
+        return undefined;
+      });
+
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'noreply@store.com' }),
+      );
+    });
+
+    it('skips notification when neither ADMIN_ALERT_EMAIL nor EMAIL_FROM is configured', async () => {
+      // configGetMock already returns undefined for all keys
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendNewOrderNotification).not.toHaveBeenCalled();
+    });
+
+    it('does not propagate notification queue failure to the caller', async () => {
+      configGetMock.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      emailService.sendNewOrderNotification.mockRejectedValue(new Error('Redis down'));
+
+      await expect(
+        svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO),
+      ).resolves.toMatchObject({ orderId: 'o-1', orderNumber: 'ORD-2026-000001' });
+    });
+
+    it('includes correct items and total in the notification payload', async () => {
+      configGetMock.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      // itemsTotal=114700 + DHL shipping=1999 = 116699
+      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          totalInCents: 116699,
+          items: [
+            { name: 'Dior Sauvage – 100ml', quantity: 2, price: 34900 },
+            { name: 'Chanel No 5 – 50ml', quantity: 1, price: 44900 },
+          ],
+        }),
+      );
+    });
+
+    it('includes adminUrl when FRONTEND_URL is set', async () => {
+      configGetMock.mockImplementation((key: string, defaultVal?: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        if (key === 'FRONTEND_URL') return 'https://store.example.com';
+        return defaultVal;
+      });
+
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ adminUrl: 'https://store.example.com/admin/orders/o-1' }),
+      );
+    });
+
+    it('omits adminUrl when FRONTEND_URL is not set', async () => {
+      configGetMock.mockImplementation((key: string, defaultVal?: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return defaultVal; // 'FRONTEND_URL' gets its '' default, which is falsy
+      });
+
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ adminUrl: undefined }),
       );
     });
   });
