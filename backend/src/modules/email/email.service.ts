@@ -56,6 +56,7 @@ export class EmailService {
     firstName: string;
     items: Array<{ name: string; quantity: number; price: number }>;
     totalInCents: number;
+    carrierCode?: string;
   }) {
     const { subject, html } = orderConfirmationTemplate(data);
     return this.send('order_confirmation', data.to, subject, html, {

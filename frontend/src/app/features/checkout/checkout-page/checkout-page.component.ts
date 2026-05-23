@@ -284,6 +284,7 @@ interface AppliedCoupon {
                 <h3>Dostawa</h3>
                 <p>{{ selectedCarrier()?.name }} — {{ selectedCarrier()?.price | price }}</p>
                 @if (lockerCode()) { <p>Paczkomat: {{ lockerCode() }}</p> }
+                @if (deliveryEstimate()) { <p class="summary-delivery-est">Szacowany czas dostawy: {{ deliveryEstimate() }}</p> }
               </div>
 
               <div class="summary-section">
@@ -458,6 +459,7 @@ interface AppliedCoupon {
     /* Summary */
     .summary-section { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--color-border); }
     .summary-section p { font-size: 14px; margin: 2px 0; }
+    .summary-delivery-est { color: var(--color-secondary); font-size: 13px; }
     .order-item { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 4px; }
     .summary-total { padding-top: 8px; margin-bottom: 24px; }
     .total-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
@@ -546,6 +548,17 @@ export class CheckoutPageComponent implements OnInit {
     if (!coupon) return items + shipping;
     if (coupon.isFreeShipping) return items;
     return Math.max(0, items + shipping - coupon.discountAmountInCents);
+  });
+
+  readonly deliveryEstimate = computed(() => {
+    const carrier = this.selectedCarrier();
+    if (!carrier) return null;
+    const map: Record<string, string> = {
+      INPOST: 'następny dzień roboczy',
+      DHL: '1–2 dni robocze',
+      GLS: '2–3 dni robocze',
+    };
+    return map[carrier.code] ?? null;
   });
 
   readonly carriers = CARRIERS;

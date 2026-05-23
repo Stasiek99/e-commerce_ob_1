@@ -293,6 +293,7 @@ export class OrdersService {
           price: i.priceInCents,
         })),
         totalInCents,
+        carrierCode: dto.carrierCode,
       })
       .catch(() => undefined);
 
