@@ -59,6 +59,12 @@ export class OrdersController {
     return this.ordersService.findEventsForUser(id, user.id);
   }
 
+  @Get(':id/invoice')
+  @UseGuards(JwtAuthGuard)
+  getInvoice(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.generateInvoiceForUser(id, user.id);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   getMyOrder(@CurrentUser() user: User, @Param('id') id: string) {

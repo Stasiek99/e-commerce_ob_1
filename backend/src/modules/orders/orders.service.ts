@@ -377,6 +377,15 @@ export class OrdersService {
     });
   }
 
+  async generateInvoiceForUser(orderId: string, userId: string): Promise<{ invoiceUrl: string }> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    return this.generateInvoice(orderId);
+  }
+
   async generateInvoice(orderId: string): Promise<{ invoiceUrl: string }> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },

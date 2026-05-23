@@ -690,6 +690,80 @@ describe('OrdersService', () => {
     });
   });
 
+  describe('generateInvoiceForUser', () => {
+    const mockOrderRow = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Marszałkowska 1',
+      snapshotCity: 'Warszawa',
+      snapshotPostalCode: '00-001',
+      itemsTotalInCents: 34900,
+      shippingCostInCents: 1999,
+      totalInCents: 36899,
+      createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, quantity: 1 }],
+    };
+
+    it('throws NotFoundException when order does not belong to the requesting user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.generateInvoiceForUser('order-1', 'attacker-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.generateInvoiceForUser('nonexistent-id', 'user-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('delegates to generateInvoice and returns invoiceUrl when user owns the order', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      const result = await service.generateInvoiceForUser('order-1', 'user-1');
+
+      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+    });
+
+    it('passes the correct WHERE clause — id AND userId — to findFirst', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.generateInvoiceForUser('order-abc', 'user-xyz'),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith({
+        where: { id: 'order-abc', userId: 'user-xyz' },
+        select: { id: true },
+      });
+    });
+
+    it('propagates BadRequestException from generateInvoice for non-invoiceable status', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.PENDING_PAYMENT,
+      });
+
+      await expect(
+        service.generateInvoiceForUser('order-1', 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('updateStatus', () => {
     it('updates the order status', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PENDING_PAYMENT });
