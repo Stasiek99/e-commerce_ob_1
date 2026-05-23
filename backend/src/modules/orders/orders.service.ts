@@ -354,6 +354,27 @@ export class OrdersService {
     return order;
   }
 
+  async findEventsForUser(orderId: string, userId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    return this.prisma.orderEvent.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        fromStatus: true,
+        toStatus: true,
+        actor: true,
+        note: true,
+        createdAt: true,
+      },
+    });
+  }
+
   async trackByEmailAndNumber(email: string, orderNumber: string) {
     const order = await this.prisma.order.findFirst({
       where: {

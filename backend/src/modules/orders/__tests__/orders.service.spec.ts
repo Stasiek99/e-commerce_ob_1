@@ -65,7 +65,7 @@ describe('OrdersService', () => {
             address: { findFirst: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null) },
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
-            orderEvent: { create: jest.fn() },
+            orderEvent: { create: jest.fn(), findMany: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -482,6 +482,102 @@ describe('OrdersService', () => {
       await expect(service.findOneForUser('o-1', 'user-1')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('findEventsForUser', () => {
+    const mockEvents = [
+      {
+        id: 'evt-1',
+        fromStatus: null,
+        toStatus: OrderStatus.PENDING_PAYMENT,
+        actor: 'CUSTOMER',
+        note: 'Order created from cart',
+        createdAt: new Date('2026-05-01T10:00:00Z'),
+      },
+      {
+        id: 'evt-2',
+        fromStatus: OrderStatus.PENDING_PAYMENT,
+        toStatus: OrderStatus.PAID,
+        actor: 'SYSTEM',
+        note: null,
+        createdAt: new Date('2026-05-01T10:05:00Z'),
+      },
+    ];
+
+    it('throws NotFoundException when order does not exist for this user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.findEventsForUser('order-1', 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('does not leak events from another user — findFirst returns null for wrong owner', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.findEventsForUser('order-1', 'other-user-id')).rejects.toThrow(
+        NotFoundException,
+      );
+
+      expect(prisma.orderEvent.findMany).not.toHaveBeenCalled();
+    });
+
+    it('returns events sorted ascending by createdAt for the owning user', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result).toEqual(mockEvents);
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { orderId: 'order-1' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
+    });
+
+    it('queries ownership with both orderId and userId in the where clause', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsForUser('order-1', 'user-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'order-1', userId: 'user-1' },
+        }),
+      );
+    });
+
+    it('returns only the allowed fields via select', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+
+      await service.findEventsForUser('order-1', 'user-1');
+
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: {
+            id: true,
+            fromStatus: true,
+            toStatus: true,
+            actor: true,
+            note: true,
+            createdAt: true,
+          },
+        }),
+      );
+    });
+
+    it('returns an empty array when the order has no events yet', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result).toEqual([]);
     });
   });
 

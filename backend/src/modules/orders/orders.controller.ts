@@ -53,6 +53,12 @@ export class OrdersController {
     return this.ordersService.findAllForUser(user.id, query);
   }
 
+  @Get(':id/events')
+  @UseGuards(JwtAuthGuard)
+  getOrderEvents(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.findEventsForUser(id, user.id);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   getMyOrder(@CurrentUser() user: User, @Param('id') id: string) {
