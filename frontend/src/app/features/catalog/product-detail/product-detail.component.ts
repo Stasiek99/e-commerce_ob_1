@@ -17,7 +17,7 @@ import { AuthService } from '../../../core/services/auth.service';
 import { StockStreamService } from '../../../core/services/stock-stream.service';
 import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
-import { ProductCardData } from '../../../shared/product-card/product-card.component';
+import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
 
 interface ProductVariantDetail {
@@ -59,7 +59,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent],
+  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent, ProductCardComponent],
   template: `
     @if (loading()) {
       <p class="loading">Ładowanie...</p>
@@ -398,6 +398,18 @@ const CATEGORY_LABELS: Record<string, string> = {
         }
       </section>
 
+      <!-- Related products -->
+      @if (relatedProducts().length > 0) {
+        <section class="related">
+          <h2 class="related__heading">Może Ci się spodobać</h2>
+          <div class="related__grid">
+            @for (p of relatedProducts(); track p.id) {
+              <app-product-card [product]="p"/>
+            }
+          </div>
+        </section>
+      }
+
       <!-- Lightbox -->
       @if (lightboxOpen()) {
         <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1">
@@ -688,6 +700,30 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .detail__main-img-btn:hover .detail__zoom-icon { opacity: 1; }
 
+    /* ── Related products ─────────────────────────────────────── */
+    .related {
+      margin-top: 64px;
+      padding-top: 40px;
+      border-top: 1px solid var(--color-border);
+    }
+    .related__heading {
+      font-size: 20px; font-weight: 700; margin: 0 0 28px;
+    }
+    .related__grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+    @media (max-width: 1024px) {
+      .related__grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 768px) {
+      .related__grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    }
+    @media (max-width: 480px) {
+      .related__grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    }
+
     /* ── Lightbox ──────────────────────────────────────────────── */
     @keyframes lb-fade { from { opacity: 0; } to { opacity: 1; } }
     @keyframes lb-scale { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
@@ -772,6 +808,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
+  readonly relatedProducts = signal<ProductCardData[]>([]);
   readonly selectedVariant = signal<ProductVariantDetail | null>(null);
   readonly activeImage = signal<string | null>(null);
   readonly adding = signal(false);
@@ -888,6 +925,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
           this.loadReviews(p.id);
+          this.loadRelatedProducts(p.slug);
           this.subscribeStockStream(p.variants.map((v) => v.id));
 
           if (this.route.snapshot.queryParamMap.get('review') === '1') {
@@ -924,6 +962,12 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
       },
       error: () => this.stockLive.set(false),
     });
+  }
+
+  private loadRelatedProducts(slug: string): void {
+    this.http
+      .get<ProductCardData[]>(`${environment.apiUrl}/products/${slug}/related?limit=6`)
+      .subscribe({ next: (data) => this.relatedProducts.set(data) });
   }
 
   private loadReviews(productId: string, append = false): void {
