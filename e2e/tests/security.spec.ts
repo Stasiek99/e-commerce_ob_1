@@ -171,6 +171,36 @@ test.describe('Cross-user data access (IDOR protection)', () => {
   });
 });
 
+// ─── 3b. New endpoint IDOR / auth coverage ───────────────────────────────────
+
+test.describe('GET /orders/:id/events auth and IDOR', () => {
+  test('unauthenticated → 401', async ({ request }) => {
+    const res = await request.get(`/orders/${PHANTOM_UUID}/events`);
+    expect(res.status()).toBe(401);
+  });
+
+  test('authenticated user on phantom order → 404 (not 200, not 500)', async ({ request }) => {
+    const res = await request.get(`/orders/${PHANTOM_UUID}/events`, {
+      headers: { Authorization: `Bearer ${userAToken}` },
+    });
+    expect(res.status()).toBe(404);
+  });
+});
+
+test.describe('POST /orders/admin/:id/invoice auth and RBAC', () => {
+  test('unauthenticated → 401', async ({ request }) => {
+    const res = await request.post(`/orders/admin/${PHANTOM_UUID}/invoice`);
+    expect(res.status()).toBe(401);
+  });
+
+  test('regular user → 403', async ({ request }) => {
+    const res = await request.post(`/orders/admin/${PHANTOM_UUID}/invoice`, {
+      headers: { Authorization: `Bearer ${userAToken}` },
+    });
+    expect(res.status()).toBe(403);
+  });
+});
+
 // ─── 4. Input validation on security-sensitive parameters ────────────────────
 
 test.describe('Input validation', () => {
@@ -181,11 +211,14 @@ test.describe('Input validation', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('POST /payments/:orderId/refund rejects non-UUID → 400', async ({ request }) => {
+  test('POST /payments/:orderId/refund non-UUID → 403 for regular user (roles guard fires before pipe)', async ({ request }) => {
+    // NestJS guard order: JwtAuthGuard → RolesGuard → ParseUUIDPipe.
+    // A non-admin user is rejected by RolesGuard (403) before UUID
+    // validation ever runs — correct and intentional NestJS behaviour.
     const res = await request.post('/payments/not-a-uuid/refund', {
       headers: { Authorization: `Bearer ${userAToken}` },
     });
-    expect(res.status()).toBe(400);
+    expect(res.status()).toBe(403);
   });
 
   test('x-session-id header rejects non-UUID format → 400', async ({ request }) => {
