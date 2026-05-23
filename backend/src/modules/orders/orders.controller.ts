@@ -97,4 +97,12 @@ export class OrdersController {
   ) {
     return this.ordersService.updateStatus(id, dto.status);
   }
+
+  @Post('admin/:id/invoice')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  generateInvoice(@Param('id') id: string) {
+    return this.ordersService.generateInvoice(id);
+  }
 }

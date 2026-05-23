@@ -8,12 +8,14 @@ import { CartService } from '../../cart/cart.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
+import { InvoiceService } from '../../invoice/invoice.service';
 
 describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: any;
   let cartService: jest.Mocked<CartService>;
   let paymentsService: jest.Mocked<PaymentsService>;
+  let invoiceService: jest.Mocked<InvoiceService>;
 
   const mockAddress = {
     firstName: 'Jan',
@@ -113,6 +115,12 @@ describe('OrdersService', () => {
             getOrThrow: jest.fn().mockReturnValue('https://example.com'),
           },
         },
+        {
+          provide: InvoiceService,
+          useValue: {
+            processInvoice: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -120,6 +128,7 @@ describe('OrdersService', () => {
     prisma = module.get(PrismaService);
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
+    invoiceService = module.get(InvoiceService);
   });
 
   describe('createFromCart', () => {
@@ -578,6 +587,106 @@ describe('OrdersService', () => {
       const result = await service.findEventsForUser('order-1', 'user-1');
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('generateInvoice', () => {
+    const mockOrderRow = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Marszałkowska 1',
+      snapshotCity: 'Warszawa',
+      snapshotPostalCode: '00-001',
+      itemsTotalInCents: 34900,
+      shippingCostInCents: 1999,
+      totalInCents: 36899,
+      createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, quantity: 1 }],
+    };
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.generateInvoice('nonexistent-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when order status is PENDING_PAYMENT', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.PENDING_PAYMENT,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is CANCELLED', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.CANCELLED,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('returns invoiceUrl for a PAID order', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      const result = await service.generateInvoice('order-1');
+
+      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+    });
+
+    it.each([
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.PARTIALLY_REFUNDED,
+      OrderStatus.REFUNDED,
+    ])('allows invoice generation for status %s', async (status) => {
+      prisma.order.findUnique.mockResolvedValue({ ...mockOrderRow, status });
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/invoice.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
+        invoiceUrl: expect.any(String),
+      });
+    });
+
+    it('delegates to InvoiceService with the full order payload', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'order-1',
+          orderNumber: 'ORD-2026-000001',
+          totalInCents: 36899,
+          items: [expect.objectContaining({ snapshotName: 'Dior Sauvage 100ml' })],
+        }),
+      );
+    });
+
+    it('propagates errors thrown by InvoiceService', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockRejectedValue(new Error('Supabase upload failed'));
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow('Supabase upload failed');
     });
   });
 
@@ -1417,6 +1526,7 @@ describe('OrdersService', () => {
             },
           },
           { provide: ConfigService, useValue: { get: configGetMock, getOrThrow: jest.fn() } },
+          { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
         ],
       }).compile();
 

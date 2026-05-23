@@ -11,6 +11,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
+import { InvoiceService } from '../invoice/invoice.service';
 
 
 interface CartItem {
@@ -50,6 +51,7 @@ export class OrdersService {
     private readonly emailService: EmailQueueService,
     private readonly couponService: CouponService,
     private readonly configService: ConfigService,
+    private readonly invoiceService: InvoiceService,
   ) {}
 
   async createFromCart(
@@ -373,6 +375,43 @@ export class OrdersService {
         createdAt: true,
       },
     });
+  }
+
+  async generateInvoice(orderId: string): Promise<{ invoiceUrl: string }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        snapshotFirstName: true,
+        snapshotLastName: true,
+        snapshotCompany: true,
+        snapshotNip: true,
+        snapshotStreet: true,
+        snapshotCity: true,
+        snapshotPostalCode: true,
+        itemsTotalInCents: true,
+        shippingCostInCents: true,
+        totalInCents: true,
+        createdAt: true,
+        items: {
+          select: { snapshotName: true, snapshotPrice: true, quantity: true },
+        },
+      },
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+
+    const nonInvoiceable: OrderStatus[] = [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED];
+    if (nonInvoiceable.includes(order.status)) {
+      throw new BadRequestException(
+        `Cannot generate invoice for an order with status ${order.status}`,
+      );
+    }
+
+    const { url } = await this.invoiceService.processInvoice(order);
+    return { invoiceUrl: url };
   }
 
   async trackByEmailAndNumber(email: string, orderNumber: string) {
