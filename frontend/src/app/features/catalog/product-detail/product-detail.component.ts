@@ -7,6 +7,7 @@ import { ActivatedRoute } from '@angular/router';
 import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
 import { TuiExpand } from '@taiga-ui/experimental';
 import { TuiCounter, TuiRating, TuiTextarea } from '@taiga-ui/kit';
+import { TuiSkeleton } from '@taiga-ui/kit/directives/skeleton';
 import { environment } from '../../../../environments/environment';
 import { CartService } from '../../../core/services/cart.service';
 import { ToastService } from '../../../core/services/toast.service';
@@ -59,10 +60,30 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent, ProductCardComponent],
+  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton],
   template: `
     @if (loading()) {
-      <p class="loading">Ładowanie...</p>
+      <div class="skeleton-detail">
+        <div class="skeleton-detail__gallery">
+          <div class="skeleton-detail__main-img" tuiSkeleton></div>
+          <div class="skeleton-detail__thumbs">
+            <div class="skeleton-detail__thumb" tuiSkeleton></div>
+            <div class="skeleton-detail__thumb" tuiSkeleton></div>
+            <div class="skeleton-detail__thumb" tuiSkeleton></div>
+          </div>
+        </div>
+        <div class="skeleton-detail__info">
+          <div class="skeleton-detail__brand" tuiSkeleton>Brand name</div>
+          <div class="skeleton-detail__name" tuiSkeleton>Product name placeholder long text</div>
+          <div class="skeleton-detail__price" tuiSkeleton>000,00 zł</div>
+          <div class="skeleton-detail__variants">
+            <div class="skeleton-detail__variant" tuiSkeleton>50ml</div>
+            <div class="skeleton-detail__variant" tuiSkeleton>100ml</div>
+            <div class="skeleton-detail__variant" tuiSkeleton>200ml</div>
+          </div>
+          <div class="skeleton-detail__btn" tuiSkeleton>Dodaj do koszyka</div>
+        </div>
+      </div>
     } @else if (product()) {
       <div class="page">
         <app-breadcrumb [crumbs]="breadcrumbs()"/>
@@ -457,7 +478,28 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
   `,
   styles: [`
-    .loading { padding: 32px 0; color: var(--color-secondary); }
+    /* ── Skeleton ───────────────────────────────────────────── */
+    .skeleton-detail {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 56px;
+      padding: 32px 0 64px;
+      align-items: start;
+    }
+    .skeleton-detail__gallery { display: flex; flex-direction: column; gap: 12px; }
+    .skeleton-detail__main-img { aspect-ratio: 1/1; border-radius: var(--border-radius-md); width: 100%; }
+    .skeleton-detail__thumbs { display: flex; gap: 8px; }
+    .skeleton-detail__thumb { width: 72px; height: 72px; border-radius: var(--border-radius-sm); flex-shrink: 0; }
+    .skeleton-detail__info { display: flex; flex-direction: column; gap: 16px; }
+    .skeleton-detail__brand { height: 16px; width: 30%; border-radius: 4px; }
+    .skeleton-detail__name { height: 32px; width: 80%; border-radius: 4px; }
+    .skeleton-detail__price { height: 28px; width: 40%; border-radius: 4px; }
+    .skeleton-detail__variants { display: flex; gap: 8px; }
+    .skeleton-detail__variant { height: 36px; width: 64px; border-radius: var(--border-radius-sm); }
+    .skeleton-detail__btn { height: 48px; width: 100%; border-radius: var(--border-radius-sm); margin-top: 8px; }
+    @media (max-width: 768px) {
+      .skeleton-detail { grid-template-columns: 1fr; gap: 24px; }
+    }
 
     .page { padding: 32px 0 0; }
     .back-btn { margin-bottom: 8px; }

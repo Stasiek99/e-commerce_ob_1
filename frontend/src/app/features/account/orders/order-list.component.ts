@@ -3,8 +3,9 @@ import { HttpClient } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
 import { Location, LowerCasePipe, DatePipe } from '@angular/common';
 import { TuiButton, TuiTitle, TuiIcon } from '@taiga-ui/core';
-import { TuiCell, } from '@taiga-ui/layout';
+import { TuiCell } from '@taiga-ui/layout';
 import { TuiPagination } from '@taiga-ui/kit';
+import { TuiSkeleton } from '@taiga-ui/kit/directives/skeleton';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 
@@ -32,7 +33,7 @@ const PAGE_SIZE = 20;
 @Component({
   selector: 'app-order-list',
   standalone: true,
-  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiIcon, TuiCell, TuiPagination],
+  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiIcon, TuiCell, TuiPagination, TuiSkeleton],
   template: `
     <div class="page">
       <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
@@ -42,6 +43,18 @@ const PAGE_SIZE = 20;
       <h1>Moje zamówienia</h1>
 
       <div class="orders-list">
+        @if (loading()) {
+          @for (_ of skeletonRows; track $index) {
+            <div tuiCell class="order-cell">
+              <div tuiTitle>
+                <span tuiSkeleton>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+                <div tuiSubtitle tuiSkeleton>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+              </div>
+              <span tuiSkeleton class="skeleton-status">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+              <strong tuiSkeleton class="order-total">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</strong>
+            </div>
+          }
+        }
         @for (order of orders(); track order.id) {
           <div tuiCell class="order-cell">
             <div tuiTitle>
@@ -91,6 +104,7 @@ const PAGE_SIZE = 20;
     .order-cell { border-bottom: 1px solid var(--color-border); }
     .order-cell:last-child { border-bottom: none; }
 
+    .skeleton-status { display: inline-block; border-radius: 999px; }
     .order-total { font-size: 14px; white-space: nowrap; }
     .empty { padding: 32px; color: var(--color-secondary); text-align: center; }
     .pagination { display: flex; justify-content: center; margin-top: 32px; }
@@ -103,6 +117,8 @@ export class OrderListComponent implements OnInit {
   readonly orders = signal<OrderSummary[]>([]);
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
+  readonly loading = signal(false);
+  readonly skeletonRows = Array(5).fill(null);
 
   ngOnInit(): void {
     this.loadOrders(1);
@@ -121,6 +137,7 @@ export class OrderListComponent implements OnInit {
   }
 
   private loadOrders(page: number): void {
+    this.loading.set(true);
     this.http
       .get<{ data: OrderSummary[]; meta: { totalPages: number } }>(
         `${environment.apiUrl}/orders?page=${page}&limit=${PAGE_SIZE}`,
@@ -129,7 +146,9 @@ export class OrderListComponent implements OnInit {
         next: (res) => {
           this.orders.set(res.data);
           this.totalPages.set(res.meta?.totalPages ?? 1);
+          this.loading.set(false);
         },
+        error: () => this.loading.set(false),
       });
   }
 }

@@ -105,6 +105,42 @@ function setup() {
   return { component, fixture, httpMock };
 }
 
+describe('ProductDetailComponent — skeleton loading', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('renders .skeleton-detail while the product is loading (before HTTP response)', () => {
+    const { fixture } = setup();
+
+    fixture.detectChanges(); // triggers ngOnInit, HTTP pending → loading() = true
+
+    const skeleton = fixture.nativeElement.querySelector('.skeleton-detail');
+    expect(skeleton).not.toBeNull();
+  });
+
+  it('does not render .page while loading', () => {
+    const { fixture } = setup();
+
+    fixture.detectChanges();
+
+    const page = fixture.nativeElement.querySelector('.page');
+    expect(page).toBeNull();
+  });
+
+  it('removes the skeleton and renders .page once the product loads', () => {
+    const { fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    expect(fixture.nativeElement.querySelector('.skeleton-detail')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.page')).not.toBeNull();
+  });
+});
+
 describe('ProductDetailComponent — loadRelatedProducts', () => {
   afterEach(() => jest.clearAllMocks());
 
