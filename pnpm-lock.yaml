@@ -38,7 +38,7 @@ importers:
     dependencies:
       '@adminjs/express':
         specifier: ^6.1.1
-        version: 6.1.1(adminjs@7.8.17(@types/babel__core@7.20.5)(@types/react@18.3.28)(encoding@0.1.13))(express-formidable@1.2.0)(express-session@1.19.0)(express@5.2.1)(tslib@2.8.1)
+        version: 6.1.1(adminjs@7.8.17(@types/babel__core@7.20.5)(@types/react@18.3.28)(encoding@0.1.13))(express-formidable@1.2.0)(express-session@1.19.0)(express@4.22.1)(tslib@2.8.1)
       '@adminjs/nestjs':
         specifier: ^7.0.0
         version: 7.0.0(@nestjs/common@11.1.21(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.21)(adminjs@7.8.17(@types/babel__core@7.20.5)(@types/react@18.3.28)(encoding@0.1.13))(rxjs@7.8.2)
@@ -123,6 +123,9 @@ importers:
       cookie-parser:
         specifier: ^1.4.7
         version: 1.4.7
+      express:
+        specifier: ^4.22.1
+        version: 4.22.1
       express-session:
         specifier: ^1.18.0
         version: 1.19.0
@@ -9335,10 +9338,10 @@ snapshots:
       - react-is
       - supports-color
 
-  '@adminjs/express@6.1.1(adminjs@7.8.17(@types/babel__core@7.20.5)(@types/react@18.3.28)(encoding@0.1.13))(express-formidable@1.2.0)(express-session@1.19.0)(express@5.2.1)(tslib@2.8.1)':
+  '@adminjs/express@6.1.1(adminjs@7.8.17(@types/babel__core@7.20.5)(@types/react@18.3.28)(encoding@0.1.13))(express-formidable@1.2.0)(express-session@1.19.0)(express@4.22.1)(tslib@2.8.1)':
     dependencies:
       adminjs: 7.8.17(@types/babel__core@7.20.5)(@types/react@18.3.28)(encoding@0.1.13)
-      express: 5.2.1
+      express: 4.22.1
       express-formidable: 1.2.0
       express-session: 1.19.0
       tslib: 2.8.1

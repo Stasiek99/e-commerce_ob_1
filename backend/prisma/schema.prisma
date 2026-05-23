@@ -306,6 +306,7 @@ model Cart {
   items CartItem[]
 
   @@index([sessionId])
+  @@index([userId])
   @@map("carts")
 }
 
@@ -320,6 +321,7 @@ model CartItem {
   updatedAt        DateTime       @updatedAt
 
   @@unique([cartId, productVariantId])
+  @@index([cartId])
   @@map("cart_items")
 }
 
@@ -373,6 +375,8 @@ model Order {
   couponUse CouponUse?
   reviews   Review[]
 
+  @@index([userId])
+  @@index([status])
   @@map("orders")
 }
 
@@ -389,6 +393,7 @@ model OrderItem {
   quantity          Int
   cancelledQuantity Int @default(0)
 
+  @@index([orderId])
   @@map("order_items")
 }
 
