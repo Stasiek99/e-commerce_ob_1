@@ -636,6 +636,7 @@ export class ReturnRequestComponent {
       reason: val.reason?.trim() || undefined,
       requestedResolution: val.requestedResolution || undefined,
       bankAccount: val.bankAccount?.trim() || undefined,
+      ...(val.type === 'WITHDRAWAL' ? { sealedOnReturn: val.sealIntact === true } : {}),
     };
 
     this.http.post<{ id: string }>(`${environment.apiUrl}/returns`, payload).subscribe({

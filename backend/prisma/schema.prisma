@@ -558,6 +558,7 @@ model ReturnRequest {
   reason              String?
   requestedResolution String?
   bankAccount         String?
+  sealedOnReturn      Boolean?
   status              ReturnStatus @default(PENDING)
   adminNote           String?
   createdAt           DateTime     @default(now())
