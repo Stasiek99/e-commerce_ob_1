@@ -2,7 +2,7 @@
 
 Living reference document. Each phase is a focused work session. Follow in order — phases are dependency-ordered.
 
-**Current state:** Backend ~95% built · Frontend ~90% built · DB migrated · 0 tests · AdminJS stub · Taiga UI installed (not yet used in components)
+**Current state:** Backend ~95% built · Frontend ~90% built · DB migrated · 0 tests · AdminJS implemented · Taiga UI installed (not yet used in components)
 
 **Origin:** Rebuilt from stochastic consensus analysis (5 independent agents, 25 flaws identified). Corrects critical ordering mistakes in the original plan — security/legal fixes moved to Phase 0, redundant work cut, MVP checkpoint defined.
 
@@ -68,17 +68,17 @@ Everything in this phase MUST be done before the first real order.
 
 ### 1A. SEO & Prerendering (Days 1-2)
 
-- [ ] Angular prerendering (NOT full SSR) — `ng build --prerender` for product/category routes
-- [ ] Meta tag service — dynamic `<title>`, `og:title`, `og:description`, `og:image` for product pages
-- [ ] JSON-LD structured data for products (Product schema)
-- [ ] Canonical URLs on all pages
-- [ ] sitemap.xml generation (static at build time from product slugs)
+- [x] Angular prerendering (NOT full SSR) — `ng build --prerender` for product/category routes
+- [x] Meta tag service — dynamic `<title>`, `og:title`, `og:description`, `og:image` for product pages
+- [x] JSON-LD structured data for products (Product schema)
+- [x] Canonical URLs on all pages
+- [x] sitemap.xml generation (static at build time from product slugs)
 
 ### 1B. Error Monitoring (Day 3)
 
-- [ ] Sentry — `@sentry/nestjs` backend + `@sentry/angular` frontend
-- [ ] Replace `.catch(() => {})` email calls with `.catch(e => Sentry.captureException(e))`
-- [ ] Email failure alerting — log + Sentry capture on Resend failures
+- [x] Sentry — `@sentry/nestjs` backend + `@sentry/angular` frontend
+- [x] Replace `.catch(() => {})` email calls with `.catch(e => Sentry.captureException(e))`
+- [x] Email failure alerting — log + Sentry capture on Resend failures
 
 ### 1C. Deployment (Days 4-5)
 
@@ -86,7 +86,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] Vercel frontend — prerendered build, `environment.prod.ts` API URL updated
 - [x] Supabase — RLS on product-images bucket, verify connection limits
 - [x] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
-- [ ] **[HARD GATE — Phase 7]** Database backups — deferred to Phase 7 where it is a go-live hard gate (see Phase 7 checklist). Resolving here marks it acknowledged; action required before Stripe live mode.
+- [x] **[HARD GATE — Phase 7]** Database backups — deferred to Phase 7 where it is a go-live hard gate (see Phase 7 checklist). Resolving here marks it acknowledged; action required before Stripe live mode.
 
 ### 1D. Smoke Testing (Days 6-7)
 
@@ -138,7 +138,7 @@ Everything in this phase MUST be done before the first real order.
 - [x] InPost label — download PDF → upload to Supabase Storage → store public URL
 - [ ] DHL — move shipper address to env vars (currently hardcoded Krakow)
 - [ ] GLS — implement GetLabel endpoint
-- [ ] AdminJS "Generate Label" action
+- [x] AdminJS "Generate Label" action
 - [x] Carrier error handling — LABEL_ERROR status on API failure
 
 ### 3C. Test Coverage Expansion (Days 7-10)
@@ -335,7 +335,10 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Seed real product catalog (products, variants, images, categories) — see field guide below
 - [ ] Upload product images to Supabase `product-images` bucket
 - [ ] **[HARD GATE] Configure database backups before enabling Stripe live mode.** Supabase free tier has no PITR — a bad migration or accidental bulk-delete before backups are enabled is unrecoverable and constitutes a potential GDPR Art. 33 breach notification. Options: (a) upgrade to Supabase Pro (enables automatic PITR + daily snapshots, simplest), or (b) set up a weekly `pg_dump` job to S3/R2 (e.g. Railway cron → `pg_dump $DATABASE_URL | gzip | aws s3 cp - s3://<bucket>/backup-$(date +%Y%m%d).sql.gz`). Verify by confirming at least one successful backup exists before flipping Stripe to live mode.
-- [ ] Switch Stripe to live mode in Railway (`sk_live_` / `pk_live_`) — verify checkout end-to-end with a real card (refund immediately)
+- [ ] Switch Stripe to live mode in Railway — replace `STRIPE_SECRET_KEY` (`sk_live_…`) and `STRIPE_PUBLISHABLE_KEY` (`pk_live_…`); `config.validation.ts` will boot-reject `sk_test_` keys in production
+- [ ] Register a live-mode Stripe webhook endpoint (Dashboard → Developers → Webhooks → Add endpoint → production URL `/payments/webhook`) → copy the new `whsec_…` signing secret → set `STRIPE_WEBHOOK_SECRET` in Railway; without this every webhook returns 400 and no order ever transitions to PAID
+- [ ] Verify checkout end-to-end with a real card (refund immediately)
+- [ ] Replace `GTM-XXXXXXX` placeholder in `frontend/src/environments/environment.prod.ts` with real Google Tag Manager container ID (tagmanager.google.com → create container → copy ID)
 - [ ] Google Search Console: submit sitemap, verify indexability
 - [ ] Final CORS check — `FRONTEND_URL` matches production domain
 - [ ] Google OAuth: update Authorized redirect URIs to production domain

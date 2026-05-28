@@ -2,26 +2,6 @@
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
 ---
-
-## Hard Launch Blockers (fix before accepting real money)
-
-### 1. Redis not provisioned → entire email layer is dead *(5/5 agents)*
-`BullMQ` silently drops every job without Redis. Order confirmations, invoices, payment failure notices, shipping notifications — none of them fire. A customer pays, gets silence, and files a chargeback. The cascade: dispute rate spikes → Stripe puts your account under review → processing suspended. This is a boot-time hard dependency that breaks the business on day one.
-
-### 2. AdminJS is a stub → you cannot run the business *(4/5 agents)*
-There is no way to: fulfill an order, update order status, generate a shipping label, process a return, or issue a refund — without direct Supabase SQL access. Without it you can't fulfill order #1.
-
-### 3. No database backups → GDPR Art. 33 liability *(4/5 agents)*
-Supabase free tier has no PITR. A botched migration or accidental DELETE is permanent. You have customer PII, order history, and payment records. GDPR Art. 33 requires notifying UODO within 72 hours of a data breach. Hard gate before live Stripe. Fix: Supabase Pro PITR, or a `pg_dump` cron to R2/S3 on Railway.
-
-### 4. STRIPE_WEBHOOK_SECRET missing → no order ever becomes PAID *(3/5 agents)*
-Without a valid `whsec_` in production, every inbound webhook returns 400. Orders stay permanently at `PENDING_PAYMENT`. Stock is never confirmed, invoices never generate, customers never get a confirmation.
-
-### 5. Stripe in test mode → boot-time rejection *(3/5 agents)*
-`config.validation.ts` rejects `sk_test_` keys in production. The app won't start. Live keys require re-registering the webhook endpoint to get a new live-mode `whsec_`.
-
----
-
 ## High-Severity Structural Flaws
 
 ### 6. Stock concurrency: `updateItem` has no row lock *(Skeptic + Risk Analyst)*
@@ -102,8 +82,9 @@ Stock restoration only happens via `paymentsService.refundPayment()` (Stripe ref
 | 11 | Regenerate Prisma client — fix `(prisma as any).returnRequest` | Returns endpoint runtime crash |
 | 12 | Move `order_number_seq` DDL creation to a migration | Deadlock under concurrent orders |
 | 13 | Add GDPR Art. 20 data export endpoint + sealed/unsealed return field | Legal compliance |
+| 23 | Configure database backups — Supabase Pro PITR or `pg_dump` cron to R2/S3 (tracked in Phase 7) | GDPR Art. 33, data integrity |
 
-**Items 1–8 are launch blockers. Items 9–13 are pre-first-real-order hardening.**
+**Items 1–8 are launch blockers. Items 9–13 are pre-first-real-order hardening. Item 23 is deferred to Phase 7.**
 
 ---
 

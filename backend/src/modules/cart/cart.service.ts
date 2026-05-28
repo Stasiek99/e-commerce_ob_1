@@ -99,15 +99,21 @@ export class CartService {
       return this.removeItem(userId, sessionId, productVariantId);
     }
 
-    const variant = await this.prisma.productVariant.findUnique({
-      where: { id: productVariantId },
-    });
-    if (!variant) throw new NotFoundException('Variant not found');
-    if (variant.stock < quantity) throw new BadRequestException('Insufficient stock');
+    await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ stock: number; isActive: boolean }>>`
+        SELECT stock, "isActive"
+        FROM product_variants
+        WHERE id = ${productVariantId}::uuid
+        FOR UPDATE
+      `;
+      const variant = rows[0];
+      if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
+      if (variant.stock < quantity) throw new BadRequestException('Insufficient stock');
 
-    await this.prisma.cartItem.updateMany({
-      where: { cartId: cart.id, productVariantId },
-      data: { quantity },
+      await tx.cartItem.updateMany({
+        where: { cartId: cart.id, productVariantId },
+        data: { quantity },
+      });
     });
 
     return this.getOrCreate(userId, sessionId);
