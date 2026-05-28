@@ -4,9 +4,6 @@
 ---
 ## High-Severity Structural Flaws
 
-### 7. Returns are structurally non-functional *(First-Principles + Domain Expert)*
-`ReturnsService` has `create()` only — no `approve()`, `reject()`, or `markRefunded()`. The admin panel has no returns surface. `(this.prisma as any).returnRequest` is a type-escape indicating the Prisma client was never regenerated after adding this model — every `POST /returns` may throw at runtime. The 14-day withdrawal right under Polish consumer law (UoK Art. 27) has zero operational support.
-
 ### 8. Stock locked for up to 24 hours on abandoned checkout *(First-Principles)*
 Stock is decremented at `createFromCart`, not at payment confirmation. Stripe's default session expiry is 24 hours. An abandoned checkout ties up that variant's stock for 24 hours (reduced to ~30 minutes by the reconciliation cron — but only if Railway's container is awake). For a fragrance store with 3–5 units per variant, this is a hard availability problem on launch day.
 
