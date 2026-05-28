@@ -15,6 +15,7 @@ import { backInStockTemplate } from './templates/back-in-stock.template';
 import { reviewRequestTemplate } from './templates/review-request.template';
 import { returnConfirmationTemplate } from './templates/return-confirmation.template';
 import { returnAdminNotificationTemplate } from './templates/return-admin-notification.template';
+import { returnStatusUpdateTemplate } from './templates/return-status-update.template';
 import { emailChangeTemplate } from './templates/email-change.template';
 import { magicLinkTemplate } from './templates/magic-link.template';
 
@@ -32,6 +33,7 @@ type EmailKind =
   | 'review_request'
   | 'return_confirmation'
   | 'return_admin_notification'
+  | 'return_status_update'
   | 'email_change'
   | 'magic_link_login';
 
@@ -201,6 +203,23 @@ export class EmailService {
     return this.send('return_admin_notification', data.to, subject, html, {
       orderNumber: data.orderNumber,
       requestId: data.requestId,
+    });
+  }
+
+  async sendReturnStatusUpdate(data: {
+    to: string;
+    firstName: string;
+    orderNumber: string;
+    requestId: string;
+    type: 'WITHDRAWAL' | 'COMPLAINT';
+    newStatus: 'APPROVED' | 'REJECTED' | 'COMPLETED';
+    adminNote?: string;
+  }) {
+    const { subject, html } = returnStatusUpdateTemplate(data);
+    return this.send('return_status_update', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      requestId: data.requestId,
+      newStatus: data.newStatus,
     });
   }
 

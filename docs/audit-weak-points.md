@@ -4,9 +4,6 @@
 ---
 ## High-Severity Structural Flaws
 
-### 6. Stock concurrency: `updateItem` has no row lock *(Skeptic + Risk Analyst)*
-`cart.service.ts:102` — `updateItem` reads stock via `findUnique` then writes via `updateMany` with no wrapping transaction and no `SELECT FOR UPDATE`. Under concurrent requests (multiple tabs, background mobile sync), two sessions can both read available stock and both proceed — resulting in overselling. The `addItem` and `createFromCart` paths are hardened; `updateItem` and cart merge on login are not.
-
 ### 7. Returns are structurally non-functional *(First-Principles + Domain Expert)*
 `ReturnsService` has `create()` only — no `approve()`, `reject()`, or `markRefunded()`. The admin panel has no returns surface. `(this.prisma as any).returnRequest` is a type-escape indicating the Prisma client was never regenerated after adding this model — every `POST /returns` may throw at runtime. The 14-day withdrawal right under Polish consumer law (UoK Art. 27) has zero operational support.
 
