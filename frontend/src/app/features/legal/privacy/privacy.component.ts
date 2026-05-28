@@ -1,4 +1,5 @@
 import { Component } from '@angular/core';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-privacy',
@@ -11,8 +12,8 @@ import { Component } from '@angular/core';
 
       <section>
         <h2>1. Administrator danych osobowych</h2>
-        <p>Administratorem Twoich danych osobowych jest <strong>[Nazwa spółki]</strong>, z siedzibą w [Adres], NIP: [NIP] (dalej: <strong>Administrator</strong>).</p>
-        <p>Kontakt w sprawach ochrony danych osobowych: <strong>rodo&#64;aromaterie.pl</strong></p>
+        <p>Administratorem Twoich danych osobowych jest <strong>{{ s.legalName }}</strong>, z siedzibą w {{ s.street }}, {{ s.postalCode }} {{ s.city }}, NIP: {{ s.nip }} (dalej: <strong>Administrator</strong>).</p>
+        <p>Kontakt w sprawach ochrony danych osobowych: <strong>{{ s.rodoEmail }}</strong></p>
       </section>
 
       <section>
@@ -60,13 +61,13 @@ import { Component } from '@angular/core';
           <li><strong>Prawo do sprzeciwu</strong> wobec przetwarzania (art. 21 RODO).</li>
           <li><strong>Prawo do cofnięcia zgody</strong> w dowolnym momencie, bez wpływu na zgodność z prawem przetwarzania dokonanego przed cofnięciem.</li>
         </ul>
-        <p>Wnioski prosimy kierować na adres: <strong>rodo&#64;aromaterie.pl</strong>. Odpowiadamy w terminie 30 dni.</p>
+        <p>Wnioski prosimy kierować na adres: <strong>{{ s.rodoEmail }}</strong>. Odpowiadamy w terminie 30 dni.</p>
         <p>Masz prawo wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych (ul. Stawki 2, 00-193 Warszawa, <a href="https://uodo.gov.pl" target="_blank" rel="noopener noreferrer">uodo.gov.pl</a>).</p>
       </section>
 
       <section>
         <h2>5a. Procedura usunięcia danych (art. 17 RODO)</h2>
-        <p>Aby skorzystać z prawa do usunięcia danych, prześlij żądanie na adres <strong>rodo&#64;aromaterie.pl</strong> z tytułem <em>„Żądanie usunięcia danych — RODO art. 17"</em>. Podaj adres email powiązany z kontem. Odpowiemy w ciągu 30 dni od daty weryfikacji tożsamości.</p>
+        <p>Aby skorzystać z prawa do usunięcia danych, prześlij żądanie na adres <strong>{{ s.rodoEmail }}</strong> z tytułem <em>„Żądanie usunięcia danych — RODO art. 17"</em>. Podaj adres email powiązany z kontem. Odpowiemy w ciągu 30 dni od daty weryfikacji tożsamości.</p>
         <p><strong>Co zostaje usunięte:</strong> dane konta (email, imię, nazwisko, telefon, hasło, dane Google OAuth), adresy dostawy, tokeny sesji i weryfikacji, dane osobowe w migawkach zamówień (imię, nazwisko, email, telefon).</p>
         <p><strong>Co zostaje zachowane:</strong> rekordy zamówień, płatności i przesyłek — bez danych osobowych — przez 5 lat od wystawienia faktury, zgodnie z art. 74 ustawy o rachunkowości i art. 86 Ordynacji podatkowej.</p>
         <p><strong>Ograniczenie prawa:</strong> usunięcie nie jest możliwe, gdy istnieje nierozliczone zamówienie (PENDING_PAYMENT, PAID, PROCESSING). W takim przypadku prosimy najpierw o anulowanie zamówienia.</p>
@@ -84,7 +85,7 @@ import { Component } from '@angular/core';
 
       <section>
         <h2>7. Kontakt</h2>
-        <p>W sprawach związanych z ochroną danych osobowych prosimy kontaktować się pod adresem: <strong>rodo&#64;aromaterie.pl</strong></p>
+        <p>W sprawach związanych z ochroną danych osobowych prosimy kontaktować się pod adresem: <strong>{{ s.rodoEmail }}</strong></p>
       </section>
     </div>
   `,
@@ -100,4 +101,6 @@ import { Component } from '@angular/core';
     a { color: var(--color-primary); text-decoration: underline; }
   `],
 })
-export class PrivacyComponent {}
+export class PrivacyComponent {
+  readonly s = environment.seller;
+}

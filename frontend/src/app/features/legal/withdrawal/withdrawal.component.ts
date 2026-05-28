@@ -1,5 +1,6 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-withdrawal',
@@ -26,9 +27,9 @@ import { RouterLink } from '@angular/router';
         <p>Termin do odstąpienia od umowy wygasa po upływie 14 dni od dnia, w którym weszłeś/weszłaś w posiadanie towaru lub w którym osoba trzecia inna niż przewoźnik i wskazana przez Ciebie weszła w posiadanie towaru.</p>
         <p>Aby skorzystać z prawa odstąpienia od umowy, musisz poinformować nas:</p>
         <div class="contact-box">
-          <p><strong>[Nazwa spółki]</strong></p>
-          <p>[Adres]</p>
-          <p>E-mail: <strong>zwroty&#64;aromaterie.pl</strong></p>
+          <p><strong>{{ s.legalName }}</strong></p>
+          <p>{{ s.street }}, {{ s.postalCode }} {{ s.city }}</p>
+          <p>E-mail: <strong>{{ s.returnsEmail }}</strong></p>
         </div>
         <p>o swojej decyzji o odstąpieniu od niniejszej umowy w drodze jednoznacznego oświadczenia (na przykład pismo wysłane pocztą lub pocztą elektroniczną).</p>
         <p>Możesz skorzystać z wzoru formularza odstąpienia od umowy zamieszczonego poniżej, jednak nie jest to obowiązkowe.</p>
@@ -50,7 +51,7 @@ import { RouterLink } from '@angular/router';
         <div class="form-template">
           <p>(formularz ten należy wypełnić i odesłać tylko w przypadku chęci odstąpienia od umowy)</p>
           <br>
-          <p>Adresat: [Nazwa spółki], [Adres], zwroty&#64;aromaterie.pl</p>
+          <p>Adresat: {{ s.legalName }}, {{ s.street }}, {{ s.postalCode }} {{ s.city }}, {{ s.returnsEmail }}</p>
           <br>
           <p>Ja/My(*) niniejszym informuję/informujemy(*) o moim/naszym(*) odstąpieniu od umowy sprzedaży następujących rzeczy(*) / o świadczenie następującej usługi(*):</p>
           <p>Data zawarcia umowy(*)/odbioru(*):</p>
@@ -111,4 +112,6 @@ import { RouterLink } from '@angular/router';
     .cta-box__btn:hover { background: #1e3a8a; }
   `],
 })
-export class WithdrawalComponent {}
+export class WithdrawalComponent {
+  readonly s = environment.seller;
+}

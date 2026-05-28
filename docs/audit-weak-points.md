@@ -4,12 +4,6 @@
 ---
 ## Compliance & Legal (Polish market-specific)
 
-### 13. VAT_RATE is a single hardcoded constant *(Domain Expert)*
-Invoice engine uses `grossCents / 1.23` for every line item. If you ever stock 5% VAT goods or handle international shipping at 0% VAT, the invoice engine produces legally invalid invoices. Needs to be per-line-item before diversifying the catalog.
-
-### 14. Seller NIP + address fields required for valid VAT invoice *(Pragmatist)*
-`SELLER_NIP`, `SELLER_STREET`, `SELLER_CITY`, `SELLER_POSTAL_CODE` are required by Polish VAT law (art. 106e). Without them in production env vars, every generated PDF invoice is legally invalid.
-
 ### 15. Legal pages must have real content *(Pragmatist)*
 `/privacy`, `/terms`, `/withdrawal` routes exist. Placeholder text is illegal in production under RODO/UoK. Non-negotiable before first real transaction.
 
