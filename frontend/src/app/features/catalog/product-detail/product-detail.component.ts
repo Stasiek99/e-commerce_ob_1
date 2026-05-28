@@ -7,6 +7,7 @@ import { ActivatedRoute } from '@angular/router';
 import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
 import { TuiExpand } from '@taiga-ui/experimental';
 import { TuiCounter, TuiRating, TuiTextarea } from '@taiga-ui/kit';
+import { TuiSkeleton } from '@taiga-ui/kit/directives/skeleton';
 import { environment } from '../../../../environments/environment';
 import { CartService } from '../../../core/services/cart.service';
 import { ToastService } from '../../../core/services/toast.service';
@@ -17,7 +18,7 @@ import { AuthService } from '../../../core/services/auth.service';
 import { StockStreamService } from '../../../core/services/stock-stream.service';
 import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
-import { ProductCardData } from '../../../shared/product-card/product-card.component';
+import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
 
 interface ProductVariantDetail {
@@ -59,10 +60,30 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent],
+  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton],
   template: `
     @if (loading()) {
-      <p class="loading">Ładowanie...</p>
+      <div class="skeleton-detail">
+        <div class="skeleton-detail__gallery">
+          <div class="skeleton-detail__main-img" tuiSkeleton></div>
+          <div class="skeleton-detail__thumbs">
+            <div class="skeleton-detail__thumb" tuiSkeleton></div>
+            <div class="skeleton-detail__thumb" tuiSkeleton></div>
+            <div class="skeleton-detail__thumb" tuiSkeleton></div>
+          </div>
+        </div>
+        <div class="skeleton-detail__info">
+          <div class="skeleton-detail__brand" tuiSkeleton>Brand name</div>
+          <div class="skeleton-detail__name" tuiSkeleton>Product name placeholder long text</div>
+          <div class="skeleton-detail__price" tuiSkeleton>000,00 zł</div>
+          <div class="skeleton-detail__variants">
+            <div class="skeleton-detail__variant" tuiSkeleton>50ml</div>
+            <div class="skeleton-detail__variant" tuiSkeleton>100ml</div>
+            <div class="skeleton-detail__variant" tuiSkeleton>200ml</div>
+          </div>
+          <div class="skeleton-detail__btn" tuiSkeleton>Dodaj do koszyka</div>
+        </div>
+      </div>
     } @else if (product()) {
       <div class="page">
         <app-breadcrumb [crumbs]="breadcrumbs()"/>
@@ -398,6 +419,18 @@ const CATEGORY_LABELS: Record<string, string> = {
         }
       </section>
 
+      <!-- Related products -->
+      @if (relatedProducts().length > 0) {
+        <section class="related">
+          <h2 class="related__heading">Może Ci się spodobać</h2>
+          <div class="related__grid">
+            @for (p of relatedProducts(); track p.id) {
+              <app-product-card [product]="p"/>
+            }
+          </div>
+        </section>
+      }
+
       <!-- Lightbox -->
       @if (lightboxOpen()) {
         <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1">
@@ -445,7 +478,28 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
   `,
   styles: [`
-    .loading { padding: 32px 0; color: var(--color-secondary); }
+    /* ── Skeleton ───────────────────────────────────────────── */
+    .skeleton-detail {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 56px;
+      padding: 32px 0 64px;
+      align-items: start;
+    }
+    .skeleton-detail__gallery { display: flex; flex-direction: column; gap: 12px; }
+    .skeleton-detail__main-img { aspect-ratio: 1/1; border-radius: var(--border-radius-md); width: 100%; }
+    .skeleton-detail__thumbs { display: flex; gap: 8px; }
+    .skeleton-detail__thumb { width: 72px; height: 72px; border-radius: var(--border-radius-sm); flex-shrink: 0; }
+    .skeleton-detail__info { display: flex; flex-direction: column; gap: 16px; }
+    .skeleton-detail__brand { height: 16px; width: 30%; border-radius: 4px; }
+    .skeleton-detail__name { height: 32px; width: 80%; border-radius: 4px; }
+    .skeleton-detail__price { height: 28px; width: 40%; border-radius: 4px; }
+    .skeleton-detail__variants { display: flex; gap: 8px; }
+    .skeleton-detail__variant { height: 36px; width: 64px; border-radius: var(--border-radius-sm); }
+    .skeleton-detail__btn { height: 48px; width: 100%; border-radius: var(--border-radius-sm); margin-top: 8px; }
+    @media (max-width: 768px) {
+      .skeleton-detail { grid-template-columns: 1fr; gap: 24px; }
+    }
 
     .page { padding: 32px 0 0; }
     .back-btn { margin-bottom: 8px; }
@@ -688,6 +742,30 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .detail__main-img-btn:hover .detail__zoom-icon { opacity: 1; }
 
+    /* ── Related products ─────────────────────────────────────── */
+    .related {
+      margin-top: 64px;
+      padding-top: 40px;
+      border-top: 1px solid var(--color-border);
+    }
+    .related__heading {
+      font-size: 20px; font-weight: 700; margin: 0 0 28px;
+    }
+    .related__grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+    @media (max-width: 1024px) {
+      .related__grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 768px) {
+      .related__grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    }
+    @media (max-width: 480px) {
+      .related__grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    }
+
     /* ── Lightbox ──────────────────────────────────────────────── */
     @keyframes lb-fade { from { opacity: 0; } to { opacity: 1; } }
     @keyframes lb-scale { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
@@ -772,6 +850,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
+  readonly relatedProducts = signal<ProductCardData[]>([]);
   readonly selectedVariant = signal<ProductVariantDetail | null>(null);
   readonly activeImage = signal<string | null>(null);
   readonly adding = signal(false);
@@ -888,6 +967,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
           this.loadReviews(p.id);
+          this.loadRelatedProducts(p.slug);
           this.subscribeStockStream(p.variants.map((v) => v.id));
 
           if (this.route.snapshot.queryParamMap.get('review') === '1') {
@@ -924,6 +1004,12 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
       },
       error: () => this.stockLive.set(false),
     });
+  }
+
+  private loadRelatedProducts(slug: string): void {
+    this.http
+      .get<ProductCardData[]>(`${environment.apiUrl}/products/${slug}/related?limit=6`)
+      .subscribe({ next: (data) => this.relatedProducts.set(data) });
   }
 
   private loadReviews(productId: string, append = false): void {

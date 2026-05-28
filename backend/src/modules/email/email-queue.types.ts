@@ -7,6 +7,7 @@ export type EmailJobData =
         firstName: string;
         items: Array<{ name: string; quantity: number; price: number }>;
         totalInCents: number;
+        carrierCode?: string;
       };
     }
   | {

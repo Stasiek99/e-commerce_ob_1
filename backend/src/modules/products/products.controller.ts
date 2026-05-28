@@ -73,6 +73,12 @@ export class ProductsController {
   }
 
   @Public()
+  @Get(':slug/related')
+  findRelated(@Param('slug') slug: string, @Query('limit') limit?: string) {
+    return this.productsService.findRelated(slug, limit ? Math.min(parseInt(limit, 10), 12) : 6);
+  }
+
+  @Public()
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
     return this.productsService.findBySlug(slug);

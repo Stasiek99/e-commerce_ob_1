@@ -644,8 +644,35 @@ export class ProductsService {
     });
   }
 
+  async findRelated(slug: string, limit = 6) {
+    const cacheKey = `related:${slug}:${limit}`;
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+
+    const product = await this.prisma.product.findUnique({
+      where: { slug },
+      select: { id: true, categoryId: true },
+    });
+    if (!product) return [];
+
+    const related = await this.prisma.product.findMany({
+      where: { isActive: true, categoryId: product.categoryId, id: { not: product.id } },
+      select: PRODUCT_SELECT,
+      orderBy: [{ isFeatured: 'desc' }, { sortOrder: 'asc' }],
+      take: limit,
+    });
+
+    try {
+      await this.redis.setex(cacheKey, 300, JSON.stringify(related));
+    } catch {}
+
+    return related;
+  }
+
   private invalidateProductCaches(): void {
-    for (const pattern of ['search:*', 'facets:*']) {
+    for (const pattern of ['search:*', 'facets:*', 'related:*']) {
       try {
         const stream = this.redis.scanStream({ match: pattern, count: 100 });
         const pipeline = this.redis.pipeline();

@@ -4,11 +4,18 @@ interface Item {
   price: number;
 }
 
+const DELIVERY_ESTIMATES: Record<string, string> = {
+  INPOST: 'następny dzień roboczy',
+  DHL: '1–2 dni robocze',
+  GLS: '2–3 dni robocze',
+};
+
 interface Data {
   orderNumber: string;
   firstName: string;
   items: Item[];
   totalInCents: number;
+  carrierCode?: string;
 }
 
 function formatPrice(cents: number): string {
@@ -27,6 +34,10 @@ export function orderConfirmationTemplate(data: Data): { subject: string; html: 
     )
     .join('');
 
+  const deliveryLine = data.carrierCode && DELIVERY_ESTIMATES[data.carrierCode]
+    ? `<p style="margin:8px 0 0;color:#555;font-size:14px">Szacowany czas dostawy: <strong>${DELIVERY_ESTIMATES[data.carrierCode]}</strong></p>`
+    : '';
+
   return {
     subject: `Potwierdzenie zamówienia #${data.orderNumber}`,
     html: `
@@ -36,6 +47,7 @@ export function orderConfirmationTemplate(data: Data): { subject: string; html: 
 <body style="font-family:sans-serif;color:#333;max-width:600px;margin:0 auto;padding:24px">
   <h1 style="color:#1a1a1a;font-size:24px">Dziękujemy za zamówienie, ${data.firstName}!</h1>
   <p>Twoje zamówienie nr <strong>#${data.orderNumber}</strong> zostało przyjęte i oczekuje na płatność.</p>
+  ${deliveryLine}
   <table style="width:100%;border-collapse:collapse;margin:24px 0">
     <thead>
       <tr style="background:#f5f5f5">
