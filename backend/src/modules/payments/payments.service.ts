@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { OrderStatus, PaymentStatus } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
@@ -84,6 +84,24 @@ export class PaymentsService {
    */
   async handleWebhookEvent(event: Stripe.Event) {
     this.logger.log(`Stripe webhook received: type=${event.type} id=${event.id}`);
+
+    // Idempotency guard: Stripe retries webhook delivery for up to 3 days.
+    // Insert the event ID before any processing. A duplicate insert (P2002)
+    // means this event was already handled — return 200 so Stripe stops retrying.
+    try {
+      await this.prisma.processedStripeEvent.create({ data: { eventId: event.id } });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        this.logger.warn(
+          `Stripe event ${event.id} (${event.type}) already processed — skipping duplicate delivery`,
+        );
+        return;
+      }
+      throw err;
+    }
 
     switch (event.type) {
       case 'checkout.session.completed':
@@ -235,6 +253,15 @@ export class PaymentsService {
 
     if (payment.status === PaymentStatus.COMPLETED) {
       // Already paid — ignore stray expired/failed event.
+      return;
+    }
+
+    if (payment.status === PaymentStatus.FAILED) {
+      // Already failed — stock was restored on first delivery; skip to prevent
+      // double-restore if the processedStripeEvent insert ever races a crash.
+      this.logger.log(
+        `Payment ${payment.id} already FAILED — skipping duplicate failure event`,
+      );
       return;
     }
 

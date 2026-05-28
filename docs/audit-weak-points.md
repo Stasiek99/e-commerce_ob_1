@@ -4,12 +4,6 @@
 ---
 ## High-Severity Structural Flaws
 
-### 8. Stock locked for up to 24 hours on abandoned checkout *(First-Principles)*
-Stock is decremented at `createFromCart`, not at payment confirmation. Stripe's default session expiry is 24 hours. An abandoned checkout ties up that variant's stock for 24 hours (reduced to ~30 minutes by the reconciliation cron — but only if Railway's container is awake). For a fragrance store with 3–5 units per variant, this is a hard availability problem on launch day.
-
-### 9. No Stripe webhook event deduplication *(Domain Expert)*
-`handleWebhookEvent` logs `event.id` but never persists it. Stripe retries webhooks for up to 3 days. A Railway restart during webhook delivery causes a duplicate delivery — `markSessionFailed` and `handleRefundUpdate` have no idempotency guard. Fix: a `processed_stripe_events(event_id PK)` table.
-
 ### 10. Railway container sleep kills the reconciliation cron *(Skeptic)*
 On Railway's hobby tier, containers sleep on inactivity. `@Cron` decorators don't fire in sleeping containers. A payment at 2 AM can leave an order in `PENDING_PAYMENT` indefinitely if no request wakes the instance. The reconciliation cron is your fallback for webhook failures — and it doesn't run when you need it most.
 
