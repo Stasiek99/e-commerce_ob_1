@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -44,7 +45,7 @@ const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
 };
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
 
   constructor(
@@ -56,6 +57,19 @@ export class OrdersService {
     private readonly configService: ConfigService,
     private readonly invoiceService: InvoiceService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    const year = new Date().getFullYear();
+    // Ensure sequences exist for the current and next calendar year.
+    // Runs once at startup, outside any transaction, so the brief DDL lock
+    // never interferes with concurrent order-creation transactions.
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+    );
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+    );
+  }
 
   async createFromCart(
     userId: string | undefined,
@@ -844,19 +858,13 @@ export class OrdersService {
     await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
   }
 
-  /**
-   * Generate a unique order number using a PostgreSQL sequence.
-   * This is race-condition-safe — each call gets a unique incrementing value.
-   */
+  // Sequences are guaranteed to exist by onModuleInit (startup) and the
+  // pre_create_order_number_sequences migration — no DDL inside this
+  // transaction to avoid AccessExclusive catalog-lock deadlocks.
   private async generateOrderNumber(
     tx: Prisma.TransactionClient,
   ): Promise<string> {
     const year = new Date().getFullYear();
-
-    // Create sequence if it doesn't exist (idempotent)
-    await tx.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-    );
 
     const result: Array<{ nextval: bigint }> = await tx.$queryRawUnsafe(
       `SELECT nextval('order_number_seq_${year}')`,

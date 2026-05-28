@@ -4,9 +4,6 @@
 ---
 ## Operational & Reliability Gaps
 
-### 18. `order_number_seq_{year}` DDL inside a transaction *(Domain Expert)*
-`CREATE SEQUENCE IF NOT EXISTS` inside a Prisma interactive transaction acquires a DDL lock. Under concurrent order creation, two transactions can deadlock on sequence creation. Move to a migration.
-
 ### 19. No merchant notification for new paid orders *(First-Principles)*
 The admin alert email fires only if `ADMIN_ALERT_EMAIL` is configured and is fire-and-forget. No push notification, no dashboard badge for new orders. At any volume above a handful per day, orders will be missed and fulfillment SLAs broken.
 

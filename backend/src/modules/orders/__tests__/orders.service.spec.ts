@@ -133,6 +133,34 @@ describe('OrdersService', () => {
     invoiceService = module.get(InvoiceService);
   });
 
+  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
+
+  describe('onModuleInit', () => {
+    it('creates sequences for the current and next year outside any transaction', async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      );
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+      );
+    });
+
+    it('uses the top-level prisma client (not a transaction client) for sequence DDL', async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      await service.onModuleInit();
+
+      // prisma.$executeRawUnsafe is the service-level client; tx.$executeRawUnsafe
+      // is the transaction-scoped client — DDL must never reach the latter
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('createFromCart', () => {
     it('should throw if cart is empty', async () => {
       cartService.getOrCreate.mockResolvedValue({ id: 'cart-1', items: [], totalInCents: 0 } as any);
@@ -1939,12 +1967,12 @@ describe('OrdersService', () => {
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000042`);
 
-      // Verify it creates sequence if not exists
-      expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      // DDL no longer runs inside the transaction (moved to onModuleInit)
+      expect(tx.$executeRawUnsafe).not.toHaveBeenCalledWith(
+        expect.stringContaining('CREATE SEQUENCE'),
       );
 
-      // Verify it uses nextval from the sequence
+      // nextval is still called inside the transaction (pure DML — no lock risk)
       expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
         `SELECT nextval('order_number_seq_${year}')`,
       );
