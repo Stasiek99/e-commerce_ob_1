@@ -5,4 +5,17 @@ export const environment = {
   sentryDsn: '',
   sentryTracesSampleRate: 1.0,
   sentryTracePropagationTargets: ['localhost', '/api'],
+  seller: {
+    name: 'Aromaterie',
+    legalName: '[UZUPEŁNIĆ — pełna nazwa prawna]',
+    street: '[UZUPEŁNIĆ — ulica i numer]',
+    postalCode: '[XX-XXX]',
+    city: '[UZUPEŁNIĆ — miasto]',
+    nip: '[UZUPEŁNIĆ — 10 cyfr]',
+    regon: '[UZUPEŁNIĆ — 9 lub 14 cyfr]',
+    krs: '[UZUPEŁNIĆ — KRS/CEIDG]',
+    email: 'kontakt@aromaterie.pl',
+    returnsEmail: 'zwroty@aromaterie.pl',
+    rodoEmail: 'rodo@aromaterie.pl',
+  },
 };

@@ -217,6 +217,7 @@ export class CartService {
       productName: item.productVariant.product.name,
       variantLabel: item.productVariant.label,
       priceInCents: item.productVariant.priceInCents,
+      vatRate: item.productVariant.vatRate,
       imageUrl: item.productVariant.product.images[0]?.url ?? null,
       slug: item.productVariant.product.slug,
       sku: item.productVariant.sku,

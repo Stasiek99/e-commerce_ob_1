@@ -279,6 +279,7 @@ export async function setupAdmin(
                     items: order.items.map((i) => ({
                       snapshotName: i.snapshotName,
                       snapshotPrice: i.snapshotPrice,
+                      snapshotVatRate: i.snapshotVatRate,
                       quantity: i.quantity,
                     })),
                   });

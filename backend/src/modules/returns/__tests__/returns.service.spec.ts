@@ -17,6 +17,7 @@ const WITHDRAWAL_DTO = {
   type: ReturnRequestType.WITHDRAWAL,
   deliveryDate: '2026-05-15',
   items: [{ productName: 'Perfumy Gold 50ml', quantity: 1 }],
+  sealedOnReturn: true,
   reason: undefined,
   requestedResolution: undefined,
   bankAccount: undefined,
@@ -29,6 +30,7 @@ const COMPLAINT_DTO = {
   requestedResolution: 'REFUND' as any,
   reason: 'Produkt jest wadliwy',
   deliveryDate: undefined,
+  sealedOnReturn: undefined,
 };
 
 // orderRow: { userId } when order exists, null when order does not exist.
@@ -279,6 +281,68 @@ describe('ReturnsService', () => {
       const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
 
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
+  // ── seal guard (Art. 38 pkt 5 UoK) ──────────────────────────────────────
+
+  describe('seal guard', () => {
+    it('throws BadRequestException for WITHDRAWAL when sealedOnReturn is false', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, sealedOnReturn: false };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException for WITHDRAWAL when sealedOnReturn is absent', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO } as any;
+      delete dto.sealedOnReturn;
+
+      await expect(service.create(dto, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('proceeds for WITHDRAWAL when sealedOnReturn is true', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, sealedOnReturn: true };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('does not block COMPLAINT regardless of sealedOnReturn value', async () => {
+      await createModule(buildPrismaMock({ type: ReturnRequestType.COMPLAINT }));
+      const dto = { ...COMPLAINT_DTO, sealedOnReturn: false };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('persists sealedOnReturn=true when provided', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, sealedOnReturn: true };
+
+      await service.create(dto as any, OWNER_ID);
+
+      expect(prisma.returnRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ sealedOnReturn: true }),
+        }),
+      );
+    });
+
+    it('persists sealedOnReturn=null when absent on a COMPLAINT', async () => {
+      await createModule(buildPrismaMock({ type: ReturnRequestType.COMPLAINT }));
+
+      await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(prisma.returnRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ sealedOnReturn: null }),
+        }),
+      );
     });
   });
 

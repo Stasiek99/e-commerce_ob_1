@@ -33,6 +33,17 @@ export class ReturnsService {
     if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
     if (order.userId !== userId) throw new ForbiddenException();
 
+    // Art. 38 pkt 5 UoK: right of withdrawal does not apply to sealed hygiene/fragrance
+    // goods whose packaging was opened after delivery. Block at the API level so direct
+    // API callers cannot bypass the client-side checkbox.
+    if (dto.type === 'WITHDRAWAL' && dto.sealedOnReturn !== true) {
+      throw new BadRequestException(
+        'Prawo odstąpienia nie przysługuje dla produktów higienicznych z naruszonymi ' +
+        'opakowaniami (art. 38 pkt 5 Ustawy o prawach konsumenta). ' +
+        'Produkty muszą być zwrócone w oryginalnym, nienaruszonem opakowaniu.',
+      );
+    }
+
     const request = await this.prisma.returnRequest.create({
       data: {
         orderNumber: dto.orderNumber.trim().toUpperCase(),
@@ -46,6 +57,7 @@ export class ReturnsService {
         reason: dto.reason?.trim() ?? null,
         requestedResolution: dto.requestedResolution ?? null,
         bankAccount: dto.bankAccount?.trim().toUpperCase() ?? null,
+        sealedOnReturn: dto.sealedOnReturn ?? null,
       },
     });
 

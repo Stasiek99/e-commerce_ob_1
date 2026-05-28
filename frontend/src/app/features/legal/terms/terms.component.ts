@@ -1,5 +1,6 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-terms',
@@ -12,7 +13,7 @@ import { RouterLink } from '@angular/router';
 
       <section>
         <h2>§1. Postanowienia ogólne</h2>
-        <p>Sklep internetowy Aromaterie, dostępny pod adresem aromaterie.pl (dalej: <strong>Sklep</strong>), prowadzony jest przez&nbsp;[Nazwa spółki], z&nbsp;siedzibą w&nbsp;[Adres], wpisaną do rejestru&nbsp;[KRS/CEIDG], NIP: [NIP], REGON: [REGON].</p>
+        <p>Sklep internetowy Aromaterie, dostępny pod adresem aromaterie.pl (dalej: <strong>Sklep</strong>), prowadzony jest przez&nbsp;{{ s.legalName }}, z&nbsp;siedzibą w&nbsp;{{ s.street }}, {{ s.postalCode }}&nbsp;{{ s.city }}, wpisaną do rejestru&nbsp;{{ s.krs }}, NIP: {{ s.nip }}, REGON: {{ s.regon }}.</p>
         <p>Niniejszy regulamin określa zasady i&nbsp;warunki korzystania ze Sklepu, składania zamówień, realizacji dostawy, płatności, prawa do&nbsp;odstąpienia od&nbsp;umowy oraz trybu składania reklamacji.</p>
         <p>Kupującym może być wyłącznie osoba fizyczna, która ukończyła 18&nbsp;lat lub osoba prawna.</p>
       </section>
@@ -55,13 +56,13 @@ import { RouterLink } from '@angular/router';
       <section>
         <h2>§7. Reklamacje</h2>
         <p>Sklep odpowiada za wady fizyczne i prawne sprzedanego towaru na zasadach określonych w ustawie z dnia 23 kwietnia 1964 r. – Kodeks cywilny (rękojmia).</p>
-        <p>Reklamacje można zgłaszać drogą e-mail na adres: <strong>kontakt&#64;aromaterie.pl</strong> lub pisemnie na adres siedziby Sprzedawcy.</p>
+        <p>Reklamacje można zgłaszać drogą e-mail na adres: <strong>{{ s.email }}</strong> lub pisemnie na adres siedziby Sprzedawcy.</p>
         <p>Reklamacja powinna zawierać: imię i nazwisko, numer zamówienia, opis wady oraz oczekiwany sposób rozwiązania sprawy. Sklep rozpatruje reklamacje w terminie 14 dni roboczych.</p>
       </section>
 
       <section>
         <h2>§8. Ochrona danych osobowych</h2>
-        <p>Administratorem danych osobowych jest [Nazwa spółki]. Zasady przetwarzania danych osobowych opisano w <a routerLink="/legal/privacy">Polityce prywatności</a>.</p>
+        <p>Administratorem danych osobowych jest {{ s.legalName }}. Zasady przetwarzania danych osobowych opisano w <a routerLink="/legal/privacy">Polityce prywatności</a>.</p>
       </section>
 
       <section>
@@ -86,4 +87,6 @@ import { RouterLink } from '@angular/router';
     a { color: var(--color-primary); text-decoration: underline; }
   `],
 })
-export class TermsComponent {}
+export class TermsComponent {
+  readonly s = environment.seller;
+}

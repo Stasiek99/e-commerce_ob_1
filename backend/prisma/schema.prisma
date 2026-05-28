@@ -269,6 +269,7 @@ model ProductVariant {
   label                String
   priceInCents         Int
   compareAtPriceInCents Int?
+  vatRate              Int      @default(2300)
   stock                Int      @default(0)
   reorderThreshold     Int      @default(5)
   isActive             Boolean  @default(true)
@@ -393,6 +394,7 @@ model OrderItem {
   snapshotName      String
   snapshotSku       String
   snapshotPrice     Int
+  snapshotVatRate   Int @default(2300)
   quantity          Int
   cancelledQuantity Int @default(0)
 
@@ -558,6 +560,7 @@ model ReturnRequest {
   reason              String?
   requestedResolution String?
   bankAccount         String?
+  sealedOnReturn      Boolean?
   status              ReturnStatus @default(PENDING)
   adminNote           String?
   createdAt           DateTime     @default(now())

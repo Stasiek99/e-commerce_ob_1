@@ -7,9 +7,6 @@ import { StorageService } from '../storage/storage.service';
 
 const FONTS_DIR = path.join(__dirname, 'fonts');
 
-// Polish standard VAT rate for cosmetics, fragrances, and household goods
-const VAT_RATE = 0.23;
-
 export interface InvoiceOrder {
   id: string;
   orderNumber: string;
@@ -27,6 +24,7 @@ export interface InvoiceOrder {
   items: Array<{
     snapshotName: string;
     snapshotPrice: number;
+    snapshotVatRate: number; // basis points — 2300 = 23%, 500 = 5%, 0 = exempt
     quantity: number;
   }>;
 }
@@ -163,22 +161,33 @@ export class InvoiceService {
     let totalNetCents = 0;
     let totalVatCents = 0;
 
-    const allItems: Array<{ name: string; qty: number; grossCents: number }> = [
+    const allItems: Array<{ name: string; qty: number; grossCents: number; vatRate: number }> = [
       ...order.items.map((i) => ({
         name: i.snapshotName,
         qty: i.quantity,
         grossCents: i.snapshotPrice * i.quantity,
+        vatRate: i.snapshotVatRate / 10000, // basis points → decimal (2300 → 0.23)
       })),
       ...(order.shippingCostInCents > 0
-        ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents }]
+        ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
         : []),
     ];
 
+    // Per-rate accumulators for the legally-required split VAT summary
+    const vatByRate = new Map<number, { netCents: number; vatCents: number }>();
+
     allItems.forEach((item, idx) => {
-      const netCents = Math.round(item.grossCents / (1 + VAT_RATE));
+      const netCents = Math.round(item.grossCents / (1 + item.vatRate));
       const vatCents = item.grossCents - netCents;
       totalNetCents += netCents;
       totalVatCents += vatCents;
+
+      const bucket = vatByRate.get(item.vatRate) ?? { netCents: 0, vatCents: 0 };
+      bucket.netCents += netCents;
+      bucket.vatCents += vatCents;
+      vatByRate.set(item.vatRate, bucket);
+
+      const vatPctLabel = item.vatRate === 0 ? 'zw.' : `${Math.round(item.vatRate * 100)}%`;
 
       doc.rect(50, y, W, ROW_H).fill(idx % 2 === 0 ? '#fff' : '#f9f9f9').stroke();
       doc.fillColor('#000');
@@ -187,7 +196,7 @@ export class InvoiceService {
       doc.text(item.name, cx.name, ry, { width: cw.name, lineBreak: false });
       doc.text(String(item.qty), cx.qty, ry, { width: cw.qty, align: 'center' });
       doc.text(this.fmtMoney(netCents), cx.netUnit, ry, { width: cw.netUnit, align: 'right' });
-      doc.text('23%', cx.vatPct, ry, { width: cw.vatPct, align: 'center' });
+      doc.text(vatPctLabel, cx.vatPct, ry, { width: cw.vatPct, align: 'center' });
       doc.text(this.fmtMoney(vatCents), cx.vatAmt, ry, { width: cw.vatAmt, align: 'right' });
       doc.text(this.fmtMoney(item.grossCents), cx.gross, ry, { width: cw.gross, align: 'right' });
       y += ROW_H;
@@ -201,8 +210,15 @@ export class InvoiceService {
 
     y += 14;
     this.sumRow(doc, 'Suma netto:', this.fmtMoney(totalNetCents), sumX, y, sumLabelW, sumValueW, false);
-    y += 16;
-    this.sumRow(doc, 'VAT 23%:', this.fmtMoney(totalVatCents), sumX, y, sumLabelW, sumValueW, false);
+
+    // One VAT line per rate (art. 106e pkt 10 Ustawy o VAT)
+    const sortedRates = Array.from(vatByRate.entries()).sort(([a], [b]) => b - a);
+    for (const [rate, bucket] of sortedRates) {
+      y += 16;
+      const rateLabel = rate === 0 ? 'VAT zw.:' : `VAT ${Math.round(rate * 100)}%:`;
+      this.sumRow(doc, rateLabel, this.fmtMoney(bucket.vatCents), sumX, y, sumLabelW, sumValueW, false);
+    }
+
     y += 16;
     doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
     y += 6;

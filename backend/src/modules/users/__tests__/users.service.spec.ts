@@ -37,6 +37,16 @@ describe('UsersService', () => {
             },
             order: {
               updateMany: jest.fn(),
+              findMany: jest.fn(),
+            },
+            review: {
+              findMany: jest.fn(),
+            },
+            wishlistItem: {
+              findMany: jest.fn(),
+            },
+            returnRequest: {
+              findMany: jest.fn(),
             },
             $transaction: jest.fn(),
           },
@@ -49,6 +59,89 @@ describe('UsersService', () => {
   });
 
   afterEach(() => jest.clearAllMocks());
+
+  // ─── exportData — GDPR Art. 20 ──────────────────────────────────────────
+
+  describe('exportData', () => {
+    const fullUser = {
+      id: 'user-1',
+      email: 'jan@example.com',
+      passwordHash: 'bcrypt-hash',
+      googleId: 'google-123',
+      firstName: 'Jan',
+      lastName: 'Kowalski',
+      phone: null,
+      nip: null,
+      role: 'CUSTOMER',
+      isEmailVerified: true,
+      pendingEmail: null,
+      createdAt: new Date('2026-01-01'),
+      updatedAt: new Date('2026-01-01'),
+      addresses: [{ id: 'addr-1', city: 'Warszawa' }],
+    };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(fullUser);
+      prisma.order.findMany.mockResolvedValue([]);
+      prisma.review.findMany.mockResolvedValue([]);
+      prisma.wishlistItem.findMany.mockResolvedValue([]);
+      prisma.returnRequest.findMany.mockResolvedValue([]);
+    });
+
+    it('strips passwordHash and googleId from the profile', async () => {
+      const result = await service.exportData('user-1', 'jan@example.com');
+
+      expect(result.profile).not.toHaveProperty('passwordHash');
+      expect(result.profile).not.toHaveProperty('googleId');
+    });
+
+    it('includes addresses nested in the profile', async () => {
+      const result = await service.exportData('user-1', 'jan@example.com');
+
+      expect((result.profile as any).addresses).toHaveLength(1);
+      expect((result.profile as any).addresses[0]).toMatchObject({ id: 'addr-1' });
+    });
+
+    it('queries return requests by email, not userId', async () => {
+      await service.exportData('user-1', 'jan@example.com');
+
+      expect(prisma.returnRequest.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { email: 'jan@example.com' } }),
+      );
+    });
+
+    it('queries orders by userId', async () => {
+      await service.exportData('user-1', 'jan@example.com');
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'user-1' } }),
+      );
+    });
+
+    it('returns all five collections and a valid ISO exportedAt timestamp', async () => {
+      prisma.order.findMany.mockResolvedValue([{ orderNumber: 'ORD-001', status: 'PAID', items: [] }]);
+      prisma.review.findMany.mockResolvedValue([{ rating: 5, title: 'Great', product: { name: 'Oud', slug: 'oud' } }]);
+      prisma.wishlistItem.findMany.mockResolvedValue([{ addedAt: new Date(), notifyOnRestock: false, product: { name: 'Rose', slug: 'rose' } }]);
+      prisma.returnRequest.findMany.mockResolvedValue([{ orderNumber: 'ORD-001', type: 'WITHDRAWAL', status: 'PENDING' }]);
+
+      const result = await service.exportData('user-1', 'jan@example.com');
+
+      expect(result.orders).toHaveLength(1);
+      expect(result.reviews).toHaveLength(1);
+      expect(result.wishlist).toHaveLength(1);
+      expect(result.returnRequests).toHaveLength(1);
+      expect(result.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it('returns empty collections when user has no associated data', async () => {
+      const result = await service.exportData('user-1', 'jan@example.com');
+
+      expect(result.orders).toEqual([]);
+      expect(result.reviews).toEqual([]);
+      expect(result.wishlist).toEqual([]);
+      expect(result.returnRequests).toEqual([]);
+    });
+  });
 
   // ─── deleteAccount ──────────────────────────────────────────────────────
 

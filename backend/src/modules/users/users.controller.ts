@@ -38,6 +38,19 @@ export class UsersController {
     return result;
   }
 
+  @Get('me/data-export')
+  @Throttle({ default: { ttl: 3600000, limit: 3 } })
+  async exportMyData(
+    @CurrentUser() user: User,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const data = await this.usersService.exportData(user.id, user.email);
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="gdpr-export-${date}.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    return data;
+  }
+
   @Delete('me')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteMe(

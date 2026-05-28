@@ -31,6 +31,7 @@ describe('UsersController', () => {
         {
           provide: UsersService,
           useValue: {
+            exportData: jest.fn(),
             deleteAccount: jest.fn(),
             update: jest.fn(),
             getAddresses: jest.fn(),
@@ -54,6 +55,64 @@ describe('UsersController', () => {
   });
 
   afterEach(() => jest.clearAllMocks());
+
+  // ─── GET /users/me/data-export — GDPR Art. 20 ───────────────────────────
+
+  describe('exportMyData', () => {
+    function makeMockResponse() {
+      return { setHeader: jest.fn() } as any;
+    }
+
+    const exportPayload = {
+      exportedAt: '2026-05-28T12:00:00.000Z',
+      profile: { id: 'user-1', email: 'jan@example.com', addresses: [] },
+      orders: [],
+      reviews: [],
+      wishlist: [],
+      returnRequests: [],
+    };
+
+    it('delegates to UsersService.exportData with the authenticated user id and email', async () => {
+      usersService.exportData.mockResolvedValue(exportPayload as any);
+
+      await controller.exportMyData(mockUser as any, makeMockResponse());
+
+      expect(usersService.exportData).toHaveBeenCalledWith('user-1', 'jan@example.com');
+    });
+
+    it('sets Content-Disposition attachment header with a dated filename', async () => {
+      usersService.exportData.mockResolvedValue(exportPayload as any);
+      const res = makeMockResponse();
+
+      await controller.exportMyData(mockUser as any, res);
+
+      const call = (res.setHeader.mock.calls as [string, string][]).find(([name]) => name === 'Content-Disposition');
+      expect(call).toBeDefined();
+      expect(call![1]).toMatch(/^attachment; filename="gdpr-export-\d{4}-\d{2}-\d{2}\.json"$/);
+    });
+
+    it('sets Content-Type to application/json', async () => {
+      usersService.exportData.mockResolvedValue(exportPayload as any);
+
+      await controller.exportMyData(mockUser as any, makeMockResponse());
+
+      expect(usersService.exportData).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns the full export payload from the service', async () => {
+      usersService.exportData.mockResolvedValue(exportPayload as any);
+
+      const result = await controller.exportMyData(mockUser as any, makeMockResponse());
+
+      expect(result).toBe(exportPayload);
+    });
+
+    it('propagates errors from UsersService without swallowing them', async () => {
+      usersService.exportData.mockRejectedValue(new Error('DB timeout'));
+
+      await expect(controller.exportMyData(mockUser as any, makeMockResponse())).rejects.toThrow('DB timeout');
+    });
+  });
 
   // ─── DELETE /users/me ─────────────────────────────────────────────────────
 

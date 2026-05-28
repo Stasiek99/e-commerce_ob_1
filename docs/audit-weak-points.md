@@ -2,26 +2,7 @@
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
 ---
-## High-Severity Structural Flaws
-
-### 10. Railway container sleep kills the reconciliation cron *(Skeptic)*
-On Railway's hobby tier, containers sleep on inactivity. `@Cron` decorators don't fire in sleeping containers. A payment at 2 AM can leave an order in `PENDING_PAYMENT` indefinitely if no request wakes the instance. The reconciliation cron is your fallback for webhook failures — and it doesn't run when you need it most.
-
----
-
 ## Compliance & Legal (Polish market-specific)
-
-### 11. No GDPR Art. 20 data portability endpoint *(Domain Expert)*
-`deleteAccount` is implemented. Data export is not. UODO has issued fines specifically for this omission. Required before accepting real customers.
-
-### 12. Fragrance withdrawal right: no sealed/unsealed tracking *(Domain Expert)*
-Art. 38 pkt 5 of UoK exempts sealed goods from the 14-day withdrawal right once opened (hygiene category). The return form has no "sealed/unsealed" field and the backend doesn't block withdrawal on opened product. You will be legally required to refund returns you could lawfully decline.
-
-### 13. VAT_RATE is a single hardcoded constant *(Domain Expert)*
-Invoice engine uses `grossCents / 1.23` for every line item. If you ever stock 5% VAT goods or handle international shipping at 0% VAT, the invoice engine produces legally invalid invoices. Needs to be per-line-item before diversifying the catalog.
-
-### 14. Seller NIP + address fields required for valid VAT invoice *(Pragmatist)*
-`SELLER_NIP`, `SELLER_STREET`, `SELLER_CITY`, `SELLER_POSTAL_CODE` are required by Polish VAT law (art. 106e). Without them in production env vars, every generated PDF invoice is legally invalid.
 
 ### 15. Legal pages must have real content *(Pragmatist)*
 `/privacy`, `/terms`, `/withdrawal` routes exist. Placeholder text is illegal in production under RODO/UoK. Non-negotiable before first real transaction.
