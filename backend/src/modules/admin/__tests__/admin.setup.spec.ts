@@ -9,9 +9,10 @@ const mockInvoice = {} as any;
 const mockShipping = {} as any;
 const mockOrders = {} as any;
 const mockPayments = {} as any;
+const mockReturns = {} as any;
 
 const callSetupAdmin = () =>
-  setupAdmin(mockApp, mockPrisma, mockInvoice, mockShipping, mockOrders, mockPayments);
+  setupAdmin(mockApp, mockPrisma, mockInvoice, mockShipping, mockOrders, mockPayments, mockReturns);
 
 const GUARD_ERROR =
   'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set — refusing to boot with an unprotected admin panel';

@@ -4,7 +4,8 @@ import { isPlatformBrowser, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute } from '@angular/router';
-import { TuiButton, TuiIcon, TuiTextfield } from '@taiga-ui/core';
+import { TuiButton, TuiGroup, TuiIcon, TuiTextfield } from '@taiga-ui/core';
+import { TuiElasticContainer, TuiSlides } from '@taiga-ui/kit';
 import { TuiExpand } from '@taiga-ui/experimental';
 import { TuiCounter, TuiRating, TuiTextarea } from '@taiga-ui/kit';
 import { TuiSkeleton } from '@taiga-ui/kit/directives/skeleton';
@@ -41,6 +42,7 @@ interface ProductDetail {
   description?: string | null;
   concentration?: string | null;
   gender?: string | null;
+  catalogNumber?: string | null;
   pyramidTop?: string | null;
   pyramidHeart?: string | null;
   pyramidBase?: string | null;
@@ -60,7 +62,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton],
+  imports: [FormsModule, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton],
   template: `
     @if (loading()) {
       <div class="skeleton-detail">
@@ -124,7 +126,9 @@ const CATEGORY_LABELS: Record<string, string> = {
           @if (product()!.brand) {
             <p class="detail__brand">{{ product()!.brand }}</p>
           }
-          <h1 class="detail__name">{{ product()!.name }}</h1>
+          <h1 class="detail__name">
+            {{ product()!.name }}@if (product()!.catalogNumber) {<span class="detail__catalog-no"> NO.&nbsp;{{ product()!.catalogNumber }}</span>}
+          </h1>
 
           <!-- Variant selection -->
           @if (product()!.variants.length) {
@@ -420,14 +424,46 @@ const CATEGORY_LABELS: Record<string, string> = {
       </section>
 
       <!-- Related products -->
-      @if (relatedProducts().length > 0) {
+      @if (pages().length > 0) {
         <section class="related">
-          <h2 class="related__heading">Może Ci się spodobać</h2>
-          <div class="related__grid">
-            @for (p of relatedProducts(); track p.id) {
-              <app-product-card [product]="p"/>
+          <div class="related__header">
+            <h2 class="related__heading">Może Ci się spodobać</h2>
+            @if (pages().length > 1) {
+              <div tuiGroup>
+                <button
+                  appearance="secondary"
+                  iconStart="@tui.chevron-left"
+                  size="m"
+                  tuiIconButton
+                  type="button"
+                  (click)="prevSlide()">
+                  Previous
+                </button>
+                <button
+                  appearance="secondary"
+                  iconStart="@tui.chevron-right"
+                  size="m"
+                  tuiIconButton
+                  type="button"
+                  (click)="nextSlide()">
+                  Next
+                </button>
+              </div>
             }
           </div>
+          <tui-elastic-container>
+            <section tuiSlides>
+              @for (page of pages(); track $index) {
+                @if ($index === slideIndex()) {
+                  <div class="related__grid">
+                    @for (p of page; track p.id) {
+                      <app-product-card [product]="p"/>
+                    }
+                  </div>
+                }
+              }
+            </section>
+          </tui-elastic-container>
         </section>
       }
 
@@ -538,7 +574,8 @@ const CATEGORY_LABELS: Record<string, string> = {
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
       color: var(--color-accent); margin: 0 0 6px; font-weight: 600;
     }
-    .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.25; }
+    .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.35; }
+    .detail__catalog-no { font-size: 0.72em; font-weight: 500; color: var(--color-secondary); letter-spacing: 0.03em; white-space: nowrap; }
 
     /* Variants */
     .detail__label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-secondary); margin: 0 0 10px; }
@@ -746,15 +783,23 @@ const CATEGORY_LABELS: Record<string, string> = {
     .related {
       margin-top: 64px;
       padding-top: 40px;
+      padding-bottom: 40px;
       border-top: 1px solid var(--color-border);
     }
+    .related__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+    }
     .related__heading {
-      font-size: 20px; font-weight: 700; margin: 0 0 28px;
+      font-size: 20px; font-weight: 700; margin: 0;
     }
     .related__grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: 24px;
+      --tui-duration: 0.5s;
     }
     @media (max-width: 1024px) {
       .related__grid { grid-template-columns: repeat(3, 1fr); }
@@ -763,7 +808,7 @@ const CATEGORY_LABELS: Record<string, string> = {
       .related__grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
     }
     @media (max-width: 480px) {
-      .related__grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+      .related__grid { grid-template-columns: 1fr; gap: 12px; }
     }
 
     /* ── Lightbox ──────────────────────────────────────────────── */
@@ -851,6 +896,15 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
   readonly relatedProducts = signal<ProductCardData[]>([]);
+  readonly slideIndex = signal(0);
+  readonly itemsPerPage = signal(4);
+  readonly pages = computed(() => {
+    const items = this.relatedProducts();
+    const n = this.itemsPerPage();
+    const result: ProductCardData[][] = [];
+    for (let i = 0; i < items.length; i += n) result.push(items.slice(i, i + n));
+    return result;
+  });
   readonly selectedVariant = signal<ProductVariantDetail | null>(null);
   readonly activeImage = signal<string | null>(null);
   readonly adding = signal(false);
@@ -945,6 +999,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
+    if (isPlatformBrowser(this.platformId)) this.updateItemsPerPage();
     const slug = this.route.snapshot.paramMap.get('slug')!;
     this.http
       .get<ProductDetail>(`${environment.apiUrl}/products/${slug}`)
@@ -1133,6 +1188,28 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   }
 
   back(): void { this.location.back(); }
+
+  nextSlide(): void {
+    this.slideIndex.update(i => (i + 1) % this.pages().length);
+  }
+
+  prevSlide(): void {
+    this.slideIndex.update(i => (i - 1 + this.pages().length) % this.pages().length);
+  }
+
+  @HostListener('window:resize')
+  onWindowResize(): void {
+    if (isPlatformBrowser(this.platformId)) this.updateItemsPerPage();
+  }
+
+  private updateItemsPerPage(): void {
+    const w = window.innerWidth;
+    const n = w >= 1024 ? 4 : w >= 768 ? 3 : w >= 480 ? 2 : 1;
+    if (n !== this.itemsPerPage()) {
+      this.itemsPerPage.set(n);
+      this.slideIndex.set(0);
+    }
+  }
 
   toggleWishlist(): void {
     const p = this.product();

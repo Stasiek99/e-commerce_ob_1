@@ -17,6 +17,7 @@ const makeProduct = (overrides: Partial<Record<string, unknown>> = {}) => ({
   pyramidHeart: null,
   pyramidBase: null,
   gender: null,
+  catalogNumber: null,
   line: null,
   sortOrder: 0,
   avgRating: null,

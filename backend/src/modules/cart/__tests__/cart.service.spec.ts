@@ -3,16 +3,6 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { CartService } from '../cart.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
-const makeVariant = (overrides: Partial<{ stock: number; isActive: boolean }> = {}) => ({
-  id: 'pv-1',
-  stock: 10,
-  isActive: true,
-  priceInCents: 4999,
-  label: '50ml',
-  sku: 'SKU-001',
-  weight: 200,
-  ...overrides,
-});
 
 const makeCart = (id = 'cart-1') => ({
   id,
@@ -40,7 +30,7 @@ const makeCartItem = (qty = 2) => ({
 const makeTx = (overrides: Record<string, any> = {}) => ({
   $queryRaw: jest.fn(),
   cart: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
-  cartItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+  cartItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   ...overrides,
 });
 
@@ -349,6 +339,10 @@ describe('CartService', () => {
   });
 
   describe('updateItem', () => {
+    const setupUpdateTx = (tx: ReturnType<typeof makeTx>) => {
+      prisma.$transaction.mockImplementation((fn: (tx: any) => Promise<any>) => fn(tx));
+    };
+
     it('throws NotFoundException when cart does not exist', async () => {
       prisma.cart.findFirst.mockResolvedValue(null);
 
@@ -366,9 +360,33 @@ describe('CartService', () => {
       expect(prisma.cartItem.deleteMany).toHaveBeenCalled();
     });
 
+    it('throws NotFoundException when variant does not exist', async () => {
+      prisma.cart.findFirst.mockResolvedValue(makeCart());
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([]); // no rows → variant not found
+      setupUpdateTx(tx);
+
+      await expect(
+        service.updateItem(undefined, 'sess-1', 'pv-1', 2),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when variant is inactive', async () => {
+      prisma.cart.findFirst.mockResolvedValue(makeCart());
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: false }]);
+      setupUpdateTx(tx);
+
+      await expect(
+        service.updateItem(undefined, 'sess-1', 'pv-1', 2),
+      ).rejects.toThrow(NotFoundException);
+    });
+
     it('throws BadRequestException when requested quantity exceeds stock', async () => {
       prisma.cart.findFirst.mockResolvedValue(makeCart());
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 1 }));
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ stock: 1, isActive: true }]);
+      setupUpdateTx(tx);
 
       await expect(
         service.updateItem(undefined, 'sess-1', 'pv-1', 5),
@@ -379,16 +397,64 @@ describe('CartService', () => {
       const cart = makeCart();
       const cartWithItem = { ...cart, items: [makeCartItem(3)] };
       prisma.cart.findFirst
-        .mockResolvedValueOnce(cart)
-        .mockResolvedValueOnce(cartWithItem);
-      prisma.productVariant.findUnique.mockResolvedValue(makeVariant({ stock: 10 }));
-      prisma.cartItem.updateMany.mockResolvedValue({});
+        .mockResolvedValueOnce(cart)        // findCart
+        .mockResolvedValueOnce(cartWithItem); // getOrCreate re-fetch
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
+      setupUpdateTx(tx);
 
       await service.updateItem(undefined, 'sess-1', 'pv-1', 3);
 
-      expect(prisma.cartItem.updateMany).toHaveBeenCalledWith(
+      expect(tx.cartItem.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({ data: { quantity: 3 } }),
       );
+    });
+
+    it('FOR UPDATE lock serializes concurrent updates: second caller sees depleted stock', async () => {
+      prisma.cart.findFirst.mockResolvedValue(makeCart());
+      const tx = makeTx();
+      // Stock is 0 after a concurrent request already updated the item
+      tx.$queryRaw.mockResolvedValue([{ stock: 0, isActive: true }]);
+      setupUpdateTx(tx);
+
+      await expect(
+        service.updateItem(undefined, 'sess-1', 'pv-1', 1),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('acquires FOR UPDATE lock on the variant row', async () => {
+      const cart = makeCart();
+      const cartWithItem = { ...cart, items: [makeCartItem(2)] };
+      prisma.cart.findFirst
+        .mockResolvedValueOnce(cart)
+        .mockResolvedValueOnce(cartWithItem);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
+      setupUpdateTx(tx);
+
+      await service.updateItem(undefined, 'sess-1', 'pv-1', 2);
+
+      const rawQuery: string = (tx.$queryRaw.mock.calls[0][0] as string[]).join('');
+      expect(rawQuery).toMatch(/FOR UPDATE/i);
+      expect(rawQuery).toMatch(/product_variants/i);
+    });
+
+    it('runs the stock check and cart write inside a single $transaction call', async () => {
+      const cart = makeCart();
+      const cartWithItem = { ...cart, items: [makeCartItem(2)] };
+      prisma.cart.findFirst
+        .mockResolvedValueOnce(cart)
+        .mockResolvedValueOnce(cartWithItem);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
+      setupUpdateTx(tx);
+
+      await service.updateItem(undefined, 'sess-1', 'pv-1', 2);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
   });
 

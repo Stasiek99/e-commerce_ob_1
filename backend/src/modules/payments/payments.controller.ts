@@ -10,12 +10,14 @@ import {
   ParseUUIDPipe,
   Post,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { User } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PaymentsService } from './payments.service';
 import { StripeClient } from './stripe.client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -33,6 +35,7 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly stripeClient: StripeClient,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -88,5 +91,35 @@ export class PaymentsController {
   async refund(@Param('orderId', ParseUUIDPipe) orderId: string) {
     await this.paymentsService.refundPayment(orderId);
     return { refunded: true };
+  }
+
+  /**
+   * External-cron trigger for the reconciliation job.
+   *
+   * The in-process @Cron decorator does not fire when Railway's hobby-tier
+   * container is sleeping. This endpoint is the external wake-up hook:
+   * configure a Railway Cron Job service (or cron-job.org / UptimeRobot) to
+   * POST here every 10 minutes with Authorization: Bearer <PAYMENTS_RECONCILE_SECRET>.
+   *
+   * Returns 200 synchronously — reconciliation runs in the background so the
+   * cron caller does not need to wait for Stripe API round-trips.
+   */
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('reconcile')
+  @HttpCode(HttpStatus.OK)
+  async triggerReconciliation(
+    @Headers('authorization') authorization: string,
+  ) {
+    const secret = this.configService.get<string>('PAYMENTS_RECONCILE_SECRET', '');
+    if (!secret || authorization !== `Bearer ${secret}`) {
+      throw new UnauthorizedException('Invalid reconcile secret');
+    }
+
+    // Fire-and-forget: the cron caller gets 200 immediately; reconciliation
+    // runs asynchronously and logs any errors via the existing @Cron path.
+    this.paymentsService.reconcilePendingPayments().catch(() => undefined);
+
+    return { triggered: true };
   }
 }

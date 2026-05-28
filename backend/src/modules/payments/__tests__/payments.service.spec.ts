@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
-import { PaymentStatus, OrderStatus } from '@prisma/client';
+import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -85,6 +85,9 @@ describe('PaymentsService', () => {
             },
             productVariant: {
               update: jest.fn(),
+            },
+            processedStripeEvent: {
+              create: jest.fn().mockResolvedValue({}),
             },
             $transaction: jest.fn(),
           },
@@ -237,6 +240,81 @@ describe('PaymentsService', () => {
         buildEvent('checkout.session.expired', mockSession),
       );
 
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    // ── Stripe event deduplication ──────────────────────────────────────
+
+    it('skips all processing when the event_id is already in processed_stripe_events (duplicate delivery)', async () => {
+      const duplicateError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`event_id`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
+      );
+      prisma.processedStripeEvent.create.mockRejectedValue(duplicateError);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
+    });
+
+    it('skips processing for expired event duplicate without touching stock', async () => {
+      const duplicateError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`event_id`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
+      );
+      prisma.processedStripeEvent.create.mockRejectedValue(duplicateError);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.expired', mockSession),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('re-throws non-P2002 errors from processedStripeEvent.create', async () => {
+      const dbError = new Prisma.PrismaClientKnownRequestError(
+        'Connection timed out',
+        { code: 'P1001', clientVersion: '6.0.0', meta: {} },
+      );
+      prisma.processedStripeEvent.create.mockRejectedValue(dbError);
+
+      await expect(
+        service.handleWebhookEvent(buildEvent('checkout.session.completed', mockSession)),
+      ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
+    });
+
+    it('records the event_id before dispatching to any handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      const event = buildEvent('checkout.session.completed', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: event.id },
+      });
+      // And the handler still ran (event was fresh)
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    // ── markSessionFailed idempotency (layer 2 guard) ────────────────────
+
+    it('skips stock restoration when payment is already FAILED', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.FAILED,
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.expired', mockSession),
+      );
+
+      // No transaction means no stock restoration attempted
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });

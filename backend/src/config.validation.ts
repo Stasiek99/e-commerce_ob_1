@@ -63,6 +63,10 @@ export const envValidationSchema = Joi.object({
   STRIPE_CURRENCY: Joi.string().lowercase().default('pln'),
   STRIPE_SUCCESS_URL: Joi.string().uri().required(),
   STRIPE_CANCEL_URL: Joi.string().uri().required(),
+  // Secret for POST /payments/reconcile. Required in production — without it,
+  // the reconciliation endpoint is permanently locked (returns 401 for every call),
+  // meaning the fallback cron path is silently broken.
+  PAYMENTS_RECONCILE_SECRET: requiredInProd(Joi.string().min(16), ''),
 
   // ── InPost ShipX ──
   INPOST_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),

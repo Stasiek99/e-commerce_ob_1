@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ReturnsService } from '../returns.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -33,7 +33,7 @@ const COMPLAINT_DTO = {
 
 // orderRow: { userId } when order exists, null when order does not exist.
 function buildPrismaMock(
-  overrides: Partial<{ id: string; type: string }> = {},
+  overrides: Partial<{ id: string; type: string; requestedResolution: string }> = {},
   orderRow: { userId: string | null } | null = { userId: OWNER_ID },
 ) {
   const record = {
@@ -55,20 +55,46 @@ function buildPrismaMock(
     },
     returnRequest: {
       create: jest.fn().mockResolvedValue(record),
+      findUnique: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue(record),
     },
+  };
+}
+
+function buildReturnRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'return-id-001',
+    orderNumber: 'ORD-2026-001',
+    firstName: 'Jan',
+    lastName: 'Kowalski',
+    email: 'jan@example.com',
+    phone: null,
+    type: 'WITHDRAWAL',
+    status: 'PENDING',
+    reason: null,
+    requestedResolution: null,
+    bankAccount: null,
+    adminNote: null,
+    ...overrides,
   };
 }
 
 describe('ReturnsService', () => {
   let service: ReturnsService;
-  let prisma: { returnRequest: { create: jest.Mock } };
-  let emailService: jest.Mocked<Pick<EmailService, 'sendReturnConfirmation' | 'sendReturnAdminNotification'>>;
+  let prisma: ReturnType<typeof buildPrismaMock>;
+  let emailService: jest.Mocked<
+    Pick<
+      EmailService,
+      'sendReturnConfirmation' | 'sendReturnAdminNotification' | 'sendReturnStatusUpdate'
+    >
+  >;
 
   async function createModule(prismaMock = buildPrismaMock()) {
     prisma = prismaMock;
     emailService = {
       sendReturnConfirmation: jest.fn().mockResolvedValue(undefined),
       sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
+      sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -86,7 +112,7 @@ describe('ReturnsService', () => {
     service = module.get<ReturnsService>(ReturnsService);
   }
 
-  // ── Return value ──────────────────────────────────────────────────
+  // ── create() ─────────────────────────────────────────────────────────
 
   describe('return value', () => {
     it('returns { id, orderNumber } on success', async () => {
@@ -95,8 +121,6 @@ describe('ReturnsService', () => {
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
     });
   });
-
-  // ── Database write ────────────────────────────────────────────────
 
   describe('database write', () => {
     it('persists WITHDRAWAL type to the database', async () => {
@@ -162,8 +186,6 @@ describe('ReturnsService', () => {
     });
   });
 
-  // ── Customer confirmation email ───────────────────────────────────
-
   describe('customer confirmation email', () => {
     it('calls sendReturnConfirmation for WITHDRAWAL with type=WITHDRAWAL', async () => {
       await createModule();
@@ -205,8 +227,6 @@ describe('ReturnsService', () => {
       );
     });
   });
-
-  // ── Admin notification email ──────────────────────────────────────
 
   describe('admin notification email', () => {
     it('calls sendReturnAdminNotification for WITHDRAWAL with type=WITHDRAWAL', async () => {
@@ -250,8 +270,6 @@ describe('ReturnsService', () => {
     });
   });
 
-  // ── Email resilience ──────────────────────────────────────────────
-
   describe('email resilience', () => {
     it('still returns { id, orderNumber } even if both emails fail', async () => {
       await createModule();
@@ -264,11 +282,9 @@ describe('ReturnsService', () => {
     });
   });
 
-  // ── Ownership guard ───────────────────────────────────────────────
-
   describe('ownership guard', () => {
     it('throws NotFoundException when the order number does not exist', async () => {
-      await createModule(buildPrismaMock({}, null)); // null → findFirst returns null
+      await createModule(buildPrismaMock({}, null));
 
       await expect(service.create(WITHDRAWAL_DTO as any, OWNER_ID)).rejects.toThrow(
         NotFoundException,
@@ -289,6 +305,208 @@ describe('ReturnsService', () => {
       const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
 
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
+  // ── approve() ────────────────────────────────────────────────────────
+
+  describe('approve()', () => {
+    it('throws NotFoundException when the return request does not exist', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(null);
+      await createModule(mock);
+
+      await expect(service.approve('nonexistent-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when already APPROVED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await expect(service.approve('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when already COMPLETED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'COMPLETED' }));
+      await createModule(mock);
+
+      await expect(service.approve('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when already REJECTED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'REJECTED' }));
+      await createModule(mock);
+
+      await expect(service.approve('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('updates status to APPROVED and persists adminNote', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+
+      await service.approve('return-id-001', 'Przyjęto');
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { status: 'APPROVED', adminNote: 'Przyjęto' },
+      });
+    });
+
+    it('sends return_status_update email with newStatus=APPROVED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+
+      await service.approve('return-id-001');
+
+      expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ newStatus: 'APPROVED', to: 'jan@example.com' }),
+      );
+    });
+
+    it('resolves even if the status email throws', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+      emailService.sendReturnStatusUpdate.mockRejectedValue(new Error('Resend down'));
+
+      await expect(service.approve('return-id-001')).resolves.toBeUndefined();
+    });
+  });
+
+  // ── reject() ─────────────────────────────────────────────────────────
+
+  describe('reject()', () => {
+    it('throws NotFoundException when the return request does not exist', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(null);
+      await createModule(mock);
+
+      await expect(service.reject('nonexistent-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when already REJECTED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'REJECTED' }));
+      await createModule(mock);
+
+      await expect(service.reject('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when already COMPLETED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'COMPLETED' }));
+      await createModule(mock);
+
+      await expect(service.reject('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('updates status to REJECTED and persists adminNote', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'IN_REVIEW' }));
+      await createModule(mock);
+
+      await service.reject('return-id-001', 'Poza terminem');
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { status: 'REJECTED', adminNote: 'Poza terminem' },
+      });
+    });
+
+    it('sends return_status_update email with newStatus=REJECTED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+
+      await service.reject('return-id-001');
+
+      expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ newStatus: 'REJECTED', to: 'jan@example.com' }),
+      );
+    });
+
+    it('resolves even if the status email throws', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+      emailService.sendReturnStatusUpdate.mockRejectedValue(new Error('Resend down'));
+
+      await expect(service.reject('return-id-001')).resolves.toBeUndefined();
+    });
+  });
+
+  // ── markRefunded() ───────────────────────────────────────────────────
+
+  describe('markRefunded()', () => {
+    it('throws NotFoundException when the return request does not exist', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(null);
+      await createModule(mock);
+
+      await expect(service.markRefunded('nonexistent-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when status is PENDING (not APPROVED)', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when status is REJECTED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'REJECTED' }));
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when already COMPLETED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'COMPLETED' }));
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('updates status to COMPLETED when APPROVED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001', 'Przelew zrealizowany 2026-05-28');
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { status: 'COMPLETED', adminNote: 'Przelew zrealizowany 2026-05-28' },
+      });
+    });
+
+    it('sends return_status_update email with newStatus=COMPLETED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ newStatus: 'COMPLETED', to: 'jan@example.com' }),
+      );
+    });
+
+    it('resolves even if the status email throws', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+      emailService.sendReturnStatusUpdate.mockRejectedValue(new Error('Resend down'));
+
+      await expect(service.markRefunded('return-id-001')).resolves.toBeUndefined();
     });
   });
 });

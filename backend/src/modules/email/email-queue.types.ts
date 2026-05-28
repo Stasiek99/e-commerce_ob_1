@@ -134,6 +134,18 @@ export type EmailJobData =
       };
     }
   | {
+      type: 'return_status_update';
+      payload: {
+        to: string;
+        firstName: string;
+        orderNumber: string;
+        requestId: string;
+        type: 'WITHDRAWAL' | 'COMPLAINT';
+        newStatus: 'APPROVED' | 'REJECTED' | 'COMPLETED';
+        adminNote?: string;
+      };
+    }
+  | {
       type: 'magic_link_login';
       payload: { to: string; firstName: string; magicUrl: string };
     };

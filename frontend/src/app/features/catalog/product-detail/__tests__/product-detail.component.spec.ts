@@ -41,13 +41,16 @@ const makeProductResponse = (overrides: Partial<Record<string, unknown>> = {}) =
   ...overrides,
 });
 
-const makeRelatedProduct = (id: string) => ({
+const makeRelatedProduct = (id: string, overrides: Partial<Record<string, unknown>> = {}) => ({
   id,
   name: `Related ${id}`,
   slug: `related-${id}`,
   brand: 'Maison',
+  catalogNumber: null,
+  gender: null,
   images: [{ url: `https://cdn.example.com/${id}.jpg` }],
   variants: [{ id: `var-${id}`, label: '50ml', priceInCents: 8900, stock: 3 }],
+  ...overrides,
 });
 
 function setup() {
@@ -260,5 +263,123 @@ describe('ProductDetailComponent — loadRelatedProducts', () => {
       const cards = fixture.nativeElement.querySelectorAll('app-product-card');
       expect(cards.length).toBe(3);
     });
+  });
+});
+
+// ─── Carousel (pages / slideIndex) ───────────────────────────────────────────
+
+describe('ProductDetailComponent — related products carousel', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  function loadWith(related: unknown[]) {
+    const { component, httpMock, fixture } = setup();
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush(related);
+    httpMock.verify();
+    return { component, fixture };
+  }
+
+  describe('pages computed signal', () => {
+    it('produces one page when products fit within itemsPerPage', () => {
+      const related = [makeRelatedProduct('1'), makeRelatedProduct('2')];
+      const { component } = loadWith(related);
+      component.itemsPerPage.set(4);
+      expect(component.pages().length).toBe(1);
+      expect(component.pages()[0].length).toBe(2);
+    });
+
+    it('chunks products into multiple pages when count exceeds itemsPerPage', () => {
+      const related = Array.from({ length: 6 }, (_, i) => makeRelatedProduct(String(i)));
+      const { component } = loadWith(related);
+      component.itemsPerPage.set(4);
+      expect(component.pages().length).toBe(2);
+      expect(component.pages()[0].length).toBe(4);
+      expect(component.pages()[1].length).toBe(2);
+    });
+
+    it('recomputes when itemsPerPage changes', () => {
+      const related = Array.from({ length: 6 }, (_, i) => makeRelatedProduct(String(i)));
+      const { component } = loadWith(related);
+      component.itemsPerPage.set(3);
+      expect(component.pages().length).toBe(2);
+      component.itemsPerPage.set(2);
+      expect(component.pages().length).toBe(3);
+    });
+
+    it('returns an empty array when there are no related products', () => {
+      const { component } = loadWith([]);
+      expect(component.pages()).toEqual([]);
+    });
+  });
+
+  describe('circular navigation', () => {
+    it('nextSlide wraps from last page to first', () => {
+      const related = Array.from({ length: 6 }, (_, i) => makeRelatedProduct(String(i)));
+      const { component } = loadWith(related);
+      component.itemsPerPage.set(4);
+      component.slideIndex.set(1); // last page (pages.length - 1)
+
+      component.nextSlide();
+
+      expect(component.slideIndex()).toBe(0);
+    });
+
+    it('prevSlide wraps from first page to last', () => {
+      const related = Array.from({ length: 6 }, (_, i) => makeRelatedProduct(String(i)));
+      const { component } = loadWith(related);
+      component.itemsPerPage.set(4);
+      component.slideIndex.set(0);
+
+      component.prevSlide();
+
+      expect(component.slideIndex()).toBe(1);
+    });
+
+    it('nextSlide advances normally in the middle', () => {
+      const related = Array.from({ length: 9 }, (_, i) => makeRelatedProduct(String(i)));
+      const { component } = loadWith(related);
+      component.itemsPerPage.set(3); // 3 pages
+      component.slideIndex.set(0);
+
+      component.nextSlide();
+
+      expect(component.slideIndex()).toBe(1);
+    });
+  });
+});
+
+// ─── Catalog number rendering ─────────────────────────────────────────────────
+
+describe('ProductDetailComponent — catalog number in heading', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('renders NO. <number> inside the h1 when catalogNumber is set', () => {
+    const { httpMock, fixture } = setup();
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ catalogNumber: '087' }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    const h1 = fixture.nativeElement.querySelector('.detail__name');
+    expect(h1.textContent).toContain('NO.');
+    expect(h1.textContent).toContain('087');
+  });
+
+  it('does not render a catalog number span when catalogNumber is null', () => {
+    const { httpMock, fixture } = setup();
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ catalogNumber: null }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    const span = fixture.nativeElement.querySelector('.detail__catalog-no');
+    expect(span).toBeNull();
   });
 });

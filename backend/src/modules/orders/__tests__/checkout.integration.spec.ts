@@ -135,6 +135,7 @@ describe('Checkout Integration Flow', () => {
             order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
             orderEvent: { create: jest.fn() },
             payment: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             $transaction: jest.fn(),
           },
         },

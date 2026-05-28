@@ -4,6 +4,9 @@ import { ConfigService } from '@nestjs/config';
 const StripeSDK = require('stripe') as { new(key: string): import('stripe/cjs/stripe.core').Stripe };
 import type { Stripe } from 'stripe/cjs/stripe.core';
 
+// Stripe's minimum is 30 minutes; default matches the reconciliation cron window.
+const DEFAULT_SESSION_TTL_MINUTES = 30;
+
 export interface CreateCheckoutSessionInput {
   orderId: string;
   orderNumber: string;
@@ -46,11 +49,20 @@ export class StripeClient {
   async createCheckoutSession(
     input: CreateCheckoutSessionInput,
   ): Promise<Stripe.Checkout.Session> {
+    const ttlMinutes = this.configService.get<number>(
+      'STRIPE_CHECKOUT_TTL_MINUTES',
+      DEFAULT_SESSION_TTL_MINUTES,
+    );
+    // Clamp to Stripe's minimum of 30 minutes
+    const clampedTtlMinutes = Math.max(ttlMinutes, DEFAULT_SESSION_TTL_MINUTES);
+    const expiresAt = Math.floor(Date.now() / 1000) + clampedTtlMinutes * 60;
+
     const session = await this.stripe.checkout.sessions.create({
       mode: 'payment',
       // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
       payment_method_types: ['card'],
       customer_email: input.customerEmail,
+      expires_at: expiresAt,
       line_items: input.lineItems.map((item) => ({
         quantity: item.quantity,
         price_data: {

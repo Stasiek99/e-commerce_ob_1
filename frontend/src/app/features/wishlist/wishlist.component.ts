@@ -132,6 +132,7 @@ export class WishlistComponent {
   constructor() {
     effect(() => {
       if (!this.wishlist.loading() && this.wishlist.items().length === 0) {
+        this.toast.info('Nie masz jeszcze żadnych ulubionych produktów.');
         this.router.navigate(['/products']);
       }
     });

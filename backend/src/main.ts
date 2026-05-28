@@ -16,6 +16,7 @@ import { InvoiceService } from './modules/invoice/invoice.service';
 import { ShippingService } from './modules/shipping/shipping.service';
 import { OrdersService } from './modules/orders/orders.service';
 import { PaymentsService } from './modules/payments/payments.service';
+import { ReturnsService } from './modules/returns/returns.service';
 import { TimeoutInterceptor } from './common/interceptors/timeout.interceptor';
 
 async function bootstrap() {
@@ -69,7 +70,8 @@ async function bootstrap() {
   const shippingService = app.get(ShippingService);
   const ordersService = app.get(OrdersService);
   const paymentsService = app.get(PaymentsService);
-  await setupAdmin(app, prisma, invoiceService, shippingService, ordersService, paymentsService);
+  const returnsService = app.get(ReturnsService);
+  await setupAdmin(app, prisma, invoiceService, shippingService, ordersService, paymentsService, returnsService);
 
   app.useLogger(app.get(Logger));
 

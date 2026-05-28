@@ -239,6 +239,7 @@ model Product {
   pyramidHeart     String?
   pyramidBase      String?
   gender           String?
+  catalogNumber    String?
   line             String?
   inspiredBy          String?
   luxuryReferenceId   Int?
@@ -565,6 +566,20 @@ model ReturnRequest {
   @@index([email])
   @@index([orderNumber])
   @@map("return_requests")
+}
+
+// ─── Stripe Event Deduplication ──────────────────────────────────────────────
+// Stores processed Stripe event IDs so duplicate webhook deliveries (Stripe
+// retries for up to 3 days) are silently skipped. The @id gives a unique
+// constraint — a second insert for the same event_id throws P2002 and is
+// caught in handleWebhookEvent. The createdAt index supports periodic cleanup.
+
+model ProcessedStripeEvent {
+  eventId   String   @id @map("event_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("processed_stripe_events")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────

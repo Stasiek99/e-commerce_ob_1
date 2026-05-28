@@ -79,6 +79,10 @@ export class EmailQueueProcessor extends WorkerHost {
         await this.emailService.sendReturnAdminNotification(payload);
         break;
 
+      case 'return_status_update':
+        await this.emailService.sendReturnStatusUpdate(payload);
+        break;
+
       case 'magic_link_login':
         await this.emailService.sendMagicLink(payload);
         break;
