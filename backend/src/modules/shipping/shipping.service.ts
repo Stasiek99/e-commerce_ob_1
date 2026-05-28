@@ -9,10 +9,11 @@ import { GlsClient } from './carriers/gls.client';
 import { DpdClient } from './carriers/dpd.client';
 
 const CARRIER_NAMES: Record<CarrierCode, string> = {
-  [CarrierCode.INPOST]: 'InPost',
-  [CarrierCode.DHL]: 'DHL Express',
-  [CarrierCode.GLS]: 'GLS',
-  [CarrierCode.DPD]: 'DPD',
+  [CarrierCode.INPOST]:      'InPost',
+  [CarrierCode.DHL]:         'DHL Express',
+  [CarrierCode.GLS]:         'GLS',
+  [CarrierCode.DPD]:         'DPD Pickup',
+  [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
 const SHIPPING_RATES = [
@@ -25,9 +26,16 @@ const SHIPPING_RATES = [
   },
   {
     carrier: CarrierCode.DPD,
+    name: 'DPD Pickup',
+    description: 'Odbiór w punkcie DPD w 1-2 dni robocze',
+    priceInCents: 1599,
+    estimatedDays: '1-2 dni robocze',
+  },
+  {
+    carrier: CarrierCode.DPD_COURIER,
     name: 'DPD Kurier',
     description: 'Dostawa do drzwi w 1-2 dni robocze',
-    priceInCents: 1599,
+    priceInCents: 1699,
     estimatedDays: '1-2 dni robocze',
   },
   {
@@ -152,7 +160,8 @@ export class ShippingService {
           rawResponse = result;
           break;
         }
-        case CarrierCode.DPD: {
+        case CarrierCode.DPD:
+        case CarrierCode.DPD_COURIER: {
           const result = await this.dpd.createShipment({
             receiver: {
               name: receiverName,
@@ -247,6 +256,7 @@ export class ShippingService {
       case CarrierCode.GLS:
         return this.gls.getTrackingUrl(trackingNumber);
       case CarrierCode.DPD:
+      case CarrierCode.DPD_COURIER:
         return this.dpd.getTrackingUrl(trackingNumber);
       default:
         throw new BadRequestException(`Unsupported carrier: ${carrier}`);

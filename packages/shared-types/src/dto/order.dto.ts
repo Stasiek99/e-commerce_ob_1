@@ -30,6 +30,7 @@ export interface CreateOrderDto {
   newAddress?: CreateAddressDto;
   carrierCode: CarrierCode;
   inpostLockerCode?: string;
+  dpdPickupPointCode?: string;
   notes?: string;
 }
 
@@ -62,6 +63,7 @@ export interface OrderDto {
   snapshotEmail: string;
   carrierCode: CarrierCode;
   inpostLockerCode?: string;
+  dpdPickupPointCode?: string;
   itemsTotalInCents: number;
   shippingCostInCents: number;
   discountInCents: number;

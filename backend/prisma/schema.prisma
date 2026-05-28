@@ -48,6 +48,7 @@ enum CarrierCode {
   DHL
   GLS
   DPD
+  DPD_COURIER
 }
 
 enum DiscountType {
@@ -356,9 +357,10 @@ model Order {
   coupon     Coupon? @relation(fields: [couponId], references: [id], onDelete: SetNull)
   couponCode String?
 
-  carrierCode      CarrierCode
-  inpostLockerCode String?
-  notes            String?
+  carrierCode         CarrierCode
+  inpostLockerCode    String?
+  dpdPickupPointCode  String?
+  notes               String?
 
   termsVersion    String?
   termsAcceptedAt DateTime?

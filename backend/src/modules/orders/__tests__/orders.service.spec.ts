@@ -156,6 +156,139 @@ describe('OrdersService', () => {
       ).rejects.toThrow('InPost locker code is required');
     });
 
+    it('should throw if DPD Pickup selected without dpdPickupPointCode', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DPD,
+          // no dpdPickupPointCode
+        }),
+      ).rejects.toThrow('DPD pickup point code is required');
+    });
+
+    it('should NOT throw if DPD_COURIER selected without dpdPickupPointCode (home delivery)', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DPD_COURIER,
+        }),
+      ).resolves.toMatchObject({ orderId: 'o-1' });
+    });
+
+    it('should persist dpdPickupPointCode in order data when DPD Pickup is selected', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DPD,
+        dpdPickupPointCode: 'KRK12',
+      });
+
+      expect(capturedOrderData.dpdPickupPointCode).toBe('KRK12');
+      expect(capturedOrderData.carrierCode).toBe(CarrierCode.DPD);
+    });
+
+    it('should use shipping rate 1599 for DPD Pickup', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedShipping: number | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedShipping = args.data.shippingCostInCents;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DPD,
+        dpdPickupPointCode: 'KRK12',
+      });
+
+      expect(capturedShipping).toBe(1599);
+    });
+
+    it('should use shipping rate 1699 for DPD_COURIER', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedShipping: number | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedShipping = args.data.shippingCostInCents;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DPD_COURIER,
+      });
+
+      expect(capturedShipping).toBe(1699);
+    });
+
     it('should throw if neither addressId nor newAddress is provided', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 

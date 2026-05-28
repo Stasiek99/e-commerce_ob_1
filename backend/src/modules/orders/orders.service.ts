@@ -27,17 +27,19 @@ interface CartItem {
 }
 
 const SHIPPING_RATES: Record<CarrierCode, number> = {
-  [CarrierCode.INPOST]: 1499,  // 14,99 zł
-  [CarrierCode.DHL]: 1999,     // 19,99 zł
-  [CarrierCode.GLS]: 1799,     // 17,99 zł
-  [CarrierCode.DPD]: 1599,     // 15,99 zł
+  [CarrierCode.INPOST]:     1499,  // 14,99 zł
+  [CarrierCode.DHL]:        1999,  // 19,99 zł
+  [CarrierCode.GLS]:        1799,  // 17,99 zł
+  [CarrierCode.DPD]:        1599,  // 15,99 zł
+  [CarrierCode.DPD_COURIER]: 1699, // 16,99 zł
 };
 
 const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
-  [CarrierCode.INPOST]: 'InPost',
-  [CarrierCode.DHL]: 'DHL Express',
-  [CarrierCode.GLS]: 'GLS',
-  [CarrierCode.DPD]: 'DPD',
+  [CarrierCode.INPOST]:      'InPost',
+  [CarrierCode.DHL]:         'DHL Express',
+  [CarrierCode.GLS]:         'GLS',
+  [CarrierCode.DPD]:         'DPD Pickup',
+  [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
 @Injectable()
@@ -72,6 +74,7 @@ export class OrdersService {
       };
       carrierCode: CarrierCode;
       inpostLockerCode?: string;
+      dpdPickupPointCode?: string;
       notes?: string;
       termsVersion?: string;
       termsAcceptedAt?: string;
@@ -89,6 +92,9 @@ export class OrdersService {
 
     if (dto.carrierCode === CarrierCode.INPOST && !dto.inpostLockerCode) {
       throw new BadRequestException('InPost locker code is required');
+    }
+    if (dto.carrierCode === CarrierCode.DPD && !dto.dpdPickupPointCode) {
+      throw new BadRequestException('DPD pickup point code is required');
     }
 
     let address: {
@@ -189,6 +195,7 @@ export class OrdersService {
           snapshotNip,
           carrierCode: dto.carrierCode,
           inpostLockerCode: dto.inpostLockerCode,
+          dpdPickupPointCode: dto.dpdPickupPointCode,
           itemsTotalInCents,
           shippingCostInCents,
           discountInCents,

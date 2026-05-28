@@ -2,6 +2,7 @@ import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angula
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
@@ -21,13 +22,26 @@ import { AnalyticsService } from '../../../core/services/analytics.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
 
+declare const easyPack: {
+  init: (config: Record<string, unknown>) => void;
+  modalMap: (
+    callback: (
+      point: { name: string; address_details: { street: string; building_number: string; city: string; post_code: string } },
+      modal: { closeModal: () => void }
+    ) => void,
+    options?: Record<string, unknown>
+  ) => void;
+};
+
 const TERMS_VERSION = '1.0';
-const enum CarrierCode { INPOST = 'INPOST', DHL = 'DHL', GLS = 'GLS' }
+const enum CarrierCode { INPOST = 'INPOST', DPD = 'DPD', DPD_COURIER = 'DPD_COURIER', DHL = 'DHL', GLS = 'GLS' }
 
 const CARRIERS = [
-  { code: CarrierCode.INPOST, name: 'InPost Paczkomat', price: 1499, desc: 'Dostawa do paczkomatu 1-2 dni' },
-  { code: CarrierCode.DHL, name: 'DHL Kurier', price: 1999, desc: 'Dostawa pod drzwi 1-2 dni' },
-  { code: CarrierCode.GLS, name: 'GLS Kurier', price: 1799, desc: 'Dostawa pod drzwi 2-3 dni' },
+  { code: CarrierCode.INPOST,      name: 'InPost Paczkomat', price: 1499, desc: 'Dostawa do paczkomatu 1-2 dni' },
+  { code: CarrierCode.DPD,         name: 'DPD Pickup',       price: 1599, desc: 'Odbiór w punkcie DPD 1-2 dni' },
+  { code: CarrierCode.DPD_COURIER, name: 'DPD Kurier',       price: 1699, desc: 'Dostawa pod drzwi 1-2 dni' },
+  { code: CarrierCode.DHL,         name: 'DHL Kurier',        price: 1999, desc: 'Dostawa pod drzwi 1-2 dni' },
+  { code: CarrierCode.GLS,         name: 'GLS Kurier',        price: 1799, desc: 'Dostawa pod drzwi 2-3 dni' },
 ];
 
 interface AppliedCoupon {
@@ -241,7 +255,7 @@ interface AppliedCoupon {
                       [id]="'carrier-' + c.code"
                       [value]="c.code"
                       [checked]="selectedCarrier()?.code === c.code"
-                      (change)="selectedCarrier.set(c)"
+                      (change)="selectCarrier(c)"
                       class="sr-only"
                     />
                     <div class="carrier-option__name">{{ c.name }}</div>
@@ -252,14 +266,46 @@ interface AppliedCoupon {
               </fieldset>
               @if (selectedCarrier()?.code === 'INPOST') {
                 <div class="inpost-section">
-                  <tui-textfield>
-                    <label tuiLabel>Kod paczkomatu</label>
-                    <input tuiTextfield type="text"
-                      [value]="lockerCode() ?? ''"
-                      (input)="lockerCode.set($any($event.target).value)"
-                      placeholder="np. POL001" />
-                  </tui-textfield>
-                  <p class="hint">Pełna mapa paczkomatów będzie dostępna wkrótce.</p>
+                  @if (selectedLocker()) {
+                    <div class="locker-selected">
+                      <div class="locker-selected__info">
+                        <span class="locker-selected__code">{{ selectedLocker()!.code }}</span>
+                        <span class="locker-selected__address">{{ selectedLocker()!.address }}</span>
+                      </div>
+                      <button type="button" tuiButton appearance="secondary" size="s" (click)="openLockerPicker()">
+                        Zmień
+                      </button>
+                    </div>
+                  } @else {
+                    <button type="button" tuiButton appearance="secondary" (click)="openLockerPicker()">
+                      Wybierz paczkomat
+                    </button>
+                    @if (lockerPickerTouched()) {
+                      <p class="field-error">Wybierz paczkomat, aby kontynuować.</p>
+                    }
+                  }
+                </div>
+              }
+              @if (selectedCarrier()?.code === 'DPD') {
+                <div class="inpost-section">
+                  @if (selectedDpdPoint()) {
+                    <div class="locker-selected">
+                      <div class="locker-selected__info">
+                        <span class="locker-selected__code">{{ selectedDpdPoint()!.code }}</span>
+                        <span class="locker-selected__address">{{ selectedDpdPoint()!.address }}</span>
+                      </div>
+                      <button type="button" tuiButton appearance="secondary" size="s" (click)="openDpdPicker()">
+                        Zmień
+                      </button>
+                    </div>
+                  } @else {
+                    <button type="button" tuiButton appearance="secondary" (click)="openDpdPicker()">
+                      Wybierz punkt DPD
+                    </button>
+                    @if (dpdPickerTouched()) {
+                      <p class="field-error">Wybierz punkt odbioru DPD, aby kontynuować.</p>
+                    }
+                  }
                 </div>
               }
             </div>
@@ -284,6 +330,7 @@ interface AppliedCoupon {
                 <h3>Dostawa</h3>
                 <p>{{ selectedCarrier()?.name }} — {{ selectedCarrier()?.price | price }}</p>
                 @if (lockerCode()) { <p>Paczkomat: {{ lockerCode() }}</p> }
+                @if (selectedDpdPoint()) { <p>Punkt DPD: {{ selectedDpdPoint()!.code }}</p> }
                 @if (deliveryEstimate()) { <p class="summary-delivery-est">Szacowany czas dostawy: {{ deliveryEstimate() }}</p> }
               </div>
 
@@ -383,6 +430,21 @@ interface AppliedCoupon {
         </section>
       </tui-elastic-container>
 
+      <!-- ── DPD Pickup modal ──────────────────────────────────── -->
+      @if (dpdModalOpen()) {
+        <div class="dpd-modal-backdrop" (click)="closeDpdModal()">
+          <div class="dpd-modal-content" (click)="$event.stopPropagation()">
+            <button type="button" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">✕</button>
+            <iframe
+              class="dpd-modal-iframe"
+              [src]="dpdWidgetUrl"
+              title="Wybierz punkt DPD"
+              referrerpolicy="no-referrer"
+            ></iframe>
+          </div>
+        </div>
+      }
+
       <!-- ── Navigation ─────────────────────────────────────────── -->
       <footer class="checkout__nav">
         <button
@@ -403,6 +465,7 @@ interface AppliedCoupon {
         </button>
       </footer>
     </div>
+
   `,
   styles: [`
     .checkout { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
@@ -454,7 +517,11 @@ interface AppliedCoupon {
     .carrier-option__desc { font-size: 12px; color: var(--color-secondary); }
     .carrier-option__price { font-weight: 600; }
     .inpost-section { padding: 16px 0 0; display: flex; flex-direction: column; gap: 8px; }
-    .hint { font-size: 12px; color: var(--color-secondary); margin: 0; }
+    .locker-selected { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #f8f8f8; border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 12px 16px; }
+    .locker-selected__info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .locker-selected__code { font-weight: 700; font-size: 15px; }
+    .locker-selected__address { font-size: 12px; color: var(--color-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 
     /* Summary */
     .summary-section { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--color-border); }
@@ -495,6 +562,13 @@ interface AppliedCoupon {
     .total-row--discount { color: #2a9d4e; }
     .discount-value { font-weight: 600; color: #2a9d4e; }
 
+    /* DPD modal */
+    .dpd-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+    .dpd-modal-content { position: relative; width: min(560px, 96vw); height: min(640px, 90vh); background: #fff; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+    .dpd-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; background: #fff; border: 1px solid var(--color-border); border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+    .dpd-modal-close:hover { background: #f0f0f5; }
+    .dpd-modal-iframe { flex: 1; width: 100%; border: none; }
+
     /* Footer nav */
     .checkout__nav { display: flex; justify-content: space-between; margin-top: 24px; }
 
@@ -524,8 +598,21 @@ export class CheckoutPageComponent implements OnInit {
 
   private readonly destroyRef = inject(DestroyRef);
 
+  private readonly sanitizer = inject(DomSanitizer);
+
   readonly selectedCarrier = signal<(typeof CARRIERS)[0] | null>(null);
   readonly lockerCode = signal<string | null>(null);
+  readonly selectedLocker = signal<{ code: string; address: string } | null>(null);
+  readonly lockerPickerTouched = signal(false);
+  private easyPackInitialized = false;
+
+  readonly selectedDpdPoint = signal<{ code: string; address: string } | null>(null);
+  readonly dpdPickerTouched = signal(false);
+  readonly dpdModalOpen = signal(false);
+  readonly dpdWidgetUrl: SafeResourceUrl = this.sanitizer.bypassSecurityTrustResourceUrl(
+    'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
+  );
+  private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
   readonly saveAddress = signal(false);
@@ -554,9 +641,11 @@ export class CheckoutPageComponent implements OnInit {
     const carrier = this.selectedCarrier();
     if (!carrier) return null;
     const map: Record<string, string> = {
-      INPOST: 'następny dzień roboczy',
-      DHL: '1–2 dni robocze',
-      GLS: '2–3 dni robocze',
+      INPOST:      'następny dzień roboczy',
+      DPD:         '1–2 dni robocze',
+      DPD_COURIER: '1–2 dni robocze',
+      DHL:         '1–2 dni robocze',
+      GLS:         '2–3 dni robocze',
     };
     return map[carrier.code] ?? null;
   });
@@ -718,7 +807,14 @@ export class CheckoutPageComponent implements OnInit {
     }
     if (this.index === 1) {
       if (!this.selectedCarrier()) return;
-      if (this.selectedCarrier()!.code === CarrierCode.INPOST && !this.lockerCode()) return;
+      if (this.selectedCarrier()!.code === CarrierCode.INPOST && !this.lockerCode()) {
+        this.lockerPickerTouched.set(true);
+        return;
+      }
+      if (this.selectedCarrier()!.code === CarrierCode.DPD && !this.selectedDpdPoint()) {
+        this.dpdPickerTouched.set(true);
+        return;
+      }
     }
     if (this.index === 2) {
       if (!this.termsAccepted()) return;
@@ -785,6 +881,87 @@ export class CheckoutPageComponent implements OnInit {
     this.addressForm.reset({ email: this.auth.currentUser()?.email ?? '' });
   }
 
+  selectCarrier(c: (typeof CARRIERS)[0]): void {
+    this.selectedCarrier.set(c);
+    if (c.code !== CarrierCode.INPOST) {
+      this.selectedLocker.set(null);
+      this.lockerCode.set(null);
+      this.lockerPickerTouched.set(false);
+    }
+    if (c.code !== CarrierCode.DPD) {
+      this.selectedDpdPoint.set(null);
+      this.dpdPickerTouched.set(false);
+    }
+  }
+
+  openDpdPicker(): void {
+    this.dpdModalOpen.set(true);
+    this.dpdMessageListener = (e: MessageEvent) => {
+      if (!e.data?.dpdWidget) return;
+      const p = e.data.dpdWidget as { id?: string; company?: string; street?: string; city?: string; zip_code?: string };
+      const code = p.id ?? '';
+      const address = [p.street, p.zip_code, p.city].filter(Boolean).join(', ');
+      this.selectedDpdPoint.set({ code, address });
+      this.dpdPickerTouched.set(false);
+      this.closeDpdModal();
+    };
+    window.addEventListener('message', this.dpdMessageListener);
+  }
+
+  closeDpdModal(): void {
+    this.dpdModalOpen.set(false);
+    if (this.dpdMessageListener) {
+      window.removeEventListener('message', this.dpdMessageListener);
+      this.dpdMessageListener = null;
+    }
+  }
+
+  openLockerPicker(): void {
+    if (typeof easyPack === 'undefined') {
+      this.toast.error('Nie udało się załadować mapy paczkomatów. Odśwież stronę.');
+      return;
+    }
+    if (!this.easyPackInitialized) {
+      easyPack.init({
+        defaultLocale: 'pl',
+        mapType: 'osm',
+        searchType: 'osm',
+        points: { types: ['parcel_locker_only'] },
+        map: { initialTypes: ['parcel_locker_only'] },
+      });
+      this.easyPackInitialized = true;
+    }
+
+    // Watch for the modal backdrop easyPack injects into <body>, then add click-outside.
+    const observer = new MutationObserver(() => {
+      const backdrop = Array.from(document.body.children).find(
+        (el) => el instanceof HTMLElement && el.querySelector('.close-modal'),
+      ) as HTMLElement | undefined;
+      if (!backdrop) return;
+      observer.disconnect();
+      backdrop.addEventListener('click', (e: Event) => {
+        if (!(e.target instanceof Node)) return;
+        const content = backdrop.querySelector('.modal-content') as HTMLElement | null;
+        if (content?.contains(e.target)) return;
+        (backdrop.querySelector('.close-modal') as HTMLElement | null)?.click();
+      });
+    });
+    observer.observe(document.body, { childList: true });
+
+    easyPack.modalMap(
+      (point, modal) => {
+        observer.disconnect();
+        modal.closeModal();
+        const { street, building_number, city, post_code } = point.address_details;
+        const address = `${street} ${building_number}, ${post_code} ${city}`;
+        this.selectedLocker.set({ code: point.name, address });
+        this.lockerCode.set(point.name);
+        this.lockerPickerTouched.set(false);
+      },
+      { width: 500, height: 600 },
+    );
+  }
+
   placeOrder(): void {
     this.placing.set(true);
     const a = this.addressForm.getRawValue();
@@ -805,6 +982,7 @@ export class CheckoutPageComponent implements OnInit {
         newAddress: addrPayload,
         carrierCode: carrier.code,
         inpostLockerCode: this.lockerCode() ?? undefined,
+        dpdPickupPointCode: this.selectedDpdPoint()?.code ?? undefined,
         guestEmail: a.email,
         termsVersion: TERMS_VERSION,
         termsAcceptedAt: new Date().toISOString(),

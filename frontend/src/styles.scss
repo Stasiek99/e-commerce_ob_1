@@ -59,3 +59,40 @@ a {
 [tuiHeader] {
   margin-bottom: 1.5rem !important;
 }
+
+// ── InPost Geowidget v4 overrides ────────────────────────────────────────
+// The widget is injected at <body> level so overrides must live here.
+.modal-map {
+  .modal-content {
+    border: 1px solid #e5e5e5 !important;
+    border-radius: 12px !important;
+    overflow: hidden !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18) !important;
+  }
+
+.bottom-bar {
+    background: #1a1a1a !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+
+    .tab-map,
+    .tab-list,
+    .menu-btn {
+      color: rgba(255, 255, 255, 0.45) !important;
+      background: transparent !important;
+      border-top: 2px solid transparent !important;
+      transition: color 0.15s, border-color 0.15s !important;
+
+      i, svg { color: inherit !important; fill: currentColor !important; }
+      span    { color: inherit !important; }
+    }
+
+    .tab-map.tabs-active,
+    .tab-list.tabs-active {
+      color: #c9a96e !important;
+      border-top-color: #c9a96e !important;
+
+      i, svg { color: #c9a96e !important; fill: #c9a96e !important; }
+      span    { color: #c9a96e !important; }
+    }
+  }
+}

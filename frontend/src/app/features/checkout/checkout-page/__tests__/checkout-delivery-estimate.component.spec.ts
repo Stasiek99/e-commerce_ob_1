@@ -92,6 +92,18 @@ describe('CheckoutPageComponent — deliveryEstimate signal', () => {
     expect(component.deliveryEstimate()).toBeNull();
   });
 
+  it('returns "1–2 dni robocze" for DPD', () => {
+    const { component } = setup();
+    component.selectedCarrier.set(carrier('DPD'));
+    expect(component.deliveryEstimate()).toBe('1–2 dni robocze');
+  });
+
+  it('returns "1–2 dni robocze" for DPD_COURIER', () => {
+    const { component } = setup();
+    component.selectedCarrier.set(carrier('DPD_COURIER'));
+    expect(component.deliveryEstimate()).toBe('1–2 dni robocze');
+  });
+
   it('updates when selectedCarrier changes', () => {
     const { component } = setup();
 
@@ -103,5 +115,114 @@ describe('CheckoutPageComponent — deliveryEstimate signal', () => {
 
     component.selectedCarrier.set(null);
     expect(component.deliveryEstimate()).toBeNull();
+  });
+});
+
+describe('CheckoutPageComponent — DPD picker state', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('openDpdPicker sets dpdModalOpen to true', () => {
+    const { component } = setup();
+    expect(component.dpdModalOpen()).toBe(false);
+    component.openDpdPicker();
+    expect(component.dpdModalOpen()).toBe(true);
+    component.closeDpdModal(); // cleanup listener
+  });
+
+  it('closeDpdModal sets dpdModalOpen to false', () => {
+    const { component } = setup();
+    component.openDpdPicker();
+    component.closeDpdModal();
+    expect(component.dpdModalOpen()).toBe(false);
+  });
+
+  it('selectCarrier non-DPD resets selectedDpdPoint', () => {
+    const { component } = setup();
+    component.selectedDpdPoint.set({ code: 'KRK01', address: 'ul. Testowa 1' });
+    component.selectCarrier(carrier('DHL'));
+    expect(component.selectedDpdPoint()).toBeNull();
+  });
+
+  it('selectCarrier DPD preserves selectedDpdPoint if already set', () => {
+    const { component } = setup();
+    component.selectedDpdPoint.set({ code: 'KRK01', address: 'ul. Testowa 1' });
+    component.selectCarrier(carrier('DPD'));
+    expect(component.selectedDpdPoint()).toEqual({ code: 'KRK01', address: 'ul. Testowa 1' });
+  });
+
+  it('selectCarrier non-DPD resets dpdPickerTouched', () => {
+    const { component } = setup();
+    component.dpdPickerTouched.set(true);
+    component.selectCarrier(carrier('GLS'));
+    expect(component.dpdPickerTouched()).toBe(false);
+  });
+
+  it('postMessage with dpdWidget data sets selectedDpdPoint and closes modal', () => {
+    const { component } = setup();
+    component.openDpdPicker();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        dpdWidget: {
+          id: 'WAW001',
+          company: 'DPD Punkt Testowy',
+          street: 'ul. Testowa 10',
+          zip_code: '00-001',
+          city: 'Warszawa',
+        },
+      },
+    }));
+
+    expect(component.selectedDpdPoint()).toEqual({
+      code: 'WAW001',
+      address: 'ul. Testowa 10, 00-001, Warszawa',
+    });
+    expect(component.dpdModalOpen()).toBe(false);
+    expect(component.dpdPickerTouched()).toBe(false);
+  });
+
+  it('postMessage without dpdWidget key is ignored', () => {
+    const { component } = setup();
+    component.openDpdPicker();
+
+    window.dispatchEvent(new MessageEvent('message', { data: { someOtherKey: 'value' } }));
+
+    expect(component.selectedDpdPoint()).toBeNull();
+    expect(component.dpdModalOpen()).toBe(true);
+    component.closeDpdModal(); // cleanup
+  });
+
+  it('step 1 navigation with DPD and no selectedDpdPoint sets dpdPickerTouched and stays on step 1', () => {
+    const { component } = setup();
+    component.index = 1;
+    component.selectCarrier(carrier('DPD'));
+    component.selectedDpdPoint.set(null);
+
+    component.onNext();
+
+    expect(component.dpdPickerTouched()).toBe(true);
+    expect(component.index).toBe(1);
+  });
+
+  it('step 1 navigation with DPD and selectedDpdPoint advances to step 2', () => {
+    const { component } = setup();
+    component.index = 1;
+    component.selectCarrier(carrier('DPD'));
+    component.selectedDpdPoint.set({ code: 'KRK01', address: 'ul. X' });
+
+    component.onNext();
+
+    expect(component.index).toBe(2);
+    expect(component.dpdPickerTouched()).toBe(false);
+  });
+
+  it('step 1 navigation with DPD_COURIER advances to step 2 without requiring pickup code', () => {
+    const { component } = setup();
+    component.index = 1;
+    component.selectCarrier(carrier('DPD_COURIER'));
+
+    component.onNext();
+
+    expect(component.index).toBe(2);
   });
 });

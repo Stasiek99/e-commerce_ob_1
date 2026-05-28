@@ -109,12 +109,18 @@ describe('ShippingService', () => {
   });
 
   describe('getShippingRates', () => {
-    it('returns all four carriers with prices', () => {
+    it('returns all five carriers with prices', () => {
       const rates = service.getShippingRates();
 
-      expect(rates).toHaveLength(4);
+      expect(rates).toHaveLength(5);
       expect(rates.map((r) => r.carrier)).toEqual(
-        expect.arrayContaining([CarrierCode.INPOST, CarrierCode.DHL, CarrierCode.GLS, CarrierCode.DPD]),
+        expect.arrayContaining([
+          CarrierCode.INPOST,
+          CarrierCode.DHL,
+          CarrierCode.GLS,
+          CarrierCode.DPD,
+          CarrierCode.DPD_COURIER,
+        ]),
       );
       rates.forEach((r) => {
         expect(r.priceInCents).toBeGreaterThan(0);
