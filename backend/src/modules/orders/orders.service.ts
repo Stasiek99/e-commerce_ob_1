@@ -20,6 +20,7 @@ interface CartItem {
   productName: string;
   variantLabel: string;
   priceInCents: number;
+  vatRate: number;
   sku: string;
   stock: number;
   imageUrl?: string | null;
@@ -211,6 +212,7 @@ export class OrdersService {
               snapshotName: `${item.productName} – ${item.variantLabel}`,
               snapshotSku: item.sku,
               snapshotPrice: item.priceInCents,
+              snapshotVatRate: item.vatRate,
               quantity: item.quantity,
             })),
           },
@@ -413,7 +415,7 @@ export class OrdersService {
         totalInCents: true,
         createdAt: true,
         items: {
-          select: { snapshotName: true, snapshotPrice: true, quantity: true },
+          select: { snapshotName: true, snapshotPrice: true, snapshotVatRate: true, quantity: true },
         },
       },
     });

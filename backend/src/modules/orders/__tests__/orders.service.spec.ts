@@ -33,6 +33,7 @@ describe('OrdersService', () => {
       productName: 'Dior Sauvage',
       variantLabel: '100ml',
       priceInCents: 34900,
+      vatRate: 2300,
       sku: 'DS-100',
       stock: 10,
       imageUrl: null,
@@ -44,6 +45,7 @@ describe('OrdersService', () => {
       productName: 'Chanel No 5',
       variantLabel: '50ml',
       priceInCents: 44900,
+      vatRate: 2300,
       sku: 'CN5-50',
       stock: 5,
       imageUrl: null,
@@ -345,6 +347,41 @@ describe('OrdersService', () => {
       expect(capturedOrderData.shippingCostInCents).toBe(1999);
       // totalInCents = 114700 + 1999 = 116699
       expect(capturedOrderData.totalInCents).toBe(116699);
+    });
+
+    it('should snapshot snapshotVatRate from cart item vatRate into each order item', async () => {
+      const cartWithCustomRate = {
+        ...mockCart,
+        items: [{ ...mockCartItems[0], vatRate: 500 }], // 5% VAT product
+      };
+      cartService.getOrCreate.mockResolvedValue(cartWithCustomRate as any);
+
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(capturedOrderData.items.create[0]).toMatchObject({ snapshotVatRate: 500 });
     });
 
     it('should atomically decrement stock for each item during order creation', async () => {
@@ -739,7 +776,7 @@ describe('OrdersService', () => {
       shippingCostInCents: 1999,
       totalInCents: 36899,
       createdAt: new Date('2026-05-01T10:00:00Z'),
-      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, quantity: 1 }],
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
     };
 
     it('throws NotFoundException when order does not exist', async () => {
@@ -815,6 +852,22 @@ describe('OrdersService', () => {
       );
     });
 
+    it('includes snapshotVatRate in the items passed to InvoiceService', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/invoice.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          items: [expect.objectContaining({ snapshotVatRate: 2300 })],
+        }),
+      );
+    });
+
     it('propagates errors thrown by InvoiceService', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockRejectedValue(new Error('Supabase upload failed'));
@@ -839,7 +892,7 @@ describe('OrdersService', () => {
       shippingCostInCents: 1999,
       totalInCents: 36899,
       createdAt: new Date('2026-05-01T10:00:00Z'),
-      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, quantity: 1 }],
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
     };
 
     it('throws NotFoundException when order does not belong to the requesting user', async () => {

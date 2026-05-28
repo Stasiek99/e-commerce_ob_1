@@ -4,9 +4,6 @@
 ---
 ## Compliance & Legal (Polish market-specific)
 
-### 12. Fragrance withdrawal right: no sealed/unsealed tracking *(Domain Expert)*
-Art. 38 pkt 5 of UoK exempts sealed goods from the 14-day withdrawal right once opened (hygiene category). The return form has no "sealed/unsealed" field and the backend doesn't block withdrawal on opened product. You will be legally required to refund returns you could lawfully decline.
-
 ### 13. VAT_RATE is a single hardcoded constant *(Domain Expert)*
 Invoice engine uses `grossCents / 1.23` for every line item. If you ever stock 5% VAT goods or handle international shipping at 0% VAT, the invoice engine produces legally invalid invoices. Needs to be per-line-item before diversifying the catalog.
 
