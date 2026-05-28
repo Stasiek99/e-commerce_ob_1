@@ -1,0 +1,118 @@
+# E-Commerce Weak Point Audit
+*Generated: 2026-05-28 — 5-agent stochastic consensus*
+
+---
+
+## Hard Launch Blockers (fix before accepting real money)
+
+### 1. Redis not provisioned → entire email layer is dead *(5/5 agents)*
+`BullMQ` silently drops every job without Redis. Order confirmations, invoices, payment failure notices, shipping notifications — none of them fire. A customer pays, gets silence, and files a chargeback. The cascade: dispute rate spikes → Stripe puts your account under review → processing suspended. This is a boot-time hard dependency that breaks the business on day one.
+
+### 2. AdminJS is a stub → you cannot run the business *(4/5 agents)*
+There is no way to: fulfill an order, update order status, generate a shipping label, process a return, or issue a refund — without direct Supabase SQL access. Without it you can't fulfill order #1.
+
+### 3. No database backups → GDPR Art. 33 liability *(4/5 agents)*
+Supabase free tier has no PITR. A botched migration or accidental DELETE is permanent. You have customer PII, order history, and payment records. GDPR Art. 33 requires notifying UODO within 72 hours of a data breach. Hard gate before live Stripe. Fix: Supabase Pro PITR, or a `pg_dump` cron to R2/S3 on Railway.
+
+### 4. STRIPE_WEBHOOK_SECRET missing → no order ever becomes PAID *(3/5 agents)*
+Without a valid `whsec_` in production, every inbound webhook returns 400. Orders stay permanently at `PENDING_PAYMENT`. Stock is never confirmed, invoices never generate, customers never get a confirmation.
+
+### 5. Stripe in test mode → boot-time rejection *(3/5 agents)*
+`config.validation.ts` rejects `sk_test_` keys in production. The app won't start. Live keys require re-registering the webhook endpoint to get a new live-mode `whsec_`.
+
+---
+
+## High-Severity Structural Flaws
+
+### 6. Stock concurrency: `updateItem` has no row lock *(Skeptic + Risk Analyst)*
+`cart.service.ts:102` — `updateItem` reads stock via `findUnique` then writes via `updateMany` with no wrapping transaction and no `SELECT FOR UPDATE`. Under concurrent requests (multiple tabs, background mobile sync), two sessions can both read available stock and both proceed — resulting in overselling. The `addItem` and `createFromCart` paths are hardened; `updateItem` and cart merge on login are not.
+
+### 7. Returns are structurally non-functional *(First-Principles + Domain Expert)*
+`ReturnsService` has `create()` only — no `approve()`, `reject()`, or `markRefunded()`. The admin panel has no returns surface. `(this.prisma as any).returnRequest` is a type-escape indicating the Prisma client was never regenerated after adding this model — every `POST /returns` may throw at runtime. The 14-day withdrawal right under Polish consumer law (UoK Art. 27) has zero operational support.
+
+### 8. Stock locked for up to 24 hours on abandoned checkout *(First-Principles)*
+Stock is decremented at `createFromCart`, not at payment confirmation. Stripe's default session expiry is 24 hours. An abandoned checkout ties up that variant's stock for 24 hours (reduced to ~30 minutes by the reconciliation cron — but only if Railway's container is awake). For a fragrance store with 3–5 units per variant, this is a hard availability problem on launch day.
+
+### 9. No Stripe webhook event deduplication *(Domain Expert)*
+`handleWebhookEvent` logs `event.id` but never persists it. Stripe retries webhooks for up to 3 days. A Railway restart during webhook delivery causes a duplicate delivery — `markSessionFailed` and `handleRefundUpdate` have no idempotency guard. Fix: a `processed_stripe_events(event_id PK)` table.
+
+### 10. Railway container sleep kills the reconciliation cron *(Skeptic)*
+On Railway's hobby tier, containers sleep on inactivity. `@Cron` decorators don't fire in sleeping containers. A payment at 2 AM can leave an order in `PENDING_PAYMENT` indefinitely if no request wakes the instance. The reconciliation cron is your fallback for webhook failures — and it doesn't run when you need it most.
+
+---
+
+## Compliance & Legal (Polish market-specific)
+
+### 11. No GDPR Art. 20 data portability endpoint *(Domain Expert)*
+`deleteAccount` is implemented. Data export is not. UODO has issued fines specifically for this omission. Required before accepting real customers.
+
+### 12. Fragrance withdrawal right: no sealed/unsealed tracking *(Domain Expert)*
+Art. 38 pkt 5 of UoK exempts sealed goods from the 14-day withdrawal right once opened (hygiene category). The return form has no "sealed/unsealed" field and the backend doesn't block withdrawal on opened product. You will be legally required to refund returns you could lawfully decline.
+
+### 13. VAT_RATE is a single hardcoded constant *(Domain Expert)*
+Invoice engine uses `grossCents / 1.23` for every line item. If you ever stock 5% VAT goods or handle international shipping at 0% VAT, the invoice engine produces legally invalid invoices. Needs to be per-line-item before diversifying the catalog.
+
+### 14. Seller NIP + address fields required for valid VAT invoice *(Pragmatist)*
+`SELLER_NIP`, `SELLER_STREET`, `SELLER_CITY`, `SELLER_POSTAL_CODE` are required by Polish VAT law (art. 106e). Without them in production env vars, every generated PDF invoice is legally invalid.
+
+### 15. Legal pages must have real content *(Pragmatist)*
+`/privacy`, `/terms`, `/withdrawal` routes exist. Placeholder text is illegal in production under RODO/UoK. Non-negotiable before first real transaction.
+
+---
+
+## Operational & Reliability Gaps
+
+### 16. No error monitoring *(3/5 agents)*
+No Sentry DSN. Every 500, every failed webhook, every queue stall is invisible until a customer reports it. Mean time to detect a critical failure = days. 30 minutes to wire Sentry is the highest ROI action on this list.
+
+### 17. JWT refresh token — no rotation on reuse, no network-drop recovery *(Skeptic + Risk Analyst)*
+7-day httpOnly cookie with no rotation. A stolen cookie is valid for the full 7 days. If the network drops after the old token is revoked but before the new one reaches the client, the user is silently logged out mid-checkout — cart state diverges.
+
+### 18. `order_number_seq_{year}` DDL inside a transaction *(Domain Expert)*
+`CREATE SEQUENCE IF NOT EXISTS` inside a Prisma interactive transaction acquires a DDL lock. Under concurrent order creation, two transactions can deadlock on sequence creation. Move to a migration.
+
+### 19. No merchant notification for new paid orders *(First-Principles)*
+The admin alert email fires only if `ADMIN_ALERT_EMAIL` is configured and is fire-and-forget. No push notification, no dashboard badge for new orders. At any volume above a handful per day, orders will be missed and fulfillment SLAs broken.
+
+### 20. Return-to-stock path inconsistent *(First-Principles)*
+Stock restoration only happens via `paymentsService.refundPayment()` (Stripe refund path). Accepting a physical return and updating the order status in the admin panel does NOT restore stock. Inventory will silently drift with every manual return.
+
+### 21. Shipping rates are hardcoded constants *(Domain Expert)*
+`SHIPPING_RATES` in `orders.service.ts` are compile-time constants. Every carrier rate change, promotional free-shipping threshold, or weight-based surcharge requires a production code deploy.
+
+### 22. SSR breaks the GDPR consent layer *(Domain Expert)*
+`ConsentService` reads `localStorage` synchronously. On SSR (`isPlatformBrowser === false`), it returns null — every SSR-delivered page renders as "consent undecided," causing the cookie banner to flash for users who already consented and suppressing GA4 unnecessarily.
+
+---
+
+## Prioritized Fix Order (shortest path to safe first order)
+
+| # | Action | Blocks |
+|---|---|---|
+| 1 | Provision Redis on Railway, set `REDIS_URL` | All transactional email |
+| 2 | Set `SELLER_NIP` + address env vars | Legal VAT invoices |
+| 3 | Verify Resend domain (SPF/DKIM/DMARC), set `EMAIL_FROM` | Email deliverability |
+| 4 | Flip Stripe to live keys + register live webhook, get new `whsec_` | Taking real payments |
+| 5 | Set `FRONTEND_URL`, `GOOGLE_CALLBACK_URL`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL` | CORS, OAuth, redirects |
+| 6 | Wire Sentry DSN | Visibility into production failures |
+| 7 | Enable daily `pg_dump` cron to R2/S3 | GDPR Art. 33, data integrity |
+| 8 | Implement AdminJS minimum: order list, status update, refund button | Order fulfillment |
+| 9 | Fix `updateItem` stock lock + cart-merge re-validation | Overselling |
+| 10 | Add `processed_stripe_events` deduplication table | Duplicate webhook processing |
+| 11 | Regenerate Prisma client — fix `(prisma as any).returnRequest` | Returns endpoint runtime crash |
+| 12 | Move `order_number_seq` DDL creation to a migration | Deadlock under concurrent orders |
+| 13 | Add GDPR Art. 20 data export endpoint + sealed/unsealed return field | Legal compliance |
+
+**Items 1–8 are launch blockers. Items 9–13 are pre-first-real-order hardening.**
+
+---
+
+## Agent Agreement Summary
+
+| Finding | Agents |
+|---|---|
+| Redis/BullMQ hard dependency, no fallback | 5/5 |
+| AdminJS absence = operational impossibility | 4/5 |
+| No DB backups = GDPR/legal risk | 4/5 |
+| Stock concurrency unsolved | 3/5 |
+| Returns system non-functional | 2/5 (verified in code) |

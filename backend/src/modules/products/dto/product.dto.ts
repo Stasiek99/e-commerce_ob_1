@@ -83,6 +83,11 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
+  catalogNumber?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(50)
   line?: string;
 }
@@ -153,6 +158,11 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(20)
   gender?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  catalogNumber?: string;
 
   @IsOptional()
   @IsString()

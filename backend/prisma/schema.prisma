@@ -239,6 +239,7 @@ model Product {
   pyramidHeart     String?
   pyramidBase      String?
   gender           String?
+  catalogNumber    String?
   line             String?
   inspiredBy          String?
   luxuryReferenceId   Int?

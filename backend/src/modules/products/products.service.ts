@@ -24,6 +24,7 @@ const PRODUCT_SELECT = {
   pyramidHeart: true,
   pyramidBase: true,
   gender: true,
+  catalogNumber: true,
   line: true,
   sortOrder: true,
   createdAt: true,

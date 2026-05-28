@@ -129,6 +129,22 @@
   overflow: hidden;
 }
 
+.product-card__catalog-no {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--color-secondary);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.product-card__subtitle {
+  font-size: 0.72rem;
+  color: var(--color-accent);
+  margin: 0;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
 .product-card__brand {
   font-size: 0.75rem;
   color: var(--color-secondary);

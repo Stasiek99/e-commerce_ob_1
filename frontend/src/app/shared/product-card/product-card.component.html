@@ -31,7 +31,13 @@
     </div>
 
     <div class="product-card__body">
-      <h3 class="product-card__name">{{ product.name }}</h3>
+      <h3 class="product-card__name">
+        {{ product.name }}@if (product.catalogNumber) {<span class="product-card__catalog-no"> NO.&nbsp;{{ product.catalogNumber }}</span>}
+      </h3>
+
+      @if (product.gender) {
+        <p class="product-card__subtitle">{{ product.gender }}</p>
+      }
 
       @if (product.brand) {
         <p class="product-card__brand">{{ product.brand }}</p>
@@ -54,7 +60,7 @@
       [disabled]="adding() || outOfStock"
       (click)="onAddToCart($event)"
       [attr.aria-label]="'Dodaj ' + product.name + ' do koszyka'">
-      <tui-icon src="@tui.shopping-cart" />
+      <tui-icon icon="@tui.shopping-cart" />
       {{ outOfStock ? 'Brak w magazynie' : (adding() ? 'Dodawanie…' : 'Do koszyka') }}
     </button>
   </div>
