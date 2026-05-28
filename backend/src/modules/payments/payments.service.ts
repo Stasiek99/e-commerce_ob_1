@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
+import * as Sentry from '@sentry/nestjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
@@ -225,6 +226,11 @@ export class PaymentsService {
       )
       .catch((err: Error) => {
         this.logger.error(`Invoice generation failed for order ${payment.order.orderNumber}: ${err.message}`);
+        Sentry.withScope((scope) => {
+          scope.setTag('payment.event', 'invoice_generation_failed');
+          scope.setContext('order', { orderNumber: payment.order.orderNumber, paymentId: payment.id });
+          Sentry.captureException(err);
+        });
         // Still deliver payment confirmation even if invoice failed
         this.emailService
           .sendPaymentConfirmed({
@@ -315,6 +321,12 @@ export class PaymentsService {
       this.logger.error(
         `Stripe refund ${refund.id} FAILED for order ${payment.order.orderNumber} — manual review required`,
       );
+      Sentry.withScope((scope) => {
+        scope.setLevel('error');
+        scope.setTag('payment.event', 'refund_failed');
+        scope.setContext('refund', { refundId: refund.id, orderNumber: payment.order.orderNumber, paymentId: payment.id });
+        Sentry.captureMessage(`Stripe refund failed: ${refund.id} for order ${payment.order.orderNumber}`, 'error');
+      });
       return;
     }
 
@@ -378,6 +390,20 @@ export class PaymentsService {
             `but order is still ${payment.order.status} — sync path failed. ` +
             `Applying best-effort recovery; cancelledQuantity requires manual correction.`,
         );
+        Sentry.withScope((scope) => {
+          scope.setLevel('fatal');
+          scope.setTag('payment.event', 'partial_refund_sync_failed');
+          scope.setContext('refund', {
+            refundId: refund.id,
+            orderNumber: payment.order.orderNumber,
+            orderStatus: payment.order.status,
+            paymentId: payment.id,
+          });
+          Sentry.captureMessage(
+            `[CRITICAL] Partial refund sync failure: order ${payment.order.orderNumber} requires manual correction`,
+            'fatal',
+          );
+        });
         await this.prisma.$transaction([
           this.prisma.order.update({
             where: { id: payment.orderId },
@@ -461,6 +487,11 @@ export class PaymentsService {
         this.logger.error(
           `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
         );
+        Sentry.withScope((scope) => {
+          scope.setTag('payment.event', 'reconciliation_failed');
+          scope.setContext('payment', { paymentId: payment.id });
+          Sentry.captureException(err);
+        });
       }
     }
   }

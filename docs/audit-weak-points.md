@@ -2,17 +2,13 @@
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
 ---
-## Compliance & Legal (Polish market-specific)
-
-### 15. Legal pages must have real content *(Pragmatist)*
-`/privacy`, `/terms`, `/withdrawal` routes exist. Placeholder text is illegal in production under RODO/UoK. Non-negotiable before first real transaction.
-
----
-
 ## Operational & Reliability Gaps
 
-### 16. No error monitoring *(3/5 agents)*
-No Sentry DSN. Every 500, every failed webhook, every queue stall is invisible until a customer reports it. Mean time to detect a critical failure = days. 30 minutes to wire Sentry is the highest ROI action on this list.
+### 16. ~~No error monitoring~~ ✅ FIXED *(2026-05-28)*
+`@sentry/nestjs` + `@sentry/angular` wired. `SentryGlobalFilter` catches all unhandled exceptions. Manual `captureException`/`captureMessage` added to swallowed payment paths (invoice generation failure, refund failure, partial refund sync failure, reconciliation loop errors). Hidden source maps enabled in production Angular build; `@sentry/cli` uploads them to Sentry post-build when `SENTRY_AUTH_TOKEN` is set. `SENTRY_DSN` now required in production via config validation.
+
+**Required Vercel env vars:** `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`
+**Required Railway env var:** `SENTRY_DSN` (already in checklist)
 
 ### 17. JWT refresh token — no rotation on reuse, no network-drop recovery *(Skeptic + Risk Analyst)*
 7-day httpOnly cookie with no rotation. A stolen cookie is valid for the full 7 days. If the network drops after the old token is revoked but before the new one reaches the client, the user is silently logged out mid-checkout — cart state diverges.

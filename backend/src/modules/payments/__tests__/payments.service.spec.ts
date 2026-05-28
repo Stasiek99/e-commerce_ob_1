@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
+import * as Sentry from '@sentry/nestjs';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';
@@ -9,11 +10,20 @@ import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 
+jest.mock('@sentry/nestjs', () => ({
+  captureException: jest.fn(),
+  captureMessage: jest.fn(),
+  withScope: jest.fn().mockImplementation((callback: (scope: any) => void) => {
+    callback({ setLevel: jest.fn(), setTag: jest.fn(), setContext: jest.fn() });
+  }),
+}));
+
 describe('PaymentsService', () => {
   let service: PaymentsService;
   let prisma: any;
   let stripeClient: jest.Mocked<StripeClient>;
   let emailService: jest.Mocked<EmailQueueService>;
+  let invoiceService: jest.Mocked<InvoiceService>;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
     id: 'cs_test_abc123',
@@ -132,6 +142,7 @@ describe('PaymentsService', () => {
     prisma = module.get(PrismaService);
     stripeClient = module.get(StripeClient);
     emailService = module.get(EmailQueueService);
+    invoiceService = module.get(InvoiceService);
   });
 
   describe('handleWebhookEvent', () => {
@@ -1198,6 +1209,140 @@ describe('PaymentsService', () => {
 
       expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123', 'order-1');
       expect(stockRestored).toContain('pv-1');
+    });
+  });
+
+  // ── Sentry error reporting ───────────────────────────────────────────────
+  // Verifies that the four catch paths that were previously swallowed (logged
+  // only) now also report to Sentry so they are visible in the dashboard.
+
+  describe('Sentry error reporting', () => {
+    const buildRefundForSentry = (overrides: Partial<Stripe.Refund> = {}): Stripe.Refund =>
+      ({
+        id: 're_sentry_test',
+        object: 'refund',
+        amount: 5000,
+        status: 'succeeded',
+        payment_intent: 'pi_test_abc123',
+        ...overrides,
+      }) as unknown as Stripe.Refund;
+
+    const refundPaymentForSentry = {
+      id: 'payment-1',
+      orderId: 'order-1',
+      status: PaymentStatus.COMPLETED,
+      stripePaymentIntentId: 'pi_test_abc123',
+      amountInCents: 14999,
+      order: {
+        orderNumber: 'ORD-2026-000001',
+        status: OrderStatus.PAID,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      },
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('calls Sentry.captureException when invoice generation fails', async () => {
+      const invoiceError = new Error('PDF service timeout');
+      invoiceService.processInvoice.mockRejectedValue(invoiceError);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+      emailService.sendPaymentConfirmed.mockResolvedValue(undefined);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      // Drain the fire-and-forget promise chain (.then().catch())
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(invoiceError);
+    });
+
+    it('falls back to plain payment confirmation when invoice generation fails', async () => {
+      invoiceService.processInvoice.mockRejectedValue(new Error('PDF service timeout'));
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+      emailService.sendPaymentConfirmed.mockResolvedValue(undefined);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(emailService.sendPaymentConfirmed).toHaveBeenCalledWith(
+        expect.objectContaining({ orderNumber: mockPayment.order.orderNumber }),
+      );
+    });
+
+    it('calls Sentry.captureMessage at error level when a Stripe refund fails', async () => {
+      prisma.payment.findUnique.mockResolvedValue(refundPaymentForSentry);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.refund.updated', buildRefundForSentry({ status: 'failed' })),
+      );
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('re_sentry_test'),
+        'error',
+      );
+      expect(Sentry.withScope).toHaveBeenCalled();
+      // A failed refund should not write DB changes — financial records must not be altered
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('calls Sentry.captureMessage at fatal level when partial refund sync path failed', async () => {
+      // Partial refund (amount < amountInCents) but order is still PAID — the
+      // sync path in partialRefund() never completed (e.g. DB crash after Stripe succeeded).
+      prisma.payment.findUnique.mockResolvedValue({
+        ...refundPaymentForSentry,
+        order: { ...refundPaymentForSentry.order, status: OrderStatus.PAID },
+      });
+      prisma.$transaction.mockResolvedValue([]);
+
+      await service.handleWebhookEvent(
+        buildEvent('refund.updated', buildRefundForSentry({ amount: 5000, status: 'succeeded' })),
+      );
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('ORD-2026-000001'),
+        'fatal',
+      );
+    });
+
+    it('calls Sentry.captureException when reconciliation throws for a payment', async () => {
+      const reconcileError = new Error('DB connection lost during reconciliation');
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockRejectedValue(reconcileError);
+
+      await service.reconcilePendingPayments();
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(reconcileError);
+    });
+
+    it('continues reconciling remaining payments after a single failure', async () => {
+      const secondPayment = {
+        ...mockPayment,
+        id: 'payment-2',
+        stripeCheckoutSessionId: 'cs_second',
+      };
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+        secondPayment,
+      ]);
+      stripeClient.retrieveCheckoutSession
+        .mockRejectedValueOnce(new Error('Stripe timeout'))
+        .mockResolvedValueOnce({ id: 'cs_second', payment_status: 'unpaid', status: 'open' } as any);
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+      expect(stripeClient.retrieveCheckoutSession).toHaveBeenCalledTimes(2);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     });
   });
 });

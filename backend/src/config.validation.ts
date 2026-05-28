@@ -117,8 +117,16 @@ export const envValidationSchema = Joi.object({
   // the app never boots with the localhost fallback against a live database.
   FRONTEND_URL: requiredInProd(Joi.string().uri(), 'http://localhost:4200'),
 
-  // ── Sentry (optional — SDK is a no-op when SENTRY_DSN is empty) ──
-  SENTRY_DSN: Joi.string().uri().allow('').optional(),
+  // ── Sentry ──
+  // Required (non-empty URI) in production so errors are never silently invisible.
+  // Dev/test can omit or leave blank — the SDK becomes a no-op when DSN is absent.
+  // Uses an explicit when() rather than requiredInProd() so that .allow('') only
+  // applies to the otherwise branch; production rejects empty strings.
+  SENTRY_DSN: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().uri().required(),
+    otherwise: Joi.string().uri().allow('').optional(),
+  }),
   SENTRY_RELEASE: Joi.string().optional(),
   SENTRY_TRACES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
   SENTRY_PROFILES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
