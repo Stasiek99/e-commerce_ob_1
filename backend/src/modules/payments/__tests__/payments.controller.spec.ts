@@ -3,14 +3,18 @@ import {
   BadRequestException,
   ExecutionContext,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { Role } from '@prisma/client';
 import { PaymentsController } from '../payments.controller';
 import { PaymentsService } from '../payments.service';
 import { StripeClient } from '../stripe.client';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { ROLES_KEY } from '../../auth/decorators/roles.decorator';
+
+const RECONCILE_SECRET = 'test-reconcile-secret-abc123';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
@@ -33,6 +37,12 @@ describe('PaymentsController', () => {
           provide: StripeClient,
           useValue: {
             constructWebhookEvent: jest.fn(),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn().mockReturnValue(RECONCILE_SECRET),
           },
         },
       ],
@@ -235,6 +245,52 @@ describe('PaymentsController', () => {
       expect(stripeClient.constructWebhookEvent).toHaveBeenCalledWith(req.rawBody, 'valid_sig');
       expect(service.handleWebhookEvent).toHaveBeenCalledWith(fakeEvent);
       expect(result).toEqual({ received: true });
+    });
+  });
+
+  // ─── POST /payments/reconcile ─────────────────────────────────────────────
+
+  describe('triggerReconciliation', () => {
+    it('returns { triggered: true } and fires reconciliation with a valid secret', async () => {
+      service.reconcilePendingPayments = jest.fn().mockResolvedValue(undefined);
+
+      const result = await controller.triggerReconciliation(
+        `Bearer ${RECONCILE_SECRET}`,
+      );
+
+      expect(result).toEqual({ triggered: true });
+      // Give the fire-and-forget micro-task a tick to start
+      await Promise.resolve();
+      expect(service.reconcilePendingPayments).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws UnauthorizedException when the authorization header is wrong', async () => {
+      await expect(
+        controller.triggerReconciliation('Bearer wrong-secret'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException when the authorization header is missing', async () => {
+      await expect(
+        controller.triggerReconciliation(''),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException when PAYMENTS_RECONCILE_SECRET is not configured', async () => {
+      // Re-create controller with an empty secret
+      const module = await Test.createTestingModule({
+        controllers: [PaymentsController],
+        providers: [
+          { provide: PaymentsService, useValue: { reconcilePendingPayments: jest.fn() } },
+          { provide: StripeClient, useValue: { constructWebhookEvent: jest.fn() } },
+          { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('') } },
+        ],
+      }).compile();
+      const ctrl = module.get(PaymentsController);
+
+      await expect(
+        ctrl.triggerReconciliation(`Bearer ${RECONCILE_SECRET}`),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

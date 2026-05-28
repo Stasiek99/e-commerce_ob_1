@@ -161,8 +161,26 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `RESEND_API_KEY` | required (no `re_mock` fallback) | Resend Dashboard → API Keys |
 | `EMAIL_FROM` | must be an address on a **verified** domain | see Resend domain verification below |
 | `REDIS_URL` | required — **hard gate**: BullMQ email queue (order confirmation, invoice, payment failure, shipping notification) silently never processes without a real Redis instance; `redis://localhost:6379` is the dev default but does not exist on Railway | Railway Dashboard → New Service → Redis → copy the connection URL |
+| `PAYMENTS_RECONCILE_SECRET` | required (≥16 chars) — without it `POST /payments/reconcile` always returns 401 and the external-cron reconciliation path is silently broken | generate with `openssl rand -hex 32` |
 | `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
 | `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
+
+#### Reconciliation cron (Railway hobby tier — required)
+
+Railway's hobby tier containers sleep on inactivity. The in-process `@Cron` decorator does not fire while the container is sleeping, so `reconcilePendingPayments()` won't run overnight when no traffic arrives — leaving stuck `PENDING_PAYMENT` orders unresolved.
+
+**Fix:** add a Railway Cron Job service (separate service, never sleeps) that pings the backend every 10 minutes:
+
+```
+# Railway Cron Job service — command field:
+curl -s -o /dev/null -w "%{http_code}" \
+  -X POST https://<your-backend-url>/payments/reconcile \
+  -H "Authorization: Bearer $PAYMENTS_RECONCILE_SECRET"
+```
+
+Set `PAYMENTS_RECONCILE_SECRET` to the same value in both the backend service and the cron job service environment variables.
+
+**Alternative (simpler, free):** configure [cron-job.org](https://cron-job.org) or UptimeRobot to `GET https://<backend>/health` every 5 minutes. This keeps the container awake so the built-in `@Cron` fires normally — no secret required, no Railway cron service needed. Sufficient for most hobby-tier deployments.
 
 #### Resend domain verification (SPF + DKIM)
 
