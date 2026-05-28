@@ -2,17 +2,7 @@
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
 ---
-## High-Severity Structural Flaws
-
-### 10. Railway container sleep kills the reconciliation cron *(Skeptic)*
-On Railway's hobby tier, containers sleep on inactivity. `@Cron` decorators don't fire in sleeping containers. A payment at 2 AM can leave an order in `PENDING_PAYMENT` indefinitely if no request wakes the instance. The reconciliation cron is your fallback for webhook failures — and it doesn't run when you need it most.
-
----
-
 ## Compliance & Legal (Polish market-specific)
-
-### 11. No GDPR Art. 20 data portability endpoint *(Domain Expert)*
-`deleteAccount` is implemented. Data export is not. UODO has issued fines specifically for this omission. Required before accepting real customers.
 
 ### 12. Fragrance withdrawal right: no sealed/unsealed tracking *(Domain Expert)*
 Art. 38 pkt 5 of UoK exempts sealed goods from the 14-day withdrawal right once opened (hygiene category). The return form has no "sealed/unsealed" field and the backend doesn't block withdrawal on opened product. You will be legally required to refund returns you could lawfully decline.
