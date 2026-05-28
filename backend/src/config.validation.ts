@@ -138,6 +138,11 @@ export const envValidationSchema = Joi.object({
   // Separate secret for signing the admin session cookie. Falls back to
   // ADMIN_DEFAULT_PASSWORD in dev, but should be set explicitly in prod.
   ADMIN_SESSION_SECRET: requiredInProd(Joi.string().min(16)),
+  // Optional: recipient override for merchant order alert emails (defaults to EMAIL_FROM).
+  ADMIN_ALERT_EMAIL: Joi.string().email().optional(),
+  // Optional: Slack incoming webhook URL for instant new-order push notifications.
+  // When set, a message is POSTed immediately after checkout.session.completed.
+  MERCHANT_SLACK_WEBHOOK_URL: Joi.string().uri().optional(),
   // Secret used by GET /health/debug-sentry to guard the intentional-error endpoint.
   DEBUG_SENTRY_SECRET: Joi.string().optional(),
 }).options({ allowUnknown: true });

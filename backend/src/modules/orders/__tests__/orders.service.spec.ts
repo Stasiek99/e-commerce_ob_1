@@ -1747,10 +1747,12 @@ describe('OrdersService', () => {
     });
   });
 
-  describe('new_order_notification', () => {
+  // Merchant notification was removed from createFromCart — it now fires only
+  // on checkout.session.completed (confirmed payment). Tests in
+  // payments.service.spec.ts cover the notification payload and channels.
+  describe('createFromCart — no premature merchant notification', () => {
     let svc: OrdersService;
     let emailService: any;
-    let configGetMock: jest.Mock;
 
     const buildTx = () => ({
       $executeRawUnsafe: jest.fn(),
@@ -1765,8 +1767,6 @@ describe('OrdersService', () => {
     const DHL_DTO = { newAddress: mockAddress, carrierCode: CarrierCode.DHL };
 
     beforeEach(async () => {
-      configGetMock = jest.fn().mockReturnValue(undefined);
-
       const module: TestingModule = await Test.createTestingModule({
         providers: [
           OrdersService,
@@ -1813,7 +1813,18 @@ describe('OrdersService', () => {
               applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
             },
           },
-          { provide: ConfigService, useValue: { get: configGetMock, getOrThrow: jest.fn() } },
+          {
+            provide: ConfigService,
+            useValue: {
+              // ADMIN_ALERT_EMAIL is set — notification must still NOT fire from createFromCart
+              get: jest.fn().mockImplementation((key: string) => {
+                if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+                if (key === 'FRONTEND_URL') return 'https://mystore.pl';
+                return undefined;
+              }),
+              getOrThrow: jest.fn().mockReturnValue('https://example.com'),
+            },
+          },
           { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
         ],
       }).compile();
@@ -1822,107 +1833,41 @@ describe('OrdersService', () => {
       emailService = module.get(EmailQueueService);
     });
 
-    it('sends notification to ADMIN_ALERT_EMAIL when configured', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return undefined;
-      });
-
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
-
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'admin@store.com',
-          customerEmail: 'customer@example.com',
-          orderNumber: 'ORD-2026-000001',
-          carrierCode: CarrierCode.DHL,
-        }),
-      );
-    });
-
-    it('falls back to EMAIL_FROM when ADMIN_ALERT_EMAIL is absent', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'EMAIL_FROM') return 'noreply@store.com';
-        return undefined;
-      });
-
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
-
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'noreply@store.com' }),
-      );
-    });
-
-    it('skips notification when neither ADMIN_ALERT_EMAIL nor EMAIL_FROM is configured', async () => {
-      // configGetMock already returns undefined for all keys
+    it('never fires sendNewOrderNotification from createFromCart even when ADMIN_ALERT_EMAIL is configured', async () => {
       await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
       await Promise.resolve();
 
       expect(emailService.sendNewOrderNotification).not.toHaveBeenCalled();
     });
 
-    it('does not propagate notification queue failure to the caller', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return undefined;
-      });
-      emailService.sendNewOrderNotification.mockRejectedValue(new Error('Redis down'));
-
-      await expect(
-        svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO),
-      ).resolves.toMatchObject({ orderId: 'o-1', orderNumber: 'ORD-2026-000001' });
-    });
-
-    it('includes correct items and total in the notification payload', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return undefined;
-      });
-
+    it('still sends order confirmation email to the customer from createFromCart', async () => {
       await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
       await Promise.resolve();
 
-      // itemsTotal=114700 + DHL shipping=1999 = 116699
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          totalInCents: 116699,
-          items: [
-            { name: 'Dior Sauvage – 100ml', quantity: 2, price: 34900 },
-            { name: 'Chanel No 5 – 50ml', quantity: 1, price: 44900 },
-          ],
-        }),
+      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'customer@example.com' }),
       );
     });
+  });
 
-    it('includes adminUrl when FRONTEND_URL is set', async () => {
-      configGetMock.mockImplementation((key: string, defaultVal?: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        if (key === 'FRONTEND_URL') return 'https://store.example.com';
-        return defaultVal;
+  describe('getUnreadCount', () => {
+    it('returns count of orders with PAID status', async () => {
+      prisma.order.count.mockResolvedValue(7);
+
+      const result = await service.getUnreadCount();
+
+      expect(result).toEqual({ count: 7 });
+      expect(prisma.order.count).toHaveBeenCalledWith({
+        where: { status: OrderStatus.PAID },
       });
-
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
-
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ adminUrl: 'https://store.example.com/admin/orders/o-1' }),
-      );
     });
 
-    it('omits adminUrl when FRONTEND_URL is not set', async () => {
-      configGetMock.mockImplementation((key: string, defaultVal?: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return defaultVal; // 'FRONTEND_URL' gets its '' default, which is falsy
-      });
+    it('returns { count: 0 } when no PAID orders exist', async () => {
+      prisma.order.count.mockResolvedValue(0);
 
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
+      const result = await service.getUnreadCount();
 
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ adminUrl: undefined }),
-      );
+      expect(result).toEqual({ count: 0 });
     });
   });
 

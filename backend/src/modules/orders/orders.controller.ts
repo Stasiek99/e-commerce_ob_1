@@ -87,6 +87,13 @@ export class OrdersController {
 
   // ── Admin ────────────────────────────────────────────────────────────────
 
+  @Get('admin/unread-count')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  getUnreadCount() {
+    return this.ordersService.getUnreadCount();
+  }
+
   @Get('admin/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)

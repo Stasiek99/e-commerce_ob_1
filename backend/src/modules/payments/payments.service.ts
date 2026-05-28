@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
+import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
@@ -183,8 +184,10 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
-    // Internal admin notification (fire-and-forget)
-    const adminEmail = this.configService.get<string>('ADMIN_ALERT_EMAIL');
+    // Merchant notification — email + optional Slack push (fire-and-forget)
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
     if (adminEmail) {
       const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
       this.emailService
@@ -199,9 +202,34 @@ export class PaymentsService {
             price: i.snapshotPrice,
           })),
           carrierCode: payment.order.carrierCode,
-          adminUrl: frontendUrl ? `${frontendUrl}/admin` : undefined,
+          adminUrl: frontendUrl
+            ? `${frontendUrl}/admin/orders/${payment.orderId}`
+            : undefined,
         })
-        .catch(() => undefined);
+        .catch((err: Error) => {
+          this.logger.error(
+            `Merchant email notification failed for order ${payment.order.orderNumber}: ${err.message}`,
+          );
+          Sentry.captureException(err, {
+            tags: {
+              'notification.channel': 'email',
+              'order.number': payment.order.orderNumber,
+            },
+          });
+        });
+    }
+
+    const slackWebhookUrl = this.configService.get<string>('MERCHANT_SLACK_WEBHOOK_URL');
+    if (slackWebhookUrl) {
+      this.postSlackOrderAlert(slackWebhookUrl, {
+        orderNumber: payment.order.orderNumber,
+        snapshotEmail: payment.order.snapshotEmail,
+        totalInCents: payment.order.totalInCents,
+      }).catch((err: Error) => {
+        this.logger.warn(
+          `Slack merchant notification failed for order ${payment.order.orderNumber}: ${err.message}`,
+        );
+      });
     }
 
     // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
@@ -716,5 +744,15 @@ export class PaymentsService {
     this.logger.log(
       `Payment failed for order ${orderId} — stock restored, order cancelled (${failureReason})`,
     );
+  }
+
+  private async postSlackOrderAlert(
+    webhookUrl: string,
+    order: { orderNumber: string; snapshotEmail: string; totalInCents: number },
+  ): Promise<void> {
+    const total = (order.totalInCents / 100).toFixed(2);
+    await axios.post(webhookUrl, {
+      text: `🛍️ New paid order *#${order.orderNumber}* — ${total} PLN — ${order.snapshotEmail}`,
+    });
   }
 }

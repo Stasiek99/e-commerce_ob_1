@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
+import axios from 'axios';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';
@@ -16,6 +17,11 @@ jest.mock('@sentry/nestjs', () => ({
   withScope: jest.fn().mockImplementation((callback: (scope: any) => void) => {
     callback({ setLevel: jest.fn(), setTag: jest.fn(), setContext: jest.fn() });
   }),
+}));
+
+jest.mock('axios', () => ({
+  default: { post: jest.fn().mockResolvedValue({ data: 'ok' }) },
+  __esModule: true,
 }));
 
 describe('PaymentsService', () => {
@@ -1343,6 +1349,227 @@ describe('PaymentsService', () => {
 
       expect(stripeClient.retrieveCheckoutSession).toHaveBeenCalledTimes(2);
       expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── Merchant notifications (markSessionPaid) ────────────────────────────
+  // Verifies the improved notification flow: email fallback, Sentry on
+  // failure, deep-link adminUrl, and optional Slack webhook.
+
+  describe('merchant notifications (markSessionPaid)', () => {
+    let notifService: PaymentsService;
+    let notifPrisma: any;
+    let notifEmail: jest.Mocked<EmailQueueService>;
+    let notifConfigGet: jest.Mock;
+
+    const mockPaymentWithItems = {
+      id: 'payment-notif-1',
+      orderId: 'order-notif-1',
+      status: PaymentStatus.PENDING,
+      stripeCheckoutSessionId: 'cs_notif',
+      order: {
+        id: 'order-notif-1',
+        orderNumber: 'ORD-2026-000099',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'customer@example.com',
+        snapshotFirstName: 'Anna',
+        totalInCents: 29900,
+        carrierCode: 'INPOST',
+        items: [
+          { snapshotName: 'Dior Sauvage 100ml', quantity: 1, snapshotPrice: 29900 },
+        ],
+      },
+    };
+
+    beforeEach(async () => {
+      notifConfigGet = jest.fn().mockReturnValue(undefined);
+      jest.clearAllMocks();
+      (axios.post as jest.Mock).mockResolvedValue({ data: 'ok' });
+
+      const module = await Test.createTestingModule({
+        providers: [
+          PaymentsService,
+          {
+            provide: PrismaService,
+            useValue: {
+              payment: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
+              order: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
+              orderEvent: { create: jest.fn() },
+              orderItem: { update: jest.fn(), findMany: jest.fn() },
+              productVariant: { update: jest.fn() },
+              processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+              $transaction: jest.fn().mockResolvedValue([{}, {}]),
+            },
+          },
+          {
+            provide: StripeClient,
+            useValue: {
+              createCheckoutSession: jest.fn(),
+              constructWebhookEvent: jest.fn(),
+              retrieveCheckoutSession: jest.fn(),
+              createRefund: jest.fn(),
+              createPartialRefund: jest.fn(),
+            },
+          },
+          {
+            provide: EmailQueueService,
+            useValue: {
+              sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
+              sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+              sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: InvoiceService,
+            useValue: {
+              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', pdf: Buffer.from('') }),
+            },
+          },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: notifConfigGet,
+              getOrThrow: jest.fn().mockReturnValue('http://example.com'),
+            },
+          },
+        ],
+      }).compile();
+
+      notifService = module.get(PaymentsService);
+      notifPrisma = module.get(PrismaService);
+      notifEmail = module.get(EmailQueueService);
+    });
+
+    const triggerPaid = async () => {
+      notifPrisma.payment.findUnique.mockResolvedValue(mockPaymentWithItems);
+      await notifService.handleWebhookEvent(
+        buildEvent('checkout.session.completed', { id: 'cs_notif', payment_intent: 'pi_notif' }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+
+    it('sends email notification to ADMIN_ALERT_EMAIL when configured', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'merchant@store.com';
+        return undefined;
+      });
+
+      await triggerPaid();
+
+      expect(notifEmail.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'merchant@store.com' }),
+      );
+    });
+
+    it('falls back to EMAIL_FROM when ADMIN_ALERT_EMAIL is absent', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'EMAIL_FROM') return 'noreply@store.com';
+        return undefined;
+      });
+
+      await triggerPaid();
+
+      expect(notifEmail.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'noreply@store.com' }),
+      );
+    });
+
+    it('sends no email notification when both ADMIN_ALERT_EMAIL and EMAIL_FROM are absent', async () => {
+      // notifConfigGet returns undefined for all keys by default
+      await triggerPaid();
+
+      expect(notifEmail.sendNewOrderNotification).not.toHaveBeenCalled();
+    });
+
+    it('deep-links adminUrl to /admin/orders/:orderId rather than just /admin', async () => {
+      notifConfigGet.mockImplementation((key: string, defaultVal?: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        if (key === 'FRONTEND_URL') return 'https://mystore.pl';
+        return defaultVal;
+      });
+
+      await triggerPaid();
+
+      expect(notifEmail.sendNewOrderNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          adminUrl: 'https://mystore.pl/admin/orders/order-notif-1',
+        }),
+      );
+    });
+
+    it('reports email enqueue failure to Sentry instead of swallowing it silently', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      const queueError = new Error('Redis connection refused');
+      (notifEmail.sendNewOrderNotification as jest.Mock).mockRejectedValue(queueError);
+
+      await triggerPaid();
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(
+        queueError,
+        expect.objectContaining({
+          tags: expect.objectContaining({ 'notification.channel': 'email' }),
+        }),
+      );
+    });
+
+    it('email enqueue failure does not propagate to the webhook handler', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      (notifEmail.sendNewOrderNotification as jest.Mock).mockRejectedValue(new Error('Redis down'));
+
+      notifPrisma.payment.findUnique.mockResolvedValue(mockPaymentWithItems);
+      await expect(
+        notifService.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { id: 'cs_notif', payment_intent: 'pi_notif' }),
+        ),
+      ).resolves.not.toThrow();
+    });
+
+    it('POSTs to Slack webhook with order number and formatted total when MERCHANT_SLACK_WEBHOOK_URL is set', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'MERCHANT_SLACK_WEBHOOK_URL') return 'https://hooks.slack.com/services/T00/B00/xxx';
+        return undefined;
+      });
+
+      await triggerPaid();
+
+      expect(axios.post).toHaveBeenCalledWith(
+        'https://hooks.slack.com/services/T00/B00/xxx',
+        expect.objectContaining({
+          text: expect.stringContaining('ORD-2026-000099'),
+        }),
+      );
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ text: expect.stringContaining('299.00') }),
+      );
+    });
+
+    it('does not POST to Slack when MERCHANT_SLACK_WEBHOOK_URL is absent', async () => {
+      // notifConfigGet returns undefined for all keys
+      await triggerPaid();
+
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('Slack POST failure does not propagate to the webhook handler', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'MERCHANT_SLACK_WEBHOOK_URL') return 'https://hooks.slack.com/services/T00/B00/xxx';
+        return undefined;
+      });
+      (axios.post as jest.Mock).mockRejectedValue(new Error('Slack API unavailable'));
+
+      notifPrisma.payment.findUnique.mockResolvedValue(mockPaymentWithItems);
+      await expect(
+        notifService.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { id: 'cs_notif', payment_intent: 'pi_notif' }),
+        ),
+      ).resolves.not.toThrow();
     });
   });
 });
