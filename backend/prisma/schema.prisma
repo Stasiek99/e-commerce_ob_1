@@ -116,6 +116,7 @@ model User {
   carts                   Cart[]
   wishlistItems           WishlistItem[]
   reviews                 Review[]
+  reviewHelpfulVotes      ReviewHelpfulVote[]
   customerNotes           CustomerNote[]
 
   @@map("users")
@@ -542,11 +543,23 @@ model Review {
   helpfulCount Int          @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+  helpfulVotes ReviewHelpfulVote[]
 
   @@unique([userId, productId])
   @@index([productId, status])
   @@index([userId])
   @@map("reviews")
+}
+
+model ReviewHelpfulVote {
+  reviewId  String
+  userId    String
+  review    Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([reviewId, userId])
+  @@map("review_helpful_votes")
 }
 
 // ─── Returns ─────────────────────────────────────────────────────────────────

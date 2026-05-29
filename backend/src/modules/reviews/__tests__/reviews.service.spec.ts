@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { OrderStatus } from '@prisma/client';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { OrderStatus, Prisma } from '@prisma/client';
 import { ReviewsService } from '../reviews.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -41,6 +41,10 @@ describe('ReviewsService', () => {
               update: jest.fn(),
               delete: jest.fn(),
             },
+            reviewHelpfulVote: {
+              create: jest.fn(),
+            },
+            $transaction: jest.fn().mockResolvedValue([{}, {}]),
             $executeRaw: jest.fn(),
           },
         },
@@ -357,32 +361,49 @@ describe('ReviewsService', () => {
     it('throws NotFoundException when review does not exist', async () => {
       prisma.review.findUnique.mockResolvedValue(null);
 
-      await expect(service.markHelpful('review-1')).rejects.toThrow(NotFoundException);
+      await expect(service.markHelpful('review-1', 'user-1')).rejects.toThrow(NotFoundException);
     });
 
     it('throws NotFoundException when review is not APPROVED', async () => {
       prisma.review.findUnique.mockResolvedValue(makeReview({ status: 'PENDING' }));
 
-      await expect(service.markHelpful('review-1')).rejects.toThrow(NotFoundException);
+      await expect(service.markHelpful('review-1', 'user-1')).rejects.toThrow(NotFoundException);
     });
 
     it('also throws NotFoundException for REJECTED reviews', async () => {
       prisma.review.findUnique.mockResolvedValue(makeReview({ status: 'REJECTED' }));
 
-      await expect(service.markHelpful('review-1')).rejects.toThrow(NotFoundException);
+      await expect(service.markHelpful('review-1', 'user-1')).rejects.toThrow(NotFoundException);
     });
 
-    it('increments helpfulCount on an APPROVED review', async () => {
+    it('executes vote creation and helpfulCount increment atomically via $transaction', async () => {
+      prisma.review.findUnique
+        .mockResolvedValueOnce(makeReview({ status: 'APPROVED' })) // guard lookup
+        .mockResolvedValueOnce({ id: 'review-1', helpfulCount: 1 }); // return value lookup
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.markHelpful('review-1', 'user-1');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    // Fix #29 — duplicate vote guard (one vote per user per review)
+    it('throws ConflictException when the user has already voted (P2002 unique constraint)', async () => {
       prisma.review.findUnique.mockResolvedValue(makeReview({ status: 'APPROVED' }));
-      prisma.review.update.mockResolvedValue({ id: 'review-1', helpfulCount: 1 });
+      const dupError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`review_id`,`user_id`)',
+        { code: 'P2002', clientVersion: '6.0.0' },
+      );
+      prisma.$transaction.mockRejectedValue(dupError);
 
-      await service.markHelpful('review-1');
+      await expect(service.markHelpful('review-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
 
-      expect(prisma.review.update).toHaveBeenCalledWith({
-        where: { id: 'review-1' },
-        data: { helpfulCount: { increment: 1 } },
-        select: { id: true, helpfulCount: true },
-      });
+    it('re-throws non-unique-constraint errors from $transaction unchanged', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ status: 'APPROVED' }));
+      prisma.$transaction.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.markHelpful('review-1', 'user-1')).rejects.toThrow('DB connection lost');
     });
   });
 
@@ -643,11 +664,13 @@ describe('ReviewsService', () => {
   // ─── markHelpful (additional edge cases) ─────────────────────────────────
 
   describe('markHelpful — additional edge cases', () => {
-    it('returns the updated helpfulCount from Prisma', async () => {
-      prisma.review.findUnique.mockResolvedValue(makeReview({ status: 'APPROVED' }));
-      prisma.review.update.mockResolvedValue({ id: 'review-1', helpfulCount: 7 });
+    it('returns the updated helpfulCount from a post-transaction findUnique', async () => {
+      prisma.review.findUnique
+        .mockResolvedValueOnce(makeReview({ status: 'APPROVED' })) // guard lookup
+        .mockResolvedValueOnce({ id: 'review-1', helpfulCount: 7 }); // return value
+      prisma.$transaction.mockResolvedValue([{}, {}]);
 
-      const result = await service.markHelpful('review-1');
+      const result = await service.markHelpful('review-1', 'user-1');
 
       expect(result).toEqual({ id: 'review-1', helpfulCount: 7 });
     });
