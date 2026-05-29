@@ -78,9 +78,6 @@ Done:
 - **Issue:** `where: { id: dto.addressId, ...(userId ? { userId } : {}) }` — when `userId` is absent (guest checkout), the ownership filter is omitted. A guest supplying another user's address UUID ships an order to that user's full name, street, and phone number.
 - **Fix:** When `userId` is absent, disallow `addressId` entirely: `if (dto.addressId && !userId) throw new BadRequestException('Guests must supply a new address')`.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 12 — `OrderStatus` state machine has no transition guard in `updateStatus()`
 - **File:** `backend/src/modules/orders/orders.service.ts:608-647`
 - **Issue:** Any `OrderStatus` target is accepted without validating the current → target transition. An admin can move `REFUNDED → PROCESSING` or `CANCELLED → PAID`. The stock restore guard (`!stockAlreadyRestored.includes(current.status)`) prevents double-restore, but the status flip itself is unrestricted, leaving order + payment records in an incoherent state.
@@ -88,8 +85,10 @@ Not yet:
 
 ### 13 — `bulkCancel` restores full `item.quantity` stock, ignoring `cancelledQuantity` *(3 agents)*
 - **File:** `backend/src/modules/orders/orders.service.ts:733-742`
-- **Issue:** `stock: { increment: item.quantity }` — `cancelledQuantity` is not subtracted. If an order is `PARTIALLY_REFUNDED` (stock already restored for those units), bulk-cancel restores the full original quantity again. Also: `PARTIALLY_REFUNDED` is missing from `nonCancellableStatuses`, so these orders can be bulk-cancelled without triggering a Stripe refund.
-- **Fix:** Use `activeQty = item.quantity - (item.cancelledQuantity ?? 0)` (matching `updateStatus()` at line 628). Add `PARTIALLY_REFUNDED` to `nonCancellableStatuses` or auto-call `refundPayment()` inside the loop.
+- **Fix applied:** Stock increment now uses `activeQty = item.quantity - (item.cancelledQuantity ?? 0)` (matching `updateStatus()`). Skip update when `activeQty <= 0`. Added `PARTIALLY_REFUNDED` to `nonCancellableStatuses` — these orders are blocked from bulk-cancel and must go through the individual refund flow.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 14 — `bulkCancel` doesn't call `refundPayment()` for PAID/PROCESSING orders
 - **File:** `backend/src/modules/orders/orders.service.ts:755-767`

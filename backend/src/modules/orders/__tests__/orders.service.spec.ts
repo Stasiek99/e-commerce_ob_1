@@ -1809,6 +1809,79 @@ describe('OrdersService', () => {
       expect(result.failed).toHaveLength(0);
       expect(result.needsRefund).toHaveLength(0);
     });
+
+    // ─── Issue #13 regression harness ────────────────────────────────────────
+
+    it('blocks PARTIALLY_REFUNDED orders — adds to failed without entering the transaction', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PARTIALLY_REFUNDED)];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0].orderNumber).toBe('ORD-001');
+      expect(result.needsRefund).toHaveLength(0);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('restores only active quantity (quantity − cancelledQuantity) per item, not full quantity', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.PAID, [
+          { productVariantId: 'pv-1', quantity: 5, cancelledQuantity: 2 }, // activeQty = 3
+          { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 0 }, // activeQty = 3
+        ] as any[]),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              increments.push({ id: args.where.id, amount: args.data.stock.increment });
+            }),
+          },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.bulkCancel(['o-1']);
+
+      expect(increments).toEqual([
+        { id: 'pv-1', amount: 3 },
+        { id: 'pv-2', amount: 3 },
+      ]);
+    });
+
+    it('skips stock restore for items where all units were already cancelled (activeQty = 0)', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT, [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — must be skipped
+          { productVariantId: 'pv-2', quantity: 4, cancelledQuantity: 1 }, // activeQty = 3 — must be restored
+        ] as any[]),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const updatedVariants: string[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              updatedVariants.push(args.where.id);
+            }),
+          },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.bulkCancel(['o-1']);
+
+      expect(updatedVariants).toEqual(['pv-2']);
+      expect(updatedVariants).not.toContain('pv-1');
+    });
   });
 
   describe('cancelItemsByUser', () => {

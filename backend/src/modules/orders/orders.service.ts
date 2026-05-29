@@ -741,6 +741,7 @@ export class OrdersService implements OnModuleInit {
     const nonCancellableStatuses: OrderStatus[] = [
       OrderStatus.CANCELLED,
       OrderStatus.REFUNDED,
+      OrderStatus.PARTIALLY_REFUNDED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
     ];
@@ -755,10 +756,13 @@ export class OrdersService implements OnModuleInit {
         try {
           await this.prisma.$transaction(async (tx) => {
             for (const item of order.items) {
-              await tx.productVariant.update({
-                where: { id: item.productVariantId },
-                data: { stock: { increment: item.quantity } },
-              });
+              const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+              if (activeQty > 0) {
+                await tx.productVariant.update({
+                  where: { id: item.productVariantId },
+                  data: { stock: { increment: activeQty } },
+                });
+              }
             }
             await tx.order.update({
               where: { id: order.id },
