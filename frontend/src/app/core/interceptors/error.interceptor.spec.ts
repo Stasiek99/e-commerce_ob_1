@@ -23,6 +23,7 @@ describe('errorInterceptor', () => {
     logout: jest.Mock;
     getAccessToken: jest.Mock;
   };
+  let mockRouter: { navigate: jest.Mock };
 
   beforeEach(() => {
     authService = {
@@ -31,13 +32,14 @@ describe('errorInterceptor', () => {
       logout: jest.fn().mockReturnValue(of(null)),
       getAccessToken: jest.fn().mockReturnValue(null),
     };
+    mockRouter = { navigate: jest.fn() };
 
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(withInterceptors([errorInterceptor])),
         provideHttpClientTesting(),
         { provide: AuthService, useValue: authService },
-        { provide: Router, useValue: { navigate: jest.fn() } },
+        { provide: Router, useValue: mockRouter },
       ],
     });
 
@@ -129,7 +131,7 @@ describe('errorInterceptor', () => {
     });
   });
 
-  it('clears session and calls logout when the refresh itself fails', (done) => {
+  it('clears session and navigates to /auth/login without calling logout() when refresh fails', (done) => {
     authService.refresh.mockReturnValue(
       throwError(() => new HttpErrorResponse({ status: 401 })),
     );
@@ -137,7 +139,8 @@ describe('errorInterceptor', () => {
     http.get('/api/orders').subscribe({
       error: () => {
         expect(authService.clearSession).toHaveBeenCalledTimes(1);
-        expect(authService.logout).toHaveBeenCalledTimes(1);
+        expect(authService.logout).not.toHaveBeenCalled();
+        expect(mockRouter.navigate).toHaveBeenCalledWith(['/auth/login']);
         done();
       },
     });
