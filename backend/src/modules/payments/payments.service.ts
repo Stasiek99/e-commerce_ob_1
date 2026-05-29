@@ -56,6 +56,10 @@ export class PaymentsService {
       lineItems,
       successUrl,
       cancelUrl,
+      ...(order.discountInCents > 0 && {
+        discountAmountInCents: order.discountInCents,
+        couponLabel: order.couponCode ?? undefined,
+      }),
     });
 
     await this.prisma.payment.create({

@@ -42,18 +42,21 @@ describe('AuthService', () => {
               findUnique: jest.fn(),
               update: jest.fn(),
               updateMany: jest.fn(),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             emailVerificationToken: {
               updateMany: jest.fn().mockResolvedValue({}),
               create: jest.fn().mockResolvedValue({}),
               findUnique: jest.fn(),
               update: jest.fn().mockResolvedValue({}),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             passwordResetToken: {
               updateMany: jest.fn().mockResolvedValue({}),
               create: jest.fn().mockResolvedValue({}),
               findUnique: jest.fn(),
               update: jest.fn().mockResolvedValue({}),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             user: {
               update: jest.fn().mockResolvedValue({}),
@@ -1046,6 +1049,57 @@ describe('AuthService', () => {
       await service.consumeMagicLink('valid-token');
 
       expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── purgeExpiredTokens ───────────────────────────────────────────────────────
+
+  describe('purgeExpiredTokens', () => {
+    it('calls deleteMany on all three token tables in parallel', async () => {
+      prisma.refreshToken.deleteMany.mockResolvedValue({ count: 5 });
+      prisma.passwordResetToken.deleteMany.mockResolvedValue({ count: 2 });
+      prisma.emailVerificationToken.deleteMany.mockResolvedValue({ count: 8 });
+
+      await service.purgeExpiredTokens();
+
+      expect(prisma.refreshToken.deleteMany).toHaveBeenCalledTimes(1);
+      expect(prisma.passwordResetToken.deleteMany).toHaveBeenCalledTimes(1);
+      expect(prisma.emailVerificationToken.deleteMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes expiresAt: { lt: <current date> } as the where clause to each table', async () => {
+      const before = Date.now();
+
+      await service.purgeExpiredTokens();
+
+      const after = Date.now();
+
+      for (const mock of [
+        prisma.refreshToken.deleteMany,
+        prisma.passwordResetToken.deleteMany,
+        prisma.emailVerificationToken.deleteMany,
+      ]) {
+        const where = (mock as jest.Mock).mock.calls[0][0].where;
+        expect(where).toHaveProperty('expiresAt');
+        const cutoff: Date = where.expiresAt.lt;
+        expect(cutoff).toBeInstanceOf(Date);
+        expect(cutoff.getTime()).toBeGreaterThanOrEqual(before);
+        expect(cutoff.getTime()).toBeLessThanOrEqual(after);
+      }
+    });
+
+    it('resolves without throwing when all tables return count 0 (nothing to purge)', async () => {
+      prisma.refreshToken.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.passwordResetToken.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.emailVerificationToken.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.purgeExpiredTokens()).resolves.toBeUndefined();
+    });
+
+    it('propagates a Prisma rejection so the scheduler surfaces the failure', async () => {
+      prisma.refreshToken.deleteMany.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.purgeExpiredTokens()).rejects.toThrow('DB connection lost');
     });
   });
 });

@@ -375,12 +375,13 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items    OrderItem[]
-  payment  Payment?
-  shipment Shipment?
-  events   OrderEvent[]
-  couponUse CouponUse?
-  reviews   Review[]
+  items          OrderItem[]
+  payment        Payment?
+  shipment       Shipment?
+  events         OrderEvent[]
+  couponUse      CouponUse?
+  reviews        Review[]
+  returnRequests ReturnRequest[]
 
   @@index([userId])
   @@index([status])
@@ -552,6 +553,8 @@ model Review {
 
 model ReturnRequest {
   id                  String       @id @default(cuid())
+  orderId             String?
+  order               Order?       @relation(fields: [orderId], references: [id])
   orderNumber         String
   email               String
   firstName           String
@@ -569,6 +572,7 @@ model ReturnRequest {
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 
+  @@index([orderId])
   @@index([email])
   @@index([orderNumber])
   @@map("return_requests")

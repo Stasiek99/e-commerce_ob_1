@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -10,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Role, User } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -36,10 +38,14 @@ export class OrdersController {
     @Body() dto: CreateOrderDto,
   ) {
     const userEmail = user?.email ?? dto.guestEmail;
-    return this.ordersService.createFromCart(user?.id, sessionId, userEmail!, dto);
+    if (!userEmail) {
+      throw new BadRequestException('Guest email is required for unauthenticated orders');
+    }
+    return this.ordersService.createFromCart(user?.id, sessionId, userEmail, dto);
   }
 
   @Get('track')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   trackOrder(
     @Query('email') email: string,
     @Query('orderNumber') orderNumber: string,

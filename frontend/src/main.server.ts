@@ -15,28 +15,21 @@ if (typeof globalScope['requestAnimationFrame'] !== 'function') {
   };
 }
 
+// Stateless no-op storage: prevents ReferenceError for any code that references
+// localStorage/sessionStorage as a global before Angular DI runs. Services must
+// inject LOCAL_STORAGE (storage.tokens.ts) which is provided per-request in
+// server.ts — each render gets an isolated store so no cross-request leakage.
 if (typeof localStorage === 'undefined') {
-  const createStorageMock = (): Storage => {
-    const store: Record<string, string> = {};
-    return {
-      getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => {
-        store[k] = String(v);
-      },
-      removeItem: (k: string) => {
-        delete store[k];
-      },
-      clear: () => {
-        Object.keys(store).forEach((k) => delete store[k]);
-      },
-      get length() {
-        return Object.keys(store).length;
-      },
-      key: (i: number) => Object.keys(store)[i] ?? null,
-    };
-  };
-  globalScope['localStorage'] = createStorageMock();
-  globalScope['sessionStorage'] = createStorageMock();
+  const noopStorage = (): Storage => ({
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    length: 0,
+  });
+  globalScope['localStorage'] = noopStorage();
+  globalScope['sessionStorage'] = noopStorage();
 }
 
 import { bootstrapApplication, BootstrapContext } from '@angular/platform-browser';

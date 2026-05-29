@@ -2,9 +2,6 @@
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
 ---
-## Operational & Reliability Gaps
-
----
 
 Legal / Compliance
 - Kasa fiskalna (fiscal printer) — B2C sales in Poland above the annual threshold require issuing fiscal receipts via a registered fiscal device or cloud fiscal service (e.g. Novitus Cloud). Software invoices alone don't
@@ -68,8 +65,5 @@ Analytics / Measurement
 
 | Finding | Agents |
 |---|---|
-| Redis/BullMQ hard dependency, no fallback | 5/5 |
-| AdminJS absence = operational impossibility | 4/5 |
 | No DB backups = GDPR/legal risk | 4/5 |
 | Stock concurrency unsolved | 3/5 |
-| Returns system non-functional | 2/5 (verified in code) |

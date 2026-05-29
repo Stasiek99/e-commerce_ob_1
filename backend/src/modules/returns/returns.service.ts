@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import { PaymentsService } from '../payments/payments.service';
 import { CreateReturnRequestDto } from './dto/create-return.dto';
 
 @Injectable()
@@ -19,6 +20,7 @@ export class ReturnsService {
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
+    private readonly payments: PaymentsService,
   ) {
     this.adminEmail = this.config.get<string>('ADMIN_DEFAULT_EMAIL', 'admin@aromaterie.pl');
   }
@@ -27,7 +29,7 @@ export class ReturnsService {
     const normalizedNumber = dto.orderNumber.trim().toUpperCase();
     const order = await this.prisma.order.findFirst({
       where: { orderNumber: normalizedNumber },
-      select: { userId: true },
+      select: { id: true, userId: true },
     });
 
     if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
@@ -46,6 +48,7 @@ export class ReturnsService {
 
     const request = await this.prisma.returnRequest.create({
       data: {
+        orderId: order.id,
         orderNumber: dto.orderNumber.trim().toUpperCase(),
         email: dto.email.trim().toLowerCase(),
         firstName: dto.firstName.trim(),
@@ -157,8 +160,9 @@ export class ReturnsService {
       );
   }
 
-  // Marks the return as COMPLETED (money transferred / complaint resolved).
-  // Only callable from APPROVED state to prevent accidental double-processing.
+  // Marks the return as COMPLETED: issues the Stripe refund, restores stock,
+  // then flips the return request status. Calling order matters — if the Stripe
+  // refund fails the return stays APPROVED so the admin can retry.
   async markRefunded(id: string, adminNote?: string): Promise<void> {
     const req = await this.prisma.returnRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Return request ${id} not found`);
@@ -167,6 +171,15 @@ export class ReturnsService {
         `Return request must be APPROVED before marking as completed (current: ${req.status})`,
       );
     }
+    if (!req.orderId) {
+      throw new BadRequestException(
+        `Return request ${id} has no linked order — process the Stripe refund manually then contact support to update this record`,
+      );
+    }
+
+    // Issues Stripe refund, restores stock, sets order.status → REFUNDED.
+    // Throws on Stripe error — intentionally propagated so the return stays APPROVED.
+    await this.payments.refundPayment(req.orderId, 'RETURN_APPROVAL');
 
     await this.prisma.returnRequest.update({
       where: { id },

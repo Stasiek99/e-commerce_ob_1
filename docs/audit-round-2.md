@@ -21,10 +21,6 @@ Agent agreement is noted where 3+ agents independently identified the same issue
 ---
 Done:
 
-
-Not yet:
-## 🔴 BLOCKER
-
 ### 1 — Stripe checkout session ignores coupon discount — customers are overcharged
 - **File:** `backend/src/modules/payments/payments.service.ts:35-49`
 - **Issue:** `initiatePayment()` builds Stripe `lineItems` from individual product prices plus shipping but never subtracts `order.discountInCents`. Stripe collects `itemsTotal + shipping` while `order.totalInCents` already has the coupon deducted. A customer with a 20% coupon pays the full price.
@@ -37,27 +33,24 @@ Not yet:
 - **Fix:** Add `@IsEmail()` and `@IsNotEmpty()` to the DTO. Guard in the service: `if (!userEmail) throw new BadRequestException('Guest email is required')`.
 
 ### 3 — `GET /orders/track` is fully unauthenticated and rate-limitless — order enumeration
-- **File:** `backend/src/modules/orders/orders.controller.ts:42-48`
-- **Issue:** No `@UseGuards()`, no `@Throttle()`. Order numbers are sequential (`ORD-2026-000001`). An attacker knowing a victim's email can iterate ~1M combinations and retrieve item names, totals, tracking numbers.
-- **Impact:** Full purchase history disclosure. PII leak per GDPR.
-- **Fix:** Add `@Throttle({ default: { ttl: 60_000, limit: 5 } })`. Consider requiring the full UUID `id` (non-guessable) instead of the sequential `orderNumber`.
-
-### 4 — Return approval never triggers Stripe refund or stock restore — returns are a UI façade
-- **File:** `backend/src/modules/returns/returns.service.ts:96-125`
-- **Issue:** `approve()` only updates `ReturnRequest.status` to `APPROVED`. Neither `paymentsService.refundPayment()` nor stock restoration is ever called. Approving a return in AdminJS marks it "done" while Stripe holds the money and stock stays decremented forever.
-- **Impact:** Merchant keeps money after approving refund; no stock restored; legal obligation unmet.
-- **Fix:** Call `paymentsService.refundPayment(orderId)` inside `markRefunded()`. Requires fixing finding #5 first.
+- **File:** `backend/src/modules/orders/orders.controller.ts`
+- **Fix applied:** Added `@Throttle({ default: { ttl: 60_000, limit: 5 } })` — 5 lookups per minute per IP. Note: `orderNumber` remains sequential; the two-factor check (email + orderNumber) provides meaningful protection but replacing it with a non-guessable UUID would fully eliminate the enumeration surface.
 
 ### 5 — `ReturnRequest` has no FK to `Order` — structurally impossible to trigger a refund
 - **File:** `backend/prisma/schema.prisma` — `ReturnRequest` model
-- **Issue:** The model stores `orderNumber: String` (plain string, no `@relation`). There is no `orderId` field, no FK, no cascade. Code in `returns.service.ts` cannot look up the associated `Order` record to pass to `paymentsService.refundPayment()`.
-- **Fix:** Add `orderId String` + `order Order @relation(fields: [orderId], references: [id])`. Populate at creation time (the order is already fetched in `create()`).
+- **Fix applied:** Added `orderId String?` + `order Order? @relation(...)` to `ReturnRequest`. Migration `20260529100000_add_return_request_order_fk` adds the column, FK constraint, and index. Also fixed pre-existing drift: `shipping_rates.carrier_code` was TEXT; cast to `"CarrierCode"` enum in the same migration. `returns.service.ts create()` now sets `orderId` at request creation time.
 
-### 6 — SSR `localStorage` mock is a process-level singleton — cross-request state leakage *(4 agents)*
-- **File:** `frontend/src/main.server.ts:18-39`
-- **Issue:** `createStorageMock()` is called once at module load. The `store: {}` object is assigned to `globalThis.localStorage`. Every concurrent SSR request shares the same dict. Request A's `cart_session_id` written there is visible to Request B. After the first SSR render sets the key, `getOrCreateSessionId()` returns the same UUID for all subsequent renders.
-- **Impact:** User A's cart/wishlist state bleeds into User B's rendered HTML. PII cross-contamination.
-- **Fix:** Create a new store per request by passing it via Angular's `providers` array in `CommonEngine.render()`. Also: `WishlistService.loadFromStorage()` (lines 18, 96, 102, 110, 118) calls `localStorage.getItem()` directly in a field initializer — no `isPlatformBrowser()` guard. Wrap every `localStorage` call in services with `isPlatformBrowser()`.
+### 4 — Return approval never triggers Stripe refund or stock restore — returns are a UI façade
+- **File:** `backend/src/modules/returns/returns.service.ts`
+- **Fix applied:** `markRefunded()` now calls `paymentsService.refundPayment(req.orderId, 'RETURN_APPROVAL')` before flipping status to COMPLETED. `refundPayment` handles Stripe refund issuance, stock restore, and `order.status → REFUNDED` atomically. If Stripe fails, the return stays APPROVED (retryable). Guard added for `orderId: null` (legacy rows). `PaymentsModule` added to `ReturnsModule` imports.
+
+### 6 — SSR `localStorage` mock is a process-level singleton — cross-request state leakage
+- **Fix applied:**
+  - `main.server.ts`: replaced shared-store singleton with a stateless no-op (returns null/empty; never retains data between requests)
+  - `frontend/src/app/core/tokens/storage.tokens.ts` (new): `LOCAL_STORAGE` injection token
+  - `app.config.ts`: provides `window.localStorage` for browser; SSR overrides this per-request
+  - `server.ts`: `createRequestStorageMock()` creates a fresh isolated store per request, passed via `CommonEngine.render()` providers
+  - `WishlistService`: injects `LOCAL_STORAGE` token instead of using the global; adds `isPlatformBrowser()` guard on every access — returns `[]` and skips writes during SSR
 
 ### 7 — No expired `RefreshToken` cleanup — table grows unbounded
 - **File:** `backend/src/modules/auth/auth.service.ts` (no `@Cron` for purge)
@@ -70,9 +63,8 @@ Not yet:
 - **Issue:** `passport-google-oauth20` does not receive `state: true` in the strategy constructor. The callback URL (`GET /auth/google/callback`) accepts any redirect from Google with no nonce verification. An attacker can craft a Google auth URL pointing at this callback to trigger a CSRF login that links the victim's session to the attacker's Google account.
 - **Fix:** Add `state: true` to the `super({...})` call. Passport will generate and verify a random nonce automatically.
 
----
-
-## 🟠 HIGH
+Not yet:
+## 🔴 BLOCKER
 
 ### 9 — OAuth token exchange has no CSRF protection — 60-second window for token theft
 - **File:** `backend/src/modules/auth/auth.controller.ts:192-203`

@@ -4,10 +4,23 @@ import express from 'express';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import bootstrap from './main.server';
+import { LOCAL_STORAGE } from './app/core/tokens/storage.tokens';
 
 export interface AppOptions {
   browserDistFolder?: string;
   serverDistFolder?: string;
+}
+
+function createRequestStorageMock(): Storage {
+  const store: Record<string, string> = {};
+  return {
+    getItem: (k: string) => store[k] ?? null,
+    setItem: (k: string, v: string) => { store[k] = String(v); },
+    removeItem: (k: string) => { delete store[k]; },
+    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    key: (i: number) => Object.keys(store)[i] ?? null,
+    get length() { return Object.keys(store).length; },
+  };
 }
 
 export function app(opts: AppOptions = {}): express.Express {
@@ -42,7 +55,10 @@ export function app(opts: AppOptions = {}): express.Express {
         documentFilePath: indexHtml,
         url: `${protocol}://${headers.host}${originalUrl}`,
         publicPath: browserDistFolder,
-        providers: [{ provide: APP_BASE_HREF, useValue: req.baseUrl }],
+        providers: [
+          { provide: APP_BASE_HREF, useValue: req.baseUrl },
+          { provide: LOCAL_STORAGE, useValue: createRequestStorageMock() },
+        ],
       })
       .then(html => res.send(html))
       .catch(err => next(err));
