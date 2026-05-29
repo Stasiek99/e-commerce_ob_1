@@ -21,15 +21,14 @@ Agent agreement is noted where 3+ agents independently identified the same issue
 ---
 Done:
 
-
-Not yet:
-## 🔴 BLOCKER
-
 ### 1 — Stripe checkout session ignores coupon discount — customers are overcharged
 - **File:** `backend/src/modules/payments/payments.service.ts:35-49`
 - **Issue:** `initiatePayment()` builds Stripe `lineItems` from individual product prices plus shipping but never subtracts `order.discountInCents`. Stripe collects `itemsTotal + shipping` while `order.totalInCents` already has the coupon deducted. A customer with a 20% coupon pays the full price.
 - **Impact:** Money loss for customers → chargebacks → Stripe account risk.
 - **Fix:** Push a negative line item before `createCheckoutSession`: `{ name: 'Rabat', unit_amount: -order.discountInCents, quantity: 1 }`. Also sets `payment.amountInCents` correctly (currently it records the discounted amount but Stripe charges the undiscounted one).
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 2 — Guest `guestEmail` has no `@IsEmail()` — order confirmation silently lost
 - **File:** `backend/src/modules/orders/dto/create-order.dto.ts` + `orders.controller.ts:38-39`

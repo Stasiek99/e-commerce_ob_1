@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -36,7 +37,10 @@ export class OrdersController {
     @Body() dto: CreateOrderDto,
   ) {
     const userEmail = user?.email ?? dto.guestEmail;
-    return this.ordersService.createFromCart(user?.id, sessionId, userEmail!, dto);
+    if (!userEmail) {
+      throw new BadRequestException('Guest email is required for unauthenticated orders');
+    }
+    return this.ordersService.createFromCart(user?.id, sessionId, userEmail, dto);
   }
 
   @Get('track')
