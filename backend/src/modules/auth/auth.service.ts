@@ -240,7 +240,7 @@ export class AuthService {
     if (!user) throw new BadRequestException('User not found');
 
     await this.prisma.emailVerificationToken.updateMany({
-      where: { userId, type: EmailTokenType.EMAIL_VERIFICATION, usedAt: null },
+      where: { userId, usedAt: null },
       data: { usedAt: new Date() },
     });
 

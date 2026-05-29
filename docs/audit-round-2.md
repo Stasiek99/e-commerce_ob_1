@@ -101,13 +101,13 @@ Done:
 - **Issue:** Stripe session is created at line 51; `Payment` row inserted at line 61. If the DB insert fails (transient error), the Stripe session exists but has no `Payment` row. `markSessionPaid` (webhook) and `reconcilePendingPayments` (cron) both look up by `stripeCheckoutSessionId` in the `payments` table — they find nothing. Customer pays Stripe; order stays `PENDING_PAYMENT` forever.
 - **Fix:** Create the `Payment` row *before* calling `createCheckoutSession`. If DB fails, no Stripe session is created. If Stripe fails after the DB row exists, the reconciliation cron handles it.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 17 — `changePassword` doesn't invalidate active access tokens — 15-minute continued access after compromise
 - **File:** `backend/src/modules/auth/auth.service.ts:361-380`
 - **Issue:** Refresh tokens are correctly revoked, but the current access token (15-min JWT) is not. An attacker with a stolen access token continues making authenticated API calls for up to 15 minutes after the victim resets their password.
 - **Fix:** Implement a Redis blocklist keyed on JWT `jti`. On `changePassword`, insert all active access token JTIs. The JWT strategy checks the blocklist before accepting tokens.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 18 — `requestEmailChange` leaves `MAGIC_LINK` tokens alive — session bypass during email change
 - **File:** `backend/src/modules/auth/auth.service.ts:219-224`

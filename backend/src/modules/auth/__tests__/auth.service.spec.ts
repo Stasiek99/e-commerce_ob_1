@@ -91,6 +91,7 @@ describe('AuthService', () => {
           provide: EmailQueueService,
           useValue: {
             sendEmailVerification: jest.fn().mockResolvedValue(undefined),
+            sendEmailChangeVerification: jest.fn().mockResolvedValue(undefined),
             sendPasswordReset: jest.fn().mockResolvedValue(undefined),
             sendMagicLink: jest.fn().mockResolvedValue(undefined),
           },
@@ -691,6 +692,92 @@ describe('AuthService', () => {
 
       await expect(service.verifyEmail('magic-link-token')).rejects.toThrow(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Request Email Change ─────────────────────────────────────────────────────
+
+  describe('requestEmailChange', () => {
+    it('throws ConflictException when the new email is already taken by another account', async () => {
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, id: 'other-user' } as any);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await expect(service.requestEmailChange('user-1', 'taken@example.com')).rejects.toThrow(
+        ConflictException,
+      );
+
+      expect(prisma.emailVerificationToken.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the requesting user does not exist', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(service.requestEmailChange('ghost-user', 'new@example.com')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('revokes ALL existing email verification tokens — including MAGIC_LINK — before issuing the change token', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      // Must NOT include a type filter — both EMAIL_VERIFICATION and MAGIC_LINK must be revoked
+      expect(prisma.emailVerificationToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ type: expect.anything() }),
+          data: { usedAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('scopes the revocation to the requesting user only', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(prisma.emailVerificationToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-1', usedAt: null }),
+        }),
+      );
+    });
+
+    it('stores the new email as pendingEmail on the user record', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(usersService.update).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ pendingEmail: 'new@example.com' }),
+      );
+    });
+
+    it('creates a new email verification token and sends the change-confirmation email', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(prisma.emailVerificationToken.create).toHaveBeenCalledTimes(1);
+      expect(emailService.sendEmailChangeVerification).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'new@example.com', newEmail: 'new@example.com' }),
+      );
+    });
+
+    it('allows the change when the new email matches the requesting user own current email (no-op conflict check)', async () => {
+      // findByEmail returns the same user → should not throw ConflictException
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await expect(
+        service.requestEmailChange('user-1', 'test@example.com'),
+      ).resolves.toBeUndefined();
     });
   });
 
