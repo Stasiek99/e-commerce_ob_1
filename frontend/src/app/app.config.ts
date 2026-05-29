@@ -1,11 +1,13 @@
 import {
   ApplicationConfig,
   ErrorHandler,
+  PLATFORM_ID,
   inject,
   isDevMode,
   provideAppInitializer,
   provideZoneChangeDetection,
 } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { provideClientHydration, withEventReplay } from '@angular/platform-browser';
 import { provideServiceWorker } from '@angular/service-worker';
 import { firstValueFrom, of } from 'rxjs';
@@ -62,6 +64,10 @@ export const appConfig: ApplicationConfig = {
       inject(AnalyticsService).init(environment.gtmId);
     }),
     provideAppInitializer(async () => {
+      // Auth refresh is only meaningful in the browser (needs cookies). Skip in
+      // SSR/prerender — otherwise every prerendered product page fires an extra
+      // POST /auth/refresh against the backend, all returning 401.
+      if (!isPlatformBrowser(inject(PLATFORM_ID))) return;
       const auth = inject(AuthService);
       await firstValueFrom(auth.refresh().pipe(catchError(() => of(null))));
     }),

@@ -12,6 +12,8 @@ export interface ProductCardData {
   name: string;
   slug: string;
   brand?: string | null;
+  gender?: string | null;
+  catalogNumber?: string | null;
   images?: Array<{ url: string }>;
   variants?: Array<{ id: string; label: string; priceInCents: number; stock: number }>;
 }

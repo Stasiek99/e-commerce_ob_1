@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
@@ -88,4 +89,10 @@ export class CreateReturnRequestDto {
   @IsString()
   @MaxLength(34) // IBAN max length
   bankAccount?: string;
+
+  // Required to be true for WITHDRAWAL — Art. 38 pkt 5 UoK exempts opened hygiene goods.
+  // Optional for COMPLAINT (seal state is irrelevant to warranty claims).
+  @IsOptional()
+  @IsBoolean()
+  sealedOnReturn?: boolean;
 }

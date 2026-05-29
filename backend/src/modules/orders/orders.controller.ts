@@ -53,6 +53,18 @@ export class OrdersController {
     return this.ordersService.findAllForUser(user.id, query);
   }
 
+  @Get(':id/events')
+  @UseGuards(JwtAuthGuard)
+  getOrderEvents(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.findEventsForUser(id, user.id);
+  }
+
+  @Get(':id/invoice')
+  @UseGuards(JwtAuthGuard)
+  getInvoice(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.generateInvoiceForUser(id, user.id);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   getMyOrder(@CurrentUser() user: User, @Param('id') id: string) {
@@ -75,6 +87,13 @@ export class OrdersController {
 
   // ── Admin ────────────────────────────────────────────────────────────────
 
+  @Get('admin/unread-count')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  getUnreadCount() {
+    return this.ordersService.getUnreadCount();
+  }
+
   @Get('admin/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
@@ -90,5 +109,13 @@ export class OrdersController {
     @Body() dto: UpdateOrderStatusDto,
   ) {
     return this.ordersService.updateStatus(id, dto.status);
+  }
+
+  @Post('admin/:id/invoice')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  generateInvoice(@Param('id') id: string) {
+    return this.ordersService.generateInvoice(id);
   }
 }

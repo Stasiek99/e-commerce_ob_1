@@ -8,6 +8,7 @@ import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingService } from '../shipping/shipping.service';
 import { OrdersService } from '../orders/orders.service';
 import { PaymentsService } from '../payments/payments.service';
+import { ReturnsService } from '../returns/returns.service';
 
 const logger = new Logger('AdminJS');
 
@@ -127,6 +128,7 @@ export async function setupAdmin(
   shippingService: ShippingService,
   ordersService: OrdersService,
   paymentsService: PaymentsService,
+  returnsService: ReturnsService,
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
@@ -134,7 +136,9 @@ export async function setupAdmin(
     process.env.ADMIN_SESSION_SECRET ?? adminPassword ?? 'dev-admin-secret';
 
   if (!adminEmail || !adminPassword) {
-    logger.warn('ADMIN_DEFAULT_EMAIL / ADMIN_DEFAULT_PASSWORD not set — /admin is UNPROTECTED');
+    throw new Error(
+      'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set — refusing to boot with an unprotected admin panel',
+    );
   }
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
@@ -275,6 +279,7 @@ export async function setupAdmin(
                     items: order.items.map((i) => ({
                       snapshotName: i.snapshotName,
                       snapshotPrice: i.snapshotPrice,
+                      snapshotVatRate: i.snapshotVatRate,
                       quantity: i.quantity,
                     })),
                   });
@@ -518,6 +523,94 @@ export async function setupAdmin(
           },
         },
       },
+      // ── Returns ──────────────────────────────────────────────────────
+      {
+        resource: { model: getModelByName('ReturnRequest'), client: prisma },
+        options: {
+          navigation: { name: 'Obsługa klienta' },
+          sort: { sortBy: 'createdAt', direction: 'desc' },
+          listProperties: ['orderNumber', 'firstName', 'lastName', 'type', 'status', 'createdAt'],
+          filterProperties: ['status', 'type', 'orderNumber', 'email'],
+          showProperties: [
+            'id', 'orderNumber', 'email', 'firstName', 'lastName', 'phone',
+            'type', 'status', 'deliveryDate', 'items', 'reason',
+            'requestedResolution', 'bankAccount', 'adminNote', 'createdAt', 'updatedAt',
+          ],
+          editProperties: ['adminNote'],
+          actions: {
+            new: { isAccessible: false },
+            delete: { isAccessible: false },
+            approve: {
+              actionType: 'record',
+              icon: 'CheckCircle',
+              label: 'Zatwierdź',
+              isVisible: (context: any) =>
+                !['APPROVED', 'COMPLETED', 'REJECTED'].includes(context.record?.params?.status),
+              handler: async (request: any, _response: any, context: any) => {
+                const { record } = context;
+                const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
+                try {
+                  await returnsService.approve(record.params.id, adminNote);
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: 'Wniosek zatwierdzony — klient został powiadomiony.', type: 'success' },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
+            reject: {
+              actionType: 'record',
+              icon: 'XCircle',
+              label: 'Odrzuć',
+              isVisible: (context: any) =>
+                !['REJECTED', 'COMPLETED'].includes(context.record?.params?.status),
+              handler: async (request: any, _response: any, context: any) => {
+                const { record } = context;
+                const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
+                try {
+                  await returnsService.reject(record.params.id, adminNote);
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: 'Wniosek odrzucony — klient został powiadomiony.', type: 'success' },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
+            markRefunded: {
+              actionType: 'record',
+              icon: 'ArrowLeft',
+              label: 'Oznacz jako zwrócono środki',
+              isVisible: (context: any) => context.record?.params?.status === 'APPROVED',
+              handler: async (request: any, _response: any, context: any) => {
+                const { record } = context;
+                const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
+                try {
+                  await returnsService.markRefunded(record.params.id, adminNote);
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: 'Zwrot środków oznaczony jako zrealizowany — klient został powiadomiony.', type: 'success' },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
+          },
+        },
+      },
       // ── Customer Service ──────────────────────────────────────────────
       {
         resource: { model: getModelByName('CustomerNote'), client: prisma },
@@ -707,23 +800,20 @@ export async function setupAdmin(
     }
   });
 
-  const router =
-    adminEmail && adminPassword
-      ? AdminJSExpress.buildAuthenticatedRouter(
-          admin,
-          {
-            authenticate: async (email: string, password: string) => {
-              if (email !== adminEmail) return null;
-              const valid = await bcrypt.compare(password, adminPassword);
-              return valid ? { email } : null;
-            },
-            cookieName: 'adminjs',
-            cookiePassword: sessionSecret,
-          },
-          null,
-          sessionOpts,
-        )
-      : AdminJSExpress.buildRouter(admin);
+  const router = AdminJSExpress.buildAuthenticatedRouter(
+    admin,
+    {
+      authenticate: async (email: string, password: string) => {
+        if (email !== adminEmail) return null;
+        const valid = await bcrypt.compare(password, adminPassword);
+        return valid ? { email } : null;
+      },
+      cookieName: 'adminjs',
+      cookiePassword: sessionSecret,
+    },
+    null,
+    sessionOpts,
+  );
 
   app.use(admin.options.rootPath, router);
 

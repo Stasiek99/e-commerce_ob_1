@@ -1,0 +1,163 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { UnauthorizedException } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
+import { HealthController } from '../health.controller';
+import { PrismaService } from '../modules/prisma/prisma.service';
+
+const mockPrisma = {
+  $queryRaw: jest.fn(),
+};
+
+const mockRedis = {
+  ping: jest.fn(),
+};
+
+const mockEmailQueue = {
+  getJobCounts: jest.fn(),
+};
+
+describe('HealthController', () => {
+  let controller: HealthController;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [HealthController],
+      providers: [
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+        { provide: getQueueToken('email'), useValue: mockEmailQueue },
+      ],
+    }).compile();
+
+    controller = module.get(HealthController);
+    jest.clearAllMocks();
+  });
+
+  describe('GET /health', () => {
+    describe('when DB and Redis are healthy', () => {
+      it('returns status ok with all checks connected and queue depths', async () => {
+        mockPrisma.$queryRaw.mockResolvedValue([{}]);
+        mockRedis.ping.mockResolvedValue('PONG');
+        mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 2, failed: 1 });
+
+        const result = await controller.check();
+
+        expect(result).toMatchObject({
+          status: 'ok',
+          db: 'connected',
+          redis: 'connected',
+          queue: { waiting: 2, failed: 1 },
+        });
+        expect(typeof result.timestamp).toBe('string');
+      });
+
+      it('returns status ok even when queue has a non-zero backlog', async () => {
+        mockPrisma.$queryRaw.mockResolvedValue([{}]);
+        mockRedis.ping.mockResolvedValue('PONG');
+        mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 500, failed: 42 });
+
+        const result = await controller.check();
+
+        expect(result.status).toBe('ok');
+        expect(result.queue).toEqual({ waiting: 500, failed: 42 });
+      });
+
+      it('defaults missing queue fields to 0', async () => {
+        mockPrisma.$queryRaw.mockResolvedValue([{}]);
+        mockRedis.ping.mockResolvedValue('PONG');
+        // BullMQ may omit fields for count types with 0 jobs
+        mockEmailQueue.getJobCounts.mockResolvedValue({});
+
+        const result = await controller.check();
+
+        expect(result.queue).toEqual({ waiting: 0, failed: 0 });
+      });
+    });
+
+    describe('when Redis is unreachable', () => {
+      it('returns status error and marks redis disconnected', async () => {
+        mockPrisma.$queryRaw.mockResolvedValue([{}]);
+        mockRedis.ping.mockRejectedValue(new Error('Redis ECONNREFUSED'));
+        mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 0, failed: 0 });
+
+        const result = await controller.check();
+
+        expect(result.status).toBe('error');
+        expect(result.redis).toBe('disconnected');
+        expect(result.db).toBe('connected');
+      });
+
+      it('returns sentinel -1 queue depths when the queue is also unreachable', async () => {
+        mockPrisma.$queryRaw.mockResolvedValue([{}]);
+        mockRedis.ping.mockRejectedValue(new Error('Redis ECONNREFUSED'));
+        mockEmailQueue.getJobCounts.mockRejectedValue(new Error('Redis ECONNREFUSED'));
+
+        const result = await controller.check();
+
+        expect(result.status).toBe('error');
+        expect(result.queue).toEqual({ waiting: -1, failed: -1 });
+      });
+    });
+
+    describe('when the database is unreachable', () => {
+      it('returns status error and marks db disconnected', async () => {
+        mockPrisma.$queryRaw.mockRejectedValue(new Error('ECONNREFUSED 5432'));
+        mockRedis.ping.mockResolvedValue('PONG');
+        mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 0, failed: 0 });
+
+        const result = await controller.check();
+
+        expect(result.status).toBe('error');
+        expect(result.db).toBe('disconnected');
+        expect(result.redis).toBe('connected');
+      });
+    });
+
+    describe('when both DB and Redis are unreachable', () => {
+      it('returns status error with both checks showing disconnected', async () => {
+        mockPrisma.$queryRaw.mockRejectedValue(new Error('DB down'));
+        mockRedis.ping.mockRejectedValue(new Error('Redis down'));
+        mockEmailQueue.getJobCounts.mockRejectedValue(new Error('Redis down'));
+
+        const result = await controller.check();
+
+        expect(result.status).toBe('error');
+        expect(result.db).toBe('disconnected');
+        expect(result.redis).toBe('disconnected');
+        expect(result.queue).toEqual({ waiting: -1, failed: -1 });
+      });
+    });
+  });
+
+  describe('GET /health/debug-sentry', () => {
+    const savedSecret = process.env.DEBUG_SENTRY_SECRET;
+
+    afterEach(() => {
+      if (savedSecret === undefined) {
+        delete process.env.DEBUG_SENTRY_SECRET;
+      } else {
+        process.env.DEBUG_SENTRY_SECRET = savedSecret;
+      }
+    });
+
+    it('throws UnauthorizedException when DEBUG_SENTRY_SECRET is not set', () => {
+      delete process.env.DEBUG_SENTRY_SECRET;
+
+      expect(() => controller.debugSentry('anything')).toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException when the provided secret does not match', () => {
+      process.env.DEBUG_SENTRY_SECRET = 'correct-secret';
+
+      expect(() => controller.debugSentry('wrong-secret')).toThrow(UnauthorizedException);
+    });
+
+    it('throws a Sentry test Error when the correct secret is supplied', () => {
+      process.env.DEBUG_SENTRY_SECRET = 'correct-secret';
+
+      expect(() => controller.debugSentry('correct-secret')).toThrow(
+        'Sentry backend test — intentional error',
+      );
+    });
+  });
+});

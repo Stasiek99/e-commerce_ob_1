@@ -3,8 +3,6 @@
 > Generated via 5-agent stochastic consensus — 2026-05-22
 > Agents: Domain Expert · Security Skeptic · UX Pragmatist · Infrastructure First-Principles · Risk Analyst
 
----
-
 ## Legend
 
 | Label | Meaning |
@@ -17,40 +15,6 @@
 Agent agreement is noted where 2+ agents independently identified the same issue.
 
 ---
-
-## 1. SEO & Indexability
-
-### 🔴 BLOCKER — Static sitemap excludes all product pages
-- `frontend/prerender-routes.txt` contains only 6 static routes; no product slugs
-- `sitemap.xml` (if pre-generated) mirrors the same list
-- **Effect:** Googlebot sees blank JS shells for every product page — zero organic traffic from Google Shopping or branded searches
-- **Fix:** Use `SITEMAP_BACKEND_URL` (already wired in Vercel env) to pull all product/category slugs at build time and emit them into `sitemap.xml`; expand `prerender-routes.txt` to include at least `/products/:slug` for each product
-
-### 🟠 HIGH — SSR configured but product pages not prerendered
-- Angular SSR `server.ts` exists and the Common Engine is wired
-- Only the 6 routes in `prerender-routes.txt` benefit from SSR prerendering at build time; all others fall back to client-side rendering
-- **Effect:** Product detail pages (the pages Google needs to rank) render as blank `<app-root>` to crawlers
-- **Fix:** Either expand the prerender list or verify that the Vercel SSR function (`api/ssr.mjs`) is correctly handling product URLs server-side on every request (not just prerender time)
-
----
-
-## 2. Analytics & Conversion Tracking
-
-### 🔴 BLOCKER — No analytics or conversion tracking anywhere
-- No `gtag`, GTM script, `GoogleAnalyticsService`, or any analytics hook found across frontend
-- `checkout-success.component.ts` fires no purchase event on Stripe success
-- **Effect:** No funnel visibility, no attribution, no way to measure CAC, ROAS, or conversion rate
-- **Fix:** Add GTM container to `index.html`; fire `purchase` event with `transaction_id`, `value`, `currency` on checkout success; fire `add_to_cart` / `begin_checkout` events in cart and checkout flow
-
----
-
-## 3. Legal & Compliance (RODO / EU Consumer Law)
-
-### 🔴 BLOCKER — Cookie consent non-compliant
-- `cookie-consent.component` exists and has `role="dialog"` / `aria-live` — good structure
-- But: only "essential cookies" offered with no opt-in/opt-out for analytics or marketing categories
-- **Effect:** RODO (Polish GDPR implementation) requires explicit opt-in consent before any non-essential cookies are set. If GTM / GA is added (as it must be — see above), this becomes an active violation from day one
-- **Fix:** Add a preference centre with at minimum two switches: Essential (locked) and Analytics (opt-in). Persist consent in localStorage. Block GA/GTM until consent granted
 
 ### 🟠 HIGH — GDPR data deletion: documented but unimplemented
 - Privacy policy (confirmed present at `/legal/privacy`) states data is deleted on request
@@ -189,7 +153,43 @@ Then run `pnpm db:migrate`.
 
 > Note: Sentry is correctly implemented on both backend (`@sentry/nestjs`, `instrument.ts`) and frontend (`@sentry/angular`, `main.ts`). Structured logging via `nestjs-pino` is also solid. These are not gaps.
 
+
 ---
+
+Legal / Compliance
+- Kasa fiskalna (fiscal printer) — B2C sales in Poland above the annual threshold require issuing fiscal receipts via a registered fiscal device or cloud fiscal service (e.g. Novitus Cloud). Software invoices alone don't
+  satisfy this.
+- EU Omnibus Directive — when displaying a promotional price, you must show the lowest price from the preceding 30 days. Your discount logic needs to store price history, not just the current price.
+- Cosmetics Regulation (EC 1223/2009) — fragrances are regulated cosmetics. Every product sold in the EU must have a "Responsible Person" registered in the CPNP (Cosmetic Products Notification Portal) before it can be listed.
+  If you're not the manufacturer, verify your supplier covered this.
+- Allergen disclosure — EU law requires listing 26 fragrance allergens by INCI name on product pages when above threshold concentrations. Non-disclosure is a regulatory issue, not just a UX one.
+- Authorized reseller status — selling branded fragrances (Dior, Chanel, Creed) without authorization exposes you to trademark exhaustion disputes and grey-market supplier risk. Establish a clear paper trail from supplier.
+- Regulamin (terms of service) — Polish consumer law has specific mandatory clauses (UOKiK checklist) that differ from generic EU T&Cs. A lawyer review is cheaper than a UOKiK fine.
+
+Financial / Tax
+- JPK_V7 reporting — Polish VAT registered businesses must submit a combined SAF-T + VAT return file monthly. Your accounting tool (not your e-commerce platform) must generate this, but your order/invoice data must be
+  structured to feed it.
+- EU VAT OSS — if you sell to consumers in other EU countries above the €10k threshold, you register once in Poland and file a quarterly OSS return instead of 27 separate VAT registrations. Plan your checkout to capture
+  customer country accurately.
+- Chargeback ratio — Stripe will flag and eventually close accounts above ~1% dispute rate. You need a fraud review step before fulfillment, not just after disputes arrive.
+
+Technical
+- Bot protection on checkout — scalpers and stockout bots hit fragrance stores heavily (limited editions). Consider Cloudflare Turnstile or similar on cart add and checkout start, not just login.
+- Crawl budget and faceted navigation — if you add filters (size, brand, concentration), each combination generates a URL. Without noindex or canonical tagging on filter pages, Google wastes crawl budget and you get duplicate
+  content penalties.
+- Structured data (Schema.org Product) — price, availability, aggregateRating, and breadcrumb markup directly affects Google Shopping and rich results CTR. Worth doing before launch, not after.
+- Load testing before first campaign — Railway hobby tier has cold starts. Run a simple k6 or locust test simulating a flash sale traffic spike before you send your first email blast.
+
+Operations
+- Returns physical process — your software handles RMA logic, but do you have a returns address, a policy for opened vs. sealed bottles, and a process for re-stocking vs. destroying returned goods? Opened fragrance bottles
+  can't legally be resold as new in the EU.
+- Carrier damage claims — InPost and DPD have strict time windows (usually 24–48h) to file damage claims. You need a photo-at-packing workflow or you'll lose every dispute.
+- Supplier lead times for reorders — out-of-stock after a successful launch is a retention killer. Know your reorder lead time per SKU and set reorder-point alerts before you run campaigns.
+
+Analytics / Measurement
+- GA4 e-commerce events — view_item, add_to_cart, begin_checkout, purchase — need to be wired before launch or you have no funnel data from day one.
+- Conversion baseline before first ad spend — run organic traffic for 2–4 weeks first so you have a baseline CVR to measure paid campaigns against. Launching ads the same day as the site means you can't distinguish ad quality
+  from site quality.
 
 ## 8. Positive Findings (Not Gaps)
 

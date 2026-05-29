@@ -9,13 +9,17 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
-import { EmailTokenType, User } from '@prisma/client';
+import { EmailTokenType, RefreshToken, User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { RegisterDto } from './dto/register.dto';
 
 const BCRYPT_ROUNDS = 12;
+
+// A rotated token re-presented within this window is treated as a network drop
+// rather than theft: the new cookie never reached the browser before the drop.
+const REFRESH_GRACE_MS = 30_000;
 
 @Injectable()
 export class AuthService {
@@ -88,8 +92,13 @@ export class AuthService {
       include: { user: true },
     });
 
-    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
-      return null;
+    if (!stored || stored.expiresAt < new Date()) return null;
+
+    if (stored.revokedAt) {
+      // Allow recently-rotated tokens through so refresh() can do network-drop recovery.
+      // Tokens revoked by logout/security events have replacedBy=null and are blocked here.
+      const inGrace = Date.now() - stored.revokedAt.getTime() < REFRESH_GRACE_MS;
+      if (!inGrace || !stored.replacedBy) return null;
     }
 
     return stored.user;
@@ -102,17 +111,39 @@ export class AuthService {
       include: { user: true },
     });
 
-    if (!stored || stored.userId !== userId || stored.revokedAt || stored.expiresAt < new Date()) {
+    if (!stored || stored.userId !== userId || stored.expiresAt < new Date()) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    // Rotate — revoke old token
-    await this.prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date() },
-    });
+    if (stored.revokedAt) {
+      const inGrace = Date.now() - stored.revokedAt.getTime() < REFRESH_GRACE_MS;
 
-    return this.generateTokenPair(stored.user);
+      if (inGrace && stored.replacedBy) {
+        // Likely network drop: the rotation succeeded server-side but the new
+        // cookie never reached the browser. Try to rotate the replacement token.
+        const replacement = await this.prisma.refreshToken.findUnique({
+          where: { tokenHash: stored.replacedBy },
+        });
+
+        if (replacement && !replacement.revokedAt && replacement.expiresAt > new Date()) {
+          return this.rotateToken(replacement, stored.family, stored.user);
+        }
+      }
+
+      if (stored.replacedBy) {
+        // Token was already rotated and is being reused outside the grace window
+        // (or its replacement is also gone). This is a theft signal — invalidate
+        // the entire session family to protect the legitimate user.
+        await this.prisma.refreshToken.updateMany({
+          where: { family: stored.family, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    return this.rotateToken(stored, stored.family, stored.user);
   }
 
   async logout(rawRefreshToken: string) {
@@ -123,7 +154,30 @@ export class AuthService {
     });
   }
 
-  private async issueAndSendVerification(user: User): Promise<void> {
+  private async rotateToken(
+    token: RefreshToken,
+    family: string,
+    user: User,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const rawNew = uuidv4();
+    const newHash = createHash('sha256').update(rawNew).digest('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await this.prisma.$transaction([
+      this.prisma.refreshToken.update({
+        where: { id: token.id },
+        data: { revokedAt: new Date(), replacedBy: newHash },
+      }),
+      this.prisma.refreshToken.create({
+        data: { tokenHash: newHash, userId: user.id, family, expiresAt },
+      }),
+    ]);
+
+    const accessToken = this.signAccessToken(user);
+    return { accessToken, refreshToken: rawNew };
+  }
+
+  private issueAndSendVerification = async (user: User): Promise<void> => {
     await this.prisma.emailVerificationToken.updateMany({
       where: { userId: user.id, type: EmailTokenType.EMAIL_VERIFICATION, usedAt: null },
       data: { usedAt: new Date() },
@@ -145,7 +199,7 @@ export class AuthService {
       firstName: user.firstName ?? 'Kliencie',
       verifyUrl,
     });
-  }
+  };
 
   async resendVerificationEmail(userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
@@ -162,13 +216,11 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
     if (!user) throw new BadRequestException('User not found');
 
-    // Invalidate any existing unused email verification tokens (not magic links)
     await this.prisma.emailVerificationToken.updateMany({
       where: { userId, type: EmailTokenType.EMAIL_VERIFICATION, usedAt: null },
       data: { usedAt: new Date() },
     });
 
-    // Stage the new email and issue a verification token for it
     await this.usersService.update(userId, { pendingEmail: newEmail });
 
     const rawToken = uuidv4();
@@ -214,7 +266,7 @@ export class AuthService {
       const newEmail = stored.user.pendingEmail;
 
       // Guard against race: another user may have claimed this email after the
-      // request was issued. If so, abandon the change rather than overwriting.
+      // request was issued.
       const taken = await this.prisma.user.findUnique({ where: { email: newEmail } });
       if (taken && taken.id !== stored.userId) {
         throw new ConflictException('The requested email address is no longer available');
@@ -229,14 +281,13 @@ export class AuthService {
           where: { id: stored.userId },
           data: { email: newEmail, pendingEmail: null, isEmailVerified: true },
         }),
-        // Revoke all refresh tokens — JWT encodes email, so all devices must re-login
+        // JWT encodes email — all devices must re-login after an email change
         this.prisma.refreshToken.updateMany({
           where: { userId: stored.userId, revokedAt: null },
           data: { revokedAt: new Date() },
         }),
       ]);
     } else {
-      // Normal registration verification
       await this.prisma.$transaction([
         this.prisma.emailVerificationToken.update({
           where: { id: stored.id },
@@ -255,7 +306,6 @@ export class AuthService {
     // Always resolve silently — never reveal whether an email is registered
     if (!user || !user.passwordHash) return;
 
-    // Invalidate any existing unused tokens for this user
     await this.prisma.passwordResetToken.updateMany({
       where: { userId: user.id, usedAt: null },
       data: { usedAt: new Date() },
@@ -301,9 +351,29 @@ export class AuthService {
         where: { id: stored.userId },
         data: { passwordHash },
       }),
-      // Revoke all active refresh tokens — forces re-login on all devices
       this.prisma.refreshToken.updateMany({
         where: { userId: stored.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) throw new UnauthorizedException('Invalid credentials');
+
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
         data: { revokedAt: new Date() },
       }),
     ]);
@@ -314,7 +384,6 @@ export class AuthService {
     // Always silent — prevents email enumeration
     if (!user) return;
 
-    // Invalidate any outstanding magic link tokens for this user
     await this.prisma.emailVerificationToken.updateMany({
       where: { userId: user.id, type: EmailTokenType.MAGIC_LINK, usedAt: null },
       data: { usedAt: new Date() },
@@ -372,24 +441,21 @@ export class AuthService {
   }
 
   async generateTokenPair(user: User) {
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const accessToken = this.signAccessToken(user);
 
-    const accessToken = this.jwtService.sign(payload);
-
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const rawRefreshToken = uuidv4();
     const tokenHash = createHash('sha256').update(rawRefreshToken).digest('hex');
+    const family = uuidv4(); // Each new login creates an isolated token family
 
     await this.prisma.refreshToken.create({
-      data: {
-        tokenHash,
-        userId: user.id,
-        expiresAt,
-      },
+      data: { tokenHash, userId: user.id, expiresAt, family },
     });
 
     return { accessToken, refreshToken: rawRefreshToken };
+  }
+
+  private signAccessToken(user: User): string {
+    return this.jwtService.sign({ sub: user.id, email: user.email, role: user.role });
   }
 }

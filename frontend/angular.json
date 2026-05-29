@@ -61,6 +61,7 @@
                 { "type": "anyComponentStyle", "maximumWarning": "8kB", "maximumError": "12kB" }
               ],
               "outputHashing": "all",
+              "sourceMap": { "scripts": true, "styles": false, "hidden": true },
               "fileReplacements": [
                 {
                   "replace": "src/environments/environment.ts",

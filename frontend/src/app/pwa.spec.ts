@@ -210,6 +210,40 @@ describe('appConfig service-worker registration', () => {
   });
 });
 
+// ─── app.config.ts — auth initializer SSR guard ──────────────────────────────
+//
+// The auth refresh appInitializer must skip in SSR/prerender.
+// Without the guard, every prerendered product page fires an extra
+// POST /auth/refresh against the backend (all returning 401), multiplying
+// build-time network calls by the number of prerendered routes.
+
+describe('appConfig auth initializer — SSR/prerender guard', () => {
+  let source: string;
+
+  beforeAll(() => {
+    source = fs.readFileSync(
+      path.join(frontendRoot, 'src/app/app.config.ts'),
+      'utf-8',
+    );
+  });
+
+  it('imports isPlatformBrowser from @angular/common', () => {
+    expect(source).toMatch(/isPlatformBrowser.*from\s+['"]@angular\/common['"]/);
+  });
+
+  it('imports PLATFORM_ID from @angular/core', () => {
+    expect(source).toContain('PLATFORM_ID');
+  });
+
+  it('guards auth.refresh() with !isPlatformBrowser(inject(PLATFORM_ID))', () => {
+    expect(source).toMatch(/!isPlatformBrowser\(inject\(PLATFORM_ID\)\)/);
+  });
+
+  it('returns early when platform is not browser (no auth refresh in SSR)', () => {
+    expect(source).toMatch(/if\s*\(!isPlatformBrowser\(inject\(PLATFORM_ID\)\)\)\s*return/);
+  });
+});
+
 // ─── push notifications — implementation gap ──────────────────────────────────
 
 /**

@@ -63,6 +63,10 @@ export const envValidationSchema = Joi.object({
   STRIPE_CURRENCY: Joi.string().lowercase().default('pln'),
   STRIPE_SUCCESS_URL: Joi.string().uri().required(),
   STRIPE_CANCEL_URL: Joi.string().uri().required(),
+  // Secret for POST /payments/reconcile. Required in production — without it,
+  // the reconciliation endpoint is permanently locked (returns 401 for every call),
+  // meaning the fallback cron path is silently broken.
+  PAYMENTS_RECONCILE_SECRET: requiredInProd(Joi.string().min(16), ''),
 
   // ── InPost ShipX ──
   INPOST_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
@@ -113,8 +117,16 @@ export const envValidationSchema = Joi.object({
   // the app never boots with the localhost fallback against a live database.
   FRONTEND_URL: requiredInProd(Joi.string().uri(), 'http://localhost:4200'),
 
-  // ── Sentry (optional — SDK is a no-op when SENTRY_DSN is empty) ──
-  SENTRY_DSN: Joi.string().uri().allow('').optional(),
+  // ── Sentry ──
+  // Required (non-empty URI) in production so errors are never silently invisible.
+  // Dev/test can omit or leave blank — the SDK becomes a no-op when DSN is absent.
+  // Uses an explicit when() rather than requiredInProd() so that .allow('') only
+  // applies to the otherwise branch; production rejects empty strings.
+  SENTRY_DSN: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().uri().required(),
+    otherwise: Joi.string().uri().allow('').optional(),
+  }),
   SENTRY_RELEASE: Joi.string().optional(),
   SENTRY_TRACES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
   SENTRY_PROFILES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
@@ -126,6 +138,11 @@ export const envValidationSchema = Joi.object({
   // Separate secret for signing the admin session cookie. Falls back to
   // ADMIN_DEFAULT_PASSWORD in dev, but should be set explicitly in prod.
   ADMIN_SESSION_SECRET: requiredInProd(Joi.string().min(16)),
+  // Optional: recipient override for merchant order alert emails (defaults to EMAIL_FROM).
+  ADMIN_ALERT_EMAIL: Joi.string().email().optional(),
+  // Optional: Slack incoming webhook URL for instant new-order push notifications.
+  // When set, a message is POSTed immediately after checkout.session.completed.
+  MERCHANT_SLACK_WEBHOOK_URL: Joi.string().uri().optional(),
   // Secret used by GET /health/debug-sentry to guard the intentional-error endpoint.
   DEBUG_SENTRY_SECRET: Joi.string().optional(),
 }).options({ allowUnknown: true });

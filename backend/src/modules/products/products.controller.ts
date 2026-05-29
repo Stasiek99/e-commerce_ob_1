@@ -73,6 +73,12 @@ export class ProductsController {
   }
 
   @Public()
+  @Get(':slug/related')
+  findRelated(@Param('slug') slug: string, @Query('limit') limit?: string) {
+    return this.productsService.findRelated(slug, limit ? Math.min(parseInt(limit, 10), 12) : 6);
+  }
+
+  @Public()
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
     return this.productsService.findBySlug(slug);
@@ -119,7 +125,7 @@ export class ProductsController {
 
   @Post(':id/images')
   @Roles(Role.ADMIN)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   async uploadImage(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,

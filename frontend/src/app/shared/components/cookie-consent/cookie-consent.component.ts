@@ -107,8 +107,7 @@ import { ConsentService } from '../../../core/services/consent.service';
 export class CookieConsentComponent {
   private readonly consent = inject(ConsentService);
 
-  // Show until the user has made any choice
-  readonly visible = computed(() => !this.consent.hasDecided());
+  readonly visible = computed(() => this.consent.bannerVisible());
 
   acceptAll(): void {
     this.consent.acceptAll();

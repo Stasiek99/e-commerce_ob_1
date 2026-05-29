@@ -243,6 +243,8 @@ describe('AuthService', () => {
       prisma.refreshToken.findUnique.mockResolvedValue({
         id: 'rt-1',
         userId: 'user-1',
+        family: 'family-1',
+        replacedBy: null,
         revokedAt: null,
         expiresAt: new Date(Date.now() + 1000 * 60),
         user: mockUser,
@@ -252,8 +254,12 @@ describe('AuthService', () => {
 
       const result = await service.refresh('user-1', 'valid-raw-token');
 
+      // data now includes replacedBy in addition to revokedAt — use objectContaining
       expect(prisma.refreshToken.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'rt-1' }, data: { revokedAt: expect.any(Date) } }),
+        expect.objectContaining({
+          where: { id: 'rt-1' },
+          data: expect.objectContaining({ revokedAt: expect.any(Date) }),
+        }),
       );
       expect(result).toHaveProperty('accessToken', 'mock-access-token');
       expect(result).toHaveProperty('refreshToken');
@@ -326,10 +332,12 @@ describe('AuthService', () => {
   });
 
   describe('refresh (additional branch coverage)', () => {
-    it('throws UnauthorizedException when token is revoked', async () => {
+    it('throws UnauthorizedException when token is revoked with no replacedBy (e.g. logout)', async () => {
       prisma.refreshToken.findUnique.mockResolvedValue({
         id: 'rt-1',
         userId: 'user-1',
+        family: 'family-1',
+        replacedBy: null,
         revokedAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),
         user: mockUser,
@@ -344,6 +352,8 @@ describe('AuthService', () => {
       prisma.refreshToken.findUnique.mockResolvedValue({
         id: 'rt-1',
         userId: 'user-1',
+        family: 'family-1',
+        replacedBy: null,
         revokedAt: null,
         expiresAt: new Date(Date.now() - 1000),
         user: mockUser,
@@ -352,6 +362,218 @@ describe('AuthService', () => {
       await expect(service.refresh('user-1', 'expired-token')).rejects.toThrow(
         UnauthorizedException,
       );
+    });
+  });
+
+  // ─── Token Family & Reuse Detection ──────────────────────────────────────────
+
+  describe('refresh — token family and reuse detection', () => {
+    const validToken = {
+      id: 'rt-1',
+      userId: 'user-1',
+      family: 'family-abc',
+      replacedBy: null,
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      user: mockUser,
+    };
+
+    it('propagates the same family to the newly issued rotation token', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ ...validToken });
+
+      await service.refresh('user-1', 'valid-raw-token');
+
+      expect(prisma.refreshToken.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ family: 'family-abc' }),
+        }),
+      );
+    });
+
+    it('stamps replacedBy on the consumed token with the new token hash', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ ...validToken });
+
+      await service.refresh('user-1', 'valid-raw-token');
+
+      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'rt-1' },
+          data: expect.objectContaining({
+            revokedAt: expect.any(Date),
+            replacedBy: expect.stringMatching(/^[a-f0-9]{64}$/), // SHA-256 hex
+          }),
+        }),
+      );
+    });
+
+    it('revokes the entire family when a rotated token is replayed outside the 30-second grace window', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        ...validToken,
+        revokedAt: new Date(Date.now() - 60_000), // 60 seconds ago — outside grace
+        replacedBy: 'some-replacement-hash',
+      });
+
+      await expect(service.refresh('user-1', 'stale-rotated-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ family: 'family-abc', revokedAt: null }),
+          data: { revokedAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('does not revoke family when token was explicitly revoked with no replacedBy (logout path)', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        ...validToken,
+        revokedAt: new Date(Date.now() - 60_000),
+        replacedBy: null, // logout — no rotation happened
+      });
+
+      await expect(service.refresh('user-1', 'logged-out-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      // Family must NOT be touched — this is not a theft signal
+      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ family: 'family-abc' }),
+        }),
+      );
+    });
+
+    it('performs network-drop recovery: rotates the replacement when called within 30-second grace window', async () => {
+      const replacementToken = {
+        id: 'rt-replacement',
+        userId: 'user-1',
+        family: 'family-abc',
+        replacedBy: null,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      };
+
+      // First call: the original (now-revoked) token with revokedAt 5s ago
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(Date.now() - 5_000),
+          replacedBy: 'replacement-hash-abc',
+        })
+        // Second call: the replacement token (still valid)
+        .mockResolvedValueOnce(replacementToken);
+
+      const result = await service.refresh('user-1', 'network-drop-raw-token');
+
+      // The replacement token should now be revoked and a fresh one issued
+      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'rt-replacement' } }),
+      );
+      expect(result).toHaveProperty('accessToken', 'mock-access-token');
+      expect(result).toHaveProperty('refreshToken');
+      expect(typeof result.refreshToken).toBe('string');
+    });
+
+    it('falls back to theft detection when the replacement is already revoked during the grace window', async () => {
+      // First call: revoked within grace window, has replacedBy
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(Date.now() - 5_000),
+          replacedBy: 'already-compromised-hash',
+        })
+        // Second call: replacement is also revoked — attacker used it already
+        .mockResolvedValueOnce({
+          id: 'rt-replacement',
+          userId: 'user-1',
+          family: 'family-abc',
+          replacedBy: null,
+          revokedAt: new Date(), // already revoked
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        });
+
+      await expect(service.refresh('user-1', 'compromised-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ family: 'family-abc', revokedAt: null }),
+          data: { revokedAt: expect.any(Date) },
+        }),
+      );
+    });
+  });
+
+  // ─── validateRefreshTokenByRaw — grace-window behavior ───────────────────────
+
+  describe('validateRefreshTokenByRaw — grace window', () => {
+    it('returns user for a recently-rotated token within the 30-second grace window', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        tokenHash: 'hash',
+        family: 'family-1',
+        replacedBy: 'some-replacement-hash',
+        revokedAt: new Date(Date.now() - 5_000), // 5 seconds ago
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        user: mockUser,
+      });
+
+      const result = await service.validateRefreshTokenByRaw('recent-rotation-token');
+      expect(result).toEqual(mockUser);
+    });
+
+    it('returns null when token was revoked by logout (replacedBy is null — not a rotation)', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        tokenHash: 'hash',
+        family: 'family-1',
+        replacedBy: null,
+        revokedAt: new Date(Date.now() - 5_000), // recent but from logout
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        user: mockUser,
+      });
+
+      const result = await service.validateRefreshTokenByRaw('logged-out-token');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when the rotation happened more than 30 seconds ago', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        tokenHash: 'hash',
+        family: 'family-1',
+        replacedBy: 'some-replacement-hash',
+        revokedAt: new Date(Date.now() - 60_000), // 60 seconds ago — outside grace
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        user: mockUser,
+      });
+
+      const result = await service.validateRefreshTokenByRaw('old-rotated-token');
+      expect(result).toBeNull();
+    });
+  });
+
+  // ─── generateTokenPair — family initialization ────────────────────────────────
+
+  describe('generateTokenPair', () => {
+    it('creates the refresh token with a non-empty family field', async () => {
+      await service.generateTokenPair(mockUser as any);
+
+      expect(prisma.refreshToken.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ family: expect.stringMatching(/^[0-9a-f-]{36}$/i) }),
+        }),
+      );
+    });
+
+    it('assigns a unique family UUID to each new token pair (different sessions)', async () => {
+      await service.generateTokenPair(mockUser as any);
+      await service.generateTokenPair(mockUser as any);
+
+      const firstFamily = (prisma.refreshToken.create.mock.calls[0][0] as any).data.family;
+      const secondFamily = (prisma.refreshToken.create.mock.calls[1][0] as any).data.family;
+
+      expect(typeof firstFamily).toBe('string');
+      expect(firstFamily).not.toBe(secondFamily);
     });
   });
 
@@ -538,6 +760,82 @@ describe('AuthService', () => {
       await service.resetPassword('valid-token', 'newStrongPassword123');
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── Change Password ──────────────────────────────────────────────────────────
+
+  describe('changePassword', () => {
+    it('throws UnauthorizedException when user is not found', async () => {
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(service.changePassword('user-1', 'currentPass', 'newPass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws UnauthorizedException when user is OAuth-only (no passwordHash)', async () => {
+      usersService.findById.mockResolvedValue({ ...mockUser, passwordHash: null } as any);
+
+      await expect(service.changePassword('user-1', 'currentPass', 'newPass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws UnauthorizedException when current password is wrong', async () => {
+      const hash = await bcrypt.hash('correctpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+      await expect(service.changePassword('user-1', 'wrongpass', 'newpass12345')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('updates passwordHash with a valid bcrypt hash of newPassword', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user-1' } }),
+      );
+      const newHash = prisma.user.update.mock.calls[0][0].data.passwordHash as string;
+      expect(await bcrypt.compare('brandnewpass', newHash)).toBe(true);
+      expect(await bcrypt.compare('currentpass', newHash)).toBe(false);
+    });
+
+    it('revokes all active refresh tokens for the user in the same transaction', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-1', revokedAt: null }),
+          data: { revokedAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('performs the password update and token revocation atomically (single $transaction call)', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      // Both operations must be batched — the mock captures the array passed to $transaction
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.user.update).toHaveBeenCalledTimes(1);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledTimes(1);
     });
   });
 

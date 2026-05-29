@@ -36,6 +36,7 @@ interface OrderDetail {
   shippingCostInCents: number;
   totalInCents: number;
   refundedAmountInCents: number;
+  invoiceUrl: string | null;
   shipment?: { trackingNumber?: string } | null;
 }
 
@@ -84,6 +85,18 @@ const STATUS_LABELS: Record<string, string> = {
             </span>
           </div>
         </div>
+
+        <!-- ── Invoice download ───────────────────────────── -->
+        @if (canDownloadInvoice(order()!.status)) {
+          <div class="invoice-row">
+            <button tuiButton appearance="outline" size="s" type="button"
+                    [disabled]="downloadingInvoice()"
+                    (click)="downloadInvoice()">
+              <tui-icon icon="@tui.file-text" />
+              {{ downloadingInvoice() ? 'Generowanie…' : 'Pobierz fakturę' }}
+            </button>
+          </div>
+        }
 
         <!-- ── Items & totals ──────────────────────────────── -->
         <div class="items-card">
@@ -234,6 +247,9 @@ const STATUS_LABELS: Record<string, string> = {
     .order-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
 
+    /* ── Invoice ────────────────────────────────────────── */
+    .invoice-row { margin-bottom: 16px; }
+
     /* ── Items card ─────────────────────────────────────── */
     .items-card {
       background: var(--color-surface);
@@ -361,6 +377,7 @@ export class OrderDetailComponent implements OnInit {
   readonly cancelling = signal(false);
   readonly partialCancelling = signal(false);
   readonly submittingPartial = signal(false);
+  readonly downloadingInvoice = signal(false);
 
   cancelReason: string | null = null;
   readonly cancelReasonItems = CANCEL_REASON_ITEMS;
@@ -379,6 +396,25 @@ export class OrderDetailComponent implements OnInit {
 
   canPartialCancel(status: string): boolean {
     return ['PAID', 'PROCESSING', 'PARTIALLY_REFUNDED'].includes(status);
+  }
+
+  canDownloadInvoice(status: string): boolean {
+    return !['PENDING_PAYMENT', 'CANCELLED'].includes(status);
+  }
+
+  downloadInvoice(): void {
+    const id = this.route.snapshot.paramMap.get('id')!;
+    this.downloadingInvoice.set(true);
+    this.http.get<{ invoiceUrl: string }>(`${environment.apiUrl}/orders/${id}/invoice`).subscribe({
+      next: ({ invoiceUrl }) => {
+        this.downloadingInvoice.set(false);
+        window.open(invoiceUrl, '_blank', 'noopener');
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Nie udało się wygenerować faktury.');
+        this.downloadingInvoice.set(false);
+      },
+    });
   }
 
   startPartialCancel(): void {

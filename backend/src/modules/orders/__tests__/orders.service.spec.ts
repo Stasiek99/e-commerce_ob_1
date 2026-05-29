@@ -8,12 +8,28 @@ import { CartService } from '../../cart/cart.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
+import { InvoiceService } from '../../invoice/invoice.service';
+import { ShippingRatesService } from '../../shipping/shipping-rates.service';
+
+const MOCK_RATES: Record<CarrierCode, number> = {
+  [CarrierCode.INPOST]:      1499,
+  [CarrierCode.DHL]:         1999,
+  [CarrierCode.GLS]:         1799,
+  [CarrierCode.DPD]:         1599,
+  [CarrierCode.DPD_COURIER]: 1699,
+};
+
+const mockShippingRatesService = {
+  getRateForCarrier: jest.fn((code: CarrierCode) => Promise.resolve(MOCK_RATES[code] ?? 1999)),
+  getRateMap: jest.fn(() => Promise.resolve(MOCK_RATES)),
+};
 
 describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: any;
   let cartService: jest.Mocked<CartService>;
   let paymentsService: jest.Mocked<PaymentsService>;
+  let invoiceService: jest.Mocked<InvoiceService>;
 
   const mockAddress = {
     firstName: 'Jan',
@@ -31,6 +47,7 @@ describe('OrdersService', () => {
       productName: 'Dior Sauvage',
       variantLabel: '100ml',
       priceInCents: 34900,
+      vatRate: 2300,
       sku: 'DS-100',
       stock: 10,
       imageUrl: null,
@@ -42,6 +59,7 @@ describe('OrdersService', () => {
       productName: 'Chanel No 5',
       variantLabel: '50ml',
       priceInCents: 44900,
+      vatRate: 2300,
       sku: 'CN5-50',
       stock: 5,
       imageUrl: null,
@@ -65,10 +83,10 @@ describe('OrdersService', () => {
             address: { findFirst: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null) },
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
-            orderEvent: { create: jest.fn() },
+            orderEvent: { create: jest.fn(), findMany: jest.fn() },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
-            productVariant: { findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+            productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
             $transaction: jest.fn(),
             $executeRawUnsafe: jest.fn(),
             $queryRawUnsafe: jest.fn(),
@@ -113,6 +131,16 @@ describe('OrdersService', () => {
             getOrThrow: jest.fn().mockReturnValue('https://example.com'),
           },
         },
+        {
+          provide: InvoiceService,
+          useValue: {
+            processInvoice: jest.fn(),
+          },
+        },
+        {
+          provide: ShippingRatesService,
+          useValue: mockShippingRatesService,
+        },
       ],
     }).compile();
 
@@ -120,6 +148,35 @@ describe('OrdersService', () => {
     prisma = module.get(PrismaService);
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
+    invoiceService = module.get(InvoiceService);
+  });
+
+  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
+
+  describe('onModuleInit', () => {
+    it('creates sequences for the current and next year outside any transaction', async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      );
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+      );
+    });
+
+    it('uses the top-level prisma client (not a transaction client) for sequence DDL', async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      await service.onModuleInit();
+
+      // prisma.$executeRawUnsafe is the service-level client; tx.$executeRawUnsafe
+      // is the transaction-scoped client — DDL must never reach the latter
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('createFromCart', () => {
@@ -145,6 +202,139 @@ describe('OrdersService', () => {
           // no inpostLockerCode
         }),
       ).rejects.toThrow('InPost locker code is required');
+    });
+
+    it('should throw if DPD Pickup selected without dpdPickupPointCode', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DPD,
+          // no dpdPickupPointCode
+        }),
+      ).rejects.toThrow('DPD pickup point code is required');
+    });
+
+    it('should NOT throw if DPD_COURIER selected without dpdPickupPointCode (home delivery)', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DPD_COURIER,
+        }),
+      ).resolves.toMatchObject({ orderId: 'o-1' });
+    });
+
+    it('should persist dpdPickupPointCode in order data when DPD Pickup is selected', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DPD,
+        dpdPickupPointCode: 'KRK12',
+      });
+
+      expect(capturedOrderData.dpdPickupPointCode).toBe('KRK12');
+      expect(capturedOrderData.carrierCode).toBe(CarrierCode.DPD);
+    });
+
+    it('should use shipping rate 1599 for DPD Pickup', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedShipping: number | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedShipping = args.data.shippingCostInCents;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DPD,
+        dpdPickupPointCode: 'KRK12',
+      });
+
+      expect(capturedShipping).toBe(1599);
+    });
+
+    it('should use shipping rate 1699 for DPD_COURIER', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedShipping: number | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedShipping = args.data.shippingCostInCents;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DPD_COURIER,
+      });
+
+      expect(capturedShipping).toBe(1699);
     });
 
     it('should throw if neither addressId nor newAddress is provided', async () => {
@@ -173,8 +363,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -206,7 +395,42 @@ describe('OrdersService', () => {
       expect(capturedOrderData.totalInCents).toBe(116699);
     });
 
-    it('should decrement stock for each item during order creation', async () => {
+    it('should snapshot snapshotVatRate from cart item vatRate into each order item', async () => {
+      const cartWithCustomRate = {
+        ...mockCart,
+        items: [{ ...mockCartItems[0], vatRate: 500 }], // 5% VAT product
+      };
+      cartService.getOrCreate.mockResolvedValue(cartWithCustomRate as any);
+
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(capturedOrderData.items.create[0]).toMatchObject({ snapshotVatRate: 500 });
+    });
+
+    it('should atomically decrement stock for each item during order creation', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 
       const stockUpdates: Array<{ id: string; decrement: number }> = [];
@@ -215,12 +439,13 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn().mockImplementation((args: any) => {
+            // updateMany with WHERE stock >= qty — returns count=1 on success
+            updateMany: jest.fn().mockImplementation((args: any) => {
               stockUpdates.push({
                 id: args.where.id,
                 decrement: args.data.stock.decrement,
               });
+              return { count: 1 };
             }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
@@ -244,7 +469,7 @@ describe('OrdersService', () => {
       ]);
     });
 
-    it('should throw if stock is insufficient', async () => {
+    it('should throw if stock is insufficient (updateMany returns count=0)', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 
       prisma.$transaction.mockImplementation(async (fn: any) => {
@@ -252,8 +477,8 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 1 }), // only 1 in stock but need 2
-            update: jest.fn(),
+            // count=0 means the WHERE stock >= qty condition was not met
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
           },
           order: { create: jest.fn() },
           cart: { findFirst: jest.fn() },
@@ -280,8 +505,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -322,8 +546,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -355,8 +578,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -404,8 +626,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -433,8 +654,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
@@ -490,31 +710,436 @@ describe('OrdersService', () => {
     });
   });
 
-  describe('updateStatus', () => {
-    it('updates the order status', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PENDING_PAYMENT });
-      prisma.$transaction.mockResolvedValue([{ id: 'o-1', status: OrderStatus.PROCESSING }, {}]);
+  describe('findEventsForUser', () => {
+    const mockEvents = [
+      {
+        id: 'evt-1',
+        fromStatus: null,
+        toStatus: OrderStatus.PENDING_PAYMENT,
+        actor: 'CUSTOMER',
+        note: 'Order created from cart',
+        createdAt: new Date('2026-05-01T10:00:00Z'),
+      },
+      {
+        id: 'evt-2',
+        fromStatus: OrderStatus.PENDING_PAYMENT,
+        toStatus: OrderStatus.PAID,
+        actor: 'SYSTEM',
+        note: null,
+        createdAt: new Date('2026-05-01T10:05:00Z'),
+      },
+    ];
 
-      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+    it('throws NotFoundException when order does not exist for this user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'o-1' },
-        data: { status: OrderStatus.PROCESSING },
+      await expect(service.findEventsForUser('order-1', 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('does not leak events from another user — findFirst returns null for wrong owner', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.findEventsForUser('order-1', 'other-user-id')).rejects.toThrow(
+        NotFoundException,
+      );
+
+      expect(prisma.orderEvent.findMany).not.toHaveBeenCalled();
+    });
+
+    it('returns events sorted ascending by createdAt for the owning user', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result).toEqual(mockEvents);
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { orderId: 'order-1' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
+    });
+
+    it('queries ownership with both orderId and userId in the where clause', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsForUser('order-1', 'user-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'order-1', userId: 'user-1' },
+        }),
+      );
+    });
+
+    it('returns only the allowed fields via select', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+
+      await service.findEventsForUser('order-1', 'user-1');
+
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: {
+            id: true,
+            fromStatus: true,
+            toStatus: true,
+            actor: true,
+            note: true,
+            createdAt: true,
+          },
+        }),
+      );
+    });
+
+    it('returns an empty array when the order has no events yet', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('generateInvoice', () => {
+    const mockOrderRow = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Marszałkowska 1',
+      snapshotCity: 'Warszawa',
+      snapshotPostalCode: '00-001',
+      itemsTotalInCents: 34900,
+      shippingCostInCents: 1999,
+      totalInCents: 36899,
+      createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
+    };
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.generateInvoice('nonexistent-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when order status is PENDING_PAYMENT', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.PENDING_PAYMENT,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is CANCELLED', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.CANCELLED,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('returns invoiceUrl for a PAID order', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      const result = await service.generateInvoice('order-1');
+
+      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+    });
+
+    it.each([
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.PARTIALLY_REFUNDED,
+      OrderStatus.REFUNDED,
+    ])('allows invoice generation for status %s', async (status) => {
+      prisma.order.findUnique.mockResolvedValue({ ...mockOrderRow, status });
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/invoice.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
+        invoiceUrl: expect.any(String),
       });
     });
 
+    it('delegates to InvoiceService with the full order payload', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'order-1',
+          orderNumber: 'ORD-2026-000001',
+          totalInCents: 36899,
+          items: [expect.objectContaining({ snapshotName: 'Dior Sauvage 100ml' })],
+        }),
+      );
+    });
+
+    it('includes snapshotVatRate in the items passed to InvoiceService', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/invoice.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          items: [expect.objectContaining({ snapshotVatRate: 2300 })],
+        }),
+      );
+    });
+
+    it('propagates errors thrown by InvoiceService', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockRejectedValue(new Error('Supabase upload failed'));
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow('Supabase upload failed');
+    });
+  });
+
+  describe('generateInvoiceForUser', () => {
+    const mockOrderRow = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Marszałkowska 1',
+      snapshotCity: 'Warszawa',
+      snapshotPostalCode: '00-001',
+      itemsTotalInCents: 34900,
+      shippingCostInCents: 1999,
+      totalInCents: 36899,
+      createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
+    };
+
+    it('throws NotFoundException when order does not belong to the requesting user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.generateInvoiceForUser('order-1', 'attacker-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.generateInvoiceForUser('nonexistent-id', 'user-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('delegates to generateInvoice and returns invoiceUrl when user owns the order', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.order.findUnique.mockResolvedValue(mockOrderRow);
+      invoiceService.processInvoice.mockResolvedValue({
+        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        pdf: Buffer.from(''),
+      });
+
+      const result = await service.generateInvoiceForUser('order-1', 'user-1');
+
+      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+    });
+
+    it('passes the correct WHERE clause — id AND userId — to findFirst', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.generateInvoiceForUser('order-abc', 'user-xyz'),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith({
+        where: { id: 'order-abc', userId: 'user-xyz' },
+        select: { id: true },
+      });
+    });
+
+    it('propagates BadRequestException from generateInvoice for non-invoiceable status', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.PENDING_PAYMENT,
+      });
+
+      await expect(
+        service.generateInvoiceForUser('order-1', 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('updateStatus', () => {
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock }> = {}) => ({
+      productVariant: { update: overrides.variantUpdate ?? jest.fn() },
+      order: { update: overrides.orderUpdate ?? jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('transitions non-terminal status without restoring stock', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PENDING_PAYMENT,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate, orderUpdate: txOrderUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(txOrderUpdate).toHaveBeenCalledWith({ where: { id: 'o-1' }, data: { status: OrderStatus.PROCESSING } });
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('restores active stock when transitioning to CANCELLED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [
+          { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+          { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+        ],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(increments).toEqual([
+        { id: 'pv-1', amount: 2 },
+        { id: 'pv-2', amount: 2 },
+      ]);
+    });
+
+    it('restores active stock when transitioning to REFUNDED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(increments).toEqual([{ id: 'pv-1', amount: 1 }]);
+    });
+
+    it('does not restore stock when transitioning from CANCELLED (already restored)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.CANCELLED,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not restore stock when transitioning from REFUNDED (already restored)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.REFUNDED,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op (no DB calls) when status is already the target', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.CANCELLED,
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips fully-cancelled items (activeQty = 0) when restoring stock', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PARTIALLY_REFUNDED,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — skip
+          { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+        ],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(increments).toHaveLength(1);
+      expect(increments[0]).toEqual({ id: 'pv-2', amount: 2 });
+    });
+
     it('fires review-request email (fire-and-forget) when status becomes DELIVERED', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PROCESSING });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
-      // dispatchReviewRequestEmail calls order.findUnique — return null to exit early
-      prisma.order.findUnique.mockResolvedValue(null);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PROCESSING,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early
 
       await service.updateStatus('o-1', OrderStatus.DELIVERED);
-      await Promise.resolve(); // flush microtasks
+      await Promise.resolve();
 
-      expect(prisma.order.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: OrderStatus.DELIVERED } }),
-      );
+      expect(prisma.order.findUnique).toHaveBeenCalled();
     });
   });
 
@@ -523,8 +1148,7 @@ describe('OrdersService', () => {
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
-        findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -801,8 +1425,10 @@ describe('OrdersService', () => {
         makeOrder('o-2', 'ORD-002', OrderStatus.PROCESSING, 'TRK002'),
       ];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
 
@@ -833,8 +1459,10 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID, 'TRK001')];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       await service.bulkMarkAsShipped(['o-1']);
       await Promise.resolve();
@@ -848,8 +1476,10 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)]; // no tracking
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       await service.bulkMarkAsShipped(['o-1']);
       await Promise.resolve();
@@ -1260,6 +1890,131 @@ describe('OrdersService', () => {
     });
   });
 
+  // Merchant notification was removed from createFromCart — it now fires only
+  // on checkout.session.completed (confirmed payment). Tests in
+  // payments.service.spec.ts cover the notification payload and channels.
+  describe('createFromCart — no premature merchant notification', () => {
+    let svc: OrdersService;
+    let emailService: any;
+
+    const buildTx = () => ({
+      $executeRawUnsafe: jest.fn(),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+      cartItem: { deleteMany: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    const DHL_DTO = { newAddress: mockAddress, carrierCode: CarrierCode.DHL };
+
+    beforeEach(async () => {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          OrdersService,
+          {
+            provide: PrismaService,
+            useValue: {
+              address: { findFirst: jest.fn() },
+              user: { findUnique: jest.fn().mockResolvedValue(null) },
+              order: { create: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn() },
+              orderEvent: { create: jest.fn() },
+              cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+              cartItem: { deleteMany: jest.fn() },
+              productVariant: { findMany: jest.fn().mockResolvedValue([]) },
+              $transaction: jest.fn().mockImplementation(async (fn: any) => fn(buildTx())),
+              $executeRawUnsafe: jest.fn(),
+              $queryRawUnsafe: jest.fn(),
+            },
+          },
+          { provide: CartService, useValue: { getOrCreate: jest.fn().mockResolvedValue(mockCart) } },
+          {
+            provide: PaymentsService,
+            useValue: {
+              initiatePayment: jest.fn().mockResolvedValue({ paymentUrl: 'https://stripe.mock/pay' }),
+              expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
+              refundPayment: jest.fn().mockResolvedValue(undefined),
+              partialRefund: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: EmailQueueService,
+            useValue: {
+              sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+              sendOrderCancellation: jest.fn().mockResolvedValue(undefined),
+              sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+              sendLowStockAlert: jest.fn().mockResolvedValue(undefined),
+              sendReviewRequest: jest.fn().mockResolvedValue(undefined),
+              sendShippingNotification: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: CouponService,
+            useValue: {
+              validate: jest.fn().mockResolvedValue({ valid: false }),
+              applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: ConfigService,
+            useValue: {
+              // ADMIN_ALERT_EMAIL is set — notification must still NOT fire from createFromCart
+              get: jest.fn().mockImplementation((key: string) => {
+                if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+                if (key === 'FRONTEND_URL') return 'https://mystore.pl';
+                return undefined;
+              }),
+              getOrThrow: jest.fn().mockReturnValue('https://example.com'),
+            },
+          },
+          { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
+          { provide: ShippingRatesService, useValue: mockShippingRatesService },
+        ],
+      }).compile();
+
+      svc = module.get(OrdersService);
+      emailService = module.get(EmailQueueService);
+    });
+
+    it('never fires sendNewOrderNotification from createFromCart even when ADMIN_ALERT_EMAIL is configured', async () => {
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendNewOrderNotification).not.toHaveBeenCalled();
+    });
+
+    it('still sends order confirmation email to the customer from createFromCart', async () => {
+      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
+      await Promise.resolve();
+
+      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'customer@example.com' }),
+      );
+    });
+  });
+
+  describe('getUnreadCount', () => {
+    it('returns count of orders with PAID status', async () => {
+      prisma.order.count.mockResolvedValue(7);
+
+      const result = await service.getUnreadCount();
+
+      expect(result).toEqual({ count: 7 });
+      expect(prisma.order.count).toHaveBeenCalledWith({
+        where: { status: OrderStatus.PAID },
+      });
+    });
+
+    it('returns { count: 0 } when no PAID orders exist', async () => {
+      prisma.order.count.mockResolvedValue(0);
+
+      const result = await service.getUnreadCount();
+
+      expect(result).toEqual({ count: 0 });
+    });
+  });
+
   describe('generateOrderNumber', () => {
     it('should produce format ORD-YYYY-NNNNNN using PostgreSQL sequence', async () => {
       // Access the private method via prototype
@@ -1276,8 +2031,7 @@ describe('OrdersService', () => {
         const fullTx = {
           ...tx,
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -1302,12 +2056,12 @@ describe('OrdersService', () => {
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000042`);
 
-      // Verify it creates sequence if not exists
-      expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      // DDL no longer runs inside the transaction (moved to onModuleInit)
+      expect(tx.$executeRawUnsafe).not.toHaveBeenCalledWith(
+        expect.stringContaining('CREATE SEQUENCE'),
       );
 
-      // Verify it uses nextval from the sequence
+      // nextval is still called inside the transaction (pure DML — no lock risk)
       expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
         `SELECT nextval('order_number_seq_${year}')`,
       );
@@ -1322,8 +2076,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
-            findUnique: jest.fn().mockResolvedValue({ stock: 100 }),
-            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {

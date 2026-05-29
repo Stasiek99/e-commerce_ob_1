@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +12,8 @@ import { PaymentsService } from '../payments/payments.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
+import { InvoiceService } from '../invoice/invoice.service';
+import { ShippingRatesService } from '../shipping/shipping-rates.service';
 
 
 interface CartItem {
@@ -19,28 +22,23 @@ interface CartItem {
   productName: string;
   variantLabel: string;
   priceInCents: number;
+  vatRate: number;
   sku: string;
   stock: number;
   imageUrl?: string | null;
   slug: string;
 }
 
-const SHIPPING_RATES: Record<CarrierCode, number> = {
-  [CarrierCode.INPOST]: 1499,  // 14,99 zł
-  [CarrierCode.DHL]: 1999,     // 19,99 zł
-  [CarrierCode.GLS]: 1799,     // 17,99 zł
-  [CarrierCode.DPD]: 1599,     // 15,99 zł
-};
-
 const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
-  [CarrierCode.INPOST]: 'InPost',
-  [CarrierCode.DHL]: 'DHL Express',
-  [CarrierCode.GLS]: 'GLS',
-  [CarrierCode.DPD]: 'DPD',
+  [CarrierCode.INPOST]:      'InPost',
+  [CarrierCode.DHL]:         'DHL Express',
+  [CarrierCode.GLS]:         'GLS',
+  [CarrierCode.DPD]:         'DPD Pickup',
+  [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
 
   constructor(
@@ -50,7 +48,22 @@ export class OrdersService {
     private readonly emailService: EmailQueueService,
     private readonly couponService: CouponService,
     private readonly configService: ConfigService,
+    private readonly invoiceService: InvoiceService,
+    private readonly shippingRatesService: ShippingRatesService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    const year = new Date().getFullYear();
+    // Ensure sequences exist for the current and next calendar year.
+    // Runs once at startup, outside any transaction, so the brief DDL lock
+    // never interferes with concurrent order-creation transactions.
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+    );
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+    );
+  }
 
   async createFromCart(
     userId: string | undefined,
@@ -70,6 +83,7 @@ export class OrdersService {
       };
       carrierCode: CarrierCode;
       inpostLockerCode?: string;
+      dpdPickupPointCode?: string;
       notes?: string;
       termsVersion?: string;
       termsAcceptedAt?: string;
@@ -87,6 +101,9 @@ export class OrdersService {
 
     if (dto.carrierCode === CarrierCode.INPOST && !dto.inpostLockerCode) {
       throw new BadRequestException('InPost locker code is required');
+    }
+    if (dto.carrierCode === CarrierCode.DPD && !dto.dpdPickupPointCode) {
+      throw new BadRequestException('DPD pickup point code is required');
     }
 
     let address: {
@@ -111,7 +128,7 @@ export class OrdersService {
       throw new BadRequestException('Address is required');
     }
 
-    const shippingCostInCents = SHIPPING_RATES[dto.carrierCode];
+    const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
     const itemsTotalInCents = cart.totalInCents;
 
     // Resolve coupon discount before entering the transaction
@@ -152,20 +169,20 @@ export class OrdersService {
       // Generate order number using raw SQL to avoid race conditions
       const orderNumber = await this.generateOrderNumber(tx);
 
-      // Validate and decrement stock
+      // Atomically check and decrement stock in a single UPDATE statement.
+      // A separate findUnique + update would be a TOCTOU race: two concurrent
+      // transactions can both read stock=1, both pass the check, both decrement
+      // → stock goes to -1. updateMany with WHERE stock >= quantity closes that gap.
       for (const item of cart.items) {
-        const variant = await tx.productVariant.findUnique({
-          where: { id: item.productVariantId },
+        const result = await tx.productVariant.updateMany({
+          where: { id: item.productVariantId, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } },
         });
-        if (!variant || variant.stock < item.quantity) {
+        if (result.count === 0) {
           throw new BadRequestException(
             `Insufficient stock for: ${item.productName} ${item.variantLabel}`,
           );
         }
-        await tx.productVariant.update({
-          where: { id: item.productVariantId },
-          data: { stock: { decrement: item.quantity } },
-        });
       }
 
       // Create order with address snapshot
@@ -187,6 +204,7 @@ export class OrdersService {
           snapshotNip,
           carrierCode: dto.carrierCode,
           inpostLockerCode: dto.inpostLockerCode,
+          dpdPickupPointCode: dto.dpdPickupPointCode,
           itemsTotalInCents,
           shippingCostInCents,
           discountInCents,
@@ -202,6 +220,7 @@ export class OrdersService {
               snapshotName: `${item.productName} – ${item.variantLabel}`,
               snapshotSku: item.sku,
               snapshotPrice: item.priceInCents,
+              snapshotVatRate: item.vatRate,
               quantity: item.quantity,
             })),
           },
@@ -291,6 +310,7 @@ export class OrdersService {
           price: i.priceInCents,
         })),
         totalInCents,
+        carrierCode: dto.carrierCode,
       })
       .catch(() => undefined);
 
@@ -331,6 +351,73 @@ export class OrdersService {
     return order;
   }
 
+  async findEventsForUser(orderId: string, userId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    return this.prisma.orderEvent.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        fromStatus: true,
+        toStatus: true,
+        actor: true,
+        note: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async generateInvoiceForUser(orderId: string, userId: string): Promise<{ invoiceUrl: string }> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    return this.generateInvoice(orderId);
+  }
+
+  async generateInvoice(orderId: string): Promise<{ invoiceUrl: string }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        snapshotFirstName: true,
+        snapshotLastName: true,
+        snapshotCompany: true,
+        snapshotNip: true,
+        snapshotStreet: true,
+        snapshotCity: true,
+        snapshotPostalCode: true,
+        itemsTotalInCents: true,
+        shippingCostInCents: true,
+        totalInCents: true,
+        createdAt: true,
+        items: {
+          select: { snapshotName: true, snapshotPrice: true, snapshotVatRate: true, quantity: true },
+        },
+      },
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+
+    const nonInvoiceable: OrderStatus[] = [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED];
+    if (nonInvoiceable.includes(order.status)) {
+      throw new BadRequestException(
+        `Cannot generate invoice for an order with status ${order.status}`,
+      );
+    }
+
+    const { url } = await this.invoiceService.processInvoice(order);
+    return { invoiceUrl: url };
+  }
+
   async trackByEmailAndNumber(email: string, orderNumber: string) {
     const order = await this.prisma.order.findFirst({
       where: {
@@ -353,6 +440,13 @@ export class OrdersService {
       trackingNumber: order.shipment?.trackingNumber ?? null,
       carrier: order.shipment?.carrierCode ?? null,
     };
+  }
+
+  async getUnreadCount(): Promise<{ count: number }> {
+    const count = await this.prisma.order.count({
+      where: { status: OrderStatus.PAID },
+    });
+    return { count };
   }
 
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {
@@ -514,14 +608,38 @@ export class OrdersService {
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
     const current = await this.prisma.order.findUniqueOrThrow({
       where: { id },
-      select: { status: true },
+      select: {
+        status: true,
+        items: { select: { productVariantId: true, quantity: true, cancelledQuantity: true } },
+      },
     });
-    await this.prisma.$transaction([
-      this.prisma.order.update({ where: { id }, data: { status } }),
-      this.prisma.orderEvent.create({
+
+    if (current.status === status) return;
+
+    const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+    const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+
+    const shouldRestoreStock =
+      stockRestoringStatuses.includes(status) && !stockAlreadyRestored.includes(current.status);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (shouldRestoreStock) {
+        for (const item of current.items) {
+          const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+          if (activeQty > 0) {
+            await tx.productVariant.update({
+              where: { id: item.productVariantId },
+              data: { stock: { increment: activeQty } },
+            });
+          }
+        }
+      }
+
+      await tx.order.update({ where: { id }, data: { status } });
+      await tx.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
-      }),
-    ]);
+      });
+    });
 
     if (status === OrderStatus.DELIVERED) {
       this.dispatchReviewRequestEmail(id).catch(() => undefined);
@@ -742,19 +860,13 @@ export class OrdersService {
     await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
   }
 
-  /**
-   * Generate a unique order number using a PostgreSQL sequence.
-   * This is race-condition-safe — each call gets a unique incrementing value.
-   */
+  // Sequences are guaranteed to exist by onModuleInit (startup) and the
+  // pre_create_order_number_sequences migration — no DDL inside this
+  // transaction to avoid AccessExclusive catalog-lock deadlocks.
   private async generateOrderNumber(
     tx: Prisma.TransactionClient,
   ): Promise<string> {
     const year = new Date().getFullYear();
-
-    // Create sequence if it doesn't exist (idempotent)
-    await tx.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-    );
 
     const result: Array<{ nextval: bigint }> = await tx.$queryRawUnsafe(
       `SELECT nextval('order_number_seq_${year}')`,

@@ -12,5 +12,8 @@ export default {
   },
   moduleNameMapper: {
     '^@shared/(.*)$': '<rootDir>/../packages/shared-types/src/$1',
+    // Prevents Jest from trying to execute external Angular template/style files as JS modules.
+    // jest-preset-angular inlines templateUrl at compile time; this mock handles any runtime require fallback.
+    '\\.html$': '<rootDir>/html-template-mock.js',
   },
 } satisfies Config;

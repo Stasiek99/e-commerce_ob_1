@@ -7,6 +7,7 @@ export type EmailJobData =
         firstName: string;
         items: Array<{ name: string; quantity: number; price: number }>;
         totalInCents: number;
+        carrierCode?: string;
       };
     }
   | {
@@ -130,6 +131,18 @@ export type EmailJobData =
         reason?: string;
         requestedResolution?: string;
         bankAccount?: string;
+      };
+    }
+  | {
+      type: 'return_status_update';
+      payload: {
+        to: string;
+        firstName: string;
+        orderNumber: string;
+        requestId: string;
+        type: 'WITHDRAWAL' | 'COMPLAINT';
+        newStatus: 'APPROVED' | 'REJECTED' | 'COMPLETED';
+        adminNote?: string;
       };
     }
   | {

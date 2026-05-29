@@ -48,6 +48,7 @@ enum CarrierCode {
   DHL
   GLS
   DPD
+  DPD_COURIER
 }
 
 enum DiscountType {
@@ -133,14 +134,17 @@ model CustomerNote {
 }
 
 model RefreshToken {
-  id        String    @id @default(uuid())
-  tokenHash String    @unique
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  id         String    @id @default(uuid())
+  tokenHash  String    @unique
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  family     String    @default(uuid())
+  replacedBy String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
 
+  @@index([family])
   @@map("refresh_tokens")
 }
 
@@ -238,6 +242,7 @@ model Product {
   pyramidHeart     String?
   pyramidBase      String?
   gender           String?
+  catalogNumber    String?
   line             String?
   inspiredBy          String?
   luxuryReferenceId   Int?
@@ -267,6 +272,7 @@ model ProductVariant {
   label                String
   priceInCents         Int
   compareAtPriceInCents Int?
+  vatRate              Int      @default(2300)
   stock                Int      @default(0)
   reorderThreshold     Int      @default(5)
   isActive             Boolean  @default(true)
@@ -306,6 +312,7 @@ model Cart {
   items CartItem[]
 
   @@index([sessionId])
+  @@index([userId])
   @@map("carts")
 }
 
@@ -320,6 +327,7 @@ model CartItem {
   updatedAt        DateTime       @updatedAt
 
   @@unique([cartId, productVariantId])
+  @@index([cartId])
   @@map("cart_items")
 }
 
@@ -354,9 +362,10 @@ model Order {
   coupon     Coupon? @relation(fields: [couponId], references: [id], onDelete: SetNull)
   couponCode String?
 
-  carrierCode      CarrierCode
-  inpostLockerCode String?
-  notes            String?
+  carrierCode         CarrierCode
+  inpostLockerCode    String?
+  dpdPickupPointCode  String?
+  notes               String?
 
   termsVersion    String?
   termsAcceptedAt DateTime?
@@ -373,6 +382,8 @@ model Order {
   couponUse CouponUse?
   reviews   Review[]
 
+  @@index([userId])
+  @@index([status])
   @@map("orders")
 }
 
@@ -386,9 +397,11 @@ model OrderItem {
   snapshotName      String
   snapshotSku       String
   snapshotPrice     Int
+  snapshotVatRate   Int @default(2300)
   quantity          Int
   cancelledQuantity Int @default(0)
 
+  @@index([orderId])
   @@map("order_items")
 }
 
@@ -550,6 +563,7 @@ model ReturnRequest {
   reason              String?
   requestedResolution String?
   bankAccount         String?
+  sealedOnReturn      Boolean?
   status              ReturnStatus @default(PENDING)
   adminNote           String?
   createdAt           DateTime     @default(now())
@@ -558,6 +572,20 @@ model ReturnRequest {
   @@index([email])
   @@index([orderNumber])
   @@map("return_requests")
+}
+
+// ─── Stripe Event Deduplication ──────────────────────────────────────────────
+// Stores processed Stripe event IDs so duplicate webhook deliveries (Stripe
+// retries for up to 3 days) are silently skipped. The @id gives a unique
+// constraint — a second insert for the same event_id throws P2002 and is
+// caught in handleWebhookEvent. The createdAt index supports periodic cleanup.
+
+model ProcessedStripeEvent {
+  eventId   String   @id @map("event_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("processed_stripe_events")
 }
 
 // ─── Email Logs ───────────────────────────────────────────────────────────────
@@ -575,4 +603,18 @@ model EmailLog {
   @@index([event])
   @@index([to])
   @@map("email_logs")
+}
+
+// ─── Shipping Rates ───────────────────────────────────────────────────────────
+// One row per carrier. Editable via admin without a deploy.
+// priceInCents is the source of truth; orders.service reads from here.
+// Seeded by the migration that creates this table.
+
+model ShippingRate {
+  carrierCode  CarrierCode @id @map("carrier_code")
+  priceInCents Int         @map("price_in_cents")
+  isActive     Boolean     @default(true) @map("is_active")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@map("shipping_rates")
 }

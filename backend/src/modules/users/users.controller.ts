@@ -20,6 +20,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangeEmailDto } from './dto/change-email.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 import { Throttle } from '@nestjs/throttler';
 
@@ -37,6 +38,19 @@ export class UsersController {
     return result;
   }
 
+  @Get('me/data-export')
+  @Throttle({ default: { ttl: 3600000, limit: 3 } })
+  async exportMyData(
+    @CurrentUser() user: User,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const data = await this.usersService.exportData(user.id, user.email);
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="gdpr-export-${date}.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    return data;
+  }
+
   @Delete('me')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteMe(
@@ -52,6 +66,13 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async changeEmail(@CurrentUser() user: User, @Body() dto: ChangeEmailDto) {
     await this.authService.requestEmailChange(user.id, dto.email);
+  }
+
+  @Throttle({ default: { ttl: 3600000, limit: 5 } })
+  @Patch('me/password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changePassword(@CurrentUser() user: User, @Body() dto: ChangePasswordDto) {
+    await this.authService.changePassword(user.id, dto.currentPassword, dto.newPassword);
   }
 
   @Patch('me')

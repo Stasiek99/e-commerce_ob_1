@@ -31,6 +31,7 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
 import { ReturnsModule } from './modules/returns/returns.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
+import { RedisModule } from './modules/redis/redis.module';
 
 @Module({
   imports: [
@@ -78,24 +79,13 @@ import { MonitoringModule } from './modules/monitoring/monitoring.module';
       },
     }),
     ScheduleModule.forRoot(),
+    RedisModule,
     BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const isProd = config.get<string>('NODE_ENV') === 'production';
-        const redis = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
-          maxRetriesPerRequest: null,
-          // In dev without Redis: give up after first failure instead of retrying forever.
-          // In prod: exponential backoff up to 5s between retries.
-          retryStrategy: isProd
-            ? (times) => Math.min(times * 500, 5_000)
-            : () => null,
-        });
-        redis.on('error', (err: Error) => {
-          console.warn(`[Redis] ${err.message}`);
-        });
-        return { connection: redis };
-      },
+      imports: [RedisModule],
+      inject: ['REDIS_CLIENT'],
+      useFactory: (redis: IORedis) => ({ connection: redis }),
     }),
+    BullModule.registerQueue({ name: 'email' }),
     CorrelationModule,
     PrismaModule,
     AuthModule,

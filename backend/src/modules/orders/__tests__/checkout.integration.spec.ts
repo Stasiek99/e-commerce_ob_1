@@ -22,6 +22,7 @@ import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { ConfigService } from '@nestjs/config';
+import { ShippingRatesService } from '../../shipping/shipping-rates.service';
 
 // Fixed IDs shared across the test scenarios
 const IDS = {
@@ -93,7 +94,7 @@ describe('Checkout Integration Flow', () => {
   let emailService: jest.Mocked<EmailQueueService>;
 
   const buildTransactionMock = (overrides: {
-    stock?: number;
+    insufficientStock?: boolean;
     orderResult?: any;
   } = {}) =>
     jest.fn().mockImplementation(async (fn: any) => {
@@ -101,11 +102,9 @@ describe('Checkout Integration Flow', () => {
         $executeRawUnsafe: jest.fn(),
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
         productVariant: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: IDS.variantId,
-            stock: overrides.stock ?? 10,
+          updateMany: jest.fn().mockResolvedValue({
+            count: overrides.insufficientStock ? 0 : 1,
           }),
-          update: jest.fn(),
         },
         order: {
           create: jest.fn().mockResolvedValue(
@@ -137,6 +136,7 @@ describe('Checkout Integration Flow', () => {
             order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
             orderEvent: { create: jest.fn() },
             payment: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             $transaction: jest.fn(),
           },
         },
@@ -175,6 +175,13 @@ describe('Checkout Integration Flow', () => {
           useValue: {
             get: jest.fn().mockReturnValue('pln'),
             getOrThrow: jest.fn().mockReturnValue('https://store.example.com/checkout/success'),
+          },
+        },
+        {
+          provide: ShippingRatesService,
+          useValue: {
+            getRateForCarrier: jest.fn().mockResolvedValue(1499),
+            getRateMap: jest.fn().mockResolvedValue({ INPOST: 1499, DHL: 1999, GLS: 1799, DPD: 1599, DPD_COURIER: 1699 }),
           },
         },
       ],
@@ -450,7 +457,7 @@ describe('Checkout Integration Flow', () => {
       });
 
       prisma.$transaction.mockImplementation(
-        buildTransactionMock({ stock: 2 }), // only 2 in stock, but 5 requested
+        buildTransactionMock({ insufficientStock: true }),
       );
 
       await expect(

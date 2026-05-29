@@ -68,6 +68,112 @@ export class UsersService {
     return this.prisma.address.delete({ where: { id: addressId } });
   }
 
+  async exportData(userId: string, userEmail: string) {
+    const [user, orders, reviews, wishlistItems, returnRequests] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { addresses: true },
+      }),
+      this.prisma.order.findMany({
+        where: { userId },
+        select: {
+          orderNumber: true,
+          status: true,
+          snapshotFirstName: true,
+          snapshotLastName: true,
+          snapshotCompany: true,
+          snapshotStreet: true,
+          snapshotCity: true,
+          snapshotPostalCode: true,
+          snapshotCountry: true,
+          snapshotPhone: true,
+          snapshotEmail: true,
+          snapshotNip: true,
+          itemsTotalInCents: true,
+          shippingCostInCents: true,
+          discountInCents: true,
+          totalInCents: true,
+          couponCode: true,
+          carrierCode: true,
+          notes: true,
+          createdAt: true,
+          items: {
+            select: {
+              snapshotName: true,
+              snapshotSku: true,
+              snapshotPrice: true,
+              quantity: true,
+            },
+          },
+          payment: {
+            select: {
+              status: true,
+              provider: true,
+              amountInCents: true,
+              refundedAmountInCents: true,
+              currency: true,
+              paidAt: true,
+            },
+          },
+          shipment: {
+            select: {
+              status: true,
+              carrierCode: true,
+              trackingNumber: true,
+              shippedAt: true,
+              deliveredAt: true,
+              estimatedDelivery: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.review.findMany({
+        where: { userId },
+        select: {
+          rating: true,
+          title: true,
+          body: true,
+          status: true,
+          createdAt: true,
+          product: { select: { name: true, slug: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.wishlistItem.findMany({
+        where: { userId },
+        select: {
+          addedAt: true,
+          notifyOnRestock: true,
+          product: { select: { name: true, slug: true } },
+        },
+      }),
+      this.prisma.returnRequest.findMany({
+        where: { email: userEmail },
+        select: {
+          orderNumber: true,
+          type: true,
+          status: true,
+          reason: true,
+          requestedResolution: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    const { passwordHash, googleId, ...profile } = user!;
+
+    return {
+      exportedAt: new Date().toISOString(),
+      profile,
+      orders,
+      reviews,
+      wishlist: wishlistItems,
+      returnRequests,
+    };
+  }
+
   async deleteAccount(userId: string): Promise<void> {
     await this.prisma.$transaction([
       // GDPR Art. 17 — scrub PII from order snapshots; the FK is nulled by the

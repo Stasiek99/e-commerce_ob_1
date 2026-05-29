@@ -93,4 +93,8 @@ export class EmailQueueService {
   sendReturnAdminNotification(data: Payload<'return_admin_notification'>) {
     return this.enqueue('return_admin_notification', { type: 'return_admin_notification', payload: data });
   }
+
+  sendReturnStatusUpdate(data: Payload<'return_status_update'>) {
+    return this.enqueue('return_status_update', { type: 'return_status_update', payload: data });
+  }
 }
