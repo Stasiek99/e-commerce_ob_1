@@ -9,6 +9,20 @@ import { PaymentsService } from '../../payments/payments.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { InvoiceService } from '../../invoice/invoice.service';
+import { ShippingRatesService } from '../../shipping/shipping-rates.service';
+
+const MOCK_RATES: Record<CarrierCode, number> = {
+  [CarrierCode.INPOST]:      1499,
+  [CarrierCode.DHL]:         1999,
+  [CarrierCode.GLS]:         1799,
+  [CarrierCode.DPD]:         1599,
+  [CarrierCode.DPD_COURIER]: 1699,
+};
+
+const mockShippingRatesService = {
+  getRateForCarrier: jest.fn((code: CarrierCode) => Promise.resolve(MOCK_RATES[code] ?? 1999)),
+  getRateMap: jest.fn(() => Promise.resolve(MOCK_RATES)),
+};
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -123,6 +137,10 @@ describe('OrdersService', () => {
             processInvoice: jest.fn(),
           },
         },
+        {
+          provide: ShippingRatesService,
+          useValue: mockShippingRatesService,
+        },
       ],
     }).compile();
 
@@ -131,6 +149,34 @@ describe('OrdersService', () => {
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
     invoiceService = module.get(InvoiceService);
+  });
+
+  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
+
+  describe('onModuleInit', () => {
+    it('creates sequences for the current and next year outside any transaction', async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      );
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+      );
+    });
+
+    it('uses the top-level prisma client (not a transaction client) for sequence DDL', async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      await service.onModuleInit();
+
+      // prisma.$executeRawUnsafe is the service-level client; tx.$executeRawUnsafe
+      // is the transaction-scoped client — DDL must never reach the latter
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('createFromCart', () => {
@@ -951,30 +997,149 @@ describe('OrdersService', () => {
   });
 
   describe('updateStatus', () => {
-    it('updates the order status', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PENDING_PAYMENT });
-      prisma.$transaction.mockResolvedValue([{ id: 'o-1', status: OrderStatus.PROCESSING }, {}]);
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock }> = {}) => ({
+      productVariant: { update: overrides.variantUpdate ?? jest.fn() },
+      order: { update: overrides.orderUpdate ?? jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('transitions non-terminal status without restoring stock', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PENDING_PAYMENT,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate, orderUpdate: txOrderUpdate })),
+      );
 
       await service.updateStatus('o-1', OrderStatus.PROCESSING);
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'o-1' },
-        data: { status: OrderStatus.PROCESSING },
+      expect(txOrderUpdate).toHaveBeenCalledWith({ where: { id: 'o-1' }, data: { status: OrderStatus.PROCESSING } });
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('restores active stock when transitioning to CANCELLED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [
+          { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+          { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+        ],
       });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(increments).toEqual([
+        { id: 'pv-1', amount: 2 },
+        { id: 'pv-2', amount: 2 },
+      ]);
+    });
+
+    it('restores active stock when transitioning to REFUNDED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(increments).toEqual([{ id: 'pv-1', amount: 1 }]);
+    });
+
+    it('does not restore stock when transitioning from CANCELLED (already restored)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.CANCELLED,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not restore stock when transitioning from REFUNDED (already restored)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.REFUNDED,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op (no DB calls) when status is already the target', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.CANCELLED,
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips fully-cancelled items (activeQty = 0) when restoring stock', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PARTIALLY_REFUNDED,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — skip
+          { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+        ],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(increments).toHaveLength(1);
+      expect(increments[0]).toEqual({ id: 'pv-2', amount: 2 });
     });
 
     it('fires review-request email (fire-and-forget) when status becomes DELIVERED', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PROCESSING });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
-      // dispatchReviewRequestEmail calls order.findUnique — return null to exit early
-      prisma.order.findUnique.mockResolvedValue(null);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PROCESSING,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early
 
       await service.updateStatus('o-1', OrderStatus.DELIVERED);
-      await Promise.resolve(); // flush microtasks
+      await Promise.resolve();
 
-      expect(prisma.order.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: OrderStatus.DELIVERED } }),
-      );
+      expect(prisma.order.findUnique).toHaveBeenCalled();
     });
   });
 
@@ -1260,8 +1425,10 @@ describe('OrdersService', () => {
         makeOrder('o-2', 'ORD-002', OrderStatus.PROCESSING, 'TRK002'),
       ];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
 
@@ -1292,8 +1459,10 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID, 'TRK001')];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       await service.bulkMarkAsShipped(['o-1']);
       await Promise.resolve();
@@ -1307,8 +1476,10 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)]; // no tracking
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       await service.bulkMarkAsShipped(['o-1']);
       await Promise.resolve();
@@ -1719,10 +1890,12 @@ describe('OrdersService', () => {
     });
   });
 
-  describe('new_order_notification', () => {
+  // Merchant notification was removed from createFromCart — it now fires only
+  // on checkout.session.completed (confirmed payment). Tests in
+  // payments.service.spec.ts cover the notification payload and channels.
+  describe('createFromCart — no premature merchant notification', () => {
     let svc: OrdersService;
     let emailService: any;
-    let configGetMock: jest.Mock;
 
     const buildTx = () => ({
       $executeRawUnsafe: jest.fn(),
@@ -1737,8 +1910,6 @@ describe('OrdersService', () => {
     const DHL_DTO = { newAddress: mockAddress, carrierCode: CarrierCode.DHL };
 
     beforeEach(async () => {
-      configGetMock = jest.fn().mockReturnValue(undefined);
-
       const module: TestingModule = await Test.createTestingModule({
         providers: [
           OrdersService,
@@ -1785,8 +1956,20 @@ describe('OrdersService', () => {
               applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
             },
           },
-          { provide: ConfigService, useValue: { get: configGetMock, getOrThrow: jest.fn() } },
+          {
+            provide: ConfigService,
+            useValue: {
+              // ADMIN_ALERT_EMAIL is set — notification must still NOT fire from createFromCart
+              get: jest.fn().mockImplementation((key: string) => {
+                if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+                if (key === 'FRONTEND_URL') return 'https://mystore.pl';
+                return undefined;
+              }),
+              getOrThrow: jest.fn().mockReturnValue('https://example.com'),
+            },
+          },
           { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
+          { provide: ShippingRatesService, useValue: mockShippingRatesService },
         ],
       }).compile();
 
@@ -1794,107 +1977,41 @@ describe('OrdersService', () => {
       emailService = module.get(EmailQueueService);
     });
 
-    it('sends notification to ADMIN_ALERT_EMAIL when configured', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return undefined;
-      });
-
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
-
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'admin@store.com',
-          customerEmail: 'customer@example.com',
-          orderNumber: 'ORD-2026-000001',
-          carrierCode: CarrierCode.DHL,
-        }),
-      );
-    });
-
-    it('falls back to EMAIL_FROM when ADMIN_ALERT_EMAIL is absent', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'EMAIL_FROM') return 'noreply@store.com';
-        return undefined;
-      });
-
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
-
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'noreply@store.com' }),
-      );
-    });
-
-    it('skips notification when neither ADMIN_ALERT_EMAIL nor EMAIL_FROM is configured', async () => {
-      // configGetMock already returns undefined for all keys
+    it('never fires sendNewOrderNotification from createFromCart even when ADMIN_ALERT_EMAIL is configured', async () => {
       await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
       await Promise.resolve();
 
       expect(emailService.sendNewOrderNotification).not.toHaveBeenCalled();
     });
 
-    it('does not propagate notification queue failure to the caller', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return undefined;
-      });
-      emailService.sendNewOrderNotification.mockRejectedValue(new Error('Redis down'));
-
-      await expect(
-        svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO),
-      ).resolves.toMatchObject({ orderId: 'o-1', orderNumber: 'ORD-2026-000001' });
-    });
-
-    it('includes correct items and total in the notification payload', async () => {
-      configGetMock.mockImplementation((key: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return undefined;
-      });
-
+    it('still sends order confirmation email to the customer from createFromCart', async () => {
       await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
       await Promise.resolve();
 
-      // itemsTotal=114700 + DHL shipping=1999 = 116699
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          totalInCents: 116699,
-          items: [
-            { name: 'Dior Sauvage – 100ml', quantity: 2, price: 34900 },
-            { name: 'Chanel No 5 – 50ml', quantity: 1, price: 44900 },
-          ],
-        }),
+      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'customer@example.com' }),
       );
     });
+  });
 
-    it('includes adminUrl when FRONTEND_URL is set', async () => {
-      configGetMock.mockImplementation((key: string, defaultVal?: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        if (key === 'FRONTEND_URL') return 'https://store.example.com';
-        return defaultVal;
+  describe('getUnreadCount', () => {
+    it('returns count of orders with PAID status', async () => {
+      prisma.order.count.mockResolvedValue(7);
+
+      const result = await service.getUnreadCount();
+
+      expect(result).toEqual({ count: 7 });
+      expect(prisma.order.count).toHaveBeenCalledWith({
+        where: { status: OrderStatus.PAID },
       });
-
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
-
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ adminUrl: 'https://store.example.com/admin/orders/o-1' }),
-      );
     });
 
-    it('omits adminUrl when FRONTEND_URL is not set', async () => {
-      configGetMock.mockImplementation((key: string, defaultVal?: string) => {
-        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
-        return defaultVal; // 'FRONTEND_URL' gets its '' default, which is falsy
-      });
+    it('returns { count: 0 } when no PAID orders exist', async () => {
+      prisma.order.count.mockResolvedValue(0);
 
-      await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
-      await Promise.resolve();
+      const result = await service.getUnreadCount();
 
-      expect(emailService.sendNewOrderNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ adminUrl: undefined }),
-      );
+      expect(result).toEqual({ count: 0 });
     });
   });
 
@@ -1939,12 +2056,12 @@ describe('OrdersService', () => {
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000042`);
 
-      // Verify it creates sequence if not exists
-      expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      // DDL no longer runs inside the transaction (moved to onModuleInit)
+      expect(tx.$executeRawUnsafe).not.toHaveBeenCalledWith(
+        expect.stringContaining('CREATE SEQUENCE'),
       );
 
-      // Verify it uses nextval from the sequence
+      // nextval is still called inside the transaction (pure DML — no lock risk)
       expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
         `SELECT nextval('order_number_seq_${year}')`,
       );

@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
+import * as Sentry from '@sentry/nestjs';
+import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
@@ -182,8 +184,10 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
-    // Internal admin notification (fire-and-forget)
-    const adminEmail = this.configService.get<string>('ADMIN_ALERT_EMAIL');
+    // Merchant notification — email + optional Slack push (fire-and-forget)
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
     if (adminEmail) {
       const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
       this.emailService
@@ -198,9 +202,34 @@ export class PaymentsService {
             price: i.snapshotPrice,
           })),
           carrierCode: payment.order.carrierCode,
-          adminUrl: frontendUrl ? `${frontendUrl}/admin` : undefined,
+          adminUrl: frontendUrl
+            ? `${frontendUrl}/admin/orders/${payment.orderId}`
+            : undefined,
         })
-        .catch(() => undefined);
+        .catch((err: Error) => {
+          this.logger.error(
+            `Merchant email notification failed for order ${payment.order.orderNumber}: ${err.message}`,
+          );
+          Sentry.captureException(err, {
+            tags: {
+              'notification.channel': 'email',
+              'order.number': payment.order.orderNumber,
+            },
+          });
+        });
+    }
+
+    const slackWebhookUrl = this.configService.get<string>('MERCHANT_SLACK_WEBHOOK_URL');
+    if (slackWebhookUrl) {
+      this.postSlackOrderAlert(slackWebhookUrl, {
+        orderNumber: payment.order.orderNumber,
+        snapshotEmail: payment.order.snapshotEmail,
+        totalInCents: payment.order.totalInCents,
+      }).catch((err: Error) => {
+        this.logger.warn(
+          `Slack merchant notification failed for order ${payment.order.orderNumber}: ${err.message}`,
+        );
+      });
     }
 
     // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
@@ -225,6 +254,11 @@ export class PaymentsService {
       )
       .catch((err: Error) => {
         this.logger.error(`Invoice generation failed for order ${payment.order.orderNumber}: ${err.message}`);
+        Sentry.withScope((scope) => {
+          scope.setTag('payment.event', 'invoice_generation_failed');
+          scope.setContext('order', { orderNumber: payment.order.orderNumber, paymentId: payment.id });
+          Sentry.captureException(err);
+        });
         // Still deliver payment confirmation even if invoice failed
         this.emailService
           .sendPaymentConfirmed({
@@ -315,6 +349,12 @@ export class PaymentsService {
       this.logger.error(
         `Stripe refund ${refund.id} FAILED for order ${payment.order.orderNumber} — manual review required`,
       );
+      Sentry.withScope((scope) => {
+        scope.setLevel('error');
+        scope.setTag('payment.event', 'refund_failed');
+        scope.setContext('refund', { refundId: refund.id, orderNumber: payment.order.orderNumber, paymentId: payment.id });
+        Sentry.captureMessage(`Stripe refund failed: ${refund.id} for order ${payment.order.orderNumber}`, 'error');
+      });
       return;
     }
 
@@ -378,6 +418,20 @@ export class PaymentsService {
             `but order is still ${payment.order.status} — sync path failed. ` +
             `Applying best-effort recovery; cancelledQuantity requires manual correction.`,
         );
+        Sentry.withScope((scope) => {
+          scope.setLevel('fatal');
+          scope.setTag('payment.event', 'partial_refund_sync_failed');
+          scope.setContext('refund', {
+            refundId: refund.id,
+            orderNumber: payment.order.orderNumber,
+            orderStatus: payment.order.status,
+            paymentId: payment.id,
+          });
+          Sentry.captureMessage(
+            `[CRITICAL] Partial refund sync failure: order ${payment.order.orderNumber} requires manual correction`,
+            'fatal',
+          );
+        });
         await this.prisma.$transaction([
           this.prisma.order.update({
             where: { id: payment.orderId },
@@ -461,6 +515,11 @@ export class PaymentsService {
         this.logger.error(
           `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
         );
+        Sentry.withScope((scope) => {
+          scope.setTag('payment.event', 'reconciliation_failed');
+          scope.setContext('payment', { paymentId: payment.id });
+          Sentry.captureException(err);
+        });
       }
     }
   }
@@ -685,5 +744,15 @@ export class PaymentsService {
     this.logger.log(
       `Payment failed for order ${orderId} — stock restored, order cancelled (${failureReason})`,
     );
+  }
+
+  private async postSlackOrderAlert(
+    webhookUrl: string,
+    order: { orderNumber: string; snapshotEmail: string; totalInCents: number },
+  ): Promise<void> {
+    const total = (order.totalInCents / 100).toFixed(2);
+    await axios.post(webhookUrl, {
+      text: `🛍️ New paid order *#${order.orderNumber}* — ${total} PLN — ${order.snapshotEmail}`,
+    });
   }
 }

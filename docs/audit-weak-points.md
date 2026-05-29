@@ -2,37 +2,44 @@
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
 ---
-## Compliance & Legal (Polish market-specific)
-
-### 15. Legal pages must have real content *(Pragmatist)*
-`/privacy`, `/terms`, `/withdrawal` routes exist. Placeholder text is illegal in production under RODO/UoK. Non-negotiable before first real transaction.
-
----
-
 ## Operational & Reliability Gaps
 
-### 16. No error monitoring *(3/5 agents)*
-No Sentry DSN. Every 500, every failed webhook, every queue stall is invisible until a customer reports it. Mean time to detect a critical failure = days. 30 minutes to wire Sentry is the highest ROI action on this list.
-
-### 17. JWT refresh token — no rotation on reuse, no network-drop recovery *(Skeptic + Risk Analyst)*
-7-day httpOnly cookie with no rotation. A stolen cookie is valid for the full 7 days. If the network drops after the old token is revoked but before the new one reaches the client, the user is silently logged out mid-checkout — cart state diverges.
-
-### 18. `order_number_seq_{year}` DDL inside a transaction *(Domain Expert)*
-`CREATE SEQUENCE IF NOT EXISTS` inside a Prisma interactive transaction acquires a DDL lock. Under concurrent order creation, two transactions can deadlock on sequence creation. Move to a migration.
-
-### 19. No merchant notification for new paid orders *(First-Principles)*
-The admin alert email fires only if `ADMIN_ALERT_EMAIL` is configured and is fire-and-forget. No push notification, no dashboard badge for new orders. At any volume above a handful per day, orders will be missed and fulfillment SLAs broken.
-
-### 20. Return-to-stock path inconsistent *(First-Principles)*
-Stock restoration only happens via `paymentsService.refundPayment()` (Stripe refund path). Accepting a physical return and updating the order status in the admin panel does NOT restore stock. Inventory will silently drift with every manual return.
-
-### 21. Shipping rates are hardcoded constants *(Domain Expert)*
-`SHIPPING_RATES` in `orders.service.ts` are compile-time constants. Every carrier rate change, promotional free-shipping threshold, or weight-based surcharge requires a production code deploy.
-
-### 22. SSR breaks the GDPR consent layer *(Domain Expert)*
-`ConsentService` reads `localStorage` synchronously. On SSR (`isPlatformBrowser === false`), it returns null — every SSR-delivered page renders as "consent undecided," causing the cookie banner to flash for users who already consented and suppressing GA4 unnecessarily.
-
 ---
+
+Legal / Compliance
+- Kasa fiskalna (fiscal printer) — B2C sales in Poland above the annual threshold require issuing fiscal receipts via a registered fiscal device or cloud fiscal service (e.g. Novitus Cloud). Software invoices alone don't
+  satisfy this.
+- EU Omnibus Directive — when displaying a promotional price, you must show the lowest price from the preceding 30 days. Your discount logic needs to store price history, not just the current price.
+- Cosmetics Regulation (EC 1223/2009) — fragrances are regulated cosmetics. Every product sold in the EU must have a "Responsible Person" registered in the CPNP (Cosmetic Products Notification Portal) before it can be listed.
+  If you're not the manufacturer, verify your supplier covered this.
+- Allergen disclosure — EU law requires listing 26 fragrance allergens by INCI name on product pages when above threshold concentrations. Non-disclosure is a regulatory issue, not just a UX one.
+- Authorized reseller status — selling branded fragrances (Dior, Chanel, Creed) without authorization exposes you to trademark exhaustion disputes and grey-market supplier risk. Establish a clear paper trail from supplier.
+- Regulamin (terms of service) — Polish consumer law has specific mandatory clauses (UOKiK checklist) that differ from generic EU T&Cs. A lawyer review is cheaper than a UOKiK fine.
+
+Financial / Tax
+- JPK_V7 reporting — Polish VAT registered businesses must submit a combined SAF-T + VAT return file monthly. Your accounting tool (not your e-commerce platform) must generate this, but your order/invoice data must be
+  structured to feed it.
+- EU VAT OSS — if you sell to consumers in other EU countries above the €10k threshold, you register once in Poland and file a quarterly OSS return instead of 27 separate VAT registrations. Plan your checkout to capture
+  customer country accurately.
+- Chargeback ratio — Stripe will flag and eventually close accounts above ~1% dispute rate. You need a fraud review step before fulfillment, not just after disputes arrive.
+
+Technical
+- Bot protection on checkout — scalpers and stockout bots hit fragrance stores heavily (limited editions). Consider Cloudflare Turnstile or similar on cart add and checkout start, not just login.
+- Crawl budget and faceted navigation — if you add filters (size, brand, concentration), each combination generates a URL. Without noindex or canonical tagging on filter pages, Google wastes crawl budget and you get duplicate
+  content penalties.
+- Structured data (Schema.org Product) — price, availability, aggregateRating, and breadcrumb markup directly affects Google Shopping and rich results CTR. Worth doing before launch, not after.
+- Load testing before first campaign — Railway hobby tier has cold starts. Run a simple k6 or locust test simulating a flash sale traffic spike before you send your first email blast.
+
+Operations
+- Returns physical process — your software handles RMA logic, but do you have a returns address, a policy for opened vs. sealed bottles, and a process for re-stocking vs. destroying returned goods? Opened fragrance bottles
+  can't legally be resold as new in the EU.
+- Carrier damage claims — InPost and DPD have strict time windows (usually 24–48h) to file damage claims. You need a photo-at-packing workflow or you'll lose every dispute.
+- Supplier lead times for reorders — out-of-stock after a successful launch is a retention killer. Know your reorder lead time per SKU and set reorder-point alerts before you run campaigns.
+
+Analytics / Measurement
+- GA4 e-commerce events — view_item, add_to_cart, begin_checkout, purchase — need to be wired before launch or you have no funnel data from day one.
+- Conversion baseline before first ad spend — run organic traffic for 2–4 weeks first so you have a baseline CVR to measure paid campaigns against. Launching ads the same day as the site means you can't distinguish ad quality
+  from site quality.
 
 ## Prioritized Fix Order (shortest path to safe first order)
 

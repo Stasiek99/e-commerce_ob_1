@@ -346,6 +346,12 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Google OAuth: update Authorized redirect URIs to production domain
 - [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
+- ### 🟢 LOW — No newsletter signup *(not yet scheduled)*
+- No `POST /newsletter/subscribe` backend endpoint
+- No signup form in footer, homepage hero, or post-purchase flow
+- **Effect:** No email list building; lost re-engagement channel
+- **Fix (if pursued):** One-field email form in footer → `POST /newsletter/subscribe` → queued welcome email via `EmailQueueService`
+
 
 **Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · **At least one verified DB backup exists before Stripe live mode**
 

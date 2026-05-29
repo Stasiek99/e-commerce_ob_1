@@ -97,12 +97,36 @@ describe('errorInterceptor', () => {
       statusText: 'Unauthorized',
     });
 
-    // Retry with new Authorization header
+    // Retry carries the new Authorization header AND the X-Retry guard header
     const retry = httpMock.expectOne('/api/orders');
-    expect(retry.request.headers.get('Authorization')).toBe(
-      `Bearer ${newToken}`,
-    );
+    expect(retry.request.headers.get('Authorization')).toBe(`Bearer ${newToken}`);
+    expect(retry.request.headers.get('X-Retry')).toBe('1');
     retry.flush({ orders: [] });
+  });
+
+  it('does not trigger a second refresh when a retried request returns 401 (X-Retry prevents infinite loop)', (done) => {
+    const newToken = 'new-access-token';
+    authService.refresh.mockReturnValue(of({ accessToken: newToken }));
+
+    http.get('/api/orders').subscribe({
+      error: () => {
+        // refresh called exactly once — the second 401 is passed through
+        expect(authService.refresh).toHaveBeenCalledTimes(1);
+        done();
+      },
+    });
+
+    // First request → 401 (triggers refresh + retry)
+    httpMock.expectOne('/api/orders').flush(null, {
+      status: 401,
+      statusText: 'Unauthorized',
+    });
+
+    // Retried request also 401s — must NOT trigger another refresh
+    httpMock.expectOne('/api/orders').flush(null, {
+      status: 401,
+      statusText: 'Unauthorized',
+    });
   });
 
   it('clears session and calls logout when the refresh itself fails', (done) => {

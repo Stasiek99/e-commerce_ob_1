@@ -6,9 +6,10 @@ import { PaymentsModule } from '../payments/payments.module';
 import { EmailModule } from '../email/email.module';
 import { CouponModule } from '../coupons/coupon.module';
 import { InvoiceModule } from '../invoice/invoice.module';
+import { ShippingModule } from '../shipping/shipping.module';
 
 @Module({
-  imports: [CartModule, PaymentsModule, EmailModule, CouponModule, InvoiceModule],
+  imports: [CartModule, PaymentsModule, EmailModule, CouponModule, InvoiceModule, ShippingModule],
   providers: [OrdersService],
   controllers: [OrdersController],
   exports: [OrdersService],
