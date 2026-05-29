@@ -44,14 +44,16 @@ Done:
 - **File:** `backend/src/modules/returns/returns.service.ts`
 - **Fix applied:** `markRefunded()` now calls `paymentsService.refundPayment(req.orderId, 'RETURN_APPROVAL')` before flipping status to COMPLETED. `refundPayment` handles Stripe refund issuance, stock restore, and `order.status → REFUNDED` atomically. If Stripe fails, the return stays APPROVED (retryable). Guard added for `orderId: null` (legacy rows). `PaymentsModule` added to `ReturnsModule` imports.
 
+### 6 — SSR `localStorage` mock is a process-level singleton — cross-request state leakage
+- **Fix applied:**
+  - `main.server.ts`: replaced shared-store singleton with a stateless no-op (returns null/empty; never retains data between requests)
+  - `frontend/src/app/core/tokens/storage.tokens.ts` (new): `LOCAL_STORAGE` injection token
+  - `app.config.ts`: provides `window.localStorage` for browser; SSR overrides this per-request
+  - `server.ts`: `createRequestStorageMock()` creates a fresh isolated store per request, passed via `CommonEngine.render()` providers
+  - `WishlistService`: injects `LOCAL_STORAGE` token instead of using the global; adds `isPlatformBrowser()` guard on every access — returns `[]` and skips writes during SSR
+
 Not yet:
 ## 🔴 BLOCKER
-
-### 6 — SSR `localStorage` mock is a process-level singleton — cross-request state leakage *(4 agents)*
-- **File:** `frontend/src/main.server.ts:18-39`
-- **Issue:** `createStorageMock()` is called once at module load. The `store: {}` object is assigned to `globalThis.localStorage`. Every concurrent SSR request shares the same dict. Request A's `cart_session_id` written there is visible to Request B. After the first SSR render sets the key, `getOrCreateSessionId()` returns the same UUID for all subsequent renders.
-- **Impact:** User A's cart/wishlist state bleeds into User B's rendered HTML. PII cross-contamination.
-- **Fix:** Create a new store per request by passing it via Angular's `providers` array in `CommonEngine.render()`. Also: `WishlistService.loadFromStorage()` (lines 18, 96, 102, 110, 118) calls `localStorage.getItem()` directly in a field initializer — no `isPlatformBrowser()` guard. Wrap every `localStorage` call in services with `isPlatformBrowser()`.
 
 ### 7 — No expired `RefreshToken` cleanup — table grows unbounded
 - **File:** `backend/src/modules/auth/auth.service.ts` (no `@Cron` for purge)
