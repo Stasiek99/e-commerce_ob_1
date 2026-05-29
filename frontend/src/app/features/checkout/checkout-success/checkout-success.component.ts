@@ -1,6 +1,8 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
+import { timer, switchMap, takeWhile, take } from 'rxjs';
 import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
 import { AnalyticsService } from '../../../core/services/analytics.service';
@@ -160,6 +162,7 @@ export class CheckoutSuccessComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly analytics = inject(AnalyticsService);
   private readonly cart = inject(CartService);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly loading = signal(true);
   readonly paid = signal(false);
@@ -174,19 +177,27 @@ export class CheckoutSuccessComponent implements OnInit {
       return;
     }
 
-    this.http
-      .get<PaymentStatusResponse>(`${environment.apiUrl}/payments/${id}/status`)
-      .subscribe({
-        next: (res) => {
-          this.paid.set(res.status === 'COMPLETED');
-          if (res.status === 'COMPLETED') {
-            this.cart.clear();
-            this.firePurchaseEvent(id);
-          }
+    // Poll every 3 s for up to 30 s (10 ticks) so a slow webhook race
+    // doesn't leave the user stuck on "Płatność w toku" forever.
+    timer(0, 3000).pipe(
+      switchMap(() =>
+        this.http.get<PaymentStatusResponse>(`${environment.apiUrl}/payments/${id}/status`),
+      ),
+      takeWhile((res) => res.status !== 'COMPLETED', true),
+      take(10),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe({
+      next: (res) => {
+        if (res.status === 'COMPLETED') {
+          this.paid.set(true);
+          this.cart.clear();
+          this.firePurchaseEvent(id);
           this.loading.set(false);
-        },
-        error: () => this.loading.set(false),
-      });
+        }
+      },
+      error: () => this.loading.set(false),
+      complete: () => this.loading.set(false),
+    });
   }
 
   private firePurchaseEvent(orderId: string): void {
