@@ -37,6 +37,19 @@ const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
+// Explicit state-machine allowlist. Any transition not listed here is invalid.
+// Terminal states (CANCELLED, REFUNDED) have empty arrays — no exit.
+const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  [OrderStatus.PENDING_PAYMENT]:    [OrderStatus.PAID, OrderStatus.CANCELLED],
+  [OrderStatus.PAID]:               [OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.PROCESSING]:         [OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.SHIPPED]:            [OrderStatus.DELIVERED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.DELIVERED]:          [OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
+  [OrderStatus.CANCELLED]:          [],
+  [OrderStatus.REFUNDED]:           [],
+};
+
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
@@ -619,6 +632,12 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (current.status === status) return;
+
+    if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
+      throw new BadRequestException(
+        `Invalid order status transition: ${current.status} → ${status}`,
+      );
+    }
 
     const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
     const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];

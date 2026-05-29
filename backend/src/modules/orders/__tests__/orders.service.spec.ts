@@ -1064,7 +1064,7 @@ describe('OrdersService', () => {
 
     it('transitions non-terminal status without restoring stock', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PENDING_PAYMENT,
+        status: OrderStatus.PAID,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
       const txVariantUpdate = jest.fn();
@@ -1123,34 +1123,30 @@ describe('OrdersService', () => {
       expect(increments).toEqual([{ id: 'pv-1', amount: 1 }]);
     });
 
-    it('does not restore stock when transitioning from CANCELLED (already restored)', async () => {
+    it('throws BadRequestException when attempting to exit terminal state CANCELLED', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         status: OrderStatus.CANCELLED,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
-      const txVariantUpdate = jest.fn();
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn(makeTx({ variantUpdate: txVariantUpdate })),
-      );
 
-      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+      await expect(
+        service.updateStatus('o-1', OrderStatus.REFUNDED),
+      ).rejects.toThrow(BadRequestException);
 
-      expect(txVariantUpdate).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('does not restore stock when transitioning from REFUNDED (already restored)', async () => {
+    it('throws BadRequestException when attempting to exit terminal state REFUNDED', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         status: OrderStatus.REFUNDED,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
-      const txVariantUpdate = jest.fn();
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn(makeTx({ variantUpdate: txVariantUpdate })),
-      );
 
-      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(BadRequestException);
 
-      expect(txVariantUpdate).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('is a no-op (no DB calls) when status is already the target', async () => {
@@ -1181,7 +1177,7 @@ describe('OrdersService', () => {
         })),
       );
 
-      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
 
       expect(increments).toHaveLength(1);
       expect(increments[0]).toEqual({ id: 'pv-2', amount: 2 });
@@ -1189,7 +1185,7 @@ describe('OrdersService', () => {
 
     it('fires review-request email (fire-and-forget) when status becomes DELIVERED', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PROCESSING,
+        status: OrderStatus.SHIPPED,
         items: [],
       });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
@@ -1199,6 +1195,101 @@ describe('OrdersService', () => {
       await Promise.resolve();
 
       expect(prisma.order.findUnique).toHaveBeenCalled();
+    });
+  });
+
+  // ─── updateStatus — state machine transition guard ───────────────────────────
+
+  describe('updateStatus — state machine transition guard', () => {
+    const makeTx = () => ({
+      productVariant: { update: jest.fn() },
+      order: { update: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('throws BadRequestException for every impossible transition from a terminal state', async () => {
+      const terminalToTarget: Array<[OrderStatus, OrderStatus]> = [
+        [OrderStatus.CANCELLED, OrderStatus.PAID],
+        [OrderStatus.CANCELLED, OrderStatus.PROCESSING],
+        [OrderStatus.CANCELLED, OrderStatus.SHIPPED],
+        [OrderStatus.CANCELLED, OrderStatus.DELIVERED],
+        [OrderStatus.CANCELLED, OrderStatus.REFUNDED],
+        [OrderStatus.CANCELLED, OrderStatus.PARTIALLY_REFUNDED],
+        [OrderStatus.REFUNDED,  OrderStatus.PAID],
+        [OrderStatus.REFUNDED,  OrderStatus.PROCESSING],
+        [OrderStatus.REFUNDED,  OrderStatus.SHIPPED],
+        [OrderStatus.REFUNDED,  OrderStatus.DELIVERED],
+        [OrderStatus.REFUNDED,  OrderStatus.CANCELLED],
+        [OrderStatus.REFUNDED,  OrderStatus.PARTIALLY_REFUNDED],
+      ];
+
+      for (const [current, target] of terminalToTarget) {
+        prisma.order.findUniqueOrThrow.mockResolvedValue({ status: current, items: [] });
+
+        await expect(service.updateStatus('o-1', target)).rejects.toThrow(BadRequestException);
+      }
+    });
+
+    it('throws BadRequestException for illegal forward skips (e.g. PENDING_PAYMENT → DELIVERED)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PENDING_PAYMENT,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.DELIVERED),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException for illegal backwards transitions (e.g. SHIPPED → PROCESSING)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.PROCESSING),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not enter the transaction when the guard fires', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.REFUNDED,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.PROCESSING),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('allows every valid transition in the happy path', async () => {
+      const validTransitions: Array<[OrderStatus, OrderStatus]> = [
+        [OrderStatus.PENDING_PAYMENT,    OrderStatus.PAID],
+        [OrderStatus.PENDING_PAYMENT,    OrderStatus.CANCELLED],
+        [OrderStatus.PAID,               OrderStatus.PROCESSING],
+        [OrderStatus.PAID,               OrderStatus.SHIPPED],
+        [OrderStatus.PAID,               OrderStatus.CANCELLED],
+        [OrderStatus.PAID,               OrderStatus.REFUNDED],
+        [OrderStatus.PROCESSING,         OrderStatus.SHIPPED],
+        [OrderStatus.PROCESSING,         OrderStatus.CANCELLED],
+        [OrderStatus.PROCESSING,         OrderStatus.REFUNDED],
+        [OrderStatus.SHIPPED,            OrderStatus.DELIVERED],
+        [OrderStatus.SHIPPED,            OrderStatus.REFUNDED],
+        [OrderStatus.DELIVERED,          OrderStatus.REFUNDED],
+        [OrderStatus.PARTIALLY_REFUNDED, OrderStatus.REFUNDED],
+      ];
+
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail early-exit
+
+      for (const [current, target] of validTransitions) {
+        prisma.order.findUniqueOrThrow.mockResolvedValue({ status: current, items: [] });
+
+        await expect(service.updateStatus('o-1', target)).resolves.not.toThrow();
+      }
     });
   });
 
