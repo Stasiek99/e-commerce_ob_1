@@ -85,8 +85,8 @@ describe('PaymentsService', () => {
             payment: {
               findUnique: jest.fn(),
               findMany: jest.fn(),
-              create: jest.fn(),
-              update: jest.fn(),
+              create: jest.fn().mockResolvedValue({ id: 'payment-1' }),
+              update: jest.fn().mockResolvedValue({}),
             },
             order: {
               findUniqueOrThrow: jest.fn(),
@@ -352,7 +352,7 @@ describe('PaymentsService', () => {
     it('returns paymentUrl on success', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       const result = await service.initiatePayment('order-1');
       expect(result.paymentUrl).toBe(mockSession.url);
@@ -366,7 +366,7 @@ describe('PaymentsService', () => {
     it('throws when Stripe session returns no redirect URL', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
       stripeClient.createCheckoutSession.mockResolvedValue({ ...mockSession, url: null } as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await expect(service.initiatePayment('order-1')).rejects.toThrow(
         'missing redirect URL',
@@ -379,12 +379,13 @@ describe('PaymentsService', () => {
         ...mockSession,
         payment_intent: { id: 'pi_nested_id' } as any,
       } as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
-      const createCall = prisma.payment.create.mock.calls[0][0];
-      expect(createCall.data.stripePaymentIntentId).toBe('pi_nested_id');
+      // stripePaymentIntentId is now set via payment.update (after Stripe confirms), not payment.create
+      const updateCall = prisma.payment.update.mock.calls[0][0];
+      expect(updateCall.data.stripePaymentIntentId).toBe('pi_nested_id');
     });
 
     // ── coupon discount forwarding ────────────────────────────────────────
@@ -394,7 +395,7 @@ describe('PaymentsService', () => {
     it('does not pass discount fields to createCheckoutSession when discountInCents is 0', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({ ...mockOrderWithItems, discountInCents: 0 });
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
@@ -410,7 +411,7 @@ describe('PaymentsService', () => {
         couponCode: 'SUMMER20',
       });
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
@@ -429,7 +430,7 @@ describe('PaymentsService', () => {
         couponCode: null,
       });
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
@@ -439,6 +440,87 @@ describe('PaymentsService', () => {
           couponLabel: undefined,
         }),
       );
+    });
+
+    // ─── Fix #16 regression harness — DB row created before Stripe call ──────
+    // Invariant: payment.create must be called BEFORE createCheckoutSession so
+    // a DB record always exists when a Stripe session exists.
+
+    it('creates the Payment DB row before calling Stripe (no orphan session on DB failure)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      const callOrder: string[] = [];
+      prisma.payment.create.mockImplementation(() => {
+        callOrder.push('db-create');
+        return Promise.resolve({ id: 'payment-1' });
+      });
+      stripeClient.createCheckoutSession.mockImplementation(() => {
+        callOrder.push('stripe');
+        return Promise.resolve(mockSession as any);
+      });
+
+      await service.initiatePayment('order-1');
+
+      expect(callOrder[0]).toBe('db-create');
+      expect(callOrder[1]).toBe('stripe');
+    });
+
+    it('attaches stripeCheckoutSessionId via update after Stripe confirms, not in create', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      await service.initiatePayment('order-1');
+
+      const createData = prisma.payment.create.mock.calls[0][0].data;
+      expect(createData.stripeCheckoutSessionId).toBeUndefined();
+
+      const updateData = prisma.payment.update.mock.calls[0][0].data;
+      expect(updateData.stripeCheckoutSessionId).toBe(mockSession.id);
+    });
+
+    it('marks Payment FAILED and rethrows when Stripe throws, without leaving a dangling PENDING row', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockRejectedValue(new Error('Stripe API down'));
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow('Stripe API down');
+
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: PaymentStatus.FAILED }),
+        }),
+      );
+    });
+
+    it('marks Payment FAILED when Stripe returns no redirect URL', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue({ ...mockSession, url: null } as any);
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow('missing redirect URL');
+
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: PaymentStatus.FAILED,
+            failureReason: expect.stringContaining('missing redirect URL'),
+          }),
+        }),
+      );
+    });
+
+    // ── cancel URL orderId injection ─────────────────────────────────────────
+    // Invariant: cancelUrl passed to Stripe must include ?orderId=<order.id>
+    // so the failure page can offer "Retry Payment" without creating a duplicate order.
+
+    it('appends ?orderId to the cancel URL passed to createCheckoutSession', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.cancelUrl).toMatch(/[?&]orderId=order-1/);
     });
   });
 

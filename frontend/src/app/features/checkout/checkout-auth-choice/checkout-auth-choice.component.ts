@@ -1,4 +1,5 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
 import { TuiButton, TuiTitle, TuiIcon } from '@taiga-ui/core';
 import { TuiCard } from '@taiga-ui/layout';
@@ -133,9 +134,10 @@ import { AuthService } from '../../../core/services/auth.service';
   `],
 })
 export class CheckoutAuthChoiceComponent implements OnInit {
-  private readonly router = inject(Router);
-  private readonly cart   = inject(CartService);
-  private readonly auth   = inject(AuthService);
+  private readonly router     = inject(Router);
+  private readonly cart       = inject(CartService);
+  private readonly auth       = inject(AuthService);
+  private readonly platformId = inject(PLATFORM_ID);
 
   ngOnInit(): void {
     if (!this.cart.items().length) {
@@ -149,7 +151,7 @@ export class CheckoutAuthChoiceComponent implements OnInit {
   }
 
   continueAsGuest(): void {
-    sessionStorage.setItem('checkout_guest', '1');
+    if (isPlatformBrowser(this.platformId)) sessionStorage.setItem('checkout_guest', '1');
     this.router.navigate(['/checkout']);
   }
 }

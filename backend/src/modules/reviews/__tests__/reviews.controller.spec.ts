@@ -73,7 +73,7 @@ describe('ReviewsController', () => {
   describe('create', () => {
     it('delegates to ReviewsService.create using current user id', async () => {
       const user = { id: 'user-1' } as any;
-      const dto = { productId: 'product-1', rating: 5 };
+      const dto = { productId: 'product-1', orderId: 'order-1', rating: 5 };
       service.create.mockResolvedValue({ id: 'review-new' } as any);
 
       await controller.create(user, dto);
@@ -85,12 +85,13 @@ describe('ReviewsController', () => {
   // ─── POST /reviews/:id/helpful ────────────────────────────────────────────
 
   describe('markHelpful', () => {
-    it('delegates to ReviewsService.markHelpful with the review id', async () => {
+    it('delegates to ReviewsService.markHelpful with review id and authenticated user id', async () => {
+      const user = { id: 'user-1' } as any;
       service.markHelpful.mockResolvedValue({ id: 'review-1', helpfulCount: 5 });
 
-      const result = await controller.markHelpful('review-1');
+      const result = await controller.markHelpful('review-1', user);
 
-      expect(service.markHelpful).toHaveBeenCalledWith('review-1');
+      expect(service.markHelpful).toHaveBeenCalledWith('review-1', 'user-1');
       expect(result).toEqual({ id: 'review-1', helpfulCount: 5 });
     });
   });

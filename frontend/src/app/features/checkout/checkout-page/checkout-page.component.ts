@@ -1,4 +1,5 @@
-import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -588,6 +589,7 @@ export class CheckoutPageComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(FormBuilder);
   private readonly toast = inject(ToastService);
+  private readonly platformId = inject(PLATFORM_ID);
 
   readonly cart = inject(CartService);
   readonly auth = inject(AuthService);
@@ -917,6 +919,7 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   openLockerPicker(): void {
+    if (!isPlatformBrowser(this.platformId)) return;
     if (typeof easyPack === 'undefined') {
       this.toast.error('Nie udało się załadować mapy paczkomatów. Odśwież stronę.');
       return;

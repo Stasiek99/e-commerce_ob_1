@@ -77,6 +77,13 @@ export class OrdersController {
     return this.ordersService.findOneForUser(id, user.id);
   }
 
+  @Post(':id/retry-payment')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  retryPayment(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.retryPayment(id, user.id);
+  }
+
   @Post(':id/cancel')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)

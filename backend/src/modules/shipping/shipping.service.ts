@@ -66,12 +66,13 @@ export class ShippingService {
       throw new BadRequestException(`Unsupported carrier: ${order.carrierCode}`);
     }
 
+    let trackingNumber: string | undefined;
+    let labelUrl: string | undefined;
+    let shipmentId: string | undefined;
+    let targetLockerCode: string | undefined;
+    let rawResponse: unknown;
+
     try {
-      let trackingNumber: string;
-      let labelUrl: string;
-      let shipmentId: string | undefined;
-      let targetLockerCode: string | undefined;
-      let rawResponse: unknown;
 
       switch (order.carrierCode) {
         case CarrierCode.INPOST: {
@@ -199,17 +200,25 @@ export class ShippingService {
       const message = (err as Error).message;
       this.logger.error(`Label generation failed for order ${orderId}: ${message}`);
 
+      // Preserve any carrier identifiers that were already committed before the
+      // failure (e.g. InPost returned shipmentId but Supabase label upload failed).
+      // Without these fields a support engineer has no way to locate the shipment
+      // on the carrier's dashboard — they would be permanently lost in memory.
       await this.prisma.shipment.upsert({
         where: { orderId },
         create: {
           orderId,
           carrierCode: order.carrierCode,
           status: ShipmentStatus.LABEL_ERROR,
-          rawCarrierResponse: { error: message } as any,
+          shipmentId: shipmentId ?? null,
+          trackingNumber: trackingNumber ?? null,
+          rawCarrierResponse: { error: message, carrierResponse: rawResponse ?? null } as any,
         },
         update: {
           status: ShipmentStatus.LABEL_ERROR,
-          rawCarrierResponse: { error: message } as any,
+          shipmentId: shipmentId ?? null,
+          trackingNumber: trackingNumber ?? null,
+          rawCarrierResponse: { error: message, carrierResponse: rawResponse ?? null } as any,
         },
       });
 

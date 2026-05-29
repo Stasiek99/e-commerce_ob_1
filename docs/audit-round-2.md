@@ -63,9 +63,6 @@ Done:
 - **Issue:** `passport-google-oauth20` does not receive `state: true` in the strategy constructor. The callback URL (`GET /auth/google/callback`) accepts any redirect from Google with no nonce verification. An attacker can craft a Google auth URL pointing at this callback to trigger a CSRF login that links the victim's session to the attacker's Google account.
 - **Fix:** Add `state: true` to the `super({...})` call. Passport will generate and verify a random nonce automatically.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 9 — OAuth token exchange has no CSRF protection — 60-second window for token theft
 - **File:** `backend/src/modules/auth/auth.controller.ts:192-203`
 - **Issue:** After Google OAuth, a full access token is stored in the `oauth_access_token` httpOnly cookie and the frontend calls `GET /auth/token/exchange` to consume it. This endpoint has no CSRF protection. Any same-origin JS (including any XSS payload) can call it within 60 seconds and receive the JWT in the response body.
@@ -88,13 +85,11 @@ Not yet:
 
 ### 13 — `bulkCancel` restores full `item.quantity` stock, ignoring `cancelledQuantity` *(3 agents)*
 - **File:** `backend/src/modules/orders/orders.service.ts:733-742`
-- **Issue:** `stock: { increment: item.quantity }` — `cancelledQuantity` is not subtracted. If an order is `PARTIALLY_REFUNDED` (stock already restored for those units), bulk-cancel restores the full original quantity again. Also: `PARTIALLY_REFUNDED` is missing from `nonCancellableStatuses`, so these orders can be bulk-cancelled without triggering a Stripe refund.
-- **Fix:** Use `activeQty = item.quantity - (item.cancelledQuantity ?? 0)` (matching `updateStatus()` at line 628). Add `PARTIALLY_REFUNDED` to `nonCancellableStatuses` or auto-call `refundPayment()` inside the loop.
+- **Fix applied:** Stock increment now uses `activeQty = item.quantity - (item.cancelledQuantity ?? 0)` (matching `updateStatus()`). Skip update when `activeQty <= 0`. Added `PARTIALLY_REFUNDED` to `nonCancellableStatuses` — these orders are blocked from bulk-cancel and must go through the individual refund flow.
 
 ### 14 — `bulkCancel` doesn't call `refundPayment()` for PAID/PROCESSING orders
 - **File:** `backend/src/modules/orders/orders.service.ts:755-767`
-- **Issue:** `PAID`/`PROCESSING` orders are marked `CANCELLED` and the admin receives a `needsRefund[]` list to process manually in Stripe. The cancellation email says "you'll be refunded" but no Stripe refund is queued.
-- **Fix:** Call `paymentsService.refundPayment(order.id, actor)` inside the loop (same as `cancelByUser` does), or stop promising refunds in the email.
+- **Fix applied:** `PAID`/`PROCESSING` orders now call `paymentsService.refundPayment(order.id, actor)` which handles Stripe refund, stock restore, status→`REFUNDED`, and event atomically. The manual `$transaction` block is only used for `PENDING_PAYMENT` orders (no payment to refund). `needsRefund` field removed from return type; `admin.setup.ts` updated accordingly.
 
 ### 15 — Coupon discount computed outside the DB transaction on a potentially stale cart total
 - **File:** `backend/src/modules/orders/orders.service.ts:131-156`
@@ -155,6 +150,9 @@ Not yet:
 - **File:** `backend/src/modules/users/users.service.ts:177-196`
 - **Issue:** `deleteAccount()` anonymises `snapshotEmail`/`snapshotFirstName`/`snapshotLastName` on orders but never touches `ReturnRequest`, which has its own `email`, `firstName`, `lastName`, `phone`, and `bankAccount` (IBAN) fields — with no FK to `User` and no cascade.
 - **Fix:** Add inside the deletion transaction: `prisma.returnRequest.updateMany({ where: { email: user.email }, data: { firstName: '[usunięto]', lastName: '[usunięto]', email: 'deleted@deleted', phone: null, bankAccount: null } })`.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 26 — Cookie `SameSite`/`Secure` attributes computed from a stale module-load constant
 - **File:** `backend/src/modules/auth/auth.controller.ts:33-48`

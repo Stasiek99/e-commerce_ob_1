@@ -175,6 +175,11 @@ export class UsersService {
   }
 
   async deleteAccount(userId: string): Promise<void> {
+    // Fetch the email before deletion — needed to match ReturnRequest records
+    // which have no FK to User (by design, so returns survive account deletion).
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user) throw new NotFoundException('User not found');
+
     await this.prisma.$transaction([
       // GDPR Art. 17 — scrub PII from order snapshots; the FK is nulled by the
       // cascade below so orders remain intact for accounting/dispute purposes.
@@ -186,6 +191,19 @@ export class UsersService {
           snapshotEmail:     'deleted@deleted',
           snapshotPhone:     '',
           snapshotNip:       null,
+        },
+      }),
+      // GDPR Art. 17 — scrub PII from ReturnRequest records that have no FK to
+      // User; matched by email because that is the only persistent link after the
+      // user row is deleted.
+      this.prisma.returnRequest.updateMany({
+        where: { email: user.email },
+        data: {
+          firstName:   '[usunięto]',
+          lastName:    '[usunięto]',
+          email:       'deleted@deleted',
+          phone:       null,
+          bankAccount: null,
         },
       }),
       // Hard-delete — cascade removes addresses, refresh tokens, email tokens,

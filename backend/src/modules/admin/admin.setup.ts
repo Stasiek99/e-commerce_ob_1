@@ -274,6 +274,8 @@ export async function setupAdmin(
                     snapshotPostalCode: order.snapshotPostalCode,
                     itemsTotalInCents: order.itemsTotalInCents,
                     shippingCostInCents: order.shippingCostInCents,
+                    discountInCents: order.discountInCents,
+                    couponCode: order.couponCode,
                     totalInCents: order.totalInCents,
                     createdAt: order.createdAt,
                     items: order.items.map((i) => ({
@@ -423,9 +425,6 @@ export async function setupAdmin(
                 if (result.succeeded > 0) parts.push(`Anulowano: ${result.succeeded}`);
                 if (result.failed.length > 0) {
                   parts.push(`Błędy (${result.failed.length}): ${result.failed.map((f) => f.orderNumber).join(', ')}`);
-                }
-                if (result.needsRefund.length > 0) {
-                  parts.push(`Wymagają zwrotu Stripe: ${result.needsRefund.join(', ')}`);
                 }
 
                 return {

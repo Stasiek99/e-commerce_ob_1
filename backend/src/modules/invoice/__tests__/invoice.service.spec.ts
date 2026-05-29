@@ -19,6 +19,8 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
     snapshotPostalCode: '00-001',
     itemsTotalInCents: 34900,
     shippingCostInCents: 1999,
+    discountInCents: 0,
+    couponCode: null,
     totalInCents: 36899,
     createdAt: new Date('2026-05-01T10:00:00Z'),
     items: [
@@ -169,6 +171,38 @@ describe('InvoiceService', () => {
             { snapshotName: 'Rose 50ml',  snapshotPrice: 19900, snapshotVatRate: 2300, quantity: 2 },
           ],
         }),
+      );
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+  });
+
+  // ── discount line item (Art. 106e pkt 7 Ustawy o VAT) ────────────────────
+
+  describe('processInvoice — discount / coupon line item', () => {
+    it('generates a valid PDF when order has a coupon discount', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({
+          discountInCents: 5000,
+          couponCode: 'SUMMER10',
+          totalInCents: 31899, // 36899 - 5000
+        }),
+      );
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('generates a valid PDF when discountInCents is 0 (no coupon)', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({ discountInCents: 0, couponCode: null }),
+      );
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('generates a valid PDF when couponCode is null but discount is non-zero', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({ discountInCents: 2000, couponCode: null, totalInCents: 34899 }),
       );
 
       expect(pdf.slice(0, 4).toString()).toBe('%PDF');

@@ -37,6 +37,19 @@ const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
+// Explicit state-machine allowlist. Any transition not listed here is invalid.
+// Terminal states (CANCELLED, REFUNDED) have empty arrays — no exit.
+const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  [OrderStatus.PENDING_PAYMENT]:    [OrderStatus.PAID, OrderStatus.CANCELLED],
+  [OrderStatus.PAID]:               [OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.PROCESSING]:         [OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.SHIPPED]:            [OrderStatus.DELIVERED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.DELIVERED]:          [OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
+  [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
+  [OrderStatus.CANCELLED]:          [],
+  [OrderStatus.REFUNDED]:           [],
+};
+
 @Injectable()
 export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
@@ -117,9 +130,13 @@ export class OrdersService implements OnModuleInit {
       phone: string;
     } | null = null;
 
+    if (dto.addressId && !userId) {
+      throw new BadRequestException('Guests must supply a new address');
+    }
+
     if (dto.addressId) {
       address = await this.prisma.address.findFirst({
-        where: { id: dto.addressId, ...(userId ? { userId } : {}) },
+        where: { id: dto.addressId, userId },
       });
       if (!address) throw new NotFoundException('Address not found');
     } else if (dto.newAddress) {
@@ -185,6 +202,37 @@ export class OrdersService implements OnModuleInit {
         }
       }
 
+      // Re-fetch prices from the rows we just locked so snapshotPrice and all totals
+      // reflect the price that was authoritative at commit time, not the stale cart read.
+      const freshVariants = await tx.productVariant.findMany({
+        where: { id: { in: cart.items.map((i: CartItem) => i.productVariantId) } },
+        select: { id: true, priceInCents: true },
+      });
+      const freshPriceMap = new Map(freshVariants.map((v) => [v.id, v.priceInCents]));
+
+      const txItemsTotalInCents = cart.items.reduce((sum: number, item: CartItem) => {
+        return sum + (freshPriceMap.get(item.productVariantId) ?? item.priceInCents) * item.quantity;
+      }, 0);
+
+      // Recompute coupon discount against the fresh items total
+      let txDiscountInCents = 0;
+      if (resolvedCouponId) {
+        const coupon = await tx.coupon.findUnique({ where: { id: resolvedCouponId } });
+        if (coupon) {
+          if (coupon.minSpendInCents !== null && txItemsTotalInCents < coupon.minSpendInCents) {
+            throw new BadRequestException(
+              'Cena produktów zmieniła się — kod rabatowy nie jest już ważny dla tej wartości koszyka.',
+            );
+          }
+          txDiscountInCents =
+            coupon.discountType === DiscountType.FREE_SHIPPING
+              ? shippingCostInCents
+              : this.couponService.calculateDiscount(coupon.discountType, coupon.value, txItemsTotalInCents);
+        }
+      }
+
+      const txTotalInCents = Math.max(0, txItemsTotalInCents + shippingCostInCents - txDiscountInCents);
+
       // Create order with address snapshot
       const newOrder = await tx.order.create({
         data: {
@@ -205,10 +253,10 @@ export class OrdersService implements OnModuleInit {
           carrierCode: dto.carrierCode,
           inpostLockerCode: dto.inpostLockerCode,
           dpdPickupPointCode: dto.dpdPickupPointCode,
-          itemsTotalInCents,
+          itemsTotalInCents: txItemsTotalInCents,
           shippingCostInCents,
-          discountInCents,
-          totalInCents,
+          discountInCents: txDiscountInCents,
+          totalInCents: txTotalInCents,
           ...(resolvedCouponId && { couponId: resolvedCouponId }),
           ...(resolvedCouponCode && { couponCode: resolvedCouponCode }),
           notes: dto.notes,
@@ -219,7 +267,7 @@ export class OrdersService implements OnModuleInit {
               productVariantId: item.productVariantId,
               snapshotName: `${item.productName} – ${item.variantLabel}`,
               snapshotSku: item.sku,
-              snapshotPrice: item.priceInCents,
+              snapshotPrice: freshPriceMap.get(item.productVariantId) ?? item.priceInCents,
               snapshotVatRate: item.vatRate,
               quantity: item.quantity,
             })),
@@ -234,7 +282,7 @@ export class OrdersService implements OnModuleInit {
           resolvedCouponId,
           newOrder.id,
           userId,
-          discountInCents,
+          txDiscountInCents,
         );
       }
 
@@ -298,21 +346,9 @@ export class OrdersService implements OnModuleInit {
       await this.prisma.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
     }
 
-    // Send confirmation email (fire-and-forget)
-    this.emailService
-      .sendOrderConfirmation({
-        to: userEmail,
-        orderNumber: order.orderNumber,
-        firstName: address.firstName,
-        items: cart.items.map((i: CartItem) => ({
-          name: `${i.productName} – ${i.variantLabel}`,
-          quantity: i.quantity,
-          price: i.priceInCents,
-        })),
-        totalInCents,
-        carrierCode: dto.carrierCode,
-      })
-      .catch(() => undefined);
+    // Order confirmation email is sent in markSessionPaid() after the Stripe
+    // webhook confirms payment — not here, to avoid emailing customers who
+    // abandon the Stripe checkout before paying.
 
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
     this.sendStockAlertIfNeeded(
@@ -339,7 +375,10 @@ export class OrdersService implements OnModuleInit {
       this.prisma.order.count({ where: { userId } }),
     ]);
 
-    return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: orders.map((o) => this.mapOrder(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findOneForUser(id: string, userId: string) {
@@ -348,7 +387,7 @@ export class OrdersService implements OnModuleInit {
       include: { items: true, payment: true, shipment: true },
     });
     if (!order) throw new NotFoundException('Order not found');
-    return order;
+    return this.mapOrder(order);
   }
 
   async findEventsForUser(orderId: string, userId: string) {
@@ -397,6 +436,8 @@ export class OrdersService implements OnModuleInit {
         snapshotPostalCode: true,
         itemsTotalInCents: true,
         shippingCostInCents: true,
+        discountInCents: true,
+        couponCode: true,
         totalInCents: true,
         createdAt: true,
         items: {
@@ -467,7 +508,10 @@ export class OrdersService implements OnModuleInit {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: orders.map((o) => this.mapOrder(o)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async cancelByUser(orderId: string, userId: string, reason?: string): Promise<void> {
@@ -539,6 +583,17 @@ export class OrdersService implements OnModuleInit {
         isRefund,
       })
       .catch(() => undefined);
+  }
+
+  async retryPayment(orderId: string, userId: string): Promise<{ paymentUrl: string }> {
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, userId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new BadRequestException(
+        `Cannot retry payment for an order in status ${order.status}`,
+      );
+    }
+    return this.paymentsService.initiatePayment(orderId);
   }
 
   async cancelItemsByUser(
@@ -615,6 +670,12 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (current.status === status) return;
+
+    if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
+      throw new BadRequestException(
+        `Invalid order status transition: ${current.status} → ${status}`,
+      );
+    }
 
     const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
     const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
@@ -704,7 +765,6 @@ export class OrdersService implements OnModuleInit {
   ): Promise<{
     succeeded: number;
     failed: Array<{ orderNumber: string; reason: string }>;
-    needsRefund: string[];
   }> {
     const orders = await this.prisma.order.findMany({
       where: { id: { in: orderIds } },
@@ -713,11 +773,11 @@ export class OrdersService implements OnModuleInit {
 
     const succeeded: string[] = [];
     const failed: Array<{ orderNumber: string; reason: string }> = [];
-    const needsRefund: string[] = [];
 
     const nonCancellableStatuses: OrderStatus[] = [
       OrderStatus.CANCELLED,
       OrderStatus.REFUNDED,
+      OrderStatus.PARTIALLY_REFUNDED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
     ];
@@ -729,30 +789,40 @@ export class OrdersService implements OnModuleInit {
           return;
         }
 
-        try {
-          await this.prisma.$transaction(async (tx) => {
-            for (const item of order.items) {
-              await tx.productVariant.update({
-                where: { id: item.productVariantId },
-                data: { stock: { increment: item.quantity } },
-              });
-            }
-            await tx.order.update({
-              where: { id: order.id },
-              data: { status: OrderStatus.CANCELLED },
-            });
-            await tx.orderEvent.create({
-              data: {
-                orderId: order.id,
-                fromStatus: order.status,
-                toStatus: OrderStatus.CANCELLED,
-                actor,
-                note: 'Bulk cancelled by admin',
-              },
-            });
-          });
+        const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
 
-          const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+        try {
+          if (isRefund) {
+            // Payment already captured — issue a full Stripe refund.
+            // refundPayment handles stock restore, order status → REFUNDED, and event atomically.
+            await this.paymentsService.refundPayment(order.id, actor);
+          } else {
+            // PENDING_PAYMENT: no payment taken, cancel in-place.
+            await this.prisma.$transaction(async (tx) => {
+              for (const item of order.items) {
+                const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+                if (activeQty > 0) {
+                  await tx.productVariant.update({
+                    where: { id: item.productVariantId },
+                    data: { stock: { increment: activeQty } },
+                  });
+                }
+              }
+              await tx.order.update({
+                where: { id: order.id },
+                data: { status: OrderStatus.CANCELLED },
+              });
+              await tx.orderEvent.create({
+                data: {
+                  orderId: order.id,
+                  fromStatus: order.status,
+                  toStatus: OrderStatus.CANCELLED,
+                  actor,
+                  note: 'Bulk cancelled by admin',
+                },
+              });
+            });
+          }
 
           this.emailService
             .sendOrderCancellation({
@@ -764,7 +834,6 @@ export class OrdersService implements OnModuleInit {
             })
             .catch(() => undefined);
 
-          if (isRefund) needsRefund.push(order.orderNumber);
           succeeded.push(order.orderNumber);
         } catch (err) {
           failed.push({ orderNumber: order.orderNumber, reason: (err as Error).message });
@@ -772,7 +841,7 @@ export class OrdersService implements OnModuleInit {
       }),
     );
 
-    return { succeeded: succeeded.length, failed, needsRefund };
+    return { succeeded: succeeded.length, failed };
   }
 
   private async dispatchReviewRequestEmail(orderId: string): Promise<void> {
@@ -858,6 +927,22 @@ export class OrdersService implements OnModuleInit {
     );
 
     await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
+  }
+
+  private mapOrder<
+    T extends {
+      items: Array<{ quantity: number; snapshotPrice: number }>;
+      payment: { refundedAmountInCents: number } | null;
+    },
+  >(order: T) {
+    return {
+      ...order,
+      items: order.items.map((item) => ({
+        ...item,
+        totalPrice: item.quantity * item.snapshotPrice,
+      })),
+      refundedAmountInCents: order.payment?.refundedAmountInCents ?? 0,
+    };
   }
 
   // Sequences are guaranteed to exist by onModuleInit (startup) and the

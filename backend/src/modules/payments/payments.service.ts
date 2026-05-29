@@ -48,37 +48,68 @@ export class PaymentsService {
       });
     }
 
-    const session = await this.stripeClient.createCheckoutSession({
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      customerEmail: order.snapshotEmail,
-      currency,
-      lineItems,
-      successUrl,
-      cancelUrl,
-      ...(order.discountInCents > 0 && {
-        discountAmountInCents: order.discountInCents,
-        couponLabel: order.couponCode ?? undefined,
-      }),
-    });
-
-    await this.prisma.payment.create({
+    // Create the Payment row BEFORE calling Stripe so there is always a DB record
+    // when a session exists. If the DB write fails here, no Stripe session is created
+    // and no money can move without a traceable payment record.
+    const payment = await this.prisma.payment.create({
       data: {
         orderId,
+        amountInCents: order.totalInCents,
+        currency: currency.toUpperCase(),
+        provider: 'stripe',
+        // stripeCheckoutSessionId / stripePaymentIntentId filled in after Stripe confirms
+      },
+    });
+
+    let session: Awaited<ReturnType<typeof this.stripeClient.createCheckoutSession>>;
+    try {
+      session = await this.stripeClient.createCheckoutSession({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerEmail: order.snapshotEmail,
+        currency,
+        lineItems,
+        successUrl,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}`,
+        ...(order.discountInCents > 0 && {
+          discountAmountInCents: order.discountInCents,
+          couponLabel: order.couponCode ?? undefined,
+        }),
+      });
+    } catch (stripeErr) {
+      // Mark the row FAILED so the reconciliation cron (which filters on
+      // stripeCheckoutSessionId != null) does not attempt to reconcile it.
+      await this.prisma.payment
+        .update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.FAILED, failureReason: (stripeErr as Error).message },
+        })
+        .catch(() => {});
+      throw stripeErr;
+    }
+
+    if (!session.url) {
+      await this.prisma.payment
+        .update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.FAILED, failureReason: 'Stripe session missing redirect URL' },
+        })
+        .catch(() => {});
+      throw new Error('Stripe Checkout Session missing redirect URL');
+    }
+
+    // Stripe confirmed — attach the session identifiers so the webhook and
+    // reconciliation cron can find this record by stripeCheckoutSessionId.
+    await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: {
         stripeCheckoutSessionId: session.id,
         stripePaymentIntentId:
           typeof session.payment_intent === 'string'
             ? session.payment_intent
             : (session.payment_intent?.id ?? null),
-        amountInCents: order.totalInCents,
-        currency: currency.toUpperCase(),
-        provider: 'stripe',
       },
     });
-
-    if (!session.url) {
-      throw new Error('Stripe Checkout Session missing redirect URL');
-    }
 
     return { paymentUrl: session.url };
   }

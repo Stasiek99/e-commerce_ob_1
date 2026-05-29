@@ -953,12 +953,12 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   openLightbox(index: number): void {
     this.lightboxIndex.set(index);
     this.lightboxOpen.set(true);
-    document.body.style.overflow = 'hidden';
+    if (isPlatformBrowser(this.platformId)) document.body.style.overflow = 'hidden';
   }
 
   closeLightbox(): void {
     this.lightboxOpen.set(false);
-    document.body.style.overflow = '';
+    if (isPlatformBrowser(this.platformId)) document.body.style.overflow = '';
   }
 
   lightboxNext(): void {
@@ -1027,9 +1027,11 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
           if (this.route.snapshot.queryParamMap.get('review') === '1') {
             this.reviewFormOpen.set(true);
-            setTimeout(() => {
-              document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
-            }, 300);
+            if (isPlatformBrowser(this.platformId)) {
+              setTimeout(() => {
+                document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
+              }, 300);
+            }
           }
         },
         error: () => this.loading.set(false),
@@ -1137,7 +1139,9 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   }
 
   scrollToReviews(): void {
-    document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
+    if (isPlatformBrowser(this.platformId)) {
+      document.getElementById('reviews')?.scrollIntoView({ behavior: 'smooth' });
+    }
   }
 
   formatDate(value: string | Date): string {
