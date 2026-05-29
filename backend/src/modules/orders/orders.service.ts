@@ -387,7 +387,10 @@ export class OrdersService implements OnModuleInit {
       this.prisma.order.count({ where: { userId } }),
     ]);
 
-    return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: orders.map((o) => ({ ...o, items: this.mapOrderItems(o.items) })),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findOneForUser(id: string, userId: string) {
@@ -396,7 +399,7 @@ export class OrdersService implements OnModuleInit {
       include: { items: true, payment: true, shipment: true },
     });
     if (!order) throw new NotFoundException('Order not found');
-    return order;
+    return { ...order, items: this.mapOrderItems(order.items) };
   }
 
   async findEventsForUser(orderId: string, userId: string) {
@@ -515,7 +518,10 @@ export class OrdersService implements OnModuleInit {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data: orders, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return {
+      data: orders.map((o) => ({ ...o, items: this.mapOrderItems(o.items) })),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async cancelByUser(orderId: string, userId: string, reason?: string): Promise<void> {
@@ -920,6 +926,12 @@ export class OrdersService implements OnModuleInit {
     );
 
     await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
+  }
+
+  private mapOrderItems<T extends { quantity: number; snapshotPrice: number }>(
+    items: T[],
+  ): (T & { totalPrice: number })[] {
+    return items.map((item) => ({ ...item, totalPrice: item.quantity * item.snapshotPrice }));
   }
 
   // Sequences are guaranteed to exist by onModuleInit (startup) and the

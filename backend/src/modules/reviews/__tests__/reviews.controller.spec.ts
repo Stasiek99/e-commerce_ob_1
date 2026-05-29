@@ -73,7 +73,7 @@ describe('ReviewsController', () => {
   describe('create', () => {
     it('delegates to ReviewsService.create using current user id', async () => {
       const user = { id: 'user-1' } as any;
-      const dto = { productId: 'product-1', rating: 5 };
+      const dto = { productId: 'product-1', orderId: 'order-1', rating: 5 };
       service.create.mockResolvedValue({ id: 'review-new' } as any);
 
       await controller.create(user, dto);

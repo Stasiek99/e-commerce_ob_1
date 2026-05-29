@@ -116,13 +116,13 @@ Done:
 - **Issue:** `orderId` in `CreateReviewDto` is `@IsOptional()`. If omitted, the purchase-verification block is skipped entirely. Any authenticated user can review any product they've never bought. `verifiedPurchase` is a label, not a gate.
 - **Fix:** Either require `orderId` for all reviews (`@IsUUID()` without `@IsOptional()`), or make unverified and verified reviews a deliberate policy choice — currently neither is enforced.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 20 — `OrderItemDto.totalPrice` is in shared-types but never emitted by the backend
 - **File:** `packages/shared-types/src/dto/order.dto.ts:44` vs `backend/src/modules/orders/orders.service.ts:326-352`
 - **Issue:** The backend returns raw Prisma `OrderItem` objects. Prisma has no `totalPrice` column. Frontend reads `order.items[n].totalPrice` → `undefined`. Silently renders NaN in order history totals.
 - **Fix:** Add a response mapper that appends `totalPrice: item.quantity * item.snapshotPrice`, or remove `totalPrice` from the DTO and compute it client-side.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 21 — `OrderDto.refundedAmountInCents` is in shared-types but the orders query never selects it
 - **File:** `packages/shared-types/src/dto/order.dto.ts:71` vs `backend/src/modules/orders/orders.service.ts:332-351`
