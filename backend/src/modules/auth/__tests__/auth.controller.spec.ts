@@ -202,4 +202,89 @@ describe('AuthController', () => {
       expect(url1).not.toBe(url2);
     });
   });
+
+  // ─── cookie SameSite/Secure derived from ConfigService ──────────────────────
+  // Invariant: CROSS_SITE must be evaluated at controller construction time via
+  // ConfigService, NOT at module-import time via process.env. The stale constant
+  // locked cookies to Secure=false/SameSite=Lax before ConfigModule finished loading.
+
+  describe('refresh-token cookie attributes — ConfigService-derived CROSS_SITE', () => {
+    async function buildControllerWithFrontendUrl(frontendUrl: string) {
+      const mockAuthSvc = {
+        register: jest.fn().mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' }),
+        login: jest.fn(),
+        refresh: jest.fn(),
+        logout: jest.fn(),
+        verifyEmail: jest.fn(),
+        resendVerificationEmail: jest.fn(),
+        requestPasswordReset: jest.fn(),
+        resetPassword: jest.fn(),
+        requestMagicLink: jest.fn(),
+        consumeMagicLink: jest.fn(),
+        generateTokenPair: jest.fn(),
+      };
+      const module = await Test.createTestingModule({
+        controllers: [AuthController],
+        providers: [
+          { provide: AuthService, useValue: mockAuthSvc },
+          {
+            provide: ConfigService,
+            useValue: { get: jest.fn().mockReturnValue(frontendUrl) },
+          },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK'), getdel: jest.fn() },
+          },
+        ],
+      }).compile();
+      return { ctrl: module.get(AuthController), authSvc: mockAuthSvc };
+    }
+
+    it('sets Secure=true and SameSite=none when FRONTEND_URL starts with https://', async () => {
+      const { ctrl } = await buildControllerWithFrontendUrl('https://shop.example.com');
+      const res = { cookie: jest.fn() };
+      const dto = { email: 'a@b.com', password: 'pass' };
+      (ctrl as any).authService.login.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await ctrl.login(dto as any, res as any);
+
+      const cookieCall = (res.cookie as jest.Mock).mock.calls[0];
+      expect(cookieCall[2]).toMatchObject({ secure: true, sameSite: 'none' });
+    });
+
+    it('sets Secure=false and SameSite=lax when FRONTEND_URL starts with http://', async () => {
+      const { ctrl } = await buildControllerWithFrontendUrl('http://localhost:4200');
+      const res = { cookie: jest.fn() };
+      const dto = { email: 'a@b.com', password: 'pass' };
+      (ctrl as any).authService.login.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await ctrl.login(dto as any, res as any);
+
+      const cookieCall = (res.cookie as jest.Mock).mock.calls[0];
+      expect(cookieCall[2]).toMatchObject({ secure: false, sameSite: 'lax' });
+    });
+
+    it('sets Secure=false and SameSite=lax when FRONTEND_URL is empty', async () => {
+      const { ctrl } = await buildControllerWithFrontendUrl('');
+      const res = { cookie: jest.fn() };
+      const dto = { email: 'a@b.com', password: 'pass' };
+      (ctrl as any).authService.login.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await ctrl.login(dto as any, res as any);
+
+      const cookieCall = (res.cookie as jest.Mock).mock.calls[0];
+      expect(cookieCall[2]).toMatchObject({ secure: false, sameSite: 'lax' });
+    });
+
+    it('register also uses ConfigService-derived secure attributes', async () => {
+      const { ctrl } = await buildControllerWithFrontendUrl('https://prod.example.com');
+      const res = { cookie: jest.fn() };
+      (ctrl as any).authService.register.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await ctrl.register({} as any, res as any);
+
+      const cookieCall = (res.cookie as jest.Mock).mock.calls[0];
+      expect(cookieCall[2]).toMatchObject({ secure: true, sameSite: 'none' });
+    });
+  });
 });

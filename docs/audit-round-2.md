@@ -126,9 +126,6 @@ Done:
 - **Issue:** `findAllForUser` and `findOneForUser` only select `payment.status` and `payment.paidAt`. `refundedAmountInCents` lives on the `Payment` model and is never forwarded. Frontend reads it as `undefined`, showing "Refunded: 0.00 PLN" for partial refunds.
 - **Fix:** Extend the payment `include` to also select `refundedAmountInCents`, or add it to the orders response mapper.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 22 — Invoice totals diverge from line items — coupon discount missing on PDF
 - **File:** `backend/src/modules/invoice/invoice.service.ts:206-229`
 - **Issue:** "Razem brutto" sums per-item grosses (undiscounted). "DO ZAPŁATY" renders `order.totalInCents` (discounted). No discount line item bridges the gap. Polish VAT law (Art. 106e pkt 7) requires the discount amount and basis on the invoice.
@@ -153,6 +150,9 @@ Not yet:
 - **File:** `backend/src/modules/users/users.service.ts:177-196`
 - **Issue:** `deleteAccount()` anonymises `snapshotEmail`/`snapshotFirstName`/`snapshotLastName` on orders but never touches `ReturnRequest`, which has its own `email`, `firstName`, `lastName`, `phone`, and `bankAccount` (IBAN) fields — with no FK to `User` and no cascade.
 - **Fix:** Add inside the deletion transaction: `prisma.returnRequest.updateMany({ where: { email: user.email }, data: { firstName: '[usunięto]', lastName: '[usunięto]', email: 'deleted@deleted', phone: null, bankAccount: null } })`.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 26 — Cookie `SameSite`/`Secure` attributes computed from a stale module-load constant
 - **File:** `backend/src/modules/auth/auth.controller.ts:33-48`

@@ -34,43 +34,50 @@ import { Throttle } from '@nestjs/throttler';
 import { REFRESH_COOKIE } from './auth.constants';
 
 const OAUTH_EXCHANGE_COOKIE = 'oauth_access_token';
-const CROSS_SITE = (process.env.FRONTEND_URL ?? '').startsWith('https://');
-
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: CROSS_SITE,
-  sameSite: (CROSS_SITE ? 'none' : 'lax') as 'none' | 'lax',
-  path: '/',
-  maxAge: 7 * 24 * 60 * 60 * 1000,
-};
-
-// Short-lived cookie used only during the OAuth exchange window.
-// 60 seconds is enough for the frontend callback page to call /auth/token/exchange.
-const OAUTH_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: CROSS_SITE,
-  sameSite: (CROSS_SITE ? 'none' : 'lax') as 'none' | 'lax',
-  path: '/',
-  maxAge: 60 * 1000,
-};
 
 const OAUTH_NONCE_TTL_S = 60;
 
 @Controller('auth')
 @UseGuards(JwtAuthGuard)
 export class AuthController {
+  private readonly crossSite: boolean;
+
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
-  ) {}
+  ) {
+    this.crossSite = (this.configService.get<string>('FRONTEND_URL', '') ?? '').startsWith('https://');
+  }
+
+  private get cookieOptions() {
+    return {
+      httpOnly: true,
+      secure: this.crossSite,
+      sameSite: (this.crossSite ? 'none' : 'lax') as 'none' | 'lax',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    };
+  }
+
+  // Short-lived cookie used only during the OAuth exchange window.
+  // 60 seconds is enough for the frontend callback page to call /auth/token/exchange.
+  private get oauthCookieOptions() {
+    return {
+      httpOnly: true,
+      secure: this.crossSite,
+      sameSite: (this.crossSite ? 'none' : 'lax') as 'none' | 'lax',
+      path: '/',
+      maxAge: 60 * 1000,
+    };
+  }
 
   @Public()
   @Throttle({ default: { ttl: 60000, limit: 3 } })  // 3 registrations per minute
   @Post('register')
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const { accessToken, refreshToken } = await this.authService.register(dto);
-    res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+    res.cookie(REFRESH_COOKIE, refreshToken, this.cookieOptions);
     return { accessToken };
   }
 
@@ -83,7 +90,7 @@ export class AuthController {
       dto.email,
       dto.password,
     );
-    res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+    res.cookie(REFRESH_COOKIE, refreshToken, this.cookieOptions);
     return { accessToken };
   }
 
@@ -101,7 +108,7 @@ export class AuthController {
       user.id,
       rawRefreshToken,
     );
-    res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+    res.cookie(REFRESH_COOKIE, refreshToken, this.cookieOptions);
     return { accessToken };
   }
 
@@ -164,7 +171,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { accessToken, refreshToken } = await this.authService.consumeMagicLink(dto.token);
-    res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+    res.cookie(REFRESH_COOKIE, refreshToken, this.cookieOptions);
     return { accessToken };
   }
 
@@ -183,7 +190,7 @@ export class AuthController {
     @Res() res: Response,
   ) {
     const { accessToken, refreshToken } = await this.authService.generateTokenPair(user);
-    res.cookie(REFRESH_COOKIE, refreshToken, { ...COOKIE_OPTIONS, path: '/' });
+    res.cookie(REFRESH_COOKIE, refreshToken, { ...this.cookieOptions, path: '/' });
 
     // Store the access token in a short-lived httpOnly cookie so it is never
     // visible in the redirect URL. A one-time nonce is appended to the redirect
@@ -194,7 +201,7 @@ export class AuthController {
     // possession of the nonce.
     const nonce = randomBytes(32).toString('hex');
     await this.redis.set(`oauth_nonce:${nonce}`, '1', 'EX', OAUTH_NONCE_TTL_S);
-    res.cookie(OAUTH_EXCHANGE_COOKIE, accessToken, OAUTH_COOKIE_OPTIONS);
+    res.cookie(OAUTH_EXCHANGE_COOKIE, accessToken, this.oauthCookieOptions);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
     res.redirect(`${frontendUrl}/auth/callback#state=${nonce}`);
   }
