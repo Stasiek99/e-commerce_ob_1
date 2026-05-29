@@ -4,9 +4,6 @@
 ---
 ## Operational & Reliability Gaps
 
-### 22. SSR breaks the GDPR consent layer *(Domain Expert)*
-`ConsentService` reads `localStorage` synchronously. On SSR (`isPlatformBrowser === false`), it returns null — every SSR-delivered page renders as "consent undecided," causing the cookie banner to flash for users who already consented and suppressing GA4 unnecessarily.
-
 ---
 
 Legal / Compliance

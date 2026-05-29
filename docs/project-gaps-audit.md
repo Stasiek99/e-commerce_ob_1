@@ -153,6 +153,7 @@ Then run `pnpm db:migrate`.
 
 > Note: Sentry is correctly implemented on both backend (`@sentry/nestjs`, `instrument.ts`) and frontend (`@sentry/angular`, `main.ts`). Structured logging via `nestjs-pino` is also solid. These are not gaps.
 
+
 ---
 
 Legal / Compliance
