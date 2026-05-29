@@ -12,27 +12,25 @@ export class ReviewsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(userId: string, dto: CreateReviewDto) {
-    if (dto.orderId) {
-      const order = await this.prisma.order.findFirst({
-        where: { id: dto.orderId, userId },
-        include: {
-          items: { include: { productVariant: { select: { productId: true } } } },
-        },
-      });
-      if (!order) throw new NotFoundException('Order not found');
-      if (order.status !== OrderStatus.DELIVERED) {
-        throw new BadRequestException(
-          'Możesz ocenić produkt tylko po jego dostarczeniu.',
-        );
-      }
-      const hasProduct = order.items.some(
-        (i) => i.productVariant.productId === dto.productId,
+    const order = await this.prisma.order.findFirst({
+      where: { id: dto.orderId, userId },
+      include: {
+        items: { include: { productVariant: { select: { productId: true } } } },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== OrderStatus.DELIVERED) {
+      throw new BadRequestException(
+        'Możesz ocenić produkt tylko po jego dostarczeniu.',
       );
-      if (!hasProduct) {
-        throw new BadRequestException(
-          'Ten produkt nie znajduje się w wybranym zamówieniu.',
-        );
-      }
+    }
+    const hasProduct = order.items.some(
+      (i) => i.productVariant.productId === dto.productId,
+    );
+    if (!hasProduct) {
+      throw new BadRequestException(
+        'Ten produkt nie znajduje się w wybranym zamówieniu.',
+      );
     }
 
     const product = await this.prisma.product.findUnique({
@@ -44,7 +42,7 @@ export class ReviewsService {
       data: {
         productId: dto.productId,
         userId,
-        orderId: dto.orderId ?? null,
+        orderId: dto.orderId,
         rating: dto.rating,
         title: dto.title?.trim() ?? null,
         body: dto.body?.trim() ?? null,

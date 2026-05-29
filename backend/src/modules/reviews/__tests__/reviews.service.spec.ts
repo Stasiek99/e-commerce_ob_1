@@ -56,11 +56,17 @@ describe('ReviewsService', () => {
   // ─── create ──────────────────────────────────────────────────────────────
 
   describe('create', () => {
-    const dto = { productId: 'product-1', rating: 5 };
+    const dto = { productId: 'product-1', orderId: 'order-1', rating: 5 };
+    const validOrder = {
+      id: 'order-1',
+      status: OrderStatus.DELIVERED,
+      items: [{ productVariant: { productId: 'product-1' } }],
+    };
 
-    it('creates review with PENDING status when no orderId provided', async () => {
+    it('creates review with PENDING status when order is DELIVERED', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
-      prisma.review.create.mockResolvedValue(makeReview({ status: 'PENDING' }));
+      prisma.review.create.mockResolvedValue(makeReview({ status: 'PENDING', orderId: 'order-1' }));
 
       await service.create('user-1', dto);
 
@@ -69,19 +75,17 @@ describe('ReviewsService', () => {
           data: expect.objectContaining({
             productId: 'product-1',
             userId: 'user-1',
-            orderId: null,
+            orderId: 'order-1',
             status: 'PENDING',
           }),
         }),
       );
     });
 
-    it('throws NotFoundException when orderId provided but order not found', async () => {
+    it('throws NotFoundException when order not found', async () => {
       prisma.order.findFirst.mockResolvedValue(null);
 
-      await expect(
-        service.create('user-1', { ...dto, orderId: 'order-1' }),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.create('user-1', dto)).rejects.toThrow(NotFoundException);
     });
 
     it('throws BadRequestException when order status is not DELIVERED', async () => {
@@ -91,9 +95,7 @@ describe('ReviewsService', () => {
         items: [{ productVariant: { productId: 'product-1' } }],
       });
 
-      await expect(
-        service.create('user-1', { ...dto, orderId: 'order-1' }),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.create('user-1', dto)).rejects.toThrow(BadRequestException);
     });
 
     it('throws BadRequestException when reviewed product is not in the given order', async () => {
@@ -103,24 +105,25 @@ describe('ReviewsService', () => {
         items: [{ productVariant: { productId: 'other-product' } }],
       });
 
-      await expect(
-        service.create('user-1', { ...dto, orderId: 'order-1' }),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.create('user-1', dto)).rejects.toThrow(BadRequestException);
     });
 
     it('throws NotFoundException when product does not exist', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue(null);
 
       await expect(service.create('user-1', dto)).rejects.toThrow(NotFoundException);
     });
 
     it('throws NotFoundException when product is inactive', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: false });
 
       await expect(service.create('user-1', dto)).rejects.toThrow(NotFoundException);
     });
 
     it('trims whitespace from title and body', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
       prisma.review.create.mockResolvedValue(makeReview());
 
@@ -134,6 +137,7 @@ describe('ReviewsService', () => {
     });
 
     it('stores null for title and body when not provided', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
       prisma.review.create.mockResolvedValue(makeReview({ title: null, body: null }));
 
@@ -147,15 +151,11 @@ describe('ReviewsService', () => {
     });
 
     it('stores orderId when order is DELIVERED and contains the product', async () => {
-      prisma.order.findFirst.mockResolvedValue({
-        id: 'order-1',
-        status: OrderStatus.DELIVERED,
-        items: [{ productVariant: { productId: 'product-1' } }],
-      });
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
       prisma.review.create.mockResolvedValue(makeReview({ orderId: 'order-1' }));
 
-      await service.create('user-1', { ...dto, orderId: 'order-1' });
+      await service.create('user-1', dto);
 
       expect(prisma.review.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -164,13 +164,16 @@ describe('ReviewsService', () => {
       );
     });
 
-    it('skips order lookup entirely when no orderId provided', async () => {
+    it('always performs order lookup before creating a review', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
       prisma.review.create.mockResolvedValue(makeReview());
 
       await service.create('user-1', dto);
 
-      expect(prisma.order.findFirst).not.toHaveBeenCalled();
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'order-1', userId: 'user-1' } }),
+      );
     });
   });
 
@@ -532,9 +535,15 @@ describe('ReviewsService', () => {
   // ─── create (additional edge cases) ──────────────────────────────────────
 
   describe('create — additional edge cases', () => {
-    const dto = { productId: 'product-1', rating: 4 };
+    const dto = { productId: 'product-1', orderId: 'order-1', rating: 4 };
+    const validOrder = {
+      id: 'order-1',
+      status: OrderStatus.DELIVERED,
+      items: [{ productVariant: { productId: 'product-1' } }],
+    };
 
     it('stores empty string title as-is (not coerced to null)', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
       prisma.review.create.mockResolvedValue(makeReview({ title: '' }));
 
@@ -553,6 +562,7 @@ describe('ReviewsService', () => {
       const uniqueError = Object.assign(new Error('Unique constraint failed'), {
         code: 'P2002',
       });
+      prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
       prisma.review.create.mockRejectedValue(uniqueError);
 

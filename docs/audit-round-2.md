@@ -106,9 +106,6 @@ Done:
 - **Issue:** Refresh tokens are correctly revoked, but the current access token (15-min JWT) is not. An attacker with a stolen access token continues making authenticated API calls for up to 15 minutes after the victim resets their password.
 - **Fix:** Implement a Redis blocklist keyed on JWT `jti`. On `changePassword`, insert all active access token JTIs. The JWT strategy checks the blocklist before accepting tokens.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 18 — `requestEmailChange` leaves `MAGIC_LINK` tokens alive — session bypass during email change
 - **File:** `backend/src/modules/auth/auth.service.ts:219-224`
 - **Issue:** The `updateMany` filters on `type: EMAIL_VERIFICATION` only. Active `MAGIC_LINK` tokens survive. A magic link issued before the email-change request was made can still be consumed to authenticate as the user.
@@ -118,6 +115,9 @@ Not yet:
 - **File:** `backend/src/modules/reviews/reviews.service.ts:14-53`
 - **Issue:** `orderId` in `CreateReviewDto` is `@IsOptional()`. If omitted, the purchase-verification block is skipped entirely. Any authenticated user can review any product they've never bought. `verifiedPurchase` is a label, not a gate.
 - **Fix:** Either require `orderId` for all reviews (`@IsUUID()` without `@IsOptional()`), or make unverified and verified reviews a deliberate policy choice — currently neither is enforced.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 20 — `OrderItemDto.totalPrice` is in shared-types but never emitted by the backend
 - **File:** `packages/shared-types/src/dto/order.dto.ts:44` vs `backend/src/modules/orders/orders.service.ts:326-352`
