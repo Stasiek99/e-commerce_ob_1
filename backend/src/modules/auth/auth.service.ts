@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -12,6 +13,7 @@ import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { EmailTokenType, RefreshToken, User } from '@prisma/client';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { EmailQueueService } from '../email/email-queue.service';
@@ -27,12 +29,16 @@ const REFRESH_GRACE_MS = 30_000;
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
+  // TTL matches the access token lifetime so the entry self-expires when no old tokens remain valid
+  private static readonly REVOKE_BEFORE_TTL_SECS = 900; // 15 minutes
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailQueueService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
@@ -373,6 +379,8 @@ export class AuthService {
         data: { revokedAt: new Date() },
       }),
     ]);
+
+    await this.revokeAccessTokensForUser(stored.userId);
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
@@ -394,6 +402,8 @@ export class AuthService {
         data: { revokedAt: new Date() },
       }),
     ]);
+
+    await this.revokeAccessTokensForUser(userId);
   }
 
   async requestMagicLink(email: string): Promise<void> {
@@ -474,5 +484,19 @@ export class AuthService {
 
   private signAccessToken(user: User): string {
     return this.jwtService.sign({ sub: user.id, email: user.email, role: user.role });
+  }
+
+  /**
+   * Records a revocation fence for a user. Any access token with iat before
+   * this fence is rejected by JwtStrategy. The key expires after one access
+   * token lifetime so Redis doesn't accumulate stale entries.
+   */
+  async revokeAccessTokensForUser(userId: string): Promise<void> {
+    await this.redis.set(
+      `auth:revoke-before:${userId}`,
+      Date.now().toString(),
+      'EX',
+      AuthService.REVOKE_BEFORE_TTL_SECS,
+    );
   }
 }

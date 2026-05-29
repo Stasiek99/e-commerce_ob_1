@@ -29,6 +29,7 @@ describe('AuthService', () => {
   let prisma: any;
   let jwtService: jest.Mocked<JwtService>;
   let emailService: any;
+  let redis: { set: jest.Mock; get: jest.Mock };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -94,6 +95,13 @@ describe('AuthService', () => {
             sendMagicLink: jest.fn().mockResolvedValue(undefined),
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'),
+            get: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -102,6 +110,7 @@ describe('AuthService', () => {
     usersService = module.get(UsersService);
     jwtService = module.get(JwtService);
     emailService = module.get(EmailQueueService);
+    redis = module.get('REDIS_CLIENT');
   });
 
   describe('register', () => {
@@ -764,6 +773,35 @@ describe('AuthService', () => {
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
+
+    it('writes the access token revocation fence to Redis after a successful password reset', async () => {
+      prisma.passwordResetToken.findUnique.mockResolvedValue({
+        id: 'prt-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        user: mockUser,
+      });
+
+      await service.resetPassword('valid-token', 'newStrongPassword123');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.stringMatching(/^\d+$/),
+        'EX',
+        900,
+      );
+    });
+
+    it('does not write revocation fence when reset token is invalid', async () => {
+      prisma.passwordResetToken.findUnique.mockResolvedValue(null);
+
+      await expect(service.resetPassword('bad-token', 'newpass')).rejects.toThrow(
+        BadRequestException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalled();
+    });
   });
 
   // ─── Change Password ──────────────────────────────────────────────────────────
@@ -839,6 +877,66 @@ describe('AuthService', () => {
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(prisma.user.update).toHaveBeenCalledTimes(1);
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    // ─── Access token revocation fence ─────────────────────────────────────────
+
+    it('writes the access token revocation fence to Redis after a successful password change', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.stringMatching(/^\d+$/),
+        'EX',
+        900,
+      );
+    });
+
+    it('sets the revocation fence TTL to 900 seconds (one access token lifetime)', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      const [, , , ttl] = redis.set.mock.calls[0];
+      expect(ttl).toBe(900);
+    });
+
+    it('stores the current time as the fence value so older tokens are identified by iat', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+      const before = Date.now();
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      const after = Date.now();
+      const fenceMs = parseInt(redis.set.mock.calls[0][1], 10);
+      expect(fenceMs).toBeGreaterThanOrEqual(before);
+      expect(fenceMs).toBeLessThanOrEqual(after);
+    });
+
+    it('does not write revocation fence when current password is wrong', async () => {
+      const hash = await bcrypt.hash('correctpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+      await expect(service.changePassword('user-1', 'wrongpass', 'newpass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalled();
+    });
+
+    it('does not write revocation fence when user is not found', async () => {
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(service.changePassword('user-1', 'pass', 'newpass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalled();
     });
   });
 

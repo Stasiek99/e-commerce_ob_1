@@ -96,13 +96,13 @@ Done:
 - **Issue:** `itemsTotalInCents` is read from `cart.totalInCents` before the `$transaction` starts. If a product price changes between the cart read and the transaction commit, the `snapshotPrice` in `OrderItem` diverges from `order.totalInCents`, and the Stripe amount diverges too.
 - **Fix:** Re-fetch `priceInCents` from `ProductVariant` inside the transaction and recompute `itemsTotalInCents` atomically.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 16 — `initiatePayment` creates the `Payment` DB record after the Stripe API call — money-loss scenario
 - **File:** `backend/src/modules/payments/payments.service.ts:51-73`
 - **Issue:** Stripe session is created at line 51; `Payment` row inserted at line 61. If the DB insert fails (transient error), the Stripe session exists but has no `Payment` row. `markSessionPaid` (webhook) and `reconcilePendingPayments` (cron) both look up by `stripeCheckoutSessionId` in the `payments` table — they find nothing. Customer pays Stripe; order stays `PENDING_PAYMENT` forever.
 - **Fix:** Create the `Payment` row *before* calling `createCheckoutSession`. If DB fails, no Stripe session is created. If Stripe fails after the DB row exists, the reconciliation cron handles it.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 17 — `changePassword` doesn't invalidate active access tokens — 15-minute continued access after compromise
 - **File:** `backend/src/modules/auth/auth.service.ts:361-380`
