@@ -27,19 +27,17 @@ Done:
 - **Impact:** Money loss for customers → chargebacks → Stripe account risk.
 - **Fix:** Push a negative line item before `createCheckoutSession`: `{ name: 'Rabat', unit_amount: -order.discountInCents, quantity: 1 }`. Also sets `payment.amountInCents` correctly (currently it records the discounted amount but Stripe charges the undiscounted one).
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 2 — Guest `guestEmail` has no `@IsEmail()` — order confirmation silently lost
 - **File:** `backend/src/modules/orders/dto/create-order.dto.ts` + `orders.controller.ts:38-39`
 - **Issue:** `guestEmail` is `@IsOptional() @IsString()` with no `@IsEmail()` and no `@IsNotEmpty()`. When both `user.email` and `dto.guestEmail` are falsy the non-null assertion `!` on `userEmail` suppresses TypeScript but not runtime — `snapshotEmail` is stored as `undefined`. No confirmation, no shipping notification, no order tracking via `/orders/track`.
 - **Fix:** Add `@IsEmail()` and `@IsNotEmpty()` to the DTO. Guard in the service: `if (!userEmail) throw new BadRequestException('Guest email is required')`.
 
 ### 3 — `GET /orders/track` is fully unauthenticated and rate-limitless — order enumeration
-- **File:** `backend/src/modules/orders/orders.controller.ts:42-48`
-- **Issue:** No `@UseGuards()`, no `@Throttle()`. Order numbers are sequential (`ORD-2026-000001`). An attacker knowing a victim's email can iterate ~1M combinations and retrieve item names, totals, tracking numbers.
-- **Impact:** Full purchase history disclosure. PII leak per GDPR.
-- **Fix:** Add `@Throttle({ default: { ttl: 60_000, limit: 5 } })`. Consider requiring the full UUID `id` (non-guessable) instead of the sequential `orderNumber`.
+- **File:** `backend/src/modules/orders/orders.controller.ts`
+- **Fix applied:** Added `@Throttle({ default: { ttl: 60_000, limit: 5 } })` — 5 lookups per minute per IP. Note: `orderNumber` remains sequential; the two-factor check (email + orderNumber) provides meaningful protection but replacing it with a non-guessable UUID would fully eliminate the enumeration surface.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 4 — Return approval never triggers Stripe refund or stock restore — returns are a UI façade
 - **File:** `backend/src/modules/returns/returns.service.ts:96-125`

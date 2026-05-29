@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { CarrierCode, Role } from '@prisma/client';
 import { OrdersController } from '../orders.controller';
 import { OrdersService } from '../orders.service';
@@ -25,7 +25,7 @@ const baseDto: Partial<CreateOrderDto> = {
 
 describe('OrdersController', () => {
   let controller: OrdersController;
-  let ordersService: jest.Mocked<Pick<OrdersService, 'createFromCart'>>;
+  let ordersService: jest.Mocked<Pick<OrdersService, 'createFromCart' | 'trackByEmailAndNumber'>>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -124,6 +124,63 @@ describe('OrdersController', () => {
       const [, , emailArg] = (ordersService.createFromCart as jest.Mock).mock.calls[0];
       expect(typeof emailArg).toBe('string');
       expect(emailArg).toBe('guest@example.com');
+    });
+  });
+
+  // ── trackOrder — rate-limit guard + delegation ────────────────────────────
+  // Guards the fix: GET /orders/track must be throttled at 5 req/min per IP
+  // so sequential orderNumber enumeration is not viable.
+
+  describe('trackOrder', () => {
+    describe('delegation', () => {
+      it('calls trackByEmailAndNumber with email and orderNumber from query params', async () => {
+        const payload = { orderNumber: 'ORD-2026-000001', status: 'PAID', items: [] };
+        (ordersService.trackByEmailAndNumber as jest.Mock).mockResolvedValue(payload);
+
+        const result = await controller.trackOrder('jan@example.com', 'ORD-2026-000001');
+
+        expect(ordersService.trackByEmailAndNumber).toHaveBeenCalledWith(
+          'jan@example.com',
+          'ORD-2026-000001',
+        );
+        expect(result).toBe(payload);
+      });
+
+      it('propagates NotFoundException from service when email+orderNumber pair does not match', async () => {
+        (ordersService.trackByEmailAndNumber as jest.Mock).mockRejectedValue(
+          new NotFoundException('Order not found'),
+        );
+
+        await expect(
+          controller.trackOrder('nobody@example.com', 'ORD-2026-999999'),
+        ).rejects.toThrow(NotFoundException);
+      });
+    });
+
+    describe('rate-limit metadata — enumeration guard', () => {
+      it('has a throttle TTL of 60 000 ms on the handler', () => {
+        const ttl = Reflect.getMetadata(
+          'THROTTLER:TTLdefault',
+          OrdersController.prototype.trackOrder,
+        );
+        expect(ttl).toBe(60_000);
+      });
+
+      it('has a throttle limit of 5 requests per window on the handler', () => {
+        const limit = Reflect.getMetadata(
+          'THROTTLER:LIMITdefault',
+          OrdersController.prototype.trackOrder,
+        );
+        expect(limit).toBe(5);
+      });
+
+      it('createOrder does not inherit the tight enumeration throttle', () => {
+        const ttl = Reflect.getMetadata(
+          'THROTTLER:TTLdefault',
+          OrdersController.prototype.createOrder,
+        );
+        expect(ttl).toBeUndefined();
+      });
     });
   });
 });

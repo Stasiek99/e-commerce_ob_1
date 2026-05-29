@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Role, User } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -44,6 +45,7 @@ export class OrdersController {
   }
 
   @Get('track')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   trackOrder(
     @Query('email') email: string,
     @Query('orderNumber') orderNumber: string,
