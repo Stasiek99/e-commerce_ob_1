@@ -137,7 +137,7 @@ describe('Checkout Integration Flow', () => {
             productVariant: { findUnique: jest.fn() },
             order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
             orderEvent: { create: jest.fn() },
-            payment: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+            payment: { findUnique: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'payment-1' }), update: jest.fn().mockResolvedValue({}) },
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             $transaction: jest.fn(),
           },
@@ -294,13 +294,16 @@ describe('Checkout Integration Flow', () => {
         },
       );
 
+      // payment.create is called first (before Stripe), so stripeCheckoutSessionId is absent
       expect(prisma.payment.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
-            orderId: IDS.orderId,
-            stripeCheckoutSessionId: IDS.sessionId,
-            provider: 'stripe',
-          }),
+          data: expect.objectContaining({ orderId: IDS.orderId, provider: 'stripe' }),
+        }),
+      );
+      // stripeCheckoutSessionId is attached via payment.update after Stripe confirms
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ stripeCheckoutSessionId: IDS.sessionId }),
         }),
       );
     });
