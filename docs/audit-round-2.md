@@ -36,19 +36,16 @@ Done:
 - **File:** `backend/src/modules/orders/orders.controller.ts`
 - **Fix applied:** Added `@Throttle({ default: { ttl: 60_000, limit: 5 } })` — 5 lookups per minute per IP. Note: `orderNumber` remains sequential; the two-factor check (email + orderNumber) provides meaningful protection but replacing it with a non-guessable UUID would fully eliminate the enumeration surface.
 
-Not yet:
-## 🔴 BLOCKER
-
-### 4 — Return approval never triggers Stripe refund or stock restore — returns are a UI façade
-- **File:** `backend/src/modules/returns/returns.service.ts:96-125`
-- **Issue:** `approve()` only updates `ReturnRequest.status` to `APPROVED`. Neither `paymentsService.refundPayment()` nor stock restoration is ever called. Approving a return in AdminJS marks it "done" while Stripe holds the money and stock stays decremented forever.
-- **Impact:** Merchant keeps money after approving refund; no stock restored; legal obligation unmet.
-- **Fix:** Call `paymentsService.refundPayment(orderId)` inside `markRefunded()`. Requires fixing finding #5 first.
-
 ### 5 — `ReturnRequest` has no FK to `Order` — structurally impossible to trigger a refund
 - **File:** `backend/prisma/schema.prisma` — `ReturnRequest` model
-- **Issue:** The model stores `orderNumber: String` (plain string, no `@relation`). There is no `orderId` field, no FK, no cascade. Code in `returns.service.ts` cannot look up the associated `Order` record to pass to `paymentsService.refundPayment()`.
-- **Fix:** Add `orderId String` + `order Order @relation(fields: [orderId], references: [id])`. Populate at creation time (the order is already fetched in `create()`).
+- **Fix applied:** Added `orderId String?` + `order Order? @relation(...)` to `ReturnRequest`. Migration `20260529100000_add_return_request_order_fk` adds the column, FK constraint, and index. Also fixed pre-existing drift: `shipping_rates.carrier_code` was TEXT; cast to `"CarrierCode"` enum in the same migration. `returns.service.ts create()` now sets `orderId` at request creation time.
+
+### 4 — Return approval never triggers Stripe refund or stock restore — returns are a UI façade
+- **File:** `backend/src/modules/returns/returns.service.ts`
+- **Fix applied:** `markRefunded()` now calls `paymentsService.refundPayment(req.orderId, 'RETURN_APPROVAL')` before flipping status to COMPLETED. `refundPayment` handles Stripe refund issuance, stock restore, and `order.status → REFUNDED` atomically. If Stripe fails, the return stays APPROVED (retryable). Guard added for `orderId: null` (legacy rows). `PaymentsModule` added to `ReturnsModule` imports.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 6 — SSR `localStorage` mock is a process-level singleton — cross-request state leakage *(4 agents)*
 - **File:** `frontend/src/main.server.ts:18-39`
