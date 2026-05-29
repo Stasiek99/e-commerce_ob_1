@@ -70,7 +70,7 @@ export class PaymentsService {
         currency,
         lineItems,
         successUrl,
-        cancelUrl,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
           couponLabel: order.couponCode ?? undefined,

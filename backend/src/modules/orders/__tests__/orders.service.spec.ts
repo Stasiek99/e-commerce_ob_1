@@ -1985,6 +1985,38 @@ describe('OrdersService', () => {
     });
   });
 
+  describe('retryPayment', () => {
+    it('throws NotFoundException when order does not exist or belongs to a different user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when order status is not PENDING_PAYMENT', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1', userId: 'user-1', status: OrderStatus.PAID });
+
+      await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('returns a new paymentUrl when order is PENDING_PAYMENT and owned by the user', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1', userId: 'user-1', status: OrderStatus.PENDING_PAYMENT });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe.com/pay/session-abc' });
+
+      const result = await service.retryPayment('order-1', 'user-1');
+
+      expect(paymentsService.initiatePayment).toHaveBeenCalledWith('order-1');
+      expect(result).toEqual({ paymentUrl: 'https://stripe.com/pay/session-abc' });
+    });
+
+    it('does not call initiatePayment when order is not PENDING_PAYMENT', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1', userId: 'user-1', status: OrderStatus.CANCELLED });
+
+      await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(BadRequestException);
+
+      expect(paymentsService.initiatePayment).not.toHaveBeenCalled();
+    });
+  });
+
   describe('cancelItemsByUser', () => {
     const mockOrderItems = [
       {

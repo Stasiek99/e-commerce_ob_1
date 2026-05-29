@@ -507,6 +507,21 @@ describe('PaymentsService', () => {
         }),
       );
     });
+
+    // ── cancel URL orderId injection ─────────────────────────────────────────
+    // Invariant: cancelUrl passed to Stripe must include ?orderId=<order.id>
+    // so the failure page can offer "Retry Payment" without creating a duplicate order.
+
+    it('appends ?orderId to the cancel URL passed to createCheckoutSession', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.cancelUrl).toMatch(/[?&]orderId=order-1/);
+    });
   });
 
   describe('getPaymentStatus', () => {

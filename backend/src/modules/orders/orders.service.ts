@@ -597,6 +597,17 @@ export class OrdersService implements OnModuleInit {
       .catch(() => undefined);
   }
 
+  async retryPayment(orderId: string, userId: string): Promise<{ paymentUrl: string }> {
+    const order = await this.prisma.order.findFirst({ where: { id: orderId, userId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new BadRequestException(
+        `Cannot retry payment for an order in status ${order.status}`,
+      );
+    }
+    return this.paymentsService.initiatePayment(orderId);
+  }
+
   async cancelItemsByUser(
     orderId: string,
     userId: string,
