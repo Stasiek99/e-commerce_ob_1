@@ -2246,10 +2246,10 @@ describe('OrdersService', () => {
     });
   });
 
-  // Merchant notification was removed from createFromCart — it now fires only
-  // on checkout.session.completed (confirmed payment). Tests in
-  // payments.service.spec.ts cover the notification payload and channels.
-  describe('createFromCart — no premature merchant notification', () => {
+  // Fix #27: order confirmation email moved to markSessionPaid() (Stripe webhook).
+  // Neither the merchant notification nor the customer confirmation email may fire
+  // from createFromCart — they must only trigger after payment is confirmed.
+  describe('createFromCart — no premature emails (fix #27)', () => {
     let svc: OrdersService;
     let emailService: any;
 
@@ -2346,13 +2346,11 @@ describe('OrdersService', () => {
       expect(emailService.sendNewOrderNotification).not.toHaveBeenCalled();
     });
 
-    it('still sends order confirmation email to the customer from createFromCart', async () => {
+    it('does NOT fire sendOrderConfirmation from createFromCart — email must only fire from markSessionPaid after Stripe webhook', async () => {
       await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
       await Promise.resolve();
 
-      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'customer@example.com' }),
-      );
+      expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
     });
   });
 

@@ -346,21 +346,9 @@ export class OrdersService implements OnModuleInit {
       await this.prisma.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
     }
 
-    // Send confirmation email (fire-and-forget)
-    this.emailService
-      .sendOrderConfirmation({
-        to: userEmail,
-        orderNumber: order.orderNumber,
-        firstName: address.firstName,
-        items: cart.items.map((i: CartItem) => ({
-          name: `${i.productName} – ${i.variantLabel}`,
-          quantity: i.quantity,
-          price: i.priceInCents,
-        })),
-        totalInCents,
-        carrierCode: dto.carrierCode,
-      })
-      .catch(() => undefined);
+    // Order confirmation email is sent in markSessionPaid() after the Stripe
+    // webhook confirms payment — not here, to avoid emailing customers who
+    // abandon the Stripe checkout before paying.
 
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
     this.sendStockAlertIfNeeded(

@@ -308,7 +308,7 @@ describe('Checkout Integration Flow', () => {
       );
     });
 
-    it('enqueues order confirmation email job', async () => {
+    it('does NOT enqueue order confirmation email at order creation — must fire only after Stripe webhook confirms payment', async () => {
       await ordersService.createFromCart(
         'user-1',
         undefined,
@@ -329,12 +329,7 @@ describe('Checkout Integration Flow', () => {
 
       // Allow the fire-and-forget promise to settle
       await Promise.resolve();
-      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'test@example.com',
-          orderNumber: IDS.orderNumber,
-        }),
-      );
+      expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
     });
   });
 
