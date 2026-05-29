@@ -91,13 +91,13 @@ Done:
 - **File:** `backend/src/modules/orders/orders.service.ts:755-767`
 - **Fix applied:** `PAID`/`PROCESSING` orders now call `paymentsService.refundPayment(order.id, actor)` which handles Stripe refund, stock restore, status→`REFUNDED`, and event atomically. The manual `$transaction` block is only used for `PENDING_PAYMENT` orders (no payment to refund). `needsRefund` field removed from return type; `admin.setup.ts` updated accordingly.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 15 — Coupon discount computed outside the DB transaction on a potentially stale cart total
 - **File:** `backend/src/modules/orders/orders.service.ts:131-156`
 - **Issue:** `itemsTotalInCents` is read from `cart.totalInCents` before the `$transaction` starts. If a product price changes between the cart read and the transaction commit, the `snapshotPrice` in `OrderItem` diverges from `order.totalInCents`, and the Stripe amount diverges too.
 - **Fix:** Re-fetch `priceInCents` from `ProductVariant` inside the transaction and recompute `itemsTotalInCents` atomically.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 16 — `initiatePayment` creates the `Payment` DB record after the Stripe API call — money-loss scenario
 - **File:** `backend/src/modules/payments/payments.service.ts:51-73`

@@ -105,7 +105,9 @@ describe('Checkout Integration Flow', () => {
           updateMany: jest.fn().mockResolvedValue({
             count: overrides.insufficientStock ? 0 : 1,
           }),
+          findMany: jest.fn().mockResolvedValue([{ id: IDS.variantId, priceInCents: 34900 }]),
         },
+        coupon: { findUnique: jest.fn().mockResolvedValue(null) },
         order: {
           create: jest.fn().mockResolvedValue(
             overrides.orderResult ?? mockOrder,
@@ -168,6 +170,7 @@ describe('Checkout Integration Flow', () => {
           useValue: {
             validate: jest.fn().mockResolvedValue({ valid: false }),
             applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            calculateDiscount: jest.fn().mockReturnValue(0),
           },
         },
         {

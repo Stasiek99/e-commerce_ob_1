@@ -202,6 +202,37 @@ export class OrdersService implements OnModuleInit {
         }
       }
 
+      // Re-fetch prices from the rows we just locked so snapshotPrice and all totals
+      // reflect the price that was authoritative at commit time, not the stale cart read.
+      const freshVariants = await tx.productVariant.findMany({
+        where: { id: { in: cart.items.map((i: CartItem) => i.productVariantId) } },
+        select: { id: true, priceInCents: true },
+      });
+      const freshPriceMap = new Map(freshVariants.map((v) => [v.id, v.priceInCents]));
+
+      const txItemsTotalInCents = cart.items.reduce((sum: number, item: CartItem) => {
+        return sum + (freshPriceMap.get(item.productVariantId) ?? item.priceInCents) * item.quantity;
+      }, 0);
+
+      // Recompute coupon discount against the fresh items total
+      let txDiscountInCents = 0;
+      if (resolvedCouponId) {
+        const coupon = await tx.coupon.findUnique({ where: { id: resolvedCouponId } });
+        if (coupon) {
+          if (coupon.minSpendInCents !== null && txItemsTotalInCents < coupon.minSpendInCents) {
+            throw new BadRequestException(
+              'Cena produktów zmieniła się — kod rabatowy nie jest już ważny dla tej wartości koszyka.',
+            );
+          }
+          txDiscountInCents =
+            coupon.discountType === DiscountType.FREE_SHIPPING
+              ? shippingCostInCents
+              : this.couponService.calculateDiscount(coupon.discountType, coupon.value, txItemsTotalInCents);
+        }
+      }
+
+      const txTotalInCents = Math.max(0, txItemsTotalInCents + shippingCostInCents - txDiscountInCents);
+
       // Create order with address snapshot
       const newOrder = await tx.order.create({
         data: {
@@ -222,10 +253,10 @@ export class OrdersService implements OnModuleInit {
           carrierCode: dto.carrierCode,
           inpostLockerCode: dto.inpostLockerCode,
           dpdPickupPointCode: dto.dpdPickupPointCode,
-          itemsTotalInCents,
+          itemsTotalInCents: txItemsTotalInCents,
           shippingCostInCents,
-          discountInCents,
-          totalInCents,
+          discountInCents: txDiscountInCents,
+          totalInCents: txTotalInCents,
           ...(resolvedCouponId && { couponId: resolvedCouponId }),
           ...(resolvedCouponCode && { couponCode: resolvedCouponCode }),
           notes: dto.notes,
@@ -236,7 +267,7 @@ export class OrdersService implements OnModuleInit {
               productVariantId: item.productVariantId,
               snapshotName: `${item.productName} – ${item.variantLabel}`,
               snapshotSku: item.sku,
-              snapshotPrice: item.priceInCents,
+              snapshotPrice: freshPriceMap.get(item.productVariantId) ?? item.priceInCents,
               snapshotVatRate: item.vatRate,
               quantity: item.quantity,
             })),
@@ -251,7 +282,7 @@ export class OrdersService implements OnModuleInit {
           resolvedCouponId,
           newOrder.id,
           userId,
-          discountInCents,
+          txDiscountInCents,
         );
       }
 

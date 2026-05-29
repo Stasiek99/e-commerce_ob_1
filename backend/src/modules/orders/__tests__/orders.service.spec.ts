@@ -122,6 +122,11 @@ describe('OrdersService', () => {
           useValue: {
             validate: jest.fn().mockResolvedValue({ valid: false }),
             applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            calculateDiscount: jest.fn().mockImplementation((type: DiscountType, value: number, cartTotal: number) => {
+              if (type === DiscountType.PERCENTAGE) return Math.round((cartTotal * value) / 100);
+              if (type === DiscountType.FIXED_AMOUNT) return Math.min(value, cartTotal);
+              return 0;
+            }),
           },
         },
         {
@@ -223,7 +228,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
@@ -249,7 +254,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
@@ -282,7 +287,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedShipping = args.data.shippingCostInCents;
@@ -314,7 +319,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedShipping = args.data.shippingCostInCents;
@@ -364,6 +369,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -407,7 +413,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
@@ -447,6 +453,7 @@ describe('OrdersService', () => {
               });
               return { count: 1 };
             }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -506,6 +513,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -547,6 +555,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -579,6 +588,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -649,7 +659,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
@@ -686,6 +696,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -714,6 +725,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
@@ -1294,12 +1306,14 @@ describe('OrdersService', () => {
   });
 
   describe('createFromCart (coupon branches)', () => {
-    const buildTx = (_overrides: { couponApply?: jest.Mock } = {}) => ({
+    const buildTx = (coupon: { id: string; discountType: DiscountType; value: number; minSpendInCents: number | null } | null = null) => ({
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
       },
+      coupon: { findUnique: jest.fn().mockResolvedValue(coupon) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
@@ -1332,7 +1346,7 @@ describe('OrdersService', () => {
 
       let capturedTotal: number | undefined;
       prisma.$transaction.mockImplementation(async (fn: any) => {
-        const tx = buildTx();
+        const tx = buildTx({ id: 'coupon-1', discountType: DiscountType.FIXED_AMOUNT, value: 1000, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedTotal = args.data.totalInCents;
           return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
@@ -1347,7 +1361,7 @@ describe('OrdersService', () => {
         couponCode: 'SAVE10',
       });
 
-      // itemsTotal=114700, shipping=1999, discount=1000 → total=115699
+      // itemsTotal=114700 (fresh prices unchanged), shipping=1999, discount=min(1000,114700)=1000 → total=115699
       expect(capturedTotal).toBe(114700 + 1999 - 1000);
     });
 
@@ -1363,7 +1377,7 @@ describe('OrdersService', () => {
 
       let capturedDiscount: number | undefined;
       prisma.$transaction.mockImplementation(async (fn: any) => {
-        const tx = buildTx();
+        const tx = buildTx({ id: 'coupon-2', discountType: DiscountType.FREE_SHIPPING, value: 0, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedDiscount = args.data.discountInCents;
           return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
@@ -2109,7 +2123,8 @@ describe('OrdersService', () => {
     const buildTx = () => ({
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
+      coupon: { findUnique: jest.fn().mockResolvedValue(null) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
@@ -2163,6 +2178,11 @@ describe('OrdersService', () => {
             useValue: {
               validate: jest.fn().mockResolvedValue({ valid: false }),
               applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+              calculateDiscount: jest.fn().mockImplementation((type: DiscountType, value: number, cartTotal: number) => {
+                if (type === DiscountType.PERCENTAGE) return Math.round((cartTotal * value) / 100);
+                if (type === DiscountType.FIXED_AMOUNT) return Math.min(value, cartTotal);
+                return 0;
+              }),
             },
           },
           {
@@ -2224,6 +2244,138 @@ describe('OrdersService', () => {
     });
   });
 
+  // ─── Fix #15 regression harness — price-change race condition ────────────────
+  // Invariant: snapshotPrice, itemsTotalInCents, and discountInCents must all be
+  // computed from the DB price at commit time, not from the stale cart read.
+
+  describe('createFromCart — price-change race condition (fix #15 regression harness)', () => {
+    const buildRaceTx = (
+      freshPrices: Array<{ id: string; priceInCents: number }>,
+      coupon: { id: string; discountType: DiscountType; value: number; minSpendInCents: number | null } | null = null,
+    ) => ({
+      $executeRawUnsafe: jest.fn(),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+      productVariant: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue(freshPrices),
+      },
+      coupon: { findUnique: jest.fn().mockResolvedValue(coupon) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+      cartItem: { deleteMany: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('uses the fresh DB price as snapshotPrice, not the stale cart price', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      // pv-1 price increased from 34900 (in cart) to 39900 (DB at commit time)
+      const freshPrices = [{ id: 'pv-1', priceInCents: 39900 }, { id: 'pv-2', priceInCents: 44900 }];
+      let capturedItems: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildRaceTx(freshPrices);
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedItems = args.data.items.create;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const item1 = capturedItems.find((i: any) => i.productVariantId === 'pv-1');
+      expect(item1.snapshotPrice).toBe(39900);
+      expect(item1.snapshotPrice).not.toBe(34900); // must not use the stale cart price
+    });
+
+    it('recomputes itemsTotalInCents and totalInCents from fresh variant prices, not stale cart total', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      // pv-1 price went from 34900 to 39900 → fresh total = 2*39900 + 44900 = 124700
+      const freshPrices = [{ id: 'pv-1', priceInCents: 39900 }, { id: 'pv-2', priceInCents: 44900 }];
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildRaceTx(freshPrices);
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedOrderData = args.data;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const freshItemsTotal = 2 * 39900 + 44900; // 124700
+      expect(capturedOrderData.itemsTotalInCents).toBe(freshItemsTotal);
+      expect(capturedOrderData.totalInCents).toBe(freshItemsTotal + 1999); // + DHL
+      expect(capturedOrderData.itemsTotalInCents).not.toBe(mockCart.totalInCents); // not stale
+    });
+
+    it('recomputes PERCENTAGE coupon discount against the fresh items total', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      couponService.validate.mockResolvedValue({
+        valid: true,
+        couponId: 'coupon-pct',
+        discountType: DiscountType.PERCENTAGE,
+        discountAmountInCents: Math.round(mockCart.totalInCents * 10 / 100), // stale outer amount
+      });
+      // pv-1 price increased → fresh total 124700 → 10% = 12470 (not 11470 from stale cart)
+      const freshPrices = [{ id: 'pv-1', priceInCents: 39900 }, { id: 'pv-2', priceInCents: 44900 }];
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildRaceTx(freshPrices, { id: 'coupon-pct', discountType: DiscountType.PERCENTAGE, value: 10, minSpendInCents: null });
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedOrderData = args.data;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        couponCode: 'SAVE10PCT',
+      });
+
+      const freshItemsTotal = 2 * 39900 + 44900; // 124700
+      expect(capturedOrderData.discountInCents).toBe(Math.round(freshItemsTotal * 10 / 100)); // 12470
+      expect(capturedOrderData.discountInCents).not.toBe(Math.round(mockCart.totalInCents * 10 / 100)); // not 11470
+    });
+
+    it('throws BadRequestException inside the transaction when fresh prices drop below coupon minSpendInCents', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      // Outer validation passes — stale cart total (114700) is above the 50000 minimum
+      couponService.validate.mockResolvedValue({
+        valid: true,
+        couponId: 'coupon-min',
+        discountType: DiscountType.FIXED_AMOUNT,
+        discountAmountInCents: 500,
+      });
+      // Fresh prices collapsed: total = 2*1000 + 1000 = 3000, below 50000 minimum
+      const cheapPrices = [{ id: 'pv-1', priceInCents: 1000 }, { id: 'pv-2', priceInCents: 1000 }];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(buildRaceTx(cheapPrices, { id: 'coupon-min', discountType: DiscountType.FIXED_AMOUNT, value: 500, minSpendInCents: 50000 })),
+      );
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+          couponCode: 'MINSPEND',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('generateOrderNumber', () => {
     it('should produce format ORD-YYYY-NNNNNN using PostgreSQL sequence', async () => {
       // Access the private method via prototype
@@ -2241,6 +2393,7 @@ describe('OrdersService', () => {
           ...tx,
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -2286,6 +2439,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
