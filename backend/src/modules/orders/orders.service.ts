@@ -117,9 +117,13 @@ export class OrdersService implements OnModuleInit {
       phone: string;
     } | null = null;
 
+    if (dto.addressId && !userId) {
+      throw new BadRequestException('Guests must supply a new address');
+    }
+
     if (dto.addressId) {
       address = await this.prisma.address.findFirst({
-        where: { id: dto.addressId, ...(userId ? { userId } : {}) },
+        where: { id: dto.addressId, userId },
       });
       if (!address) throw new NotFoundException('Address not found');
     } else if (dto.newAddress) {

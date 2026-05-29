@@ -612,6 +612,65 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    // ─── IDOR guard: guest + saved addressId ─────────────────────────────────
+
+    it('throws BadRequestException when a guest supplies an addressId — IDOR guard', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        // userId = undefined → guest checkout
+        service.createFromCart(undefined, 'session-abc', 'guest@example.com', {
+          addressId: 'addr-belonging-to-registered-user',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not query the address table when the IDOR guard fires', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart(undefined, 'session-abc', 'guest@example.com', {
+          addressId: 'addr-belonging-to-registered-user',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prisma.address.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('allows an authenticated user to reference a saved addressId', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.address.findFirst.mockResolvedValue({
+        firstName: 'Jan', lastName: 'K', street: 'ul. X 1',
+        city: 'Kraków', postalCode: '30-001', country: 'PL', phone: '+48111111111',
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'user@example.com', {
+          addressId: 'addr-1',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).resolves.not.toThrow();
+
+      expect(prisma.address.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 'addr-1', userId: 'user-1' }) }),
+      );
+    });
+
     it('falls back to sessionId cart when userId cart is empty', async () => {
       const emptyCart = { id: 'cart-user', items: [], totalInCents: 0, itemCount: 0 };
       const sessionCart = mockCart;

@@ -68,9 +68,6 @@ Done:
 - **Issue:** After Google OAuth, a full access token is stored in the `oauth_access_token` httpOnly cookie and the frontend calls `GET /auth/token/exchange` to consume it. This endpoint has no CSRF protection. Any same-origin JS (including any XSS payload) can call it within 60 seconds and receive the JWT in the response body.
 - **Fix:** Issue a server-side one-time nonce in the OAuth callback redirect URL fragment (`#state=nonce`). The exchange endpoint requires the nonce as a POST body param and verifies it against a Redis key before returning the token.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 10 — `POST /email/webhook` signature verification silently skipped when `RESEND_WEBHOOK_SECRET` is unset
 - **File:** `backend/src/modules/email/email-webhook.controller.ts:53-66`
 - **Issue:** When the env var is empty (the default in `.env.example`), the controller logs a warning and processes the unauthenticated POST. Any actor can write arbitrary rows to `emailLog` and trigger spam-complaint Sentry alerts for real customers. No throttle.
@@ -80,6 +77,9 @@ Not yet:
 - **File:** `backend/src/modules/orders/orders.service.ts:120-124`
 - **Issue:** `where: { id: dto.addressId, ...(userId ? { userId } : {}) }` — when `userId` is absent (guest checkout), the ownership filter is omitted. A guest supplying another user's address UUID ships an order to that user's full name, street, and phone number.
 - **Fix:** When `userId` is absent, disallow `addressId` entirely: `if (dto.addressId && !userId) throw new BadRequestException('Guests must supply a new address')`.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 12 — `OrderStatus` state machine has no transition guard in `updateStatus()`
 - **File:** `backend/src/modules/orders/orders.service.ts:608-647`
