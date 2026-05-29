@@ -2135,6 +2135,23 @@ describe('OrdersService', () => {
       ).rejects.toThrow('Invalid quantity 0');
     });
 
+    it('throws BadRequestException when cancelledQuantity already equals quantity (remaining is 0)', async () => {
+      // Guards the DB CHECK: 0 <= cancelledQuantity <= quantity.
+      // When an item is fully cancelled, no further quantity can be removed.
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        items: [
+          { id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 3, snapshotName: 'Dior', snapshotSku: 'DS', snapshotPrice: 34900 },
+        ],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('delegates to paymentsService.partialRefund with resolved items and CUSTOMER actor', async () => {
       prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
 
