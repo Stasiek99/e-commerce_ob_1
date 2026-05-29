@@ -614,14 +614,38 @@ export class OrdersService implements OnModuleInit {
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
     const current = await this.prisma.order.findUniqueOrThrow({
       where: { id },
-      select: { status: true },
+      select: {
+        status: true,
+        items: { select: { productVariantId: true, quantity: true, cancelledQuantity: true } },
+      },
     });
-    await this.prisma.$transaction([
-      this.prisma.order.update({ where: { id }, data: { status } }),
-      this.prisma.orderEvent.create({
+
+    if (current.status === status) return;
+
+    const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+    const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+
+    const shouldRestoreStock =
+      stockRestoringStatuses.includes(status) && !stockAlreadyRestored.includes(current.status);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (shouldRestoreStock) {
+        for (const item of current.items) {
+          const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+          if (activeQty > 0) {
+            await tx.productVariant.update({
+              where: { id: item.productVariantId },
+              data: { stock: { increment: activeQty } },
+            });
+          }
+        }
+      }
+
+      await tx.order.update({ where: { id }, data: { status } });
+      await tx.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
-      }),
-    ]);
+      });
+    });
 
     if (status === OrderStatus.DELIVERED) {
       this.dispatchReviewRequestEmail(id).catch(() => undefined);

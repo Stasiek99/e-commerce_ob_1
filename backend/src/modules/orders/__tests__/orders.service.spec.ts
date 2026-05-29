@@ -979,30 +979,149 @@ describe('OrdersService', () => {
   });
 
   describe('updateStatus', () => {
-    it('updates the order status', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PENDING_PAYMENT });
-      prisma.$transaction.mockResolvedValue([{ id: 'o-1', status: OrderStatus.PROCESSING }, {}]);
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock }> = {}) => ({
+      productVariant: { update: overrides.variantUpdate ?? jest.fn() },
+      order: { update: overrides.orderUpdate ?? jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('transitions non-terminal status without restoring stock', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PENDING_PAYMENT,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate, orderUpdate: txOrderUpdate })),
+      );
 
       await service.updateStatus('o-1', OrderStatus.PROCESSING);
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'o-1' },
-        data: { status: OrderStatus.PROCESSING },
+      expect(txOrderUpdate).toHaveBeenCalledWith({ where: { id: 'o-1' }, data: { status: OrderStatus.PROCESSING } });
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('restores active stock when transitioning to CANCELLED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [
+          { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+          { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+        ],
       });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(increments).toEqual([
+        { id: 'pv-1', amount: 2 },
+        { id: 'pv-2', amount: 2 },
+      ]);
+    });
+
+    it('restores active stock when transitioning to REFUNDED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(increments).toEqual([{ id: 'pv-1', amount: 1 }]);
+    });
+
+    it('does not restore stock when transitioning from CANCELLED (already restored)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.CANCELLED,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not restore stock when transitioning from REFUNDED (already restored)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.REFUNDED,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(txVariantUpdate).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op (no DB calls) when status is already the target', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.CANCELLED,
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips fully-cancelled items (activeQty = 0) when restoring stock', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PARTIALLY_REFUNDED,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — skip
+          { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+        ],
+      });
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({
+          variantUpdate: jest.fn().mockImplementation((args: any) => {
+            increments.push({ id: args.where.id, amount: args.data.stock.increment });
+          }),
+        })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(increments).toHaveLength(1);
+      expect(increments[0]).toEqual({ id: 'pv-2', amount: 2 });
     });
 
     it('fires review-request email (fire-and-forget) when status becomes DELIVERED', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PROCESSING });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
-      // dispatchReviewRequestEmail calls order.findUnique — return null to exit early
-      prisma.order.findUnique.mockResolvedValue(null);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PROCESSING,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early
 
       await service.updateStatus('o-1', OrderStatus.DELIVERED);
-      await Promise.resolve(); // flush microtasks
+      await Promise.resolve();
 
-      expect(prisma.order.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: OrderStatus.DELIVERED } }),
-      );
+      expect(prisma.order.findUnique).toHaveBeenCalled();
     });
   });
 
@@ -1288,8 +1407,10 @@ describe('OrdersService', () => {
         makeOrder('o-2', 'ORD-002', OrderStatus.PROCESSING, 'TRK002'),
       ];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
 
@@ -1320,8 +1441,10 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID, 'TRK001')];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       await service.bulkMarkAsShipped(['o-1']);
       await Promise.resolve();
@@ -1335,8 +1458,10 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)]; // no tracking
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
 
       await service.bulkMarkAsShipped(['o-1']);
       await Promise.resolve();
