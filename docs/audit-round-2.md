@@ -58,17 +58,13 @@ Done:
 - **Impact:** Table bloat → query latency regression; Supabase free-tier storage cap risk.
 - **Fix:** Add a nightly `@Cron(CronExpression.EVERY_DAY_AT_4AM)` that `deleteMany({ where: { expiresAt: { lt: new Date() } } })` on all three token tables.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 8 — Google OAuth has no `state` parameter — CSRF on the callback
 - **File:** `backend/src/modules/auth/strategies/google.strategy.ts`
 - **Issue:** `passport-google-oauth20` does not receive `state: true` in the strategy constructor. The callback URL (`GET /auth/google/callback`) accepts any redirect from Google with no nonce verification. An attacker can craft a Google auth URL pointing at this callback to trigger a CSRF login that links the victim's session to the attacker's Google account.
 - **Fix:** Add `state: true` to the `super({...})` call. Passport will generate and verify a random nonce automatically.
 
----
-
-## 🟠 HIGH
+Not yet:
+## 🔴 BLOCKER
 
 ### 9 — OAuth token exchange has no CSRF protection — 60-second window for token theft
 - **File:** `backend/src/modules/auth/auth.controller.ts:192-203`
