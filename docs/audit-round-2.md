@@ -63,13 +63,13 @@ Done:
 - **Issue:** `passport-google-oauth20` does not receive `state: true` in the strategy constructor. The callback URL (`GET /auth/google/callback`) accepts any redirect from Google with no nonce verification. An attacker can craft a Google auth URL pointing at this callback to trigger a CSRF login that links the victim's session to the attacker's Google account.
 - **Fix:** Add `state: true` to the `super({...})` call. Passport will generate and verify a random nonce automatically.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 9 — OAuth token exchange has no CSRF protection — 60-second window for token theft
 - **File:** `backend/src/modules/auth/auth.controller.ts:192-203`
 - **Issue:** After Google OAuth, a full access token is stored in the `oauth_access_token` httpOnly cookie and the frontend calls `GET /auth/token/exchange` to consume it. This endpoint has no CSRF protection. Any same-origin JS (including any XSS payload) can call it within 60 seconds and receive the JWT in the response body.
 - **Fix:** Issue a server-side one-time nonce in the OAuth callback redirect URL fragment (`#state=nonce`). The exchange endpoint requires the nonce as a POST body param and verifies it against a Redis key before returning the token.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 10 — `POST /email/webhook` signature verification silently skipped when `RESEND_WEBHOOK_SECRET` is unset
 - **File:** `backend/src/modules/email/email-webhook.controller.ts:53-66`

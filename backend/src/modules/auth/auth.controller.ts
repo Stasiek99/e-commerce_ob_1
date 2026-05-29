@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Post,
   Req,
   Res,
@@ -12,13 +13,16 @@ import {
 } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
 import { User } from '@prisma/client';
+import type IORedis from 'ioredis';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ExchangeTokenDto } from './dto/exchange-token.dto';
 import { MagicLinkRequestDto, MagicLinkVerifyDto } from './dto/magic-link.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -50,12 +54,15 @@ const OAUTH_COOKIE_OPTIONS = {
   maxAge: 60 * 1000,
 };
 
+const OAUTH_NONCE_TTL_S = 60;
+
 @Controller('auth')
 @UseGuards(JwtAuthGuard)
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   @Public()
@@ -177,23 +184,37 @@ export class AuthController {
   ) {
     const { accessToken, refreshToken } = await this.authService.generateTokenPair(user);
     res.cookie(REFRESH_COOKIE, refreshToken, { ...COOKIE_OPTIONS, path: '/' });
-    // Set a short-lived httpOnly cookie instead of exposing the access token in
-    // the redirect URL. The frontend callback page immediately calls
-    // GET /auth/token/exchange to retrieve it, then the cookie is cleared.
-    // Dev note: GOOGLE_CALLBACK_URL must route through the Angular proxy
-    // (http://localhost:4200/api/auth/google/callback) so the cookie lands on
-    // localhost:4200, matching the origin the exchange fetch is sent from.
+
+    // Store the access token in a short-lived httpOnly cookie so it is never
+    // visible in the redirect URL. A one-time nonce is appended to the redirect
+    // fragment (#state=<nonce>) and stored in Redis for 60 s. The frontend reads
+    // the nonce from window.location.hash and POSTs it to /auth/token/exchange,
+    // which verifies + deletes the Redis key before returning the token — preventing
+    // any unauthenticated caller (XSS, other tab) from consuming the cookie without
+    // possession of the nonce.
+    const nonce = randomBytes(32).toString('hex');
+    await this.redis.set(`oauth_nonce:${nonce}`, '1', 'EX', OAUTH_NONCE_TTL_S);
     res.cookie(OAUTH_EXCHANGE_COOKIE, accessToken, OAUTH_COOKIE_OPTIONS);
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
-    res.redirect(`${frontendUrl}/auth/callback`);
+    res.redirect(`${frontendUrl}/auth/callback#state=${nonce}`);
   }
 
   @Public()
-  @Get('token/exchange')
-  exchangeOAuthToken(
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @Post('token/exchange')
+  @HttpCode(HttpStatus.OK)
+  async exchangeOAuthToken(
+    @Body() dto: ExchangeTokenDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const nonceKey = `oauth_nonce:${dto.nonce}`;
+    // Atomic getdel: verifies existence and deletes in one round-trip (one-time use)
+    const valid = await this.redis.getdel(nonceKey);
+    if (!valid) {
+      throw new UnauthorizedException('Invalid or expired OAuth nonce');
+    }
+
     const token = req.cookies?.[OAUTH_EXCHANGE_COOKIE] as string | undefined;
     if (!token) {
       throw new UnauthorizedException('OAuth exchange token not found or expired');
