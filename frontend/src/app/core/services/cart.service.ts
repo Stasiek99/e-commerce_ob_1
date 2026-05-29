@@ -135,6 +135,11 @@ export class CartService {
     this._items.set(cart.items);
   }
 
+  clear() {
+    this._items.set([]);
+    this._cartId.set(null);
+  }
+
   getSessionId(): string {
     return this.sessionId;
   }

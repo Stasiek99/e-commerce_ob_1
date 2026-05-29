@@ -1005,6 +1005,7 @@ export class CheckoutPageComponent implements OnInit {
           }));
         } catch { /* sessionStorage unavailable (private browsing quota) */ }
         this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
+        this.cart.clear();
         window.location.href = res.paymentUrl;
       },
       error: (err) => {

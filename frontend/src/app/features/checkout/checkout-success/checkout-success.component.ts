@@ -4,6 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
 import { AnalyticsService } from '../../../core/services/analytics.service';
+import { CartService } from '../../../core/services/cart.service';
 
 interface PaymentStatusResponse {
   status: string;
@@ -158,6 +159,7 @@ export class CheckoutSuccessComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly http = inject(HttpClient);
   private readonly analytics = inject(AnalyticsService);
+  private readonly cart = inject(CartService);
 
   readonly loading = signal(true);
   readonly paid = signal(false);
@@ -178,6 +180,7 @@ export class CheckoutSuccessComponent implements OnInit {
         next: (res) => {
           this.paid.set(res.status === 'COMPLETED');
           if (res.status === 'COMPLETED') {
+            this.cart.clear();
             this.firePurchaseEvent(id);
           }
           this.loading.set(false);
