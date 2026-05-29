@@ -1698,37 +1698,26 @@ describe('OrdersService', () => {
       expect(stockRestored).toContain('pv-1');
     });
 
-    it('adds PAID orders to needsRefund list', async () => {
+    it('calls refundPayment for PAID orders instead of the manual transaction', async () => {
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.$transaction.mockImplementation(async (fn: any) => {
-        await fn({
-          productVariant: { update: jest.fn() },
-          order: { update: jest.fn() },
-          orderEvent: { create: jest.fn() },
-        });
-      });
 
       const result = await service.bulkCancel(['o-1']);
 
       expect(result.succeeded).toBe(1);
-      expect(result.needsRefund).toContain('ORD-001');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('o-1', 'ADMIN');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('adds PROCESSING orders to needsRefund list', async () => {
+    it('calls refundPayment for PROCESSING orders instead of the manual transaction', async () => {
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PROCESSING)];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.$transaction.mockImplementation(async (fn: any) => {
-        await fn({
-          productVariant: { update: jest.fn() },
-          order: { update: jest.fn() },
-          orderEvent: { create: jest.fn() },
-        });
-      });
 
       const result = await service.bulkCancel(['o-1']);
 
-      expect(result.needsRefund).toContain('ORD-001');
+      expect(result.succeeded).toBe(1);
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('o-1', 'ADMIN');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('rejects non-cancellable statuses: CANCELLED, REFUNDED, SHIPPED, DELIVERED', async () => {
@@ -1744,7 +1733,6 @@ describe('OrdersService', () => {
 
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(4);
-      expect(result.needsRefund).toHaveLength(0);
     });
 
     it('sends cancellation email for each cancelled order', async () => {
@@ -1807,7 +1795,6 @@ describe('OrdersService', () => {
 
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(0);
-      expect(result.needsRefund).toHaveLength(0);
     });
 
     // ─── Issue #13 regression harness ────────────────────────────────────────
@@ -1821,13 +1808,12 @@ describe('OrdersService', () => {
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(1);
       expect(result.failed[0].orderNumber).toBe('ORD-001');
-      expect(result.needsRefund).toHaveLength(0);
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('restores only active quantity (quantity − cancelledQuantity) per item, not full quantity', async () => {
       const orders = [
-        makeOrder('o-1', 'ORD-001', OrderStatus.PAID, [
+        makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT, [
           { productVariantId: 'pv-1', quantity: 5, cancelledQuantity: 2 }, // activeQty = 3
           { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 0 }, // activeQty = 3
         ] as any[]),

@@ -87,13 +87,12 @@ Done:
 - **File:** `backend/src/modules/orders/orders.service.ts:733-742`
 - **Fix applied:** Stock increment now uses `activeQty = item.quantity - (item.cancelledQuantity ?? 0)` (matching `updateStatus()`). Skip update when `activeQty <= 0`. Added `PARTIALLY_REFUNDED` to `nonCancellableStatuses` — these orders are blocked from bulk-cancel and must go through the individual refund flow.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 14 — `bulkCancel` doesn't call `refundPayment()` for PAID/PROCESSING orders
 - **File:** `backend/src/modules/orders/orders.service.ts:755-767`
-- **Issue:** `PAID`/`PROCESSING` orders are marked `CANCELLED` and the admin receives a `needsRefund[]` list to process manually in Stripe. The cancellation email says "you'll be refunded" but no Stripe refund is queued.
-- **Fix:** Call `paymentsService.refundPayment(order.id, actor)` inside the loop (same as `cancelByUser` does), or stop promising refunds in the email.
+- **Fix applied:** `PAID`/`PROCESSING` orders now call `paymentsService.refundPayment(order.id, actor)` which handles Stripe refund, stock restore, status→`REFUNDED`, and event atomically. The manual `$transaction` block is only used for `PENDING_PAYMENT` orders (no payment to refund). `needsRefund` field removed from return type; `admin.setup.ts` updated accordingly.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 15 — Coupon discount computed outside the DB transaction on a potentially stale cart total
 - **File:** `backend/src/modules/orders/orders.service.ts:131-156`

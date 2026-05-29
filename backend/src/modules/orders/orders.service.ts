@@ -727,7 +727,6 @@ export class OrdersService implements OnModuleInit {
   ): Promise<{
     succeeded: number;
     failed: Array<{ orderNumber: string; reason: string }>;
-    needsRefund: string[];
   }> {
     const orders = await this.prisma.order.findMany({
       where: { id: { in: orderIds } },
@@ -736,7 +735,6 @@ export class OrdersService implements OnModuleInit {
 
     const succeeded: string[] = [];
     const failed: Array<{ orderNumber: string; reason: string }> = [];
-    const needsRefund: string[] = [];
 
     const nonCancellableStatuses: OrderStatus[] = [
       OrderStatus.CANCELLED,
@@ -753,33 +751,40 @@ export class OrdersService implements OnModuleInit {
           return;
         }
 
-        try {
-          await this.prisma.$transaction(async (tx) => {
-            for (const item of order.items) {
-              const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-              if (activeQty > 0) {
-                await tx.productVariant.update({
-                  where: { id: item.productVariantId },
-                  data: { stock: { increment: activeQty } },
-                });
-              }
-            }
-            await tx.order.update({
-              where: { id: order.id },
-              data: { status: OrderStatus.CANCELLED },
-            });
-            await tx.orderEvent.create({
-              data: {
-                orderId: order.id,
-                fromStatus: order.status,
-                toStatus: OrderStatus.CANCELLED,
-                actor,
-                note: 'Bulk cancelled by admin',
-              },
-            });
-          });
+        const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
 
-          const isRefund = order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING;
+        try {
+          if (isRefund) {
+            // Payment already captured — issue a full Stripe refund.
+            // refundPayment handles stock restore, order status → REFUNDED, and event atomically.
+            await this.paymentsService.refundPayment(order.id, actor);
+          } else {
+            // PENDING_PAYMENT: no payment taken, cancel in-place.
+            await this.prisma.$transaction(async (tx) => {
+              for (const item of order.items) {
+                const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+                if (activeQty > 0) {
+                  await tx.productVariant.update({
+                    where: { id: item.productVariantId },
+                    data: { stock: { increment: activeQty } },
+                  });
+                }
+              }
+              await tx.order.update({
+                where: { id: order.id },
+                data: { status: OrderStatus.CANCELLED },
+              });
+              await tx.orderEvent.create({
+                data: {
+                  orderId: order.id,
+                  fromStatus: order.status,
+                  toStatus: OrderStatus.CANCELLED,
+                  actor,
+                  note: 'Bulk cancelled by admin',
+                },
+              });
+            });
+          }
 
           this.emailService
             .sendOrderCancellation({
@@ -791,7 +796,6 @@ export class OrdersService implements OnModuleInit {
             })
             .catch(() => undefined);
 
-          if (isRefund) needsRefund.push(order.orderNumber);
           succeeded.push(order.orderNumber);
         } catch (err) {
           failed.push({ orderNumber: order.orderNumber, reason: (err as Error).message });
@@ -799,7 +803,7 @@ export class OrdersService implements OnModuleInit {
       }),
     );
 
-    return { succeeded: succeeded.length, failed, needsRefund };
+    return { succeeded: succeeded.length, failed };
   }
 
   private async dispatchReviewRequestEmail(orderId: string): Promise<void> {

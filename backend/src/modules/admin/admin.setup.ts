@@ -424,9 +424,6 @@ export async function setupAdmin(
                 if (result.failed.length > 0) {
                   parts.push(`Błędy (${result.failed.length}): ${result.failed.map((f) => f.orderNumber).join(', ')}`);
                 }
-                if (result.needsRefund.length > 0) {
-                  parts.push(`Wymagają zwrotu Stripe: ${result.needsRefund.join(', ')}`);
-                }
 
                 return {
                   records: records.map((r: any) => r.toJSON()),
