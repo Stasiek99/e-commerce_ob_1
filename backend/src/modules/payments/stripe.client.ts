@@ -20,6 +20,10 @@ export interface CreateCheckoutSessionInput {
   }>;
   successUrl: string;
   cancelUrl: string;
+  /** Coupon discount already deducted in order.totalInCents — creates a Stripe coupon so Checkout charges the correct amount. */
+  discountAmountInCents?: number;
+  /** Human-readable label shown in the Stripe Checkout UI (e.g. the coupon code). */
+  couponLabel?: string;
 }
 
 @Injectable()
@@ -57,6 +61,18 @@ export class StripeClient {
     const clampedTtlMinutes = Math.max(ttlMinutes, DEFAULT_SESSION_TTL_MINUTES);
     const expiresAt = Math.floor(Date.now() / 1000) + clampedTtlMinutes * 60;
 
+    let discounts: Array<{ coupon: string }> | undefined;
+    if (input.discountAmountInCents && input.discountAmountInCents > 0) {
+      const coupon = await this.stripe.coupons.create({
+        amount_off: input.discountAmountInCents,
+        currency: input.currency.toLowerCase(),
+        duration: 'once',
+        max_redemptions: 1,
+        name: input.couponLabel ?? 'Rabat',
+      });
+      discounts = [{ coupon: coupon.id }];
+    }
+
     const session = await this.stripe.checkout.sessions.create({
       mode: 'payment',
       // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
@@ -74,6 +90,7 @@ export class StripeClient {
           },
         },
       })),
+      ...(discounts ? { discounts } : {}),
       metadata: {
         orderId: input.orderId,
         orderNumber: input.orderNumber,

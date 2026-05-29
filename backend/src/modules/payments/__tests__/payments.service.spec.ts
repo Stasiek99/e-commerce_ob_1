@@ -386,6 +386,60 @@ describe('PaymentsService', () => {
       const createCall = prisma.payment.create.mock.calls[0][0];
       expect(createCall.data.stripePaymentIntentId).toBe('pi_nested_id');
     });
+
+    // ── coupon discount forwarding ────────────────────────────────────────
+    // Guards the fix: discountInCents must be forwarded to StripeClient so
+    // Stripe charges order.totalInCents, not the pre-discount item sum.
+
+    it('does not pass discount fields to createCheckoutSession when discountInCents is 0', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ ...mockOrderWithItems, discountInCents: 0 });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({} as any);
+
+      await service.initiatePayment('order-1');
+
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.discountAmountInCents).toBeUndefined();
+      expect(callArg.couponLabel).toBeUndefined();
+    });
+
+    it('passes discountAmountInCents and couponLabel when order has a coupon discount', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        discountInCents: 2000,
+        couponCode: 'SUMMER20',
+      });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({} as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          discountAmountInCents: 2000,
+          couponLabel: 'SUMMER20',
+        }),
+      );
+    });
+
+    it('passes couponLabel as undefined when discountInCents > 0 but couponCode is null', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        discountInCents: 1500,
+        couponCode: null,
+      });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({} as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          discountAmountInCents: 1500,
+          couponLabel: undefined,
+        }),
+      );
+    });
   });
 
   describe('getPaymentStatus', () => {

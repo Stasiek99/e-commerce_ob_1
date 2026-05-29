@@ -5,6 +5,7 @@ import { StripeClient, CreateCheckoutSessionInput } from '../stripe.client';
 // Mock the Stripe SDK before the module is loaded.
 // StripeClient uses `require('stripe')` internally, so jest.mock intercepts it.
 const mockSessionsCreate = jest.fn();
+const mockCouponsCreate = jest.fn();
 jest.mock('stripe', () => {
   return function MockStripe() {
     return {
@@ -14,6 +15,9 @@ jest.mock('stripe', () => {
           expire: jest.fn(),
           retrieve: jest.fn(),
         },
+      },
+      coupons: {
+        create: mockCouponsCreate,
       },
       refunds: { create: jest.fn() },
       webhooks: { constructEvent: jest.fn() },
@@ -60,6 +64,7 @@ describe('StripeClient.createCheckoutSession', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSessionsCreate.mockResolvedValue(MOCK_SESSION);
+    mockCouponsCreate.mockResolvedValue({ id: 'co_test_discount' });
   });
 
   // ── expires_at ──────────────────────────────────────────────────────
@@ -141,6 +146,83 @@ describe('StripeClient.createCheckoutSession', () => {
       const client = await buildClient();
       const result = await client.createCheckoutSession(BASE_INPUT);
       expect(result).toEqual(MOCK_SESSION);
+    });
+  });
+
+  // ── discount coupon ──────────────────────────────────────────────────
+  // Guards the fix: orders with a coupon must have a Stripe coupon attached
+  // so Stripe charges order.totalInCents, not the pre-discount item sum.
+
+  describe('discount coupon', () => {
+    it('does not create a Stripe coupon when discountAmountInCents is absent', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      expect(mockCouponsCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not create a Stripe coupon when discountAmountInCents is 0', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, discountAmountInCents: 0 });
+
+      expect(mockCouponsCreate).not.toHaveBeenCalled();
+    });
+
+    it('does not include a discounts key in the session when there is no discount', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      const params = mockSessionsCreate.mock.calls[0][0];
+      expect(params.discounts).toBeUndefined();
+    });
+
+    it('creates a Stripe coupon with the correct amount, currency, and restrictions when discountAmountInCents > 0', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, discountAmountInCents: 2000, couponLabel: 'SUMMER20' });
+
+      expect(mockCouponsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount_off: 2000,
+          currency: 'pln',
+          duration: 'once',
+          max_redemptions: 1,
+          name: 'SUMMER20',
+        }),
+      );
+    });
+
+    it('uses couponLabel as the Stripe coupon name', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, discountAmountInCents: 1500, couponLabel: 'VIP15' });
+
+      expect(mockCouponsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'VIP15' }),
+      );
+    });
+
+    it('falls back to "Rabat" as the coupon name when couponLabel is not provided', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, discountAmountInCents: 1500 });
+
+      expect(mockCouponsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Rabat' }),
+      );
+    });
+
+    it('attaches the created coupon id to the session via discounts array', async () => {
+      mockCouponsCreate.mockResolvedValue({ id: 'co_abc123' });
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, discountAmountInCents: 2000, couponLabel: 'SUMMER20' });
+
+      const params = mockSessionsCreate.mock.calls[0][0];
+      expect(params.discounts).toEqual([{ coupon: 'co_abc123' }]);
     });
   });
 });
