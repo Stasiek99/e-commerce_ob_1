@@ -748,28 +748,71 @@ describe('OrdersService', () => {
 
   describe('findAllForUser', () => {
     it('returns all orders for a user', async () => {
-      const orders = [{ id: 'o-1' }, { id: 'o-2' }];
+      const orders = [
+        { id: 'o-1', items: [], payment: null },
+        { id: 'o-2', items: [], payment: null },
+      ];
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.count.mockResolvedValue(2);
 
       const result = await service.findAllForUser('user-1');
 
-      expect(result.data).toEqual(orders);
+      expect(result.data).toMatchObject([{ id: 'o-1' }, { id: 'o-2' }]);
       expect(result.meta.total).toBe(2);
       expect(prisma.order.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { userId: 'user-1' } }),
       );
     });
+
+    it('appends totalPrice = quantity * snapshotPrice to each item', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [
+          { id: 'oi-1', quantity: 2, snapshotPrice: 34900, snapshotName: 'Sauvage', snapshotSku: 'DS-1' },
+          { id: 'oi-2', quantity: 1, snapshotPrice: 44900, snapshotName: 'No 5', snapshotSku: 'CN-1' },
+        ],
+        payment: null,
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllForUser('user-1');
+      const items = result.data[0].items;
+
+      expect(items[0].totalPrice).toBe(69800);
+      expect(items[1].totalPrice).toBe(44900);
+    });
+
+    it('hoists refundedAmountInCents from the payment relation', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [],
+        payment: { refundedAmountInCents: 5000 },
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllForUser('user-1');
+
+      expect(result.data[0].refundedAmountInCents).toBe(5000);
+    });
+
+    it('defaults refundedAmountInCents to 0 when payment is null', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'o-1', items: [], payment: null }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllForUser('user-1');
+
+      expect(result.data[0].refundedAmountInCents).toBe(0);
+    });
   });
 
   describe('findOneForUser', () => {
     it('returns the order when found', async () => {
-      const order = { id: 'o-1', userId: 'user-1' };
+      const order = { id: 'o-1', userId: 'user-1', items: [], payment: null };
       prisma.order.findFirst.mockResolvedValue(order);
 
       const result = await service.findOneForUser('o-1', 'user-1');
 
-      expect(result).toEqual(order);
+      expect(result).toMatchObject({ id: 'o-1', userId: 'user-1' });
     });
 
     it('throws NotFoundException when order does not belong to user', async () => {
@@ -778,6 +821,38 @@ describe('OrdersService', () => {
       await expect(service.findOneForUser('o-1', 'user-1')).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('appends totalPrice = quantity * snapshotPrice to each item', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'o-1',
+        items: [{ id: 'oi-1', quantity: 3, snapshotPrice: 10000, snapshotName: 'X', snapshotSku: 'X-1' }],
+        payment: null,
+      });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.items[0].totalPrice).toBe(30000);
+    });
+
+    it('hoists refundedAmountInCents from the payment relation', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'o-1',
+        items: [],
+        payment: { refundedAmountInCents: 12500 },
+      });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.refundedAmountInCents).toBe(12500);
+    });
+
+    it('defaults refundedAmountInCents to 0 when payment is null', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o-1', items: [], payment: null });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.refundedAmountInCents).toBe(0);
     });
   });
 
@@ -1442,7 +1517,7 @@ describe('OrdersService', () => {
 
   describe('findAllAdmin', () => {
     it('returns all orders without status filter', async () => {
-      prisma.order.findMany.mockResolvedValue([{ id: 'o-1' }]);
+      prisma.order.findMany.mockResolvedValue([{ id: 'o-1', items: [], payment: null }]);
       prisma.order.count.mockResolvedValue(1);
 
       const result = await service.findAllAdmin({});
@@ -1462,6 +1537,32 @@ describe('OrdersService', () => {
       expect(prisma.order.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { status: OrderStatus.PAID } }),
       );
+    });
+
+    it('appends totalPrice to each item in admin response', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [{ id: 'oi-1', quantity: 1, snapshotPrice: 49900, snapshotName: 'Y', snapshotSku: 'Y-1' }],
+        payment: { refundedAmountInCents: 0 },
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllAdmin({});
+
+      expect(result.data[0].items[0].totalPrice).toBe(49900);
+    });
+
+    it('hoists refundedAmountInCents from payment in admin response', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [],
+        payment: { refundedAmountInCents: 9900 },
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllAdmin({});
+
+      expect(result.data[0].refundedAmountInCents).toBe(9900);
     });
   });
 

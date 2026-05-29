@@ -388,7 +388,7 @@ export class OrdersService implements OnModuleInit {
     ]);
 
     return {
-      data: orders.map((o) => ({ ...o, items: this.mapOrderItems(o.items) })),
+      data: orders.map((o) => this.mapOrder(o)),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -399,7 +399,7 @@ export class OrdersService implements OnModuleInit {
       include: { items: true, payment: true, shipment: true },
     });
     if (!order) throw new NotFoundException('Order not found');
-    return { ...order, items: this.mapOrderItems(order.items) };
+    return this.mapOrder(order);
   }
 
   async findEventsForUser(orderId: string, userId: string) {
@@ -519,7 +519,7 @@ export class OrdersService implements OnModuleInit {
     ]);
 
     return {
-      data: orders.map((o) => ({ ...o, items: this.mapOrderItems(o.items) })),
+      data: orders.map((o) => this.mapOrder(o)),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -928,10 +928,20 @@ export class OrdersService implements OnModuleInit {
     await this.emailService.sendLowStockAlert({ to: adminEmail, orderNumber, items: alertItems });
   }
 
-  private mapOrderItems<T extends { quantity: number; snapshotPrice: number }>(
-    items: T[],
-  ): (T & { totalPrice: number })[] {
-    return items.map((item) => ({ ...item, totalPrice: item.quantity * item.snapshotPrice }));
+  private mapOrder<
+    T extends {
+      items: Array<{ quantity: number; snapshotPrice: number }>;
+      payment: { refundedAmountInCents: number } | null;
+    },
+  >(order: T) {
+    return {
+      ...order,
+      items: order.items.map((item) => ({
+        ...item,
+        totalPrice: item.quantity * item.snapshotPrice,
+      })),
+      refundedAmountInCents: order.payment?.refundedAmountInCents ?? 0,
+    };
   }
 
   // Sequences are guaranteed to exist by onModuleInit (startup) and the
