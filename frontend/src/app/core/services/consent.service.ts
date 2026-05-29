@@ -18,6 +18,9 @@ export class ConsentService {
 
   readonly hasDecided = computed(() => this._state() !== null);
   readonly analyticsConsented = computed(() => this._state()?.analytics === true);
+  // False on SSR (no localStorage) so the server-rendered HTML never contains
+  // the banner — prevents the flash for returning visitors who already consented.
+  readonly bannerVisible = computed(() => this.isBrowser && this._state() === null);
 
   acceptAll(): void {
     this.persist({ analytics: true, v: 1 });

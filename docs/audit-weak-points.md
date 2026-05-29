@@ -4,9 +4,6 @@
 ---
 ## Operational & Reliability Gaps
 
-### 21. Shipping rates are hardcoded constants *(Domain Expert)*
-`SHIPPING_RATES` in `orders.service.ts` are compile-time constants. Every carrier rate change, promotional free-shipping threshold, or weight-based surcharge requires a production code deploy.
-
 ### 22. SSR breaks the GDPR consent layer *(Domain Expert)*
 `ConsentService` reads `localStorage` synchronously. On SSR (`isPlatformBrowser === false`), it returns null — every SSR-delivered page renders as "consent undecided," causing the cookie banner to flash for users who already consented and suppressing GA4 unnecessarily.
 

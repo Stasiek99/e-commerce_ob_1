@@ -113,6 +113,35 @@ describe('ConsentService', () => {
     });
   });
 
+  // ── bannerVisible ─────────────────────────────────────────────────────────
+
+  describe('bannerVisible', () => {
+    it('is true in browser when no consent stored', () => {
+      expect(setup('browser').bannerVisible()).toBe(true);
+    });
+
+    it('is false in browser once user has accepted', () => {
+      const svc = setup('browser');
+      svc.acceptAll();
+      expect(svc.bannerVisible()).toBe(false);
+    });
+
+    it('is false in browser once user has rejected', () => {
+      const svc = setup('browser');
+      svc.rejectNonEssential();
+      expect(svc.bannerVisible()).toBe(false);
+    });
+
+    it('is false in browser when prior consent is already in localStorage', () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ analytics: true, v: 1 }));
+      expect(setup('browser').bannerVisible()).toBe(false);
+    });
+
+    it('is false on the server — SSR HTML must never include the banner', () => {
+      expect(setup('server').bannerVisible()).toBe(false);
+    });
+  });
+
   // ── SSR ───────────────────────────────────────────────────────────────────
 
   describe('server (SSR)', () => {

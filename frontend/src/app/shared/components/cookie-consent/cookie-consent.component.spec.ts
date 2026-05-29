@@ -8,6 +8,7 @@ import { ConsentService } from '../../../core/services/consent.service';
 function makeConsentMock(hasDecided: boolean) {
   return {
     hasDecided: computed(() => hasDecided),
+    bannerVisible: computed(() => !hasDecided),
     analyticsConsented: computed(() => false),
     acceptAll: jest.fn(),
     rejectNonEssential: jest.fn(),
