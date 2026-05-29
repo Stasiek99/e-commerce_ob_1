@@ -22,6 +22,7 @@ import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { ConfigService } from '@nestjs/config';
+import { ShippingRatesService } from '../../shipping/shipping-rates.service';
 
 // Fixed IDs shared across the test scenarios
 const IDS = {
@@ -174,6 +175,13 @@ describe('Checkout Integration Flow', () => {
           useValue: {
             get: jest.fn().mockReturnValue('pln'),
             getOrThrow: jest.fn().mockReturnValue('https://store.example.com/checkout/success'),
+          },
+        },
+        {
+          provide: ShippingRatesService,
+          useValue: {
+            getRateForCarrier: jest.fn().mockResolvedValue(1499),
+            getRateMap: jest.fn().mockResolvedValue({ INPOST: 1499, DHL: 1999, GLS: 1799, DPD: 1599, DPD_COURIER: 1699 }),
           },
         },
       ],

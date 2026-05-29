@@ -7,6 +7,7 @@ import { InpostClient } from './carriers/inpost.client';
 import { DhlClient } from './carriers/dhl.client';
 import { GlsClient } from './carriers/gls.client';
 import { DpdClient } from './carriers/dpd.client';
+import { ShippingRatesService } from './shipping-rates.service';
 
 const CARRIER_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.INPOST]:      'InPost',
@@ -16,43 +17,14 @@ const CARRIER_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
-const SHIPPING_RATES = [
-  {
-    carrier: CarrierCode.INPOST,
-    name: 'InPost Paczkomat',
-    description: 'Dostawa do paczkomatu w 1-2 dni robocze',
-    priceInCents: 1499,
-    estimatedDays: '1-2 dni robocze',
-  },
-  {
-    carrier: CarrierCode.DPD,
-    name: 'DPD Pickup',
-    description: 'Odbiór w punkcie DPD w 1-2 dni robocze',
-    priceInCents: 1599,
-    estimatedDays: '1-2 dni robocze',
-  },
-  {
-    carrier: CarrierCode.DPD_COURIER,
-    name: 'DPD Kurier',
-    description: 'Dostawa do drzwi w 1-2 dni robocze',
-    priceInCents: 1699,
-    estimatedDays: '1-2 dni robocze',
-  },
-  {
-    carrier: CarrierCode.DHL,
-    name: 'DHL Kurier',
-    description: 'Dostawa do drzwi w 1-2 dni robocze',
-    priceInCents: 1999,
-    estimatedDays: '1-2 dni robocze',
-  },
-  {
-    carrier: CarrierCode.GLS,
-    name: 'GLS Kurier',
-    description: 'Dostawa do drzwi w 2-3 dni robocze',
-    priceInCents: 1799,
-    estimatedDays: '2-3 dni robocze',
-  },
-];
+// Static display metadata — only prices come from the DB.
+const CARRIER_DISPLAY = [
+  { carrier: CarrierCode.INPOST,      name: 'InPost Paczkomat', description: 'Dostawa do paczkomatu w 1-2 dni robocze',    estimatedDays: '1-2 dni robocze' },
+  { carrier: CarrierCode.DPD,         name: 'DPD Pickup',       description: 'Odbiór w punkcie DPD w 1-2 dni robocze',     estimatedDays: '1-2 dni robocze' },
+  { carrier: CarrierCode.DPD_COURIER, name: 'DPD Kurier',       description: 'Dostawa do drzwi w 1-2 dni robocze',         estimatedDays: '1-2 dni robocze' },
+  { carrier: CarrierCode.DHL,         name: 'DHL Kurier',       description: 'Dostawa do drzwi w 1-2 dni robocze',         estimatedDays: '1-2 dni robocze' },
+  { carrier: CarrierCode.GLS,         name: 'GLS Kurier',       description: 'Dostawa do drzwi w 2-3 dni robocze',         estimatedDays: '2-3 dni robocze' },
+] as const;
 
 @Injectable()
 export class ShippingService {
@@ -66,10 +38,14 @@ export class ShippingService {
     private readonly dhl: DhlClient,
     private readonly gls: GlsClient,
     private readonly dpd: DpdClient,
+    private readonly shippingRates: ShippingRatesService,
   ) {}
 
-  getShippingRates() {
-    return SHIPPING_RATES;
+  async getShippingRates() {
+    const rateMap = await this.shippingRates.getRateMap();
+    return CARRIER_DISPLAY
+      .filter((c) => rateMap[c.carrier] !== undefined)
+      .map((c) => ({ ...c, priceInCents: rateMap[c.carrier] }));
   }
 
   async generateLabel(orderId: string) {

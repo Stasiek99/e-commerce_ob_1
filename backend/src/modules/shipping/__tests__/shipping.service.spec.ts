@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { CarrierCode, ShipmentStatus } from '@prisma/client';
 import { ShippingService } from '../shipping.service';
+import { ShippingRatesService } from '../shipping-rates.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { StorageService } from '../../storage/storage.service';
@@ -9,6 +10,14 @@ import { InpostClient } from '../carriers/inpost.client';
 import { DhlClient } from '../carriers/dhl.client';
 import { GlsClient } from '../carriers/gls.client';
 import { DpdClient } from '../carriers/dpd.client';
+
+const MOCK_RATE_MAP: Record<CarrierCode, number> = {
+  [CarrierCode.INPOST]:      1499,
+  [CarrierCode.DHL]:         1999,
+  [CarrierCode.GLS]:         1799,
+  [CarrierCode.DPD]:         1599,
+  [CarrierCode.DPD_COURIER]: 1699,
+};
 
 describe('ShippingService', () => {
   let service: ShippingService;
@@ -95,6 +104,13 @@ describe('ShippingService', () => {
             getTrackingUrl: jest.fn().mockReturnValue('https://dpd.com/track/TRK'),
           },
         },
+        {
+          provide: ShippingRatesService,
+          useValue: {
+            getRateMap: jest.fn().mockResolvedValue(MOCK_RATE_MAP),
+            getRateForCarrier: jest.fn((code: CarrierCode) => Promise.resolve(MOCK_RATE_MAP[code])),
+          },
+        },
       ],
     }).compile();
 
@@ -109,8 +125,8 @@ describe('ShippingService', () => {
   });
 
   describe('getShippingRates', () => {
-    it('returns all five carriers with prices', () => {
-      const rates = service.getShippingRates();
+    it('returns all five carriers with prices from the DB-backed rate map', async () => {
+      const rates = await service.getShippingRates();
 
       expect(rates).toHaveLength(5);
       expect(rates.map((r) => r.carrier)).toEqual(

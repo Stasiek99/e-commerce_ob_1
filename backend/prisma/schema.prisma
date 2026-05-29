@@ -604,3 +604,17 @@ model EmailLog {
   @@index([to])
   @@map("email_logs")
 }
+
+// ─── Shipping Rates ───────────────────────────────────────────────────────────
+// One row per carrier. Editable via admin without a deploy.
+// priceInCents is the source of truth; orders.service reads from here.
+// Seeded by the migration that creates this table.
+
+model ShippingRate {
+  carrierCode  CarrierCode @id @map("carrier_code")
+  priceInCents Int         @map("price_in_cents")
+  isActive     Boolean     @default(true) @map("is_active")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@map("shipping_rates")
+}

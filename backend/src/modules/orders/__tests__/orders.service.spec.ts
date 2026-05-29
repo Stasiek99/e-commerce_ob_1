@@ -9,6 +9,20 @@ import { PaymentsService } from '../../payments/payments.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { InvoiceService } from '../../invoice/invoice.service';
+import { ShippingRatesService } from '../../shipping/shipping-rates.service';
+
+const MOCK_RATES: Record<CarrierCode, number> = {
+  [CarrierCode.INPOST]:      1499,
+  [CarrierCode.DHL]:         1999,
+  [CarrierCode.GLS]:         1799,
+  [CarrierCode.DPD]:         1599,
+  [CarrierCode.DPD_COURIER]: 1699,
+};
+
+const mockShippingRatesService = {
+  getRateForCarrier: jest.fn((code: CarrierCode) => Promise.resolve(MOCK_RATES[code] ?? 1999)),
+  getRateMap: jest.fn(() => Promise.resolve(MOCK_RATES)),
+};
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -122,6 +136,10 @@ describe('OrdersService', () => {
           useValue: {
             processInvoice: jest.fn(),
           },
+        },
+        {
+          provide: ShippingRatesService,
+          useValue: mockShippingRatesService,
         },
       ],
     }).compile();
@@ -1951,6 +1969,7 @@ describe('OrdersService', () => {
             },
           },
           { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
+          { provide: ShippingRatesService, useValue: mockShippingRatesService },
         ],
       }).compile();
 

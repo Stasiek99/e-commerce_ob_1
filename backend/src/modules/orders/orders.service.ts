@@ -13,6 +13,7 @@ import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
+import { ShippingRatesService } from '../shipping/shipping-rates.service';
 
 
 interface CartItem {
@@ -27,14 +28,6 @@ interface CartItem {
   imageUrl?: string | null;
   slug: string;
 }
-
-const SHIPPING_RATES: Record<CarrierCode, number> = {
-  [CarrierCode.INPOST]:     1499,  // 14,99 zł
-  [CarrierCode.DHL]:        1999,  // 19,99 zł
-  [CarrierCode.GLS]:        1799,  // 17,99 zł
-  [CarrierCode.DPD]:        1599,  // 15,99 zł
-  [CarrierCode.DPD_COURIER]: 1699, // 16,99 zł
-};
 
 const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.INPOST]:      'InPost',
@@ -56,6 +49,7 @@ export class OrdersService implements OnModuleInit {
     private readonly couponService: CouponService,
     private readonly configService: ConfigService,
     private readonly invoiceService: InvoiceService,
+    private readonly shippingRatesService: ShippingRatesService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -134,7 +128,7 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Address is required');
     }
 
-    const shippingCostInCents = SHIPPING_RATES[dto.carrierCode];
+    const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
     const itemsTotalInCents = cart.totalInCents;
 
     // Resolve coupon discount before entering the transaction
