@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -23,6 +25,8 @@ const REFRESH_GRACE_MS = 30_000;
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
@@ -30,6 +34,19 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly emailService: EmailQueueService,
   ) {}
+
+  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  async purgeExpiredTokens(): Promise<void> {
+    const now = new Date();
+    const [refreshResult, resetResult, verificationResult] = await Promise.all([
+      this.prisma.refreshToken.deleteMany({ where: { expiresAt: { lt: now } } }),
+      this.prisma.passwordResetToken.deleteMany({ where: { expiresAt: { lt: now } } }),
+      this.prisma.emailVerificationToken.deleteMany({ where: { expiresAt: { lt: now } } }),
+    ]);
+    this.logger.log(
+      `Token purge complete — refresh: ${refreshResult.count}, passwordReset: ${resetResult.count}, emailVerification: ${verificationResult.count}`,
+    );
+  }
 
   async register(dto: RegisterDto) {
     const existing = await this.usersService.findByEmail(dto.email);

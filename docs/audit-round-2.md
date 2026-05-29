@@ -52,14 +52,14 @@ Done:
   - `server.ts`: `createRequestStorageMock()` creates a fresh isolated store per request, passed via `CommonEngine.render()` providers
   - `WishlistService`: injects `LOCAL_STORAGE` token instead of using the global; adds `isPlatformBrowser()` guard on every access — returns `[]` and skips writes during SSR
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 7 — No expired `RefreshToken` cleanup — table grows unbounded
 - **File:** `backend/src/modules/auth/auth.service.ts` (no `@Cron` for purge)
 - **Issue:** Every login/register/OAuth creates a new `RefreshToken` row. Rows are soft-deleted (`revokedAt`) but never hard-deleted. No cron exists to purge `expiresAt < NOW()` rows. Same issue for `PasswordResetToken` and `EmailVerificationToken` (the Phase 5D cleanup cron is listed as ⏳).
 - **Impact:** Table bloat → query latency regression; Supabase free-tier storage cap risk.
 - **Fix:** Add a nightly `@Cron(CronExpression.EVERY_DAY_AT_4AM)` that `deleteMany({ where: { expiresAt: { lt: new Date() } } })` on all three token tables.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 8 — Google OAuth has no `state` parameter — CSRF on the callback
 - **File:** `backend/src/modules/auth/strategies/google.strategy.ts`
