@@ -448,6 +448,8 @@ export class OrdersService implements OnModuleInit {
         snapshotPostalCode: true,
         itemsTotalInCents: true,
         shippingCostInCents: true,
+        discountInCents: true,
+        couponCode: true,
         totalInCents: true,
         createdAt: true,
         items: {

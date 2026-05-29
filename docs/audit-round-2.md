@@ -121,13 +121,13 @@ Done:
 - **Issue:** The backend returns raw Prisma `OrderItem` objects. Prisma has no `totalPrice` column. Frontend reads `order.items[n].totalPrice` → `undefined`. Silently renders NaN in order history totals.
 - **Fix:** Add a response mapper that appends `totalPrice: item.quantity * item.snapshotPrice`, or remove `totalPrice` from the DTO and compute it client-side.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 21 — `OrderDto.refundedAmountInCents` is in shared-types but the orders query never selects it
 - **File:** `packages/shared-types/src/dto/order.dto.ts:71` vs `backend/src/modules/orders/orders.service.ts:332-351`
 - **Issue:** `findAllForUser` and `findOneForUser` only select `payment.status` and `payment.paidAt`. `refundedAmountInCents` lives on the `Payment` model and is never forwarded. Frontend reads it as `undefined`, showing "Refunded: 0.00 PLN" for partial refunds.
 - **Fix:** Extend the payment `include` to also select `refundedAmountInCents`, or add it to the orders response mapper.
+
+Not yet:
+## 🔴 BLOCKER
 
 ### 22 — Invoice totals diverge from line items — coupon discount missing on PDF
 - **File:** `backend/src/modules/invoice/invoice.service.ts:206-229`

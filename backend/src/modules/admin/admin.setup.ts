@@ -274,6 +274,8 @@ export async function setupAdmin(
                     snapshotPostalCode: order.snapshotPostalCode,
                     itemsTotalInCents: order.itemsTotalInCents,
                     shippingCostInCents: order.shippingCostInCents,
+                    discountInCents: order.discountInCents,
+                    couponCode: order.couponCode,
                     totalInCents: order.totalInCents,
                     createdAt: order.createdAt,
                     items: order.items.map((i) => ({

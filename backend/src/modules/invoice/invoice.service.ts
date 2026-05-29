@@ -19,6 +19,8 @@ export interface InvoiceOrder {
   snapshotPostalCode: string;
   itemsTotalInCents: number;
   shippingCostInCents: number;
+  discountInCents: number;
+  couponCode?: string | null;
   totalInCents: number;
   createdAt: Date;
   items: Array<{
@@ -170,6 +172,17 @@ export class InvoiceService {
       })),
       ...(order.shippingCostInCents > 0
         ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
+        : []),
+      // Art. 106e pkt 7 Ustawy o VAT: discount must appear as a separate line
+      ...(order.discountInCents > 0
+        ? [
+            {
+              name: `Rabat: ${order.couponCode ?? 'kupon'}`,
+              qty: 1,
+              grossCents: -order.discountInCents,
+              vatRate: 0.23,
+            },
+          ]
         : []),
     ];
 
