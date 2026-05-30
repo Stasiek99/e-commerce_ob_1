@@ -4,7 +4,8 @@ import { CarrierCode } from '@prisma/client';
 import { ShippingRatesService } from '../shipping-rates.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
-const FIVE_MIN_MS = 5 * 60 * 1000;
+const CACHE_KEY = 'shipping:rates';
+const CACHE_TTL_SECONDS = 5 * 60;
 
 describe('ShippingRatesService', () => {
   let service: ShippingRatesService;
@@ -15,6 +16,7 @@ describe('ShippingRatesService', () => {
       update: jest.Mock;
     };
   };
+  let mockRedis: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
 
   const makeDbRow = (carrier: CarrierCode, price: number, isActive = true) => ({
     carrierCode: carrier,
@@ -31,6 +33,14 @@ describe('ShippingRatesService', () => {
     makeDbRow(CarrierCode.DPD_COURIER, 1699),
   ];
 
+  const cachedRates = {
+    [CarrierCode.INPOST]:      1499,
+    [CarrierCode.DHL]:         1999,
+    [CarrierCode.GLS]:         1799,
+    [CarrierCode.DPD]:         1599,
+    [CarrierCode.DPD_COURIER]: 1699,
+  };
+
   beforeEach(async () => {
     prisma = {
       shippingRate: {
@@ -40,10 +50,17 @@ describe('ShippingRatesService', () => {
       },
     };
 
+    mockRedis = {
+      get: jest.fn().mockResolvedValue(null), // default: cache miss
+      set: jest.fn().mockResolvedValue('OK'),
+      del: jest.fn().mockResolvedValue(1),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ShippingRatesService,
         { provide: PrismaService, useValue: prisma },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
 
@@ -79,35 +96,73 @@ describe('ShippingRatesService', () => {
 
     it('DB price overrides the compile-time fallback for that carrier', async () => {
       prisma.shippingRate.findMany.mockResolvedValue([
-        makeDbRow(CarrierCode.DHL, 2499), // raised from 1999
+        makeDbRow(CarrierCode.DHL, 2499),
       ]);
 
       const map = await service.getRateMap();
 
       expect(map[CarrierCode.DHL]).toBe(2499);
-      // Carriers not in the DB row still come from fallback
       expect(map[CarrierCode.INPOST]).toBe(1499);
     });
 
-    it('returns cached map on second call within TTL without hitting DB again', async () => {
+    // ── Redis cache behaviour ────────────────────────────────────────────────
+
+    it('returns cached map from Redis without querying DB when key is present', async () => {
+      mockRedis.get.mockResolvedValue(JSON.stringify(cachedRates));
+
+      const map = await service.getRateMap();
+
+      expect(prisma.shippingRate.findMany).not.toHaveBeenCalled();
+      expect(map[CarrierCode.INPOST]).toBe(1499);
+      expect(map[CarrierCode.DHL]).toBe(1999);
+    });
+
+    it('returns cached map on second call without hitting DB again', async () => {
+      mockRedis.get
+        .mockResolvedValueOnce(null)                           // first call: cache miss
+        .mockResolvedValueOnce(JSON.stringify(cachedRates));  // second call: cache hit
+
       await service.getRateMap();
       await service.getRateMap();
 
       expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(1);
     });
 
-    it('re-fetches from DB after the cache TTL has expired', async () => {
-      const now = Date.now();
-      const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+    it('stores rate map in Redis with 5-minute TTL after DB load', async () => {
+      await service.getRateMap();
 
-      await service.getRateMap(); // populates cache
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        CACHE_KEY,
+        expect.any(String),
+        'EX',
+        CACHE_TTL_SECONDS,
+      );
+    });
 
-      // Advance past the 5-minute TTL
-      dateSpy.mockReturnValue(now + FIVE_MIN_MS + 1);
+    it('stored JSON in Redis is parseable and contains correct rates', async () => {
+      await service.getRateMap();
 
-      await service.getRateMap(); // cache expired → DB hit
+      const stored = JSON.parse(mockRedis.set.mock.calls[0][1]) as Record<string, number>;
+      expect(stored[CarrierCode.INPOST]).toBe(1499);
+      expect(stored[CarrierCode.DHL]).toBe(1999);
+    });
 
-      expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(2);
+    it('falls through to DB when Redis read throws', async () => {
+      mockRedis.get.mockRejectedValue(new Error('Redis unavailable'));
+
+      const map = await service.getRateMap();
+
+      expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(1);
+      expect(map[CarrierCode.INPOST]).toBe(1499);
+    });
+
+    it('still returns result when Redis write throws after successful DB load', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockRedis.set.mockRejectedValue(new Error('Redis write failed'));
+
+      const map = await service.getRateMap();
+
+      expect(map[CarrierCode.INPOST]).toBe(1499);
     });
 
     it('returns fallback rates without throwing when DB call fails', async () => {
@@ -128,6 +183,8 @@ describe('ShippingRatesService', () => {
       await service.getRateMap(); // second call: DB works → cached
 
       expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(2);
+      // Fallback path must NOT write to Redis
+      expect(mockRedis.set).toHaveBeenCalledTimes(1); // only the second successful call
     });
   });
 
@@ -144,12 +201,17 @@ describe('ShippingRatesService', () => {
       ];
 
       for (const [code, expectedPrice] of cases) {
+        mockRedis.get.mockResolvedValue(null);
         const price = await service.getRateForCarrier(code);
         expect(price).toBe(expectedPrice);
       }
     });
 
-    it('uses the cache on repeated calls without extra DB round-trips', async () => {
+    it('serves from Redis cache on repeated calls without extra DB round-trips', async () => {
+      mockRedis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(JSON.stringify(cachedRates));
+
       await service.getRateForCarrier(CarrierCode.DHL);
       await service.getRateForCarrier(CarrierCode.INPOST);
 
@@ -226,28 +288,39 @@ describe('ShippingRatesService', () => {
       prisma.shippingRate.findUnique.mockResolvedValue(existingRow);
       prisma.shippingRate.update.mockResolvedValue(updatedRow);
 
-      await service.updateRate(CarrierCode.DHL, 2499); // isActive omitted
+      await service.updateRate(CarrierCode.DHL, 2499);
 
       const updateCall = prisma.shippingRate.update.mock.calls[0][0];
       expect(updateCall.data).not.toHaveProperty('isActive');
     });
 
+    it('deletes the Redis cache key after a successful update', async () => {
+      prisma.shippingRate.findUnique.mockResolvedValue(existingRow);
+      prisma.shippingRate.update.mockResolvedValue(updatedRow);
+
+      await service.updateRate(CarrierCode.DHL, 2499);
+
+      expect(mockRedis.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+
     it('invalidates the cache so the next getRateMap() re-fetches from DB', async () => {
-      // Warm the cache
+      // Warm the Redis cache
+      mockRedis.get
+        .mockResolvedValueOnce(null)                           // first getRateMap: miss
+        .mockResolvedValueOnce(null);                          // getRateMap after invalidation: miss again
+
       await service.getRateMap();
       expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(1);
 
-      // Update invalidates cache
       prisma.shippingRate.findUnique.mockResolvedValue(existingRow);
       prisma.shippingRate.update.mockResolvedValue(updatedRow);
       await service.updateRate(CarrierCode.DHL, 2499);
 
-      // Next getRateMap() must hit DB (cache was cleared)
       await service.getRateMap();
       expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(2);
     });
 
-    it('reflects the updated price in getRateForCarrier after the cache is refreshed', async () => {
+    it('reflects the updated price in getRateForCarrier after cache refresh', async () => {
       // First load: DHL = 1999
       await service.getRateForCarrier(CarrierCode.DHL);
 
@@ -256,13 +329,22 @@ describe('ShippingRatesService', () => {
       prisma.shippingRate.update.mockResolvedValue(updatedRow);
       await service.updateRate(CarrierCode.DHL, 2499);
 
-      // DB now returns updated price
+      // Redis has no cached value after invalidation; DB returns new price
+      mockRedis.get.mockResolvedValue(null);
       prisma.shippingRate.findMany.mockResolvedValue([
         makeDbRow(CarrierCode.DHL, 2499),
       ]);
 
       const price = await service.getRateForCarrier(CarrierCode.DHL);
       expect(price).toBe(2499);
+    });
+
+    it('does not throw when Redis del fails during invalidation', async () => {
+      prisma.shippingRate.findUnique.mockResolvedValue(existingRow);
+      prisma.shippingRate.update.mockResolvedValue(updatedRow);
+      mockRedis.del.mockRejectedValue(new Error('Redis unavailable'));
+
+      await expect(service.updateRate(CarrierCode.DHL, 2499)).resolves.toEqual(updatedRow);
     });
   });
 });
