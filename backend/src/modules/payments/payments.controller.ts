@@ -118,7 +118,7 @@ export class PaymentsController {
 
     // Fire-and-forget: the cron caller gets 200 immediately; reconciliation
     // runs asynchronously and logs any errors via the existing @Cron path.
-    this.paymentsService.reconcilePendingPayments().catch(() => undefined);
+    this.paymentsService.reconcilePendingPayments().catch((err) => this.logger.warn('reconcilePendingPayments failed', err));
 
     return { triggered: true };
   }

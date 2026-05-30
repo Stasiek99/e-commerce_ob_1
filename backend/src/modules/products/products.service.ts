@@ -474,7 +474,7 @@ export class ProductsService {
     });
 
     if (wasOutOfStock && newStock > 0) {
-      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch(() => undefined);
+      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
     }
 
     this.invalidateProductCaches();

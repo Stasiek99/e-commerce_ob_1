@@ -193,7 +193,7 @@ export class ShippingService {
           trackingNumber,
           trackingUrl,
         })
-        .catch(() => undefined);
+        .catch((err) => this.logger.warn('Shipping notification email failed', err));
 
       return shipment;
     } catch (err) {

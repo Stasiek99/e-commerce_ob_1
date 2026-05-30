@@ -354,7 +354,7 @@ export class OrdersService implements OnModuleInit {
     this.sendStockAlertIfNeeded(
       order.orderNumber,
       cart.items.map((i: CartItem) => i.productVariantId),
-    ).catch(() => undefined);
+    ).catch((err) => this.logger.warn('sendStockAlertIfNeeded failed', err));
 
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
   }
@@ -582,7 +582,7 @@ export class OrdersService implements OnModuleInit {
         totalInCents: order.totalInCents,
         isRefund,
       })
-      .catch(() => undefined);
+      .catch((err) => this.logger.warn('Order cancellation email failed', err));
   }
 
   async retryPayment(orderId: string, userId: string): Promise<{ paymentUrl: string }> {
@@ -657,7 +657,7 @@ export class OrdersService implements OnModuleInit {
         totalInCents: refundAmountInCents,
         isRefund: true,
       })
-      .catch(() => undefined);
+      .catch((err) => this.logger.warn('Partial refund cancellation email failed', err));
   }
 
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
@@ -703,7 +703,7 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (status === OrderStatus.DELIVERED) {
-      this.dispatchReviewRequestEmail(id).catch(() => undefined);
+      this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
     }
   }
 
@@ -746,7 +746,7 @@ export class OrdersService implements OnModuleInit {
                 carrier: CARRIER_DISPLAY_NAMES[order.carrierCode] ?? order.carrierCode,
                 trackingNumber: order.shipment.trackingNumber,
               })
-              .catch(() => undefined);
+              .catch((err) => this.logger.warn('Bulk shipped shipping notification email failed', err));
           }
 
           succeeded.push(order.orderNumber);
@@ -832,7 +832,7 @@ export class OrdersService implements OnModuleInit {
               totalInCents: order.totalInCents,
               isRefund,
             })
-            .catch(() => undefined);
+            .catch((err) => this.logger.warn('Bulk cancel order cancellation email failed', err));
 
           succeeded.push(order.orderNumber);
         } catch (err) {
