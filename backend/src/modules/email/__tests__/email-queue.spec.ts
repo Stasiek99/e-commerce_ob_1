@@ -656,15 +656,27 @@ describe('EmailQueueProcessor', () => {
   });
 
   // ── exhaustiveness guard ─────────────────────────────────────────────────────
+  // Invariant: unknown job type must throw so BullMQ moves the job to failed
+  // state and applies the retry policy. A resolved promise would silently
+  // dequeue the job, losing the email permanently.
 
-  it('does not throw on an unrecognised job type (warns and returns gracefully)', async () => {
+  it('throws an Error for an unrecognised job type so BullMQ retries the job', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const badJob = { id: 'job-bad', data: { type: 'totally_unknown', payload: {} } } as unknown as Job<any>;
 
-    await expect(processor.process(badJob)).resolves.toBeUndefined();
+    await expect(processor.process(badJob)).rejects.toThrow(
+      'Unknown email job type: totally_unknown',
+    );
+  });
 
-    // None of the real email methods should have been called
+  it('does not call any email method before throwing on an unrecognised type', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const badJob = { id: 'job-bad', data: { type: 'totally_unknown', payload: {} } } as unknown as Job<any>;
+
+    await processor.process(badJob).catch(() => undefined);
+
     expect(emailService.sendEmailVerification).not.toHaveBeenCalled();
     expect(emailService.sendPasswordReset).not.toHaveBeenCalled();
+    expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
   });
 });
