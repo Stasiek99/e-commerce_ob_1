@@ -65,7 +65,21 @@ export class UsersService {
       where: { id: addressId, userId },
     });
     if (!address) throw new NotFoundException('Address not found');
-    return this.prisma.address.delete({ where: { id: addressId } });
+
+    await this.prisma.address.delete({ where: { id: addressId } });
+
+    if (address.isDefault) {
+      const next = await this.prisma.address.findFirst({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (next) {
+        await this.prisma.address.update({
+          where: { id: next.id },
+          data: { isDefault: true },
+        });
+      }
+    }
   }
 
   async exportData(userId: string, userEmail: string) {
