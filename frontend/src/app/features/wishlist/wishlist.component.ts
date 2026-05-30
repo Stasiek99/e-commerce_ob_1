@@ -1,5 +1,5 @@
-import { Component, computed, inject, effect, signal } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { Component, computed, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { from, mergeMap, toArray } from 'rxjs';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { WishlistService, WishlistItemData } from '../../core/services/wishlist.service';
@@ -112,7 +112,6 @@ import { ProductCardComponent } from '../../shared/product-card/product-card.com
   `],
 })
 export class WishlistComponent {
-  private readonly router = inject(Router);
   private readonly cart = inject(CartService);
   private readonly toast = inject(ToastService);
   readonly wishlist = inject(WishlistService);
@@ -129,14 +128,7 @@ export class WishlistComponent {
     this.wishlist.items().filter((p) => p.variants?.some((v) => v.stock > 0)).length,
   );
 
-  constructor() {
-    effect(() => {
-      if (!this.wishlist.loading() && this.wishlist.items().length === 0) {
-        this.toast.info('Nie masz jeszcze żadnych ulubionych produktów.');
-        this.router.navigate(['/products']);
-      }
-    });
-  }
+  constructor() {}
 
   addAllToCart(): void {
     const inStockProducts = this.wishlist
