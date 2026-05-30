@@ -1,8 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CarrierCode } from '@prisma/client';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_SECONDS = 5 * 60; // 5 minutes
+const CACHE_KEY = 'shipping:rates';
 
 // Compile-time fallback used when the DB is unreachable at startup or during a
 // migration window. Values match the seeded rows so behaviour is identical.
@@ -18,14 +20,19 @@ const FALLBACK_RATES: Record<CarrierCode, number> = {
 export class ShippingRatesService {
   private readonly logger = new Logger(ShippingRatesService.name);
 
-  private cache: Record<CarrierCode, number> | null = null;
-  private cacheExpiresAt = 0;
-
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+  ) {}
 
   async getRateMap(): Promise<Record<CarrierCode, number>> {
-    if (this.cache && Date.now() < this.cacheExpiresAt) {
-      return this.cache;
+    try {
+      const cached = await this.redis.get(CACHE_KEY);
+      if (cached) {
+        return JSON.parse(cached) as Record<CarrierCode, number>;
+      }
+    } catch (err) {
+      this.logger.warn(`Redis read failed for ${CACHE_KEY}: ${(err as Error).message}`);
     }
 
     try {
@@ -38,8 +45,12 @@ export class ShippingRatesService {
         map[row.carrierCode] = row.priceInCents;
       }
 
-      this.cache = map;
-      this.cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+      try {
+        await this.redis.set(CACHE_KEY, JSON.stringify(map), 'EX', CACHE_TTL_SECONDS);
+      } catch (err) {
+        this.logger.warn(`Redis write failed for ${CACHE_KEY}: ${(err as Error).message}`);
+      }
+
       return map;
     } catch (err) {
       this.logger.warn(
@@ -80,7 +91,7 @@ export class ShippingRatesService {
       },
     });
 
-    this.invalidateCache();
+    await this.invalidateCache();
     this.logger.log(
       `Shipping rate updated: ${carrierCode} → ${priceInCents} gr (isActive=${updated.isActive})`,
     );
@@ -88,8 +99,11 @@ export class ShippingRatesService {
     return updated;
   }
 
-  private invalidateCache() {
-    this.cache = null;
-    this.cacheExpiresAt = 0;
+  private async invalidateCache() {
+    try {
+      await this.redis.del(CACHE_KEY);
+    } catch (err) {
+      this.logger.warn(`Redis delete failed for ${CACHE_KEY}: ${(err as Error).message}`);
+    }
   }
 }

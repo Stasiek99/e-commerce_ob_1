@@ -40,7 +40,7 @@ export class AnalyticsService {
   // if the user already consented on a prior visit. For new visitors the
   // effect() above handles loading once they click "Accept all".
   init(gtmId: string): void {
-    if (!this.isBrowser || !gtmId) return;
+    if (!this.isBrowser || !gtmId || gtmId.startsWith('GTM-XXX')) return;
     this.gtmId = gtmId;
     if (this.consent.analyticsConsented() && !this.gtmLoaded) {
       this.loadGtm();

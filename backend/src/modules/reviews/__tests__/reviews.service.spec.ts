@@ -179,6 +179,51 @@ describe('ReviewsService', () => {
         expect.objectContaining({ where: { id: 'order-1', userId: 'user-1' } }),
       );
     });
+
+    // ── duplicate review guard (fix #41) ──────────────────────────────────────
+    // Invariant: Prisma P2002 (@@unique[userId, productId] violation) must map
+    // to a 409 ConflictException rather than propagating as an unhandled 500.
+
+    it('throws ConflictException when user has already reviewed this product', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+
+      const p2002 = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`userId`,`productId`)',
+        { code: 'P2002', clientVersion: '5.0.0', meta: { target: ['userId', 'productId'] } },
+      );
+      prisma.review.create.mockRejectedValue(p2002);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(ConflictException);
+    });
+
+    it('includes a descriptive message in the ConflictException', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+
+      const p2002 = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed',
+        { code: 'P2002', clientVersion: '5.0.0', meta: { target: ['userId', 'productId'] } },
+      );
+      prisma.review.create.mockRejectedValue(p2002);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(
+        'You have already reviewed this product',
+      );
+    });
+
+    it('re-throws non-P2002 Prisma errors unchanged', async () => {
+      prisma.order.findFirst.mockResolvedValue(validOrder);
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+
+      const p2003 = new Prisma.PrismaClientKnownRequestError(
+        'Foreign key constraint failed',
+        { code: 'P2003', clientVersion: '5.0.0', meta: {} },
+      );
+      prisma.review.create.mockRejectedValue(p2003);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(p2003);
+    });
   });
 
   // ─── getByProduct ─────────────────────────────────────────────────────────

@@ -92,6 +92,43 @@ describe('AnalyticsService', () => {
         );
         expect(gtmScript).toBeUndefined();
       });
+
+      // ── placeholder GTM ID guard (fix #39) ─────────────────────────────────
+      // Invariant: init() must not fire a real Google CDN request when the
+      // environment file still contains the 'GTM-XXXXXXX' placeholder.
+
+      it('is a no-op when gtmId is the exact placeholder GTM-XXXXXXX', () => {
+        const svc = setup('browser');
+
+        svc.init('GTM-XXXXXXX');
+
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('googletagmanager.com'),
+        );
+        expect(gtmScript).toBeUndefined();
+      });
+
+      it('is a no-op for any id starting with GTM-XXX (placeholder family)', () => {
+        const svc = setup('browser');
+
+        svc.init('GTM-XXXABC');
+
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('googletagmanager.com'),
+        );
+        expect(gtmScript).toBeUndefined();
+      });
+
+      it('proceeds normally for a real container ID that starts with GTM- but not GTM-XXX', () => {
+        const svc = setup('browser');
+
+        svc.init('GTM-ABC1234');
+
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('GTM-ABC1234'),
+        );
+        expect(gtmScript).toBeDefined();
+      });
     });
 
     // push()

@@ -80,7 +80,10 @@ export class ProductCardComponent {
         this.toast.success('Dodano do koszyka!');
         this.adding.set(false);
       },
-      error: () => this.adding.set(false),
+      error: () => {
+        this.adding.set(false);
+        this.toast.error('Nie udało się dodać do koszyka.');
+      },
     });
   }
 }

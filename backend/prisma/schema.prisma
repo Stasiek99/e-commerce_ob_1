@@ -412,7 +412,7 @@ model OrderItem {
 model Payment {
   id                       String        @id @default(uuid())
   orderId                  String        @unique
-  order                    Order         @relation(fields: [orderId], references: [id])
+  order                    Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   status                   PaymentStatus @default(PENDING)
   provider                 String        @default("stripe")
   stripeCheckoutSessionId  String?       @unique
@@ -434,7 +434,7 @@ model Payment {
 model Shipment {
   id               String         @id @default(uuid())
   orderId          String         @unique
-  order            Order          @relation(fields: [orderId], references: [id])
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   status           ShipmentStatus @default(LABEL_PENDING)
   carrierCode      CarrierCode
   trackingNumber   String?
@@ -520,6 +520,7 @@ model CouponUse {
   discountAppliedInCents Int
   createdAt              DateTime @default(now())
 
+  @@unique([couponId, userId])
   @@index([couponId])
   @@index([userId])
   @@map("coupon_uses")

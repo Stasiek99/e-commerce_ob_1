@@ -34,8 +34,6 @@ function setup(wishlistItems: unknown[] = [], loading = false) {
     schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
   });
 
-  // Strip RouterLink from the component's own imports so detectChanges doesn't
-  // try to hydrate it against an empty router state (no root route configured).
   TestBed.overrideComponent(WishlistComponent, {
     set: { imports: [], schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA] },
   });
@@ -44,64 +42,69 @@ function setup(wishlistItems: unknown[] = [], loading = false) {
   const router = TestBed.inject(Router);
   const navigateSpy = jest.spyOn(router, 'navigate').mockResolvedValue(true);
 
-  return { fixture, navigateSpy, mockToast, loadingSignal };
+  return { fixture, navigateSpy, mockToast, loadingSignal, itemsSignal };
 }
 
-describe('WishlistComponent — empty wishlist redirect', () => {
+describe('WishlistComponent — empty wishlist keeps empty-state visible (no redirect)', () => {
   afterEach(() => jest.clearAllMocks());
 
-  it('navigates to /products when wishlist is empty and not loading', () => {
+  it('does NOT navigate away when wishlist is empty and not loading', () => {
     const { fixture, navigateSpy } = setup([], false);
 
     fixture.detectChanges();
     TestBed.flushEffects();
 
-    expect(navigateSpy).toHaveBeenCalledWith(['/products']);
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('shows an info toast before redirecting so the user knows why', () => {
-    const { fixture, navigateSpy, mockToast } = setup([], false);
-
-    fixture.detectChanges();
-    TestBed.flushEffects();
-
-    expect(mockToast.info).toHaveBeenCalledWith(
-      'Nie masz jeszcze żadnych ulubionych produktów.',
-    );
-    expect(navigateSpy).toHaveBeenCalledWith(['/products']);
-  });
-
-  it('fires toast before navigate — not after', () => {
-    const callOrder: string[] = [];
-    const { fixture, navigateSpy, mockToast } = setup([], false);
-    mockToast.info.mockImplementation(() => callOrder.push('toast'));
-    navigateSpy.mockImplementation(() => { callOrder.push('navigate'); return Promise.resolve(true); });
-
-    fixture.detectChanges();
-    TestBed.flushEffects();
-
-    expect(callOrder).toEqual(['toast', 'navigate']);
-  });
-
-  it('does NOT redirect while still loading', () => {
-    const { fixture, navigateSpy, loadingSignal } = setup([], true);
+  it('does NOT navigate away while wishlist is still loading', () => {
+    const { fixture, navigateSpy } = setup([], true);
 
     fixture.detectChanges();
     TestBed.flushEffects();
 
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT navigate away when loading finishes with an empty list', () => {
+    const { fixture, navigateSpy, loadingSignal } = setup([], true);
+
+    fixture.detectChanges();
+    TestBed.flushEffects();
 
     loadingSignal.set(false);
     TestBed.flushEffects();
 
-    expect(navigateSpy).toHaveBeenCalledWith(['/products']);
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('does NOT redirect when wishlist has items', () => {
+  it('does NOT navigate away when wishlist has items', () => {
     const product = { id: 'p1', name: 'Wildman', slug: 'wildman', variants: [{ id: 'v1', stock: 5 }] };
     const { fixture, navigateSpy } = setup([product], false);
 
     fixture.detectChanges();
+    TestBed.flushEffects();
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call the info toast on empty wishlist — empty-state UI handles messaging', () => {
+    const { fixture, mockToast } = setup([], false);
+
+    fixture.detectChanges();
+    TestBed.flushEffects();
+
+    expect(mockToast.info).not.toHaveBeenCalled();
+  });
+
+  it('does NOT navigate away when items signal transitions from non-empty to empty', () => {
+    const product = { id: 'p1', name: 'Wildman', slug: 'wildman', variants: [{ id: 'v1', stock: 5 }] };
+    const { fixture, navigateSpy, itemsSignal } = setup([product], false);
+
+    fixture.detectChanges();
+    TestBed.flushEffects();
+
+    itemsSignal.set([]);
     TestBed.flushEffects();
 
     expect(navigateSpy).not.toHaveBeenCalled();

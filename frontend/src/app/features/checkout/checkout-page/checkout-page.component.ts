@@ -788,7 +788,10 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   onStep(newIndex: number): void {
-    if (newIndex >= this.index) return;
+    if (newIndex > this.index) {
+      this.onNext();
+      return;
+    }
     this.direction = newIndex - this.index;
     this.index = newIndex;
   }
@@ -1005,6 +1008,7 @@ export class CheckoutPageComponent implements OnInit {
           }));
         } catch { /* sessionStorage unavailable (private browsing quota) */ }
         this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
+        this.cart.clear();
         window.location.href = res.paymentUrl;
       },
       error: (err) => {

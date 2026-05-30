@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { DiscountType, CouponType } from '@prisma/client';
+import { DiscountType, CouponType, Prisma } from '@prisma/client';
 import { CouponService } from '../coupon.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -441,6 +441,21 @@ describe('CouponService', () => {
       ).rejects.toThrow(BadRequestException);
 
       expect(tx.couponUse.create).not.toHaveBeenCalled();
+    });
+
+    it('propagates P2002 unique constraint error when a concurrent request wins the race on (couponId, userId)', async () => {
+      // Simulates two requests both passing the SQL subquery check simultaneously.
+      // The DB unique index on (coupon_id, user_id) ensures only one insert succeeds.
+      tx.$executeRaw.mockResolvedValue(1);
+      const uniqueViolation = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`couponId`,`userId`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['couponId', 'userId'] } },
+      );
+      tx.couponUse.create.mockRejectedValue(uniqueViolation);
+
+      await expect(
+        service.applyInsideTransaction(tx, 'coupon-1', 'order-1', 'user-1', 1000),
+      ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
     });
   });
 

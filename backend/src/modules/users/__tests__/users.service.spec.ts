@@ -241,7 +241,7 @@ describe('UsersService', () => {
     });
   });
 
-  // ─── deleteAddress — ownership guard ────────────────────────────────────
+  // ─── deleteAddress — ownership guard + default promotion ────────────────
 
   describe('deleteAddress', () => {
     it('throws NotFoundException when address does not belong to the user', async () => {
@@ -251,13 +251,55 @@ describe('UsersService', () => {
     });
 
     it('deletes only when the address belongs to the requesting user', async () => {
-      const addr = { id: 'addr-1', userId: 'user-1' };
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: false };
       prisma.address.findFirst.mockResolvedValue(addr);
       prisma.address.delete.mockResolvedValue(addr);
 
       await service.deleteAddress('user-1', 'addr-1');
 
       expect(prisma.address.delete).toHaveBeenCalledWith({ where: { id: 'addr-1' } });
+    });
+
+    it('promotes the most recently created remaining address when the deleted address was default', async () => {
+      const deleted = { id: 'addr-1', userId: 'user-1', isDefault: true };
+      const next    = { id: 'addr-2', userId: 'user-1', isDefault: false };
+
+      // first findFirst: ownership check; second findFirst: next address lookup
+      prisma.address.findFirst
+        .mockResolvedValueOnce(deleted)
+        .mockResolvedValueOnce(next);
+      prisma.address.delete.mockResolvedValue(deleted);
+      prisma.address.update.mockResolvedValue({ ...next, isDefault: true });
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'addr-2' },
+        data: { isDefault: true },
+      });
+    });
+
+    it('does not promote any address when no remaining addresses exist after deleting the default', async () => {
+      const deleted = { id: 'addr-1', userId: 'user-1', isDefault: true };
+
+      prisma.address.findFirst
+        .mockResolvedValueOnce(deleted)
+        .mockResolvedValueOnce(null); // no remaining addresses
+      prisma.address.delete.mockResolvedValue(deleted);
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.update).not.toHaveBeenCalled();
+    });
+
+    it('does not promote any address when the deleted address was not the default', async () => {
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: false };
+      prisma.address.findFirst.mockResolvedValue(addr);
+      prisma.address.delete.mockResolvedValue(addr);
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.update).not.toHaveBeenCalled();
     });
   });
 });

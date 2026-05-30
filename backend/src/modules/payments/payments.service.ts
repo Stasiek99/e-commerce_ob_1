@@ -302,7 +302,7 @@ export class PaymentsService {
             firstName: payment.order.snapshotFirstName,
             totalInCents: payment.order.totalInCents,
           })
-          .catch(() => undefined);
+          .catch((err) => this.logger.warn('Payment confirmed email failed', err));
       });
   }
 

@@ -2135,6 +2135,23 @@ describe('OrdersService', () => {
       ).rejects.toThrow('Invalid quantity 0');
     });
 
+    it('throws BadRequestException when cancelledQuantity already equals quantity (remaining is 0)', async () => {
+      // Guards the DB CHECK: 0 <= cancelledQuantity <= quantity.
+      // When an item is fully cancelled, no further quantity can be removed.
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        items: [
+          { id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 3, snapshotName: 'Dior', snapshotSku: 'DS', snapshotPrice: 34900 },
+        ],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('delegates to paymentsService.partialRefund with resolved items and CUSTOMER actor', async () => {
       prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
 
@@ -2594,6 +2611,135 @@ describe('OrdersService', () => {
 
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000001`);
+    });
+  });
+
+  // ─── fire-and-forget email error handling (fix #38) ─────────────────────────
+  // Invariant: email failures must be logged via logger.warn, never swallowed.
+  // Each fire-and-forget call must resolve the outer function even when the
+  // email service rejects, and the rejection must be captured in a warn log.
+
+  describe('fire-and-forget email error handling', () => {
+    const flush = () => new Promise<void>((r) => setImmediate(r));
+
+    it('cancelByUser logs warning and resolves when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Queue connection refused');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 10000,
+        items: [{ productVariantId: 'pv-1', quantity: 1 }],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        }),
+      );
+
+      await expect(service.cancelByUser('order-1', 'user-1')).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('cancellation email'),
+        emailError,
+      );
+    });
+
+    it('cancelItemsByUser logs warning and resolves when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Redis write timeout');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PAID,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 100000,
+        items: [{ id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 0, snapshotName: 'X', snapshotSku: 'X-1', snapshotPrice: 34900 }],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', { items: [{ orderItemId: 'item-1', quantity: 1 }] }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('cancellation email'),
+        emailError,
+      );
+    });
+
+    it('updateStatus logs warning and resolves when dispatchReviewRequestEmail rejects', async () => {
+      const emailError = new Error('BullMQ not reachable');
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        }),
+      );
+      // dispatchReviewRequestEmail reads from DB — make it throw to simulate full pipeline failure
+      prisma.order.findUnique.mockRejectedValue(emailError);
+
+      await expect(service.updateStatus('order-1', OrderStatus.DELIVERED)).resolves.not.toThrow();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Review request email'),
+        emailError,
+      );
+    });
+
+    it('bulkMarkAsShipped logs warning and still counts order as succeeded when shipping email rejects', async () => {
+      const emailError = new Error('SMTP timeout');
+      const emailService = (service as any).emailService;
+      emailService.sendShippingNotification.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PAID,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        carrierCode: CarrierCode.DHL,
+        shipment: { trackingNumber: 'TRK001' },
+      }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+      );
+
+      const result = await service.bulkMarkAsShipped(['o-1']);
+      await flush();
+
+      expect(result.succeeded).toBe(1);
+      expect(result.failed).toHaveLength(0);
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('shipping notification email'),
+        emailError,
+      );
     });
   });
 });
