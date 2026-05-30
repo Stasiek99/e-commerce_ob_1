@@ -320,6 +320,39 @@ describe('ShippingService', () => {
         );
       });
 
+      // Fix #52 regression harness — label generation time ≠ actual dispatch time.
+      // Invariant: generateLabel must record when the *label was printed*, not when
+      // the parcel was handed to the carrier. shippedAt is set separately when the
+      // order status transitions to SHIPPED.
+
+      it('sets labelGeneratedAt (not shippedAt) in the upsert create payload', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'DHL001', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'https://dhl.pdf', trackingNumber: 'DHL001' });
+
+        await service.generateLabel('order-1');
+
+        const createPayload = prisma.shipment.upsert.mock.calls[0][0].create;
+        expect(createPayload).toHaveProperty('labelGeneratedAt');
+        expect(createPayload.labelGeneratedAt).toBeInstanceOf(Date);
+        expect(createPayload).not.toHaveProperty('shippedAt');
+      });
+
+      it('sets labelGeneratedAt (not shippedAt) in the upsert update payload', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'DHL001', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'https://dhl.pdf', trackingNumber: 'DHL001' });
+
+        await service.generateLabel('order-1');
+
+        const updatePayload = prisma.shipment.upsert.mock.calls[0][0].update;
+        expect(updatePayload).toHaveProperty('labelGeneratedAt');
+        expect(updatePayload.labelGeneratedAt).toBeInstanceOf(Date);
+        expect(updatePayload).not.toHaveProperty('shippedAt');
+      });
+
       it('upserts shipment with LABEL_ERROR status when carrier throws', async () => {
         const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
         prisma.order.findUnique.mockResolvedValue(mockOrder);

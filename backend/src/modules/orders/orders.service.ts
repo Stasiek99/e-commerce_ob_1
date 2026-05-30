@@ -67,15 +67,20 @@ export class OrdersService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const year = new Date().getFullYear();
-    // Ensure sequences exist for the current and next calendar year.
-    // Runs once at startup, outside any transaction, so the brief DDL lock
-    // never interferes with concurrent order-creation transactions.
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-    );
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
-    );
+    // pg_advisory_xact_lock serializes concurrent DDL across replicas.
+    // Without it, two pods starting simultaneously both hold competing
+    // AccessExclusive locks and add latency to cold-start under load.
+    // The lock is automatically released when the transaction commits.
+    const LOCK_KEY = 4283901234; // stable, unique key for order-number DDL
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_KEY})`;
+      await tx.$executeRawUnsafe(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+      );
+      await tx.$executeRawUnsafe(
+        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+      );
+    });
   }
 
   async createFromCart(
@@ -485,9 +490,24 @@ export class OrdersService implements OnModuleInit {
 
   async getUnreadCount(): Promise<{ count: number }> {
     const count = await this.prisma.order.count({
-      where: { status: OrderStatus.PAID },
+      where: { status: OrderStatus.PAID, isRead: false },
     });
     return { count };
+  }
+
+  async findOneAdmin(id: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: { items: true, payment: true, shipment: true, user: { select: { email: true } } },
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (!order.isRead) {
+      await this.prisma.order.update({ where: { id }, data: { isRead: true } });
+    }
+
+    return order;
   }
 
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {
@@ -700,6 +720,13 @@ export class OrdersService implements OnModuleInit {
       await tx.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       });
+
+      if (status === OrderStatus.SHIPPED) {
+        await tx.shipment.updateMany({
+          where: { orderId: id, shippedAt: null },
+          data: { shippedAt: new Date() },
+        });
+      }
     });
 
     if (status === OrderStatus.DELIVERED) {

@@ -52,9 +52,14 @@ describe('OrderListComponent — skeleton loading', () => {
   // ─── loading signal lifecycle ─────────────────────────────────────────────
 
   describe('loading signal', () => {
-    it('is false before ngOnInit fires', () => {
+    // Fix #57 — initialised to true so the skeleton renders immediately on
+    // component creation, before ngOnInit fires. Prevents a one-frame flash
+    // of the "Brak zamówień" empty-state before the HTTP request starts.
+
+    it('is true before ngOnInit fires — skeleton shown immediately, no empty-state flash', () => {
       const { component } = setup();
-      expect(component.loading()).toBe(false);
+
+      expect(component.loading()).toBe(true);
     });
 
     it('is true once ngOnInit fires (HTTP request is pending)', () => {

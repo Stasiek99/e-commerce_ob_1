@@ -371,7 +371,9 @@ model Order {
   termsVersion    String?
   termsAcceptedAt DateTime?
 
-  invoiceUrl String?
+  invoiceUrl    String?
+  invoiceNumber String? @unique
+  isRead        Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -443,6 +445,7 @@ model Shipment {
   shipmentId       String?
   targetLockerCode String?
   dispatchNumber   String?
+  labelGeneratedAt DateTime?
   shippedAt        DateTime?
   deliveredAt      DateTime?
   estimatedDelivery DateTime?

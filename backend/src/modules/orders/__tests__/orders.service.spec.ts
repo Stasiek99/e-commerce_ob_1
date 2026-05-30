@@ -158,29 +158,60 @@ describe('OrdersService', () => {
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
 
-  describe('onModuleInit', () => {
-    it('creates sequences for the current and next year outside any transaction', async () => {
-      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
+  // Fix #56 — DDL wrapped in pg_advisory_xact_lock to serialise concurrent
+  // pod startup. Without the lock two Railway replicas hold competing
+  // AccessExclusive locks and add cold-start latency under load.
 
+  describe('onModuleInit', () => {
+    let txExecuteRaw: jest.Mock;
+    let txExecuteRawUnsafe: jest.Mock;
+
+    beforeEach(() => {
+      txExecuteRaw = jest.fn().mockResolvedValue(undefined);
+      txExecuteRawUnsafe = jest.fn().mockResolvedValue(undefined);
+
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ $executeRaw: txExecuteRaw, $executeRawUnsafe: txExecuteRawUnsafe }),
+      );
+    });
+
+    it('runs DDL inside a transaction (not bare on the top-level client)', async () => {
+      await service.onModuleInit();
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('acquires pg_advisory_xact_lock before creating sequences', async () => {
+      await service.onModuleInit();
+
+      expect(txExecuteRaw).toHaveBeenCalledTimes(1);
+      const [query] = txExecuteRaw.mock.calls[0];
+      expect(String(query)).toContain('pg_advisory_xact_lock');
+    });
+
+    it('creates order_number_seq for the current year inside the transaction', async () => {
       await service.onModuleInit();
 
       const year = new Date().getFullYear();
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
       );
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+    });
+
+    it('creates order_number_seq for next year inside the transaction', async () => {
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
       );
     });
 
-    it('uses the top-level prisma client (not a transaction client) for sequence DDL', async () => {
-      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
-
+    it('does NOT call the top-level $executeRawUnsafe — all DDL goes through the tx', async () => {
       await service.onModuleInit();
 
-      // prisma.$executeRawUnsafe is the service-level client; tx.$executeRawUnsafe
-      // is the transaction-scoped client — DDL must never reach the latter
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     });
   });
 
@@ -1000,6 +1031,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       const result = await service.generateInvoice('order-1');
@@ -1018,6 +1050,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/invoice.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
@@ -1030,6 +1063,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await service.generateInvoice('order-1');
@@ -1049,6 +1083,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/invoice.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await service.generateInvoice('order-1');
@@ -1109,6 +1144,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       const result = await service.generateInvoiceForUser('order-1', 'user-1');
@@ -1143,10 +1179,11 @@ describe('OrdersService', () => {
   });
 
   describe('updateStatus', () => {
-    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock }> = {}) => ({
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock; shipmentUpdateMany: jest.Mock }> = {}) => ({
       productVariant: { update: overrides.variantUpdate ?? jest.fn() },
       order: { update: overrides.orderUpdate ?? jest.fn() },
       orderEvent: { create: jest.fn() },
+      shipment: { updateMany: overrides.shipmentUpdateMany ?? jest.fn() },
     });
 
     it('transitions non-terminal status without restoring stock', async () => {
@@ -1283,6 +1320,44 @@ describe('OrdersService', () => {
 
       expect(prisma.order.findUnique).toHaveBeenCalled();
     });
+
+    // Fix #52 regression harness — shippedAt must reflect actual parcel dispatch,
+    // not label generation. Invariant: when updateStatus transitions an order to
+    // SHIPPED, it must call shipment.updateMany({ where: { orderId, shippedAt: null },
+    // data: { shippedAt: <now> } }) inside the same transaction.
+
+    it('sets shippedAt on the shipment when transitioning to SHIPPED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PROCESSING,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.SHIPPED);
+
+      expect(shipmentUpdateMany).toHaveBeenCalledWith({
+        where: { orderId: 'o-1', shippedAt: null },
+        data: { shippedAt: expect.any(Date) },
+      });
+    });
+
+    it('does not set shippedAt on the shipment for non-SHIPPED transitions', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(shipmentUpdateMany).not.toHaveBeenCalled();
+    });
   });
 
   // ─── updateStatus — state machine transition guard ───────────────────────────
@@ -1292,6 +1367,7 @@ describe('OrdersService', () => {
       productVariant: { update: jest.fn() },
       order: { update: jest.fn() },
       orderEvent: { create: jest.fn() },
+      shipment: { updateMany: jest.fn() },
     });
 
     it('throws BadRequestException for every impossible transition from a terminal state', async () => {
@@ -1692,7 +1768,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
@@ -1726,7 +1802,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -1743,7 +1819,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -2372,23 +2448,85 @@ describe('OrdersService', () => {
   });
 
   describe('getUnreadCount', () => {
-    it('returns count of orders with PAID status', async () => {
+    // Fix #53 — filter by isRead: false so the badge resets after admin views orders
+
+    it('filters by status PAID AND isRead false — no longer a monotonic all-time count', async () => {
       prisma.order.count.mockResolvedValue(7);
 
       const result = await service.getUnreadCount();
 
       expect(result).toEqual({ count: 7 });
       expect(prisma.order.count).toHaveBeenCalledWith({
-        where: { status: OrderStatus.PAID },
+        where: { status: OrderStatus.PAID, isRead: false },
       });
     });
 
-    it('returns { count: 0 } when no PAID orders exist', async () => {
+    it('returns { count: 0 } when no unread PAID orders exist', async () => {
       prisma.order.count.mockResolvedValue(0);
 
       const result = await service.getUnreadCount();
 
       expect(result).toEqual({ count: 0 });
+    });
+
+    it('does NOT pass isRead: true in the where clause (read orders are excluded)', async () => {
+      prisma.order.count.mockResolvedValue(3);
+
+      await service.getUnreadCount();
+
+      const whereClause = prisma.order.count.mock.calls[0][0].where;
+      expect(whereClause.isRead).toBe(false);
+    });
+  });
+
+  // ─── findOneAdmin — marks order as read on first access ──────────────────────
+
+  describe('findOneAdmin', () => {
+    const mockOrderUnread = {
+      id: 'order-1',
+      status: OrderStatus.PAID,
+      isRead: false,
+      items: [],
+      payment: null,
+      shipment: null,
+      user: { email: 'jan@example.com' },
+    };
+
+    const mockOrderAlreadyRead = { ...mockOrderUnread, isRead: true };
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.findOneAdmin('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the order when it exists', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderUnread);
+      prisma.order.update.mockResolvedValue({ ...mockOrderUnread, isRead: true });
+
+      const result = await service.findOneAdmin('order-1');
+
+      expect(result).toMatchObject({ id: 'order-1' });
+    });
+
+    it('marks an unread order as isRead: true when admin opens it', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderUnread);
+      prisma.order.update.mockResolvedValue({ ...mockOrderUnread, isRead: true });
+
+      await service.findOneAdmin('order-1');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { isRead: true },
+      });
+    });
+
+    it('does NOT call order.update when order is already read', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderAlreadyRead);
+
+      await service.findOneAdmin('order-1');
+
+      expect(prisma.order.update).not.toHaveBeenCalled();
     });
   });
 
@@ -2728,7 +2866,7 @@ describe('OrdersService', () => {
       }]);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1']);

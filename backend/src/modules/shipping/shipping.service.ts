@@ -169,7 +169,7 @@ export class ShippingService {
           labelUrl,
           shipmentId,
           targetLockerCode,
-          shippedAt: new Date(),
+          labelGeneratedAt: new Date(),
           rawCarrierResponse: rawResponse as any,
         },
         update: {
@@ -177,7 +177,7 @@ export class ShippingService {
           trackingNumber,
           labelUrl,
           shipmentId,
-          shippedAt: new Date(),
+          labelGeneratedAt: new Date(),
           rawCarrierResponse: rawResponse as any,
         },
       });

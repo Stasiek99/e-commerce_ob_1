@@ -37,6 +37,7 @@ describe('CouponService', () => {
         {
           provide: PrismaService,
           useValue: {
+            $executeRaw: jest.fn(),
             coupon: {
               findUnique: jest.fn(),
               findMany: jest.fn(),
@@ -514,6 +515,30 @@ describe('CouponService', () => {
       await expect(
         service.create({ ...validDto, value: 100 }),
       ).resolves.not.toThrow();
+    });
+  });
+
+  // ─── reconcileCurrentUses ────────────────────────────────────────────────
+
+  describe('reconcileCurrentUses', () => {
+    it('executes a raw SQL UPDATE to sync currentUses from coupon_uses COUNT', async () => {
+      prisma.$executeRaw.mockResolvedValue(undefined);
+
+      await service.reconcileCurrentUses();
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves without throwing when $executeRaw succeeds', async () => {
+      prisma.$executeRaw.mockResolvedValue(undefined);
+
+      await expect(service.reconcileCurrentUses()).resolves.toBeUndefined();
+    });
+
+    it('propagates database errors so the scheduler can log and retry', async () => {
+      prisma.$executeRaw.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.reconcileCurrentUses()).rejects.toThrow('DB connection lost');
     });
   });
 

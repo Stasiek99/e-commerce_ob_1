@@ -162,7 +162,7 @@ describe('Checkout Integration Flow', () => {
         {
           provide: InvoiceService,
           useValue: {
-            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from('') }),
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
           },
         },
         {
