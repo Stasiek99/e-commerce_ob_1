@@ -158,29 +158,60 @@ describe('OrdersService', () => {
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
 
-  describe('onModuleInit', () => {
-    it('creates sequences for the current and next year outside any transaction', async () => {
-      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
+  // Fix #56 — DDL wrapped in pg_advisory_xact_lock to serialise concurrent
+  // pod startup. Without the lock two Railway replicas hold competing
+  // AccessExclusive locks and add cold-start latency under load.
 
+  describe('onModuleInit', () => {
+    let txExecuteRaw: jest.Mock;
+    let txExecuteRawUnsafe: jest.Mock;
+
+    beforeEach(() => {
+      txExecuteRaw = jest.fn().mockResolvedValue(undefined);
+      txExecuteRawUnsafe = jest.fn().mockResolvedValue(undefined);
+
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ $executeRaw: txExecuteRaw, $executeRawUnsafe: txExecuteRawUnsafe }),
+      );
+    });
+
+    it('runs DDL inside a transaction (not bare on the top-level client)', async () => {
+      await service.onModuleInit();
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('acquires pg_advisory_xact_lock before creating sequences', async () => {
+      await service.onModuleInit();
+
+      expect(txExecuteRaw).toHaveBeenCalledTimes(1);
+      const [query] = txExecuteRaw.mock.calls[0];
+      expect(String(query)).toContain('pg_advisory_xact_lock');
+    });
+
+    it('creates order_number_seq for the current year inside the transaction', async () => {
       await service.onModuleInit();
 
       const year = new Date().getFullYear();
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
       );
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+    });
+
+    it('creates order_number_seq for next year inside the transaction', async () => {
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
       );
     });
 
-    it('uses the top-level prisma client (not a transaction client) for sequence DDL', async () => {
-      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
-
+    it('does NOT call the top-level $executeRawUnsafe — all DDL goes through the tx', async () => {
       await service.onModuleInit();
 
-      // prisma.$executeRawUnsafe is the service-level client; tx.$executeRawUnsafe
-      // is the transaction-scoped client — DDL must never reach the latter
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     });
   });
 
