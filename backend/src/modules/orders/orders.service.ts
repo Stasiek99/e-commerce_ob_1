@@ -485,9 +485,24 @@ export class OrdersService implements OnModuleInit {
 
   async getUnreadCount(): Promise<{ count: number }> {
     const count = await this.prisma.order.count({
-      where: { status: OrderStatus.PAID },
+      where: { status: OrderStatus.PAID, isRead: false },
     });
     return { count };
+  }
+
+  async findOneAdmin(id: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: { items: true, payment: true, shipment: true, user: { select: { email: true } } },
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (!order.isRead) {
+      await this.prisma.order.update({ where: { id }, data: { isRead: true } });
+    }
+
+    return order;
   }
 
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {

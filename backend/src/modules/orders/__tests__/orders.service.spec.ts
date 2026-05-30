@@ -2417,23 +2417,85 @@ describe('OrdersService', () => {
   });
 
   describe('getUnreadCount', () => {
-    it('returns count of orders with PAID status', async () => {
+    // Fix #53 — filter by isRead: false so the badge resets after admin views orders
+
+    it('filters by status PAID AND isRead false — no longer a monotonic all-time count', async () => {
       prisma.order.count.mockResolvedValue(7);
 
       const result = await service.getUnreadCount();
 
       expect(result).toEqual({ count: 7 });
       expect(prisma.order.count).toHaveBeenCalledWith({
-        where: { status: OrderStatus.PAID },
+        where: { status: OrderStatus.PAID, isRead: false },
       });
     });
 
-    it('returns { count: 0 } when no PAID orders exist', async () => {
+    it('returns { count: 0 } when no unread PAID orders exist', async () => {
       prisma.order.count.mockResolvedValue(0);
 
       const result = await service.getUnreadCount();
 
       expect(result).toEqual({ count: 0 });
+    });
+
+    it('does NOT pass isRead: true in the where clause (read orders are excluded)', async () => {
+      prisma.order.count.mockResolvedValue(3);
+
+      await service.getUnreadCount();
+
+      const whereClause = prisma.order.count.mock.calls[0][0].where;
+      expect(whereClause.isRead).toBe(false);
+    });
+  });
+
+  // ─── findOneAdmin — marks order as read on first access ──────────────────────
+
+  describe('findOneAdmin', () => {
+    const mockOrderUnread = {
+      id: 'order-1',
+      status: OrderStatus.PAID,
+      isRead: false,
+      items: [],
+      payment: null,
+      shipment: null,
+      user: { email: 'jan@example.com' },
+    };
+
+    const mockOrderAlreadyRead = { ...mockOrderUnread, isRead: true };
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.findOneAdmin('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the order when it exists', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderUnread);
+      prisma.order.update.mockResolvedValue({ ...mockOrderUnread, isRead: true });
+
+      const result = await service.findOneAdmin('order-1');
+
+      expect(result).toMatchObject({ id: 'order-1' });
+    });
+
+    it('marks an unread order as isRead: true when admin opens it', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderUnread);
+      prisma.order.update.mockResolvedValue({ ...mockOrderUnread, isRead: true });
+
+      await service.findOneAdmin('order-1');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { isRead: true },
+      });
+    });
+
+    it('does NOT call order.update when order is already read', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderAlreadyRead);
+
+      await service.findOneAdmin('order-1');
+
+      expect(prisma.order.update).not.toHaveBeenCalled();
     });
   });
 
