@@ -788,7 +788,10 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   onStep(newIndex: number): void {
-    if (newIndex >= this.index) return;
+    if (newIndex > this.index) {
+      this.onNext();
+      return;
+    }
     this.direction = newIndex - this.index;
     this.index = newIndex;
   }
