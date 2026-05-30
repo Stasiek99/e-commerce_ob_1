@@ -133,6 +133,58 @@ describe('AuthController', () => {
     });
   });
 
+  // ─── logout — cookie cleanup ──────────────────────────────────────────────────
+
+  describe('logout — cookie cleanup', () => {
+    it('clears both refresh_token and oauth_access_token cookies', async () => {
+      (authService as any).logout = jest.fn().mockResolvedValue(undefined);
+      const req = { cookies: { refresh_token: 'rt-val' } };
+      const res = { clearCookie: jest.fn() };
+
+      await controller.logout(req as any, res as any);
+
+      const clearedNames = (res.clearCookie as jest.Mock).mock.calls.map(
+        (args: unknown[]) => args[0] as string,
+      );
+      expect(clearedNames).toContain('refresh_token');
+      expect(clearedNames).toContain('oauth_access_token');
+    });
+
+    it('clears oauth_access_token even when no refresh token cookie is present', async () => {
+      const req = { cookies: {} };
+      const res = { clearCookie: jest.fn() };
+
+      await controller.logout(req as any, res as any);
+
+      const clearedNames = (res.clearCookie as jest.Mock).mock.calls.map(
+        (args: unknown[]) => args[0] as string,
+      );
+      expect(clearedNames).toContain('oauth_access_token');
+    });
+
+    it('clears both cookies with path / so they are matched by the browser', async () => {
+      (authService as any).logout = jest.fn().mockResolvedValue(undefined);
+      const req = { cookies: { refresh_token: 'rt-val' } };
+      const res = { clearCookie: jest.fn() };
+
+      await controller.logout(req as any, res as any);
+
+      const calls = (res.clearCookie as jest.Mock).mock.calls as [string, { path: string }][];
+      for (const [, options] of calls) {
+        expect(options).toMatchObject({ path: '/' });
+      }
+    });
+
+    it('does not call authService.logout when no refresh token cookie is present', async () => {
+      const req = { cookies: {} };
+      const res = { clearCookie: jest.fn() };
+
+      await controller.logout(req as any, res as any);
+
+      expect((authService as any).logout).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── googleCallback — nonce issuance ─────────────────────────────────────────
 
   describe('googleCallback — nonce issuance', () => {

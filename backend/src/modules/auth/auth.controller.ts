@@ -121,6 +121,7 @@ export class AuthController {
       await this.authService.logout(rawRefreshToken);
     }
     res.clearCookie(REFRESH_COOKIE, { path: '/' });
+    res.clearCookie('oauth_access_token', { path: '/' });
   }
 
   @Public()
