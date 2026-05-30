@@ -1,5 +1,6 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DiscountType, Prisma } from '@prisma/client';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCouponDto, UpdateCouponDto } from './dto/create-coupon.dto';
 
@@ -13,6 +14,8 @@ export interface CouponValidationResult {
 
 @Injectable()
 export class CouponService {
+  private readonly logger = new Logger(CouponService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async validate(
@@ -181,5 +184,19 @@ export class CouponService {
     const coupon = await this.prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new NotFoundException('Coupon not found');
     return coupon;
+  }
+
+  // Reconciles the denormalized currentUses counter against the actual CouponUse
+  // rows. Runs hourly so that a crash mid-rollback cannot permanently inflate the
+  // counter and silently block otherwise-valid coupon redemptions.
+  @Cron(CronExpression.EVERY_HOUR)
+  async reconcileCurrentUses(): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE coupons
+      SET current_uses = (
+        SELECT COUNT(*) FROM coupon_uses WHERE coupon_id = coupons.id
+      )
+    `;
+    this.logger.debug('Coupon currentUses reconciliation complete');
   }
 }
