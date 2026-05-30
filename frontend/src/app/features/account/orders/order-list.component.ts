@@ -117,7 +117,7 @@ export class OrderListComponent implements OnInit {
   readonly orders = signal<OrderSummary[]>([]);
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
-  readonly loading = signal(false);
+  readonly loading = signal(true);
   readonly skeletonRows = Array(5).fill(null);
 
   ngOnInit(): void {
