@@ -444,6 +444,7 @@ model Shipment {
   shipmentId       String?
   targetLockerCode String?
   dispatchNumber   String?
+  labelGeneratedAt DateTime?
   shippedAt        DateTime?
   deliveredAt      DateTime?
   estimatedDelivery DateTime?

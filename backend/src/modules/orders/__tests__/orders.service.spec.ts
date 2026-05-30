@@ -1148,10 +1148,11 @@ describe('OrdersService', () => {
   });
 
   describe('updateStatus', () => {
-    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock }> = {}) => ({
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock; shipmentUpdateMany: jest.Mock }> = {}) => ({
       productVariant: { update: overrides.variantUpdate ?? jest.fn() },
       order: { update: overrides.orderUpdate ?? jest.fn() },
       orderEvent: { create: jest.fn() },
+      shipment: { updateMany: overrides.shipmentUpdateMany ?? jest.fn() },
     });
 
     it('transitions non-terminal status without restoring stock', async () => {
@@ -1288,6 +1289,44 @@ describe('OrdersService', () => {
 
       expect(prisma.order.findUnique).toHaveBeenCalled();
     });
+
+    // Fix #52 regression harness — shippedAt must reflect actual parcel dispatch,
+    // not label generation. Invariant: when updateStatus transitions an order to
+    // SHIPPED, it must call shipment.updateMany({ where: { orderId, shippedAt: null },
+    // data: { shippedAt: <now> } }) inside the same transaction.
+
+    it('sets shippedAt on the shipment when transitioning to SHIPPED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PROCESSING,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.SHIPPED);
+
+      expect(shipmentUpdateMany).toHaveBeenCalledWith({
+        where: { orderId: 'o-1', shippedAt: null },
+        data: { shippedAt: expect.any(Date) },
+      });
+    });
+
+    it('does not set shippedAt on the shipment for non-SHIPPED transitions', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(shipmentUpdateMany).not.toHaveBeenCalled();
+    });
   });
 
   // ─── updateStatus — state machine transition guard ───────────────────────────
@@ -1297,6 +1336,7 @@ describe('OrdersService', () => {
       productVariant: { update: jest.fn() },
       order: { update: jest.fn() },
       orderEvent: { create: jest.fn() },
+      shipment: { updateMany: jest.fn() },
     });
 
     it('throws BadRequestException for every impossible transition from a terminal state', async () => {
@@ -1697,7 +1737,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
@@ -1731,7 +1771,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -1748,7 +1788,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -2733,7 +2773,7 @@ describe('OrdersService', () => {
       }]);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1']);

@@ -700,6 +700,13 @@ export class OrdersService implements OnModuleInit {
       await tx.orderEvent.create({
         data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
       });
+
+      if (status === OrderStatus.SHIPPED) {
+        await tx.shipment.updateMany({
+          where: { orderId: id, shippedAt: null },
+          data: { shippedAt: new Date() },
+        });
+      }
     });
 
     if (status === OrderStatus.DELIVERED) {
