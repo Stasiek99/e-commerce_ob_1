@@ -1000,6 +1000,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       const result = await service.generateInvoice('order-1');
@@ -1018,6 +1019,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/invoice.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
@@ -1030,6 +1032,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await service.generateInvoice('order-1');
@@ -1049,6 +1052,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/invoice.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await service.generateInvoice('order-1');
@@ -1109,6 +1113,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       const result = await service.generateInvoiceForUser('order-1', 'user-1');
