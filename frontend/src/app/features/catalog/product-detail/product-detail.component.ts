@@ -27,6 +27,7 @@ interface ProductVariantDetail {
   label: string;
   priceInCents: number;
   compareAtPriceInCents?: number | null;
+  lowestPrice30dInCents?: number | null;
   stock: number;
   sku: string;
   volume?: number | null;
@@ -172,7 +173,12 @@ const CATEGORY_LABELS: Record<string, string> = {
           <!-- Price + stock -->
           @if (selectedVariant()) {
             <div class="detail__price-row">
-              <span class="detail__price">{{ selectedVariant()!.priceInCents | price }}</span>
+              @if (selectedVariant()!.compareAtPriceInCents) {
+                <span class="detail__price detail__price--sale">{{ selectedVariant()!.priceInCents | price }}</span>
+                <span class="detail__price detail__price--was">{{ selectedVariant()!.compareAtPriceInCents | price }}</span>
+              } @else {
+                <span class="detail__price">{{ selectedVariant()!.priceInCents | price }}</span>
+              }
               @if (selectedVariant()!.stock > 0) {
                 <span class="detail__stock detail__stock--ok">
                   <tui-icon icon="@tui.check-circle"></tui-icon>
@@ -195,6 +201,11 @@ const CATEGORY_LABELS: Record<string, string> = {
                 </span>
               }
             </div>
+            @if (selectedVariant()!.compareAtPriceInCents) {
+              <p class="detail__omnibus">
+                Najniższa cena z 30 dni: {{ (selectedVariant()!.lowestPrice30dInCents ?? selectedVariant()!.priceInCents) | price }}
+              </p>
+            }
 
             <!-- Quantity + Add to cart + Wishlist -->
             <div class="detail__cta">
@@ -592,6 +603,9 @@ const CATEGORY_LABELS: Record<string, string> = {
     /* Price + stock */
     .detail__price-row { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
+    .detail__price--sale { color: var(--color-error); }
+    .detail__price--was { font-size: 18px; font-weight: 400; color: var(--color-secondary); text-decoration: line-through; }
+    .detail__omnibus { font-size: 12px; color: var(--color-secondary); margin: -12px 0 20px; font-variant-numeric: tabular-nums; }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
     .detail__stock--ok { color: var(--color-success); }

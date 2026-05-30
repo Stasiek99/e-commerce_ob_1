@@ -15,7 +15,14 @@ export interface ProductCardData {
   gender?: string | null;
   catalogNumber?: string | null;
   images?: Array<{ url: string }>;
-  variants?: Array<{ id: string; label: string; priceInCents: number; stock: number }>;
+  variants?: Array<{
+    id: string;
+    label: string;
+    priceInCents: number;
+    compareAtPriceInCents?: number | null;
+    lowestPrice30dInCents?: number | null;
+    stock: number;
+  }>;
 }
 
 @Component({
