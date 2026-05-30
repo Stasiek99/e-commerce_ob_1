@@ -39,11 +39,13 @@ import { ToastService } from '../../../core/services/toast.service';
           <label tuiLabel>Email</label>
           <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
         </tui-textfield>
+        @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
 
         <tui-textfield>
           <label tuiLabel>Hasło (min. 8 znaków)</label>
           <input tuiTextfield type="password" formControlName="password" autocomplete="new-password" />
         </tui-textfield>
+        @if (errorMsg('password'); as msg) { <p class="field-error">{{ msg }}</p> }
 
         <button tuiButton type="submit" [disabled]="form.invalid || loading" class="btn-full">
           {{ loading ? 'Tworzenie konta...' : 'Utwórz konto' }}
@@ -62,6 +64,7 @@ import { ToastService } from '../../../core/services/toast.service';
     .btn-full { display: flex; width: 100%; justify-content: center; }
     .auth-link { text-align: center; font-size: 14px; color: var(--color-secondary); margin: 0; }
     .auth-link a { color: var(--color-primary); font-weight: 500; }
+    .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
   `],
 })
 export class RegisterComponent {
@@ -82,8 +85,21 @@ export class RegisterComponent {
     password:  ['', [Validators.required, Validators.minLength(8)]],
   });
 
+  errorMsg(field: string): string | null {
+    const ctrl = this.form.get(field);
+    if (!ctrl?.touched || ctrl.valid) return null;
+    const e = ctrl.errors!;
+    if (e['required']) return 'To pole jest wymagane';
+    if (e['email']) return 'Podaj prawidłowy adres e-mail';
+    if (e['minlength']) return `Minimum ${e['minlength'].requiredLength} znaków`;
+    return null;
+  }
+
   submit(): void {
-    if (this.form.invalid) return;
+    if (this.form.invalid) {
+      this.form.markAllAsTouched();
+      return;
+    }
     this.loading = true;
     const v = this.form.getRawValue();
     this.auth.register(v.email!, v.password!, v.firstName ?? undefined, v.lastName ?? undefined).subscribe({
