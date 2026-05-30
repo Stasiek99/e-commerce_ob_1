@@ -39,17 +39,24 @@ export class ReviewsService {
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
 
-    return this.prisma.review.create({
-      data: {
-        productId: dto.productId,
-        userId,
-        orderId: dto.orderId,
-        rating: dto.rating,
-        title: dto.title?.trim() ?? null,
-        body: dto.body?.trim() ?? null,
-        status: 'PENDING',
-      },
-    });
+    try {
+      return await this.prisma.review.create({
+        data: {
+          productId: dto.productId,
+          userId,
+          orderId: dto.orderId,
+          rating: dto.rating,
+          title: dto.title?.trim() ?? null,
+          body: dto.body?.trim() ?? null,
+          status: 'PENDING',
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('You have already reviewed this product');
+      }
+      throw err;
+    }
   }
 
   async getByProduct(
