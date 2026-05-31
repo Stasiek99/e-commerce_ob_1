@@ -149,6 +149,49 @@ describe('StripeClient.createCheckoutSession', () => {
     });
   });
 
+  // ── payment methods ──────────────────────────────────────────────────
+  // Guards the fix: BLIK and P24 must be explicitly listed.
+  // Passing only ['card'] silently excludes them — Stripe does not
+  // auto-include BLIK/P24 via the 'card' type.
+
+  describe('payment methods', () => {
+    it('includes card in payment_method_types', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      const { payment_method_types } = mockSessionsCreate.mock.calls[0][0];
+      expect(payment_method_types).toContain('card');
+    });
+
+    it('includes blik in payment_method_types', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      const { payment_method_types } = mockSessionsCreate.mock.calls[0][0];
+      expect(payment_method_types).toContain('blik');
+    });
+
+    it('includes p24 in payment_method_types', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      const { payment_method_types } = mockSessionsCreate.mock.calls[0][0];
+      expect(payment_method_types).toContain('p24');
+    });
+
+    it('passes exactly card, blik, and p24 — no more, no less', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      const { payment_method_types } = mockSessionsCreate.mock.calls[0][0];
+      expect(payment_method_types).toEqual(['card', 'blik', 'p24']);
+    });
+  });
+
   // ── discount coupon ──────────────────────────────────────────────────
   // Guards the fix: orders with a coupon must have a Stripe coupon attached
   // so Stripe charges order.totalInCents, not the pre-discount item sum.

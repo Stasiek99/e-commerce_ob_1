@@ -75,8 +75,7 @@ export class StripeClient {
 
     const session = await this.stripe.checkout.sessions.create({
       mode: 'payment',
-      // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
-      payment_method_types: ['card'],
+      payment_method_types: ['card', 'blik', 'p24'],
       customer_email: input.customerEmail,
       expires_at: expiresAt,
       line_items: input.lineItems.map((item) => ({

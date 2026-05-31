@@ -6,6 +6,17 @@
 > **Excludes** Phase 7 (pre-launch checklist) items.
 
 ---
+Done:
+## 🔴 BLOCKER — BLIK and P24 are advertised but never enabled in Stripe Checkout *(5/7 agents)*
+**File:** `backend/src/modules/payments/stripe.client.ts:79`
+```ts
+// Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card')
+payment_method_types: ['card'],
+```
+The comment is factually wrong. Passing only `['card']` to Stripe does **not** automatically include BLIK or Przelewy24 — these require explicit entries. BLIK is the dominant Polish payment method (~60% of e-commerce transactions per NBP/PayU data). A Polish-language fragrance store that silently presents a card-only checkout will lose the majority of mobile-first buyers with zero error logged anywhere.
+Additionally, `checkout.session.async_payment_failed` is already wired in the webhook handler for BLIK's async confirmation model — meaning the backend is ready but the payment methods are simply never offered.
+**Fix:** Change to `payment_method_types: ['card', 'blik', 'p24']` or remove the array entirely and use `automatic_payment_methods: { enabled: true }` with methods configured in the Stripe Dashboard.
+---
 
 ## Legend
 
@@ -14,46 +25,7 @@
 | 🔴 BLOCKER | Must fix before any real customer |
 | 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
 | 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
-
-Agent agreement noted where 3+ agents independently identified the same issue.
-
----
-
-## 🔴 BLOCKER — BLIK and P24 are advertised but never enabled in Stripe Checkout *(5/7 agents)*
-
-**File:** `backend/src/modules/payments/stripe.client.ts:79`
-
-```ts
-// Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card')
-payment_method_types: ['card'],
-```
-
-The comment is factually wrong. Passing only `['card']` to Stripe does **not** automatically include BLIK or Przelewy24 — these require explicit entries. BLIK is the dominant Polish payment method (~60% of e-commerce transactions per NBP/PayU data). A Polish-language fragrance store that silently presents a card-only checkout will lose the majority of mobile-first buyers with zero error logged anywhere.
-
-Additionally, `checkout.session.async_payment_failed` is already wired in the webhook handler for BLIK's async confirmation model — meaning the backend is ready but the payment methods are simply never offered.
-
-**Fix:** Change to `payment_method_types: ['card', 'blik', 'p24']` or remove the array entirely and use `automatic_payment_methods: { enabled: true }` with methods configured in the Stripe Dashboard.
-
----
-
-## 🔴 BLOCKER — Invoice sequence DDL race on concurrent boot + `nextval` consumed before upload *(4/7 agents)*
-
-**Files:**
-- `backend/src/modules/invoice/invoice.service.ts:56–85`
-
-Two distinct sub-bugs compound each other:
-
-**Bug A — DDL race on cold-start:** `ensureSequence()` issues `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_YYYY` as a bare `$executeRawUnsafe` with no advisory lock. `OrdersService.onModuleInit()` wraps its equivalent DDL in `pg_advisory_xact_lock` — `InvoiceService` does not. Two Railway replicas booting simultaneously race to create the sequence, with one potentially failing `onModuleInit` and entering Railway's restart loop.
-
-**Bug B — Sequence consumed before upload commits:** `nextInvoiceNumber()` calls `nextval(...)` at line 69 before `generatePdf()` and `uploadInvoice()`. PostgreSQL sequences are intentionally non-transactional — `nextval` always advances even if the caller throws or the process is SIGKILL'd mid-PDF. Any failure after `nextval` produces a permanent gap in the `FV/YYYY/NNNNNN` series. Polish VAT law (Art. 106e pkt 2 Ustawy o VAT) requires sequential invoice numbering without gaps; missing numbers are treated by KAS (tax authority) as evidence of suppressed invoices.
-
-Furthermore, if two concurrent calls reach `processInvoice` simultaneously (e.g. `markSessionPaid` webhook + admin's "Download Invoice" click within the same second), both call `nextval` independently, each gets a unique sequence number, both attempt `order.update({ invoiceNumber })`, and the second throws P2002 (`@unique` on `invoiceNumber`). The first invoice is saved; the second order fails silently (fire-and-forget in `markSessionPaid`), so the customer's PAID order never gets an invoice with no alert beyond Sentry.
-
-**Fix A:** Wrap `ensureSequence` in `$transaction` with `pg_advisory_xact_lock(stable_int)` using `DIRECT_URL`.
-**Fix B:** Use a `invoice_counter` table with `SELECT ... FOR UPDATE` inside the same `$transaction` as `order.update(invoiceNumber)` — a DB table counter is transactional, a PostgreSQL sequence is not. Check `order.invoiceNumber IS NOT NULL` before allocating to prevent concurrent double-allocation.
-
----
+| 🟢 LOW | Polish / hardening |lets p
 
 ## 🟠 HIGH — `processedStripeEvent` table grows forever — eventual checkout blockage *(3/7 agents)*
 
