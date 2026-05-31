@@ -249,6 +249,13 @@ model Product {
   luxuryReferenceId   Int?
   luxuryReference     LuxuryReference? @relation(fields: [luxuryReferenceId], references: [id], onDelete: SetNull)
   sortOrder        Int      @default(0)
+
+  // EU Cosmetics Regulation 1223/2009 — mandatory for distance selling
+  ingredients      String?   // full INCI string as printed on the data sheet
+  allergens        String[]  // allergens listed individually above threshold (>0.001% for leave-on)
+  paoMonths        Int?      // Period After Opening in months (PAO symbol)
+  warnings         String?   // safety warnings (Ostrzeżenia) from data sheet
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

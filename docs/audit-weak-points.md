@@ -1,14 +1,16 @@
 # E-Commerce Weak Point Audit
 *Generated: 2026-05-28 — 5-agent stochastic consensus*
 
+Done:
+Legal / Compliance
+- EU Omnibus Directive — when displaying a promotional price, you must show the lowest price from the preceding 30 days. Your discount logic needs to store price history, not just the current price.
+
 ---
+Not yet:
 
 Legal / Compliance
 - Kasa fiskalna (fiscal printer) — B2C sales in Poland above the annual threshold require issuing fiscal receipts via a registered fiscal device or cloud fiscal service (e.g. Novitus Cloud). Software invoices alone don't
   satisfy this.
-- EU Omnibus Directive — when displaying a promotional price, you must show the lowest price from the preceding 30 days. Your discount logic needs to store price history, not just the current price.
-- Cosmetics Regulation (EC 1223/2009) — fragrances are regulated cosmetics. Every product sold in the EU must have a "Responsible Person" registered in the CPNP (Cosmetic Products Notification Portal) before it can be listed.
-  If you're not the manufacturer, verify your supplier covered this.
 - Allergen disclosure — EU law requires listing 26 fragrance allergens by INCI name on product pages when above threshold concentrations. Non-disclosure is a regulatory issue, not just a UX one.
 - Authorized reseller status — selling branded fragrances (Dior, Chanel, Creed) without authorization exposes you to trademark exhaustion disputes and grey-market supplier risk. Establish a clear paper trail from supplier.
 - Regulamin (terms of service) — Polish consumer law has specific mandatory clauses (UOKiK checklist) that differ from generic EU T&Cs. A lawyer review is cheaper than a UOKiK fine.
