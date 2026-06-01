@@ -27,10 +27,16 @@ export class ReturnsService {
 
   async create(dto: CreateReturnRequestDto, userId: string) {
     const normalizedNumber = dto.orderNumber.trim().toUpperCase();
-    const order = await this.prisma.order.findFirst({
-      where: { orderNumber: normalizedNumber },
-      select: { id: true, userId: true },
-    });
+    const [order, user] = await Promise.all([
+      this.prisma.order.findFirst({
+        where: { orderNumber: normalizedNumber },
+        select: { id: true, userId: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      }),
+    ]);
 
     if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
     if (order.userId !== userId) throw new ForbiddenException();
@@ -50,7 +56,7 @@ export class ReturnsService {
       data: {
         orderId: order.id,
         orderNumber: dto.orderNumber.trim().toUpperCase(),
-        email: dto.email.trim().toLowerCase(),
+        email: user!.email,
         firstName: dto.firstName.trim(),
         lastName: dto.lastName.trim(),
         phone: dto.phone?.trim() ?? null,

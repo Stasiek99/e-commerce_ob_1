@@ -9,6 +9,8 @@ import { ReturnType as ReturnRequestType } from '../dto/create-return.dto';
 
 const ADMIN_EMAIL = 'admin@aromaterie.pl';
 const OWNER_ID = 'user-owner-1';
+// Distinct from dto.email — confirms the service uses the DB record, not the caller-supplied value.
+const USER_ACCOUNT_EMAIL = 'authenticated-user@account.example.com';
 
 const WITHDRAWAL_DTO = {
   orderNumber: 'ORD-2026-001',
@@ -44,7 +46,7 @@ function buildPrismaMock(
     orderNumber: 'ORD-2026-001',
     firstName: 'Jan',
     lastName: 'Kowalski',
-    email: 'jan@example.com',
+    email: USER_ACCOUNT_EMAIL,
     phone: null,
     type: ReturnRequestType.WITHDRAWAL,
     reason: null,
@@ -55,6 +57,9 @@ function buildPrismaMock(
   return {
     order: {
       findFirst: jest.fn().mockResolvedValue(orderRow),
+    },
+    user: {
+      findUnique: jest.fn().mockResolvedValue({ email: USER_ACCOUNT_EMAIL }),
     },
     returnRequest: {
       create: jest.fn().mockResolvedValue(record),
@@ -71,7 +76,7 @@ function buildReturnRecord(overrides: Record<string, unknown> = {}) {
     orderNumber: 'ORD-2026-001',
     firstName: 'Jan',
     lastName: 'Kowalski',
-    email: 'jan@example.com',
+    email: USER_ACCOUNT_EMAIL,
     phone: null,
     type: 'WITHDRAWAL',
     status: 'PENDING',
@@ -160,12 +165,13 @@ describe('ReturnsService', () => {
       );
     });
 
-    it('normalises email to lower-case', async () => {
+    it('stores the authenticated user account email, ignoring dto.email', async () => {
       await createModule();
-      await service.create({ ...WITHDRAWAL_DTO, email: 'JAN@EXAMPLE.COM' } as any, OWNER_ID);
+      // dto.email is a different address — the DB write must use user.email from the DB lookup
+      await service.create({ ...WITHDRAWAL_DTO, email: 'attacker@evil.com' } as any, OWNER_ID);
       expect(prisma.returnRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ email: 'jan@example.com' }),
+          data: expect.objectContaining({ email: USER_ACCOUNT_EMAIL }),
         }),
       );
     });
@@ -220,11 +226,11 @@ describe('ReturnsService', () => {
       );
     });
 
-    it('sends confirmation to the customer email address', async () => {
+    it('sends confirmation to the authenticated user account email, not dto.email', async () => {
       await createModule();
       await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
       expect(emailService.sendReturnConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'jan@example.com' }),
+        expect.objectContaining({ to: USER_ACCOUNT_EMAIL }),
       );
     });
 
@@ -242,6 +248,17 @@ describe('ReturnsService', () => {
       expect(emailService.sendReturnConfirmation).toHaveBeenCalledWith(
         expect.objectContaining({ orderNumber: 'ORD-2026-001' }),
       );
+    });
+
+    it('never delivers to the caller-supplied dto.email — prevents phishing via store sending domain', async () => {
+      await createModule();
+      const attackerEmail = 'victim@third-party.example.com';
+
+      await service.create({ ...WITHDRAWAL_DTO, email: attackerEmail } as any, OWNER_ID);
+
+      const confirmationCall = (emailService.sendReturnConfirmation as jest.Mock).mock.calls[0][0];
+      expect(confirmationCall.to).not.toBe(attackerEmail);
+      expect(confirmationCall.to).toBe(USER_ACCOUNT_EMAIL);
     });
   });
 
@@ -443,7 +460,7 @@ describe('ReturnsService', () => {
       await service.approve('return-id-001');
 
       expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ newStatus: 'APPROVED', to: 'jan@example.com' }),
+        expect.objectContaining({ newStatus: 'APPROVED', to: USER_ACCOUNT_EMAIL }),
       );
     });
 
@@ -505,7 +522,7 @@ describe('ReturnsService', () => {
       await service.reject('return-id-001');
 
       expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ newStatus: 'REJECTED', to: 'jan@example.com' }),
+        expect.objectContaining({ newStatus: 'REJECTED', to: USER_ACCOUNT_EMAIL }),
       );
     });
 
@@ -575,7 +592,7 @@ describe('ReturnsService', () => {
       await service.markRefunded('return-id-001');
 
       expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ newStatus: 'COMPLETED', to: 'jan@example.com' }),
+        expect.objectContaining({ newStatus: 'COMPLETED', to: USER_ACCOUNT_EMAIL }),
       );
     });
 
