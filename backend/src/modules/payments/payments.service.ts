@@ -200,8 +200,11 @@ export class PaymentsService {
 
     try {
       await this.prisma.$transaction([
-        // processedStripeEvent.create is first so a duplicate eventId (P2002) fails
-        // before any state change — entire transaction rolls back, allowing retry.
+        // Always insert a session-scoped key so concurrent callers (webhook + reconcile cron)
+        // racing on the same session both hit P2002 — only one commit wins.
+        this.prisma.processedStripeEvent.create({ data: { eventId: `paid-${session.id}` } }),
+        // Additionally record the webhook event ID when present to deduplicate
+        // multiple deliveries of the exact same Stripe event.
         ...(eventId ? [this.prisma.processedStripeEvent.create({ data: { eventId } })] : []),
         this.prisma.payment.update({
           where: { id: payment.id },
@@ -231,7 +234,7 @@ export class PaymentsService {
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         this.logger.warn(
-          `Stripe event ${eventId} (${session.id}) already processed — skipping duplicate delivery`,
+          `Session ${session.id} already processed (eventId: ${eventId ?? 'reconcile'}) — skipping duplicate`,
         );
         return;
       }

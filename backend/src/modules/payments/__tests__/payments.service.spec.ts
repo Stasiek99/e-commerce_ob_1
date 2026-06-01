@@ -1975,6 +1975,84 @@ describe('PaymentsService', () => {
     });
   });
 
+  // ── markSessionPaid idempotency — session-scoped key ──────────────────
+  // Verifies the fix: markSessionPaid always inserts a paid-{session.id}
+  // processedStripeEvent row regardless of caller (webhook or reconcile cron)
+  // so concurrent callers race on the same unique constraint — only one wins.
+
+  describe('markSessionPaid idempotency — session-scoped key', () => {
+    const paidSession = {
+      ...mockSession,
+      payment_status: 'paid',
+      status: 'complete',
+    } as any;
+
+    it('always inserts paid-{session.id} key in the transaction when called from reconcile path (no eventId)', async () => {
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: `paid-${mockSession.id}` },
+      });
+    });
+
+    it('does not insert a webhook eventId row when called from reconcile path (session key only)', async () => {
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledTimes(1);
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: `paid-${mockSession.id}` },
+      });
+    });
+
+    it('inserts both paid-{session.id} and eventId when called from webhook path', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      const event = buildEvent('checkout.session.completed', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledTimes(2);
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: `paid-${mockSession.id}` },
+      });
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: event.id },
+      });
+    });
+
+    it('reconcile path resolves without error when session-scoped key already exists (P2002 — webhook already committed)', async () => {
+      const duplicateError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`event_id`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
+      );
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(duplicateError);
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+      expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
+      expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
+    });
+  });
+
   // ── pruneProcessedStripeEvents ─────────────────────────────────────────
   // Invariant: nightly cron must delete rows older than 7 days so the
   // dedup table does not grow unboundedly and cause Postgres disk exhaustion.
