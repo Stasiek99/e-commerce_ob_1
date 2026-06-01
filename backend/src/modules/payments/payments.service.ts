@@ -655,6 +655,21 @@ export class PaymentsService {
   }
 
   /**
+   * Nightly cleanup of the processedStripeEvent deduplication log.
+   * Stripe retries webhooks for up to 72 hours; 7 days gives a safe margin before rows are purged.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async pruneProcessedStripeEvents() {
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const { count } = await this.prisma.processedStripeEvent.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+    if (count > 0) {
+      this.logger.log(`Pruned ${count} processed Stripe event(s) older than 7 days`);
+    }
+  }
+
+  /**
    * Expires a pending Stripe Checkout Session for a PENDING_PAYMENT order.
    * Best-effort — session may already be expired or non-existent.
    */

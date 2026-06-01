@@ -105,6 +105,7 @@ describe('PaymentsService', () => {
             },
             processedStripeEvent: {
               create: jest.fn().mockResolvedValue({}),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             $transaction: jest.fn(),
           },
@@ -1684,7 +1685,7 @@ describe('PaymentsService', () => {
               orderEvent: { create: jest.fn() },
               orderItem: { update: jest.fn(), findMany: jest.fn() },
               productVariant: { update: jest.fn() },
-              processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+              processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
               $transaction: jest.fn().mockResolvedValue([{}, {}]),
             },
           },
@@ -1962,6 +1963,47 @@ describe('PaymentsService', () => {
           data: expect.objectContaining({ actor: 'ADMIN:analyst' }),
         }),
       );
+    });
+  });
+
+  // ── pruneProcessedStripeEvents ─────────────────────────────────────────
+  // Invariant: nightly cron must delete rows older than 7 days so the
+  // dedup table does not grow unboundedly and cause Postgres disk exhaustion.
+
+  describe('pruneProcessedStripeEvents', () => {
+    it('calls deleteMany with a createdAt cutoff exactly 7 days in the past', async () => {
+      const frozenNow = 1_700_000_000_000;
+      jest.spyOn(Date, 'now').mockReturnValue(frozenNow);
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 3 });
+
+      await service.pruneProcessedStripeEvents();
+
+      expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: new Date(frozenNow - 7 * 24 * 60 * 60 * 1000) } },
+      });
+
+      jest.spyOn(Date, 'now').mockRestore();
+    });
+
+    it('resolves without error when no rows are pruned (count = 0)', async () => {
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.pruneProcessedStripeEvents()).resolves.not.toThrow();
+    });
+
+    it('resolves without error when rows are pruned (count > 0)', async () => {
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 42 });
+
+      await expect(service.pruneProcessedStripeEvents()).resolves.not.toThrow();
+    });
+
+    it('does not call any other prisma method (cleanup is self-contained)', async () => {
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+      await service.pruneProcessedStripeEvents();
+
+      expect(prisma.payment.findMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 });
