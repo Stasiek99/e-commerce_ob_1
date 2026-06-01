@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
@@ -10,6 +10,7 @@ import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
 import { InvoiceOrder } from '../invoice/invoice.service';
+import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
 
 @Injectable()
 export class PaymentsService {
@@ -62,6 +63,9 @@ export class PaymentsService {
       },
     });
 
+    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
+
     let session: Awaited<ReturnType<typeof this.stripeClient.createCheckoutSession>>;
     try {
       session = await this.stripeClient.createCheckoutSession({
@@ -70,7 +74,7 @@ export class PaymentsService {
         customerEmail: order.snapshotEmail,
         currency,
         lineItems,
-        successUrl,
+        successUrl: `${successUrl}?orderId=${order.id}&token=${cancelToken}`,
         cancelUrl: `${cancelUrl}?orderId=${order.id}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
@@ -618,6 +622,22 @@ export class PaymentsService {
 
     if (payment.order.userId !== requestingUserId) {
       throw new ForbiddenException('You do not have access to this order');
+    }
+
+    return { status: payment.status, paidAt: payment.paidAt };
+  }
+
+  async getPaymentStatusByToken(orderId: string, token: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { orderId },
+      select: { status: true, paidAt: true, order: { select: { snapshotEmail: true } } },
+    });
+
+    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+
+    const secret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    if (!verifyOrderToken(token, orderId, payment.order.snapshotEmail, secret)) {
+      throw new UnauthorizedException('Invalid order token');
     }
 
     return { status: payment.status, paidAt: payment.paidAt };

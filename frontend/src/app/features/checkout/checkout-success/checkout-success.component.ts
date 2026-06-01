@@ -170,6 +170,7 @@ export class CheckoutSuccessComponent implements OnInit {
 
   ngOnInit(): void {
     const id = this.route.snapshot.queryParamMap.get('orderId');
+    const token = this.route.snapshot.queryParamMap.get('token');
     this.orderId.set(id);
 
     if (!id) {
@@ -177,11 +178,15 @@ export class CheckoutSuccessComponent implements OnInit {
       return;
     }
 
+    const statusUrl = token
+      ? `${environment.apiUrl}/payments/${id}/status?token=${encodeURIComponent(token)}`
+      : `${environment.apiUrl}/payments/${id}/status`;
+
     // Poll every 3 s for up to 30 s (10 ticks) so a slow webhook race
     // doesn't leave the user stuck on "Płatność w toku" forever.
     timer(0, 3000).pipe(
       switchMap(() =>
-        this.http.get<PaymentStatusResponse>(`${environment.apiUrl}/payments/${id}/status`),
+        this.http.get<PaymentStatusResponse>(statusUrl),
       ),
       takeWhile((res) => res.status !== 'COMPLETED', true),
       take(10),
