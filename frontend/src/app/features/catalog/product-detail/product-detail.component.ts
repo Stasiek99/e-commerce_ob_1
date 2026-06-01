@@ -54,6 +54,9 @@ interface ProductDetail {
   avgRating?: number | null;
   reviewCount?: number;
   sdsUrl?: string | null;
+  ingredients?: string | null;
+  warnings?: string | null;
+  paoMonths?: number | null;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -308,6 +311,42 @@ const CATEGORY_LABELS: Record<string, string> = {
                   <span class="detail__pyramid-label">Baza</span>
                   <span class="detail__pyramid-notes">{{ product()!.pyramidBase }}</span>
                 </div>
+              }
+            </div>
+          }
+
+          <!-- PAO + Ingredients + Warnings (EU Cosmetics Reg. 1223/2009) -->
+          @if (product()!.paoMonths || product()!.ingredients || product()!.warnings) {
+            <div class="detail__compliance">
+
+              @if (product()!.paoMonths) {
+                <div class="detail__pao">
+                  <span class="detail__pao-symbol" aria-hidden="true">{{ product()!.paoMonths }}M</span>
+                  <span class="detail__pao-label">Okres przydatności po otwarciu: <strong>{{ product()!.paoMonths }} miesięcy</strong></span>
+                </div>
+              }
+
+              @if (product()!.ingredients) {
+                <div class="detail__ingredients-section">
+                  <button tuiButton type="button" appearance="flat" size="s"
+                          class="detail__expand-btn"
+                          [attr.aria-expanded]="inciExpanded"
+                          (click)="inciExpanded = !inciExpanded">
+                    Składniki (INCI)
+                    <tui-icon [icon]="inciExpanded ? '@tui.chevron-up' : '@tui.chevron-down'" aria-hidden="true"></tui-icon>
+                  </button>
+                  <tui-expand [expanded]="inciExpanded">
+                    <p class="detail__inci-body">{{ product()!.ingredients }}</p>
+                  </tui-expand>
+                </div>
+              }
+
+              @if (product()!.warnings) {
+                <ul class="detail__warnings">
+                  @for (w of warningsList(); track $index) {
+                    <li>{{ w }}</li>
+                  }
+                </ul>
               }
             </div>
           }
@@ -675,6 +714,57 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .detail__pyramid-notes { color: var(--color-secondary); text-align: right; line-height: 1.5; }
 
+    /* Compliance block (PAO + INCI + warnings) */
+    .detail__compliance {
+      border-top: 1px solid var(--color-border);
+      padding-top: 16px;
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .detail__pao {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .detail__pao-symbol {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid var(--color-secondary);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--color-secondary);
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+    .detail__pao-label {
+      font-size: 13px;
+      color: var(--color-secondary);
+    }
+    .detail__ingredients-section { }
+    .detail__inci-body {
+      font-size: 11px;
+      color: var(--color-secondary);
+      line-height: 1.6;
+      padding: 8px 0 4px;
+      margin: 0;
+    }
+    .detail__warnings {
+      margin: 0;
+      padding: 0 0 0 16px;
+      list-style: disc;
+    }
+    .detail__warnings li {
+      font-size: 11px;
+      color: var(--color-secondary);
+      line-height: 1.6;
+    }
+
     /* SDS download */
     .detail__sds {
       border-top: 1px solid var(--color-border);
@@ -939,6 +1029,13 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
+  inciExpanded = false;
+
+  readonly warningsList = computed(() => {
+    const w = this.product()?.warnings;
+    if (!w) return [];
+    return w.split(';').map((s) => s.trim()).filter(Boolean);
+  });
   readonly relatedProducts = signal<ProductCardData[]>([]);
   readonly slideIndex = signal(0);
   readonly itemsPerPage = signal(4);
