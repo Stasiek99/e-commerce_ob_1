@@ -31,6 +31,7 @@ const PRODUCT_SELECT = {
   updatedAt: true,
   reviewCount: true,
   avgRating: true,
+  sdsUrl: true,
   variants: { where: { isActive: true }, orderBy: { priceInCents: 'asc' as const } },
   images: { orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }] },
   category: { select: { id: true, name: true, slug: true } },

@@ -53,6 +53,7 @@ interface ProductDetail {
   category?: { id: string; name: string; slug: string } | null;
   avgRating?: number | null;
   reviewCount?: number;
+  sdsUrl?: string | null;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -308,6 +309,17 @@ const CATEGORY_LABELS: Record<string, string> = {
                   <span class="detail__pyramid-notes">{{ product()!.pyramidBase }}</span>
                 </div>
               }
+            </div>
+          }
+
+          <!-- Safety Data Sheet download (diffusers — REACH 2020/878) -->
+          @if (product()!.sdsUrl) {
+            <div class="detail__sds">
+              <a [href]="product()!.sdsUrl!" target="_blank" rel="noopener noreferrer"
+                 class="detail__sds-link" aria-label="Pobierz kartę charakterystyki produktu (PDF)">
+                <tui-icon icon="@tui.file-text" aria-hidden="true"></tui-icon>
+                Karta charakterystyki (SDS, PDF)
+              </a>
             </div>
           }
         </div>
@@ -662,6 +674,22 @@ const CATEGORY_LABELS: Record<string, string> = {
       min-width: 52px;
     }
     .detail__pyramid-notes { color: var(--color-secondary); text-align: right; line-height: 1.5; }
+
+    /* SDS download */
+    .detail__sds {
+      border-top: 1px solid var(--color-border);
+      padding-top: 16px;
+      margin-top: 4px;
+    }
+    .detail__sds-link {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 500;
+      color: var(--color-secondary);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .detail__sds-link:hover { color: var(--color-accent); text-decoration: underline; }
+    .detail__sds-link tui-icon { font-size: 16px; flex-shrink: 0; }
 
     /* Meta */
     .detail__meta { border-top: 1px solid var(--color-border); padding-top: 16px; }
