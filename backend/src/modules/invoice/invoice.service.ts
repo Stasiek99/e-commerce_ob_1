@@ -203,15 +203,34 @@ export class InvoiceService implements OnModuleInit {
         ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
         : []),
       // Art. 106e pkt 7 Ustawy o VAT: discount must appear as a separate line
+      // Art. 106e pkt 7 / Art. 29a ust. 10 — discount must be prorated across each VAT
+      // rate proportional to the gross amount of items at that rate. A single 23% line
+      // produces an incorrect VAT split for mixed-rate baskets (KAS audit finding).
       ...(order.discountInCents > 0
-        ? [
-            {
-              name: `Rabat: ${order.couponCode ?? 'kupon'}`,
-              qty: 1,
-              grossCents: -order.discountInCents,
-              vatRate: 0.23,
-            },
-          ]
+        ? (() => {
+            const grossByRate = new Map<number, number>();
+            for (const item of order.items) {
+              const rate = item.snapshotVatRate / 10000;
+              grossByRate.set(rate, (grossByRate.get(rate) ?? 0) + item.snapshotPrice * item.quantity);
+            }
+            const totalItemsGross = [...grossByRate.values()].reduce((s, v) => s + v, 0);
+            if (totalItemsGross === 0) return [];
+            const rates = [...grossByRate.entries()].sort(([a], [b]) => a - b);
+            let remaining = order.discountInCents;
+            return rates.map(([rate, gross], idx) => {
+              const isLast = idx === rates.length - 1;
+              const portionCents = isLast
+                ? remaining
+                : Math.round(order.discountInCents * (gross / totalItemsGross));
+              remaining -= portionCents;
+              return {
+                name: `Rabat: ${order.couponCode ?? 'kupon'}`,
+                qty: 1,
+                grossCents: -portionCents,
+                vatRate: rate,
+              };
+            });
+          })()
         : []),
     ];
 
