@@ -904,6 +904,7 @@ export class CheckoutPageComponent implements OnInit {
   openDpdPicker(): void {
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
+      if (e.origin !== 'https://api.dpd.cz') return;
       if (!e.data?.dpdWidget) return;
       const p = e.data.dpdWidget as { id?: string; company?: string; street?: string; city?: string; zip_code?: string };
       const code = p.id ?? '';
