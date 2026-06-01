@@ -20,6 +20,7 @@ import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { AnalyticsService } from '../../../core/services/analytics.service';
+import { TurnstileService } from '../../../core/services/turnstile.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
 
@@ -594,6 +595,7 @@ export class CheckoutPageComponent implements OnInit {
   readonly cart = inject(CartService);
   readonly auth = inject(AuthService);
   private readonly analytics = inject(AnalyticsService);
+  private readonly turnstile = inject(TurnstileService);
 
   index = 0;
   direction = 0;
@@ -970,6 +972,7 @@ export class CheckoutPageComponent implements OnInit {
 
   placeOrder(): void {
     this.placing.set(true);
+    this.turnstile.getToken().then((turnstileToken) => {
     const a = this.addressForm.getRawValue();
     const carrier = this.selectedCarrier()!;
     const addrPayload = {
@@ -981,6 +984,9 @@ export class CheckoutPageComponent implements OnInit {
       postalCode: a.postalCode!,
       phone: a.phone!,
     };
+
+    const headers: Record<string, string> = { 'x-session-id': this.cart.getSessionId() };
+    if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
 
     this.http.post<any>(
       `${environment.apiUrl}/orders`,
@@ -994,7 +1000,7 @@ export class CheckoutPageComponent implements OnInit {
         termsAcceptedAt: new Date().toISOString(),
         couponCode: this.appliedCoupon()?.code ?? undefined,
       },
-      { headers: new HttpHeaders({ 'x-session-id': this.cart.getSessionId() }) },
+      { headers: new HttpHeaders(headers) },
     ).subscribe({
       next: (res) => {
         if (this.saveAddress() && this.auth.currentUser() && this.selectedSavedId() === null) {
@@ -1023,6 +1029,7 @@ export class CheckoutPageComponent implements OnInit {
         }
         this.placing.set(false);
       },
+    });
     });
   }
 }

@@ -3,6 +3,7 @@ export const environment = {
   apiUrl: '/api',
   gtmId: '',
   sentryDsn: '',
+  turnstileSiteKey: '1x00000000000000000000AA',
   sentryTracesSampleRate: 1.0,
   sentryTracePropagationTargets: ['localhost', '/api'],
   seller: {

@@ -90,16 +90,15 @@ export class CartService {
       });
   }
 
-  addItem(productVariantId: string, quantity = 1) {
-    return this.http
-      .post<CartDto>(
-        `${environment.apiUrl}/cart/items`,
-        { productVariantId, quantity },
-        { headers: this.sessionHeaders() },
-      )
-      .pipe(
-        // tap is not imported but we handle via subscribe at call site
-      );
+  addItem(productVariantId: string, quantity = 1, turnstileToken = '') {
+    const headers = turnstileToken
+      ? this.sessionHeaders().set('cf-turnstile-response', turnstileToken)
+      : this.sessionHeaders();
+    return this.http.post<CartDto>(
+      `${environment.apiUrl}/cart/items`,
+      { productVariantId, quantity },
+      { headers },
+    );
   }
 
   updateQuantity(productVariantId: string, quantity: number) {

@@ -25,13 +25,14 @@ import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { UserOrdersQueryDto } from './dto/user-orders-query.dto';
 import { CancelItemsDto } from './dto/cancel-items.dto';
 import { SessionId } from '../../common/decorators/session-id.decorator';
+import { TurnstileGuard } from '../../common/guards/turnstile.guard';
 
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Post()
-  @UseGuards(OptionalJwtGuard)
+  @UseGuards(OptionalJwtGuard, TurnstileGuard)
   createOrder(
     @CurrentUser() user: User | undefined,
     @SessionId() sessionId: string | undefined,

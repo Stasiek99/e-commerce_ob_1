@@ -18,6 +18,7 @@ import { WishlistService } from '../../../core/services/wishlist.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { StockStreamService } from '../../../core/services/stock-stream.service';
 import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
+import { TurnstileService } from '../../../core/services/turnstile.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
@@ -906,6 +907,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly stockStream = inject(StockStreamService);
   private readonly analytics = inject(AnalyticsService);
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly turnstile = inject(TurnstileService);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -1180,9 +1182,10 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
     const variant = this.selectedVariant();
     if (!variant || variant.stock === 0) return;
     this.adding.set(true);
-    this.cartService
-      .addItem(variant.id, this.quantity)
-      .subscribe({
+    this.turnstile.getToken().then((token) => {
+      this.cartService
+        .addItem(variant.id, this.quantity, token)
+        .subscribe({
         next: (cart) => {
           this.cartService.refreshFromServer(cart);
           const p = this.product();
@@ -1203,6 +1206,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.adding.set(false);
         },
       });
+    });
   }
 
   back(): void { this.location.back(); }
