@@ -617,7 +617,10 @@ export class ProductListComponent implements OnInit {
         if (volume.length) filters['volume'] = volume;
         this.appliedFilters.set(filters);
 
-        this.updateSeo(slug, featured);
+        const hasFilters = q.length > 0 || inStock || page > 1 ||
+          gender.length > 0 || scentFamily.length > 0 ||
+          line.length > 0 || volume.length > 0;
+        this.updateSeo(slug, featured, hasFilters);
         this.loadFacets(slug);
         this.loading.set(true);
 
@@ -748,14 +751,19 @@ export class ProductListComponent implements OnInit {
     this.router.navigate([], { queryParams: params, queryParamsHandling: 'merge' });
   }
 
-  private updateSeo(slug: string | null, featured: boolean): void {
+  private updateSeo(slug: string | null, featured: boolean, hasFilters: boolean): void {
     const label = featured ? 'Bestsellery' : slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
+    const canonicalPath = slug ? `/products/${slug}` : '/products';
     this.seo.updatePageMeta({
       title: label,
       description: slug
         ? `${label} — premium zapachy w Aromaterie.`
         : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
+      path: canonicalPath,
     });
+    if (hasFilters) {
+      this.seo.setRobotsTag('noindex,follow');
+    }
   }
 
   private loadFacets(slug: string | null): void {

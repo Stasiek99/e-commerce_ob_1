@@ -150,6 +150,10 @@ export class SeoService {
     this.upsertJsonLd(jsonld);
   }
 
+  setRobotsTag(content: string): void {
+    this.upsertName('robots', content);
+  }
+
   clearJsonLd(): void {
     const existing = this.document.getElementById('ld-product');
     if (existing) existing.remove();
@@ -165,6 +169,7 @@ export class SeoService {
     this.title.setTitle(data.title);
 
     this.upsertName('description', data.description);
+    this.upsertName('robots', 'index,follow');
 
     this.upsertProperty('og:site_name', SITE_NAME);
     this.upsertProperty('og:title', data.title);
