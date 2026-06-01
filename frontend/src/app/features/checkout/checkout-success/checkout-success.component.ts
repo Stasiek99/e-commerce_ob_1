@@ -10,7 +10,7 @@ import { CartService } from '../../../core/services/cart.service';
 
 interface PaymentStatusResponse {
   status: string;
-  orderId: string;
+  orderNumber: string;
 }
 
 @Component({
@@ -29,12 +29,12 @@ interface PaymentStatusResponse {
         <h1>Dziękujemy za zamówienie!</h1>
         <p>Potwierdzenie zostało wysłane na Twój adres e-mail.</p>
 
-        @if (orderId()) {
+        @if (orderNumber()) {
           <div class="page__details">
             <h2>Szczegóły transakcji</h2>
             <div class="page__detail-row">
               <span>Numer zamówienia</span>
-              <strong>{{ orderId() }}</strong>
+              <strong>{{ orderNumber() }}</strong>
             </div>
             <div class="page__detail-row">
               <span>Status płatności</span>
@@ -167,6 +167,7 @@ export class CheckoutSuccessComponent implements OnInit {
   readonly loading = signal(true);
   readonly paid = signal(false);
   readonly orderId = signal<string | null>(null);
+  readonly orderNumber = signal<string | null>(null);
 
   ngOnInit(): void {
     const id = this.route.snapshot.queryParamMap.get('orderId');
@@ -195,6 +196,7 @@ export class CheckoutSuccessComponent implements OnInit {
       next: (res) => {
         if (res.status === 'COMPLETED') {
           this.paid.set(true);
+          this.orderNumber.set(res.orderNumber ?? null);
           this.cart.clear();
           this.firePurchaseEvent(id);
           this.loading.set(false);

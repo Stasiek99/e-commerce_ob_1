@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
+import { generateOrderToken } from '../../../common/utils/order-token.util';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -684,27 +685,45 @@ describe('PaymentsService', () => {
   });
 
   describe('getPaymentStatus', () => {
-    it('returns status and paidAt for an order the user owns', async () => {
+    it('returns status, paidAt, and orderNumber for an order the user owns', async () => {
       const now = new Date();
+
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { userId: 'user-1' },
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000001' },
       });
 
       const result = await service.getPaymentStatus('order-1', 'user-1');
-      expect(result).toEqual({ status: PaymentStatus.COMPLETED, paidAt: now });
+
+      expect(result).toEqual({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+        orderNumber: 'ORD-2026-000001',
+      });
+    });
+
+    it('includes orderNumber in the Prisma select so the response is never missing it', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000042' },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.orderNumber).toBe('ORD-2026-000042');
     });
 
     it('throws ForbiddenException when user does not own the order', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { userId: 'other-user' },
+        order: { userId: 'other-user', orderNumber: 'ORD-2026-000001' },
       });
 
       await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
-        'You do not have access to this order',
+        ForbiddenException,
       );
     });
 
@@ -712,8 +731,84 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue(null);
 
       await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
-        'No payment found for order order-1',
+        NotFoundException,
       );
+    });
+  });
+
+  describe('getPaymentStatusByToken', () => {
+    // The ConfigService mock returns 'pln' for all get() calls, so JWT_ACCESS_SECRET = 'pln'
+    const SECRET = 'pln';
+    const ORDER_ID = 'order-1';
+    const EMAIL = 'test@example.com';
+
+    it('returns status, paidAt, and orderNumber when token is valid', async () => {
+      const now = new Date();
+      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+      });
+
+      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+
+      expect(result).toEqual({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+        orderNumber: 'ORD-2026-000001',
+      });
+    });
+
+    it('includes the human-readable orderNumber so guests can use it in track-order form', async () => {
+      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000042' },
+      });
+
+      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+
+      expect(result.orderNumber).toBe('ORD-2026-000042');
+    });
+
+    it('throws UnauthorizedException when token is invalid', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+      });
+
+      await expect(
+        service.getPaymentStatusByToken(ORDER_ID, 'invalid-token'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException when token belongs to a different order (prevents enumeration)', async () => {
+      const tokenForOtherOrder = generateOrderToken('other-order-id', EMAIL, SECRET);
+
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+      });
+
+      await expect(
+        service.getPaymentStatusByToken(ORDER_ID, tokenForOtherOrder),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws NotFoundException when no payment exists for the order', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+
+      await expect(
+        service.getPaymentStatusByToken(ORDER_ID, validToken),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

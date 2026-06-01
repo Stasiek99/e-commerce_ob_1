@@ -618,7 +618,7 @@ export class PaymentsService {
   async getPaymentStatus(orderId: string, requestingUserId: string) {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { status: true, paidAt: true, order: { select: { userId: true } } },
+      select: { status: true, paidAt: true, order: { select: { userId: true, orderNumber: true } } },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -627,13 +627,13 @@ export class PaymentsService {
       throw new ForbiddenException('You do not have access to this order');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt };
+    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
   }
 
   async getPaymentStatusByToken(orderId: string, token: string) {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { status: true, paidAt: true, order: { select: { snapshotEmail: true } } },
+      select: { status: true, paidAt: true, order: { select: { snapshotEmail: true, orderNumber: true } } },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -643,7 +643,7 @@ export class PaymentsService {
       throw new UnauthorizedException('Invalid order token');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt };
+    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
   }
 
   /**

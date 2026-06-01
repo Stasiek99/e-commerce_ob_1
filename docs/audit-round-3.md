@@ -95,22 +95,12 @@ Additionally, the widget is loaded from `https://api.dpd.cz` (Czech domain), whi
 **Fix:** Add `if (e.origin !== 'https://api.dpd.cz') return;` before processing the event data. Evaluate migrating to the official Polish DPD widget.
 ---
 
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🔴 BLOCKER | Must fix before any real customer |
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |lets p
-
 ## 🟠 HIGH — File upload accepts any MIME type — stored XSS via Supabase CDN *(1/7 agents)*
 **File:** `backend/src/modules/products/products.controller.ts:128`, `backend/src/modules/storage/storage.service.ts:27–33`
 `FileInterceptor` only limits file size (10 MB). No `fileFilter` callback validates the actual content type. `StorageService.uploadProductImage` passes `file.mimetype` directly to Supabase as `contentType` — but Multer's `mimetype` is taken from the request `Content-Type` header, **never verified against actual file bytes**.
 An authenticated admin (or a compromised admin session) can upload an SVG containing embedded JavaScript by sending `Content-Type: image/jpeg`. Supabase stores it and serves it from its public CDN. Any user loading the "image" URL receives attacker-controlled content. Browsers execute inline scripts in SVGs served as `image/svg+xml` (and sometimes even `image/jpeg` under MIME-sniff). This is a stored XSS vector on the product catalog served to all visitors.
 **Fix:** Add `fileFilter` using the `file-type` npm package to verify magic bytes match an allowlist (`image/jpeg`, `image/png`, `image/webp`). Reject mismatches before the file reaches Supabase.
 ---
-
 ## 🟠 HIGH — Return notification email uses caller-supplied `dto.email`, not the authenticated user's email *(1/7 agents)*
 **File:** `backend/src/modules/returns/returns.service.ts:49–62`, `backend/src/modules/returns/dto/create-return.dto.ts`
 `ReturnsService.create()` correctly verifies ownership (`order.userId !== userId`), but then uses `dto.email` — not the authenticated user's account email — as the notification destination for both the customer confirmation and the admin notification:
@@ -215,6 +205,14 @@ The success page displays `orderId` (a UUID like `3f7a8b2c-...`) as "Numer zamó
 The `PaymentStatusResponse` DTO returned by `GET /payments/:orderId/status` does not include `orderNumber` — the field is never fetched or displayed.
 **Fix:** Add `orderNumber` to `PaymentStatusResponse` and display it on the success page. The order is already loaded in the success component — `orderNumber` just needs to be included in the backend response.
 ---
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🔴 BLOCKER | Must fix before any real customer |
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
 
 ## 🟡 MEDIUM — `compareAtPriceInCents` modelled in the DTO but never rendered — sale prices invisible *(1/7 agents)*
 **Files:** `frontend/src/app/features/catalog/product-detail/product-detail.component.ts:29`, `frontend/src/app/shared/product-card/product-card.component.html`
