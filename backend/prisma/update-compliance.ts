@@ -9,9 +9,14 @@ import { PrismaClient } from '@prisma/client';
 import { createClient } from '@supabase/supabase-js';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as dotenv from 'dotenv';
-
-dotenv.config({ path: path.join(__dirname, '../.env') });
+// Manual .env loader (dotenv not in deps)
+const envFile = path.join(__dirname, '../.env');
+if (fs.existsSync(envFile)) {
+  for (const line of fs.readFileSync(envFile, 'utf-8').split('\n')) {
+    const m = line.match(/^([^=#\s]+)\s*=\s*["']?(.+?)["']?\s*$/);
+    if (m) process.env[m[1]] = m[2];
+  }
+}
 
 const prisma = new PrismaClient();
 const supabase = createClient(
@@ -19,7 +24,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-const DOCS_DIR = path.join(__dirname, '../../../docs');
+const DOCS_DIR = path.join(__dirname, '../../docs');
 const SDS_BUCKET = 'product-images';
 
 // ─── INCI/warnings/PAO data keyed by base_code (= primary variant SKU) ──────
@@ -178,7 +183,6 @@ const COMPLIANCE: Record<string, ComplianceEntry> = {
   '101U': { paoMonths: 36, warnings: W1, inci: 'Alcohol denat., Parfum, Tetramethyl acetyloctahydronaphthalenes, Linalool, Pogostemon cablin oil, Vanillin, Citrus limon peel oil, Coumarin, Limonene, Benzyl salicylate, Linalyl acetate, Juniperus virginiana oil, Lavandula oil/extract, Sclareol, Pinene, Citronellol, Cinnamomum zeylanicum bark oil, Pelargonium graveolens flower oil, Beta-caryophyllene, Cinnamal, Menthol, Rose ketones, Citral, Alpha-isomethyl ionone, Citrus aurantium peel oil, Geraniol, Terpineol, Anethole, Hydroxycitronellal, Alpha-terpinene, Benzyl benzoate, Benzyl alcohol, Terpinolene, Cananga odorata oil/extract, Mentha piperita oil, Camphor, Eugenol, Farnesol' },
   // 30ml-only variant from INCI pages (code 096W = 30ml only product "The Muse")
   '096W': { paoMonths: 36, warnings: W3, inci: 'Alcohol denat., Parfum, Hexyl cinnamal, Linalyl acetate, Limonene, Citronellol, Citrus limon peel oil, Geraniol, Linalool, Benzyl salicylate, Pinene, Cananga odorata flower oil, Citrus aurantium peel oil, Santalum album oil, Acetylcedrene, Santalol, Benzyl benzoate, Hydroxycitronellal, Vanillin, Geranyl acetate, Rose ketones, Citral, Coumarin, Benzyl alcohol, Eugenol, Beta-caryophyllene, Benzyl cinnamate, Farnesol, Terpinolene' },
-  '086M': { paoMonths: 36, warnings: W1, inci: 'Alcohol denat., Parfum, Tetramethyl acetyloctahydronaphthalenes, Acetylcedrene, Linalyl acetate, Citronellol, Linalool, Citrus limon peel oil, Limonene, Coumarin, Eucalyptus globulus oil, Trimethylcyclopentenyl methylisopentenol, Sclareol, Pinene, Lavandula oil/extract, Rose ketones, Citral, Geraniol, Camphor, Geranyl acetate, Terpineol, Beta-caryophyllene' },
 };
 
 // ─── SDS file mapping: base_code → PDF filename ──────────────────────────────
