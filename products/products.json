@@ -1794,7 +1794,7 @@
   {
     "base_code": "091M",
     "name": "Perfumy dla Niego",
-    "description_raw": "Perfumy dla Niego",
+    "description_raw": "Bond - Perfumy dla Niego",
     "category": "perfume",
     "gender": "men",
     "is_best_seller": false,
@@ -1825,8 +1825,8 @@
   },
   {
     "base_code": "021M",
-    "name": "Perfumy dla Niego",
-    "description_raw": "Perfumy dla Niego",
+    "name": "Aqua Soul",
+    "description_raw": "Aqua Soul - Perfumy dla Niego",
     "category": "perfume",
     "gender": "men",
     "is_best_seller": false,
@@ -2209,8 +2209,8 @@
   },
   {
     "base_code": "076W",
-    "name": "Perfumy dla Niej",
-    "description_raw": "Perfumy dla Niej",
+    "name": "Deep Blue",
+    "description_raw": "Deep Blue - Perfumy dla Niej",
     "category": "perfume",
     "gender": "women",
     "is_best_seller": false,
@@ -2337,8 +2337,8 @@
   },
   {
     "base_code": "089W",
-    "name": "Perfumy dla Niej",
-    "description_raw": "Perfumy dla Niej",
+    "name": "Ville Lumière",
+    "description_raw": "Ville Lumière - Perfumy dla Niej",
     "category": "perfume",
     "gender": "women",
     "is_best_seller": false,

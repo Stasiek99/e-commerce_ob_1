@@ -19,6 +19,7 @@ import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
 import { ProductsService } from './products.service';
 import { StorageService } from '../storage/storage.service';
+import { validateImageMagicBytes } from '../storage/image-file-filter';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -131,7 +132,8 @@ export class ProductsController {
     @UploadedFile() file: Express.Multer.File,
     @Body('altText') altText?: string,
   ) {
-    const { url, path } = await this.storageService.uploadProductImage(id, file);
+    const verifiedMime = await validateImageMagicBytes(file.buffer);
+    const { url, path } = await this.storageService.uploadProductImage(id, file, verifiedMime);
     return this.productsService.addImage(id, url, path, altText);
   }
 

@@ -20,14 +20,20 @@ export class StorageService {
   async uploadProductImage(
     productId: string,
     file: Express.Multer.File,
+    verifiedMime: 'image/jpeg' | 'image/png' | 'image/webp',
   ): Promise<{ url: string; path: string }> {
-    const ext = file.originalname.split('.').pop();
+    const extMap: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+    };
+    const ext = extMap[verifiedMime];
     const path = `${productId}/${Date.now()}.${ext}`;
 
     const { error } = await this.supabase.storage
       .from(PRODUCT_IMAGES_BUCKET)
       .upload(path, file.buffer, {
-        contentType: file.mimetype,
+        contentType: verifiedMime,
         upsert: false,
       });
 
