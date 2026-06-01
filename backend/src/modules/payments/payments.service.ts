@@ -366,7 +366,7 @@ export class PaymentsService {
     // Falls back to a plain payment confirmation if invoice generation fails.
     this.invoiceService
       .processInvoice(order)
-      .then(({ url: _url, pdf }) =>
+      .then(({ url: invoiceUrl }) =>
         this.emailService.sendPaymentConfirmedWithInvoice({
           to: order.snapshotEmail,
           orderNumber: order.orderNumber,
@@ -378,8 +378,7 @@ export class PaymentsService {
           })),
           shippingCostInCents: order.shippingCostInCents,
           totalInCents: order.totalInCents,
-          invoiceUrl: _url,
-          invoicePdf: pdf,
+          invoiceUrl,
         }),
       )
       .catch((err: Error) => {

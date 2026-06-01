@@ -27,11 +27,12 @@ export class EmailQueueProcessor extends WorkerHost {
         break;
 
       case 'payment_confirmed_with_invoice': {
-        const { invoicePdfBase64, ...rest } = payload;
-        await this.emailService.sendPaymentConfirmedWithInvoice({
-          ...rest,
-          invoicePdf: Buffer.from(invoicePdfBase64, 'base64'),
-        });
+        const pdfRes = await fetch(payload.invoiceUrl);
+        if (!pdfRes.ok) {
+          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${payload.invoiceUrl}`);
+        }
+        const invoicePdf = Buffer.from(await pdfRes.arrayBuffer());
+        await this.emailService.sendPaymentConfirmedWithInvoice({ ...payload, invoicePdf });
         break;
       }
 
