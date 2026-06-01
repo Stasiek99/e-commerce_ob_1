@@ -27,6 +27,11 @@ async function bootstrap() {
     bodyParser: false,
   });
 
+  // Trust Railway's single load-balancer hop so req.ips is populated from
+  // X-Forwarded-For and the throttler getTracker reads the real client IP
+  // instead of the shared load-balancer IP.
+  app.set('trust proxy', 1);
+
   // Register body parsers manually with an explicit limit.
   // The verify callback re-implements the rawBody capture that NestJS's auto
   // parser provides, so req.rawBody remains available for Stripe HMAC verification.
