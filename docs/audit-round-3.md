@@ -4,7 +4,6 @@
 
 > **Excludes** everything already in `audit-weak-points.md`, `audit-round-2.md`, and `project-gaps-audit.md`.
 > **Excludes** Phase 7 (pre-launch checklist) items.
-
 ---
 Done:
 ## 🔴 BLOCKER — BLIK and P24 are advertised but never enabled in Stripe Checkout *(5/7 agents)*
