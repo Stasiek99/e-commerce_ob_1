@@ -1033,6 +1033,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
             variants: p.variants,
             avgRating: p.avgRating,
             reviewCount: p.reviewCount,
+            category: p.category ? { name: p.category.name, slug: p.category.slug } : null,
           };
           this.seo.updateProductMeta(seoInput);
           this.seo.setProductJsonLd(seoInput);

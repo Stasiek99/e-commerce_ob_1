@@ -15,9 +15,10 @@ export interface ProductSeoInput {
   shortDescription?: string | null;
   slug: string;
   images?: { url: string }[] | null;
-  variants?: { priceInCents: number }[] | null;
+  variants?: { priceInCents: number; stock?: number }[] | null;
   avgRating?: number | null;
   reviewCount?: number;
+  category?: { name: string; slug: string } | null;
 }
 
 export interface PageSeoInput {
@@ -100,6 +101,11 @@ export class SeoService {
     const priceValidUntil = new Date();
     priceValidUntil.setFullYear(priceValidUntil.getFullYear() + 1);
 
+    const anyInStock = product.variants?.some((v) => (v.stock ?? 1) > 0) ?? true;
+    const availability = anyInStock
+      ? 'https://schema.org/InStock'
+      : 'https://schema.org/OutOfStock';
+
     const offers =
       prices.length > 1
         ? {
@@ -109,7 +115,7 @@ export class SeoService {
             lowPrice: (lowestCents / 100).toFixed(2),
             highPrice: (highestCents / 100).toFixed(2),
             offerCount: prices.length,
-            availability: 'https://schema.org/InStock',
+            availability,
           }
         : {
             '@type': 'Offer',
@@ -117,12 +123,11 @@ export class SeoService {
             priceCurrency: 'PLN',
             price: (lowestCents / 100).toFixed(2),
             priceValidUntil: priceValidUntil.toISOString().slice(0, 10),
-            availability: 'https://schema.org/InStock',
+            availability,
             itemCondition: 'https://schema.org/NewCondition',
           };
 
-    const jsonld: Record<string, unknown> = {
-      '@context': 'https://schema.org',
+    const productNode: Record<string, unknown> = {
       '@type': 'Product',
       name: product.name,
       sku: product.slug,
@@ -132,13 +137,13 @@ export class SeoService {
     };
 
     if (product.shortDescription?.trim()) {
-      jsonld['description'] = product.shortDescription.trim();
+      productNode['description'] = product.shortDescription.trim();
     }
     if (product.brand) {
-      jsonld['brand'] = { '@type': 'Brand', name: product.brand };
+      productNode['brand'] = { '@type': 'Brand', name: product.brand };
     }
     if (product.avgRating != null && product.reviewCount && product.reviewCount > 0) {
-      jsonld['aggregateRating'] = {
+      productNode['aggregateRating'] = {
         '@type': 'AggregateRating',
         ratingValue: product.avgRating.toFixed(1),
         reviewCount: product.reviewCount,
@@ -147,7 +152,23 @@ export class SeoService {
       };
     }
 
-    this.upsertJsonLd(jsonld);
+    const graph: unknown[] = [productNode];
+
+    if (product.category) {
+      const crumbs: Array<Record<string, unknown>> = [
+        { '@type': 'ListItem', position: 1, name: 'Strona główna', item: SITE_URL },
+        {
+          '@type': 'ListItem',
+          position: 2,
+          name: product.category.name,
+          item: `${SITE_URL}/products/${product.category.slug}`,
+        },
+        { '@type': 'ListItem', position: 3, name: product.name },
+      ];
+      graph.push({ '@type': 'BreadcrumbList', itemListElement: crumbs });
+    }
+
+    this.upsertJsonLd({ '@context': 'https://schema.org', '@graph': graph });
   }
 
   setRobotsTag(content: string): void {
