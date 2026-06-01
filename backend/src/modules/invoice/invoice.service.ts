@@ -73,27 +73,36 @@ export class InvoiceService implements OnModuleInit {
   }
 
   /**
-   * Generates the invoice PDF, uploads it to Supabase, saves the URL and the
-   * crash-safe sequential invoice number on the order, then returns all three.
-   * The invoice number is only persisted after a successful upload — preventing
-   * permanent sequence gaps from mid-upload crashes.
+   * Generates the invoice PDF, uploads it to Supabase, persists the raw storage
+   * path and invoice number on the order, then returns all four values.
+   * The path (not a signed URL) is stored so that key rotations and project
+   * migrations never invalidate historical invoice access — callers re-sign on
+   * demand via getSignedUrl(). The returned url is a 7-day signed URL suitable
+   * for embedding in transactional emails at send time.
    */
-  async processInvoice(order: InvoiceOrder): Promise<{ url: string; pdf: Buffer; invoiceNumber: string }> {
+  async processInvoice(order: InvoiceOrder): Promise<{ url: string; storagePath: string; pdf: Buffer; invoiceNumber: string }> {
     const year = order.createdAt.getFullYear();
     const seq = await this.nextInvoiceNumber(year);
     const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
 
     const pdf = await this.generatePdf(order, invoiceNumber);
     const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
-    const url = await this.storage.uploadInvoice(pdf, filename);
+    const storagePath = await this.storage.uploadInvoice(pdf, filename);
 
     await this.prisma.order.update({
       where: { id: order.id },
-      data: { invoiceUrl: url, invoiceNumber },
+      data: { invoiceStoragePath: storagePath, invoiceNumber },
     });
 
-    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${url}`);
-    return { url, pdf, invoiceNumber };
+    const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+    const url = await this.storage.getInvoiceSignedUrl(storagePath, SEVEN_DAYS_SECONDS);
+
+    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
+    return { url, storagePath, pdf, invoiceNumber };
+  }
+
+  async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
+    return this.storage.getInvoiceSignedUrl(storagePath, expiresInSeconds);
   }
 
   private generatePdf(order: InvoiceOrder, invoiceNumber: string): Promise<Buffer> {

@@ -4,7 +4,8 @@ import { InvoiceService, InvoiceOrder } from '../invoice.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 
-const MOCK_URL = 'https://cdn.example.com/FV-2026-000001.pdf';
+const MOCK_PATH = 'invoices/FV-2026-000001.pdf';
+const MOCK_URL = 'https://cdn.example.com/FV-2026-000001.pdf?token=abc';
 const MOCK_SEQ = 1n; // BigInt — matches Postgres nextval return type
 
 function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
@@ -33,11 +34,14 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
 
 describe('InvoiceService', () => {
   let service: InvoiceService;
-  let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice'>>;
+  let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
   let mockPrisma: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
 
   beforeEach(async () => {
-    mockStorage = { uploadInvoice: jest.fn().mockResolvedValue(MOCK_URL) };
+    mockStorage = {
+      uploadInvoice: jest.fn().mockResolvedValue(MOCK_PATH),
+      getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_URL),
+    };
     mockPrisma = {
       $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: MOCK_SEQ }]),
@@ -75,10 +79,11 @@ describe('InvoiceService', () => {
   // ── orchestration ──────────────────────────────────────────────────────────
 
   describe('processInvoice — orchestration', () => {
-    it('returns { url, pdf } where pdf is a non-empty Buffer', async () => {
+    it('returns { url, storagePath, pdf } where pdf is a non-empty Buffer', async () => {
       const result = await service.processInvoice(buildOrder());
 
       expect(result.url).toBe(MOCK_URL);
+      expect(result.storagePath).toBe(MOCK_PATH);
       expect(Buffer.isBuffer(result.pdf)).toBe(true);
       expect(result.pdf.length).toBeGreaterThan(0);
     });
@@ -99,16 +104,26 @@ describe('InvoiceService', () => {
       );
     });
 
-    it('saves both invoiceUrl and invoiceNumber on the order via prisma', async () => {
+    it('persists invoiceStoragePath (raw path) — never stores a signed URL in the DB', async () => {
       await service.processInvoice(buildOrder());
 
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
-        data: { invoiceUrl: MOCK_URL, invoiceNumber: 'FV/2026/000001' },
+        data: { invoiceStoragePath: MOCK_PATH, invoiceNumber: 'FV/2026/000001' },
       });
+      // The DB update must NOT contain invoiceUrl — that would break on key rotation
+      const [call] = mockPrisma.order.update.mock.calls;
+      expect(call[0].data).not.toHaveProperty('invoiceUrl');
     });
 
-    it('returns invoiceNumber alongside url and pdf', async () => {
+    it('calls getInvoiceSignedUrl with a 7-day TTL for the returned email URL', async () => {
+      await service.processInvoice(buildOrder());
+
+      const SEVEN_DAYS = 7 * 24 * 60 * 60;
+      expect(mockStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_PATH, SEVEN_DAYS);
+    });
+
+    it('returns invoiceNumber alongside url, storagePath, and pdf', async () => {
       const result = await service.processInvoice(buildOrder());
 
       expect(result.invoiceNumber).toBe('FV/2026/000001');
@@ -117,6 +132,7 @@ describe('InvoiceService', () => {
     it('invoice number uses the year from order.createdAt, not system clock', async () => {
       const order2024 = buildOrder({ createdAt: new Date('2024-06-15T10:00:00Z') });
       mockPrisma.$queryRawUnsafe.mockResolvedValue([{ nextval: 5n }]);
+      mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2024-000005.pdf');
 
       const result = await service.processInvoice(order2024);
 
@@ -127,7 +143,7 @@ describe('InvoiceService', () => {
       );
     });
 
-    it('does not persist invoiceNumber when upload fails', async () => {
+    it('does not persist invoiceStoragePath when upload fails', async () => {
       mockStorage.uploadInvoice.mockRejectedValue(new Error('upload failed'));
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
@@ -139,6 +155,34 @@ describe('InvoiceService', () => {
       mockStorage.uploadInvoice.mockRejectedValue(new Error('Supabase bucket full'));
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('Supabase bucket full');
+    });
+  });
+
+  describe('getSignedUrl', () => {
+    it('delegates to storage.getInvoiceSignedUrl with default 1h TTL', async () => {
+      await service.getSignedUrl(MOCK_PATH);
+
+      expect(mockStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_PATH, 3600);
+    });
+
+    it('passes custom expiresInSeconds to storage', async () => {
+      await service.getSignedUrl(MOCK_PATH, 86400);
+
+      expect(mockStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_PATH, 86400);
+    });
+
+    it('returns the signed URL from storage', async () => {
+      mockStorage.getInvoiceSignedUrl.mockResolvedValue('https://signed.example.com/invoice.pdf');
+
+      const result = await service.getSignedUrl(MOCK_PATH);
+
+      expect(result).toBe('https://signed.example.com/invoice.pdf');
+    });
+
+    it('propagates signing errors to the caller', async () => {
+      mockStorage.getInvoiceSignedUrl.mockRejectedValue(new Error('Invoice signing failed'));
+
+      await expect(service.getSignedUrl(MOCK_PATH)).rejects.toThrow('Invoice signing failed');
     });
   });
 

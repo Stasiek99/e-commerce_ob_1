@@ -398,8 +398,9 @@ model Order {
   termsVersion    String?
   termsAcceptedAt DateTime?
 
-  invoiceUrl    String?
-  invoiceNumber String? @unique
+  invoiceUrl          String?
+  invoiceStoragePath  String?
+  invoiceNumber       String? @unique
   isRead        Boolean @default(false)
 
   createdAt DateTime @default(now())

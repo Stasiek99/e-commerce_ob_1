@@ -260,9 +260,9 @@ export async function setupAdmin(
                   };
                 }
 
-                let invoiceUrl = order.invoiceUrl;
+                let storagePath = order.invoiceStoragePath;
 
-                if (!invoiceUrl) {
+                if (!storagePath) {
                   const result = await invoiceService.processInvoice({
                     id: order.id,
                     orderNumber: order.orderNumber,
@@ -285,8 +285,10 @@ export async function setupAdmin(
                       quantity: i.quantity,
                     })),
                   });
-                  invoiceUrl = result.url;
+                  storagePath = result.storagePath;
                 }
+
+                const invoiceUrl = await invoiceService.getSignedUrl(storagePath);
 
                 return {
                   redirectUrl: invoiceUrl,

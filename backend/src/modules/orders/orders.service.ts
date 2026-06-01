@@ -429,6 +429,7 @@ export class OrdersService implements OnModuleInit {
         id: true,
         orderNumber: true,
         status: true,
+        invoiceStoragePath: true,
         snapshotFirstName: true,
         snapshotLastName: true,
         snapshotCompany: true,
@@ -457,8 +458,15 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
-    const { url } = await this.invoiceService.processInvoice(order);
-    return { invoiceUrl: url };
+    // Re-sign with 1h TTL on every request — path is stable across key rotations
+    if (order.invoiceStoragePath) {
+      const invoiceUrl = await this.invoiceService.getSignedUrl(order.invoiceStoragePath);
+      return { invoiceUrl };
+    }
+
+    const { storagePath } = await this.invoiceService.processInvoice(order);
+    const invoiceUrl = await this.invoiceService.getSignedUrl(storagePath);
+    return { invoiceUrl };
   }
 
   async trackByEmailAndNumber(email: string, orderNumber: string) {

@@ -140,6 +140,7 @@ describe('OrdersService', () => {
           provide: InvoiceService,
           useValue: {
             processInvoice: jest.fn(),
+            getSignedUrl: jest.fn(),
           },
         },
         {
@@ -984,10 +985,14 @@ describe('OrdersService', () => {
   });
 
   describe('generateInvoice', () => {
+    const MOCK_STORAGE_PATH = 'invoices/FV-2026-000001.pdf';
+    const MOCK_SIGNED_URL = 'https://cdn.example.com/FV-ORD-2026-000001.pdf?token=abc';
+
     const mockOrderRow = {
       id: 'order-1',
       orderNumber: 'ORD-2026-000001',
       status: OrderStatus.PAID,
+      invoiceStoragePath: null,
       snapshotFirstName: 'Jan',
       snapshotLastName: 'Kowalski',
       snapshotCompany: null,
@@ -997,6 +1002,8 @@ describe('OrdersService', () => {
       snapshotPostalCode: '00-001',
       itemsTotalInCents: 34900,
       shippingCostInCents: 1999,
+      discountInCents: 0,
+      couponCode: null,
       totalInCents: 36899,
       createdAt: new Date('2026-05-01T10:00:00Z'),
       items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
@@ -1026,17 +1033,33 @@ describe('OrdersService', () => {
       await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('returns invoiceUrl for a PAID order', async () => {
+    it('returns a fresh 1h signed URL for a PAID order without an existing invoice', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        url: 'https://unused-7day-url.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       const result = await service.generateInvoice('order-1');
 
-      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+      expect(result).toEqual({ invoiceUrl: MOCK_SIGNED_URL });
+    });
+
+    it('re-signs existing invoice without regenerating PDF when invoiceStoragePath is set', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        invoiceStoragePath: MOCK_STORAGE_PATH,
+      });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
+
+      const result = await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).not.toHaveBeenCalled();
+      expect(invoiceService.getSignedUrl).toHaveBeenCalledWith(MOCK_STORAGE_PATH);
+      expect(result).toEqual({ invoiceUrl: MOCK_SIGNED_URL });
     });
 
     it.each([
@@ -1048,10 +1071,12 @@ describe('OrdersService', () => {
     ])('allows invoice generation for status %s', async (status) => {
       prisma.order.findUnique.mockResolvedValue({ ...mockOrderRow, status });
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/invoice.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
         invoiceUrl: expect.any(String),
@@ -1061,10 +1086,12 @@ describe('OrdersService', () => {
     it('delegates to InvoiceService with the full order payload', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       await service.generateInvoice('order-1');
 
@@ -1081,10 +1108,12 @@ describe('OrdersService', () => {
     it('includes snapshotVatRate in the items passed to InvoiceService', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/invoice.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       await service.generateInvoice('order-1');
 
@@ -1095,11 +1124,21 @@ describe('OrdersService', () => {
       );
     });
 
-    it('propagates errors thrown by InvoiceService', async () => {
+    it('propagates errors thrown by InvoiceService.processInvoice', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockRejectedValue(new Error('Supabase upload failed'));
 
       await expect(service.generateInvoice('order-1')).rejects.toThrow('Supabase upload failed');
+    });
+
+    it('propagates errors thrown by InvoiceService.getSignedUrl', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        invoiceStoragePath: MOCK_STORAGE_PATH,
+      });
+      invoiceService.getSignedUrl.mockRejectedValue(new Error('Invoice signing failed'));
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow('Invoice signing failed');
     });
   });
 
@@ -1108,6 +1147,7 @@ describe('OrdersService', () => {
       id: 'order-1',
       orderNumber: 'ORD-2026-000001',
       status: OrderStatus.PAID,
+      invoiceStoragePath: null,
       snapshotFirstName: 'Jan',
       snapshotLastName: 'Kowalski',
       snapshotCompany: null,
@@ -1117,6 +1157,8 @@ describe('OrdersService', () => {
       snapshotPostalCode: '00-001',
       itemsTotalInCents: 34900,
       shippingCostInCents: 1999,
+      discountInCents: 0,
+      couponCode: null,
       totalInCents: 36899,
       createdAt: new Date('2026-05-01T10:00:00Z'),
       items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
@@ -1138,18 +1180,22 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('delegates to generateInvoice and returns invoiceUrl when user owns the order', async () => {
+    it('delegates to generateInvoice and returns a fresh signed invoiceUrl when user owns the order', async () => {
+      const SIGNED_URL = 'https://cdn.example.com/FV-ORD-2026-000001.pdf?token=abc';
+
       prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: 'invoices/FV-2026-000001.pdf',
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(SIGNED_URL);
 
       const result = await service.generateInvoiceForUser('order-1', 'user-1');
 
-      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+      expect(result).toEqual({ invoiceUrl: SIGNED_URL });
     });
 
     it('passes the correct WHERE clause — id AND userId — to findFirst', async () => {
