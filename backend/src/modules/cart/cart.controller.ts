@@ -16,6 +16,7 @@ import { User } from '@prisma/client';
 import { AddToCartDto } from './dto/add-to-cart.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 import { SessionId } from '../../common/decorators/session-id.decorator';
+import { TurnstileGuard } from '../../common/guards/turnstile.guard';
 
 @Controller('cart')
 @UseGuards(JwtAuthGuard)
@@ -33,6 +34,7 @@ export class CartController {
 
   @Public()
   @Post('items')
+  @UseGuards(TurnstileGuard)
   addItem(
     @CurrentUser() user: User | undefined,
     @SessionId() sessionId: string | undefined,

@@ -17,6 +17,7 @@ enum Role {
 
 enum OrderStatus {
   PENDING_PAYMENT
+  FRAUD_REVIEW
   PAID
   PROCESSING
   SHIPPED
@@ -249,6 +250,13 @@ model Product {
   luxuryReferenceId   Int?
   luxuryReference     LuxuryReference? @relation(fields: [luxuryReferenceId], references: [id], onDelete: SetNull)
   sortOrder        Int      @default(0)
+
+  // EU Cosmetics Regulation 1223/2009 — mandatory for distance selling
+  ingredients      String?   // full INCI string as printed on the data sheet
+  allergens        String[]  // allergens listed individually above threshold (>0.001% for leave-on)
+  paoMonths        Int?      // Period After Opening in months (PAO symbol)
+  warnings         String?   // safety warnings (Ostrzeżenia) from data sheet
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -280,10 +288,26 @@ model ProductVariant {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  orderItems OrderItem[]
-  cartItems  CartItem[]
+  orderItems    OrderItem[]
+  cartItems     CartItem[]
+  priceHistory  ProductVariantPriceHistory[]
 
   @@map("product_variants")
+}
+
+// EU Omnibus Directive (2019/2161) — when a promotional price is displayed
+// alongside a strikethrough compareAtPriceInCents, Polish law requires showing
+// the lowest price charged in the preceding 30 days. This table is the
+// append-only log that makes that calculation possible.
+model ProductVariantPriceHistory {
+  id           String         @id @default(uuid())
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  priceInCents Int
+  recordedAt   DateTime       @default(now())
+
+  @@index([variantId, recordedAt])
+  @@map("product_variant_price_history")
 }
 
 model ProductImage {

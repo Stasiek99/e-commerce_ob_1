@@ -54,6 +54,34 @@ export class AnalyticsService {
     window.dataLayer.push(event);
   }
 
+  trackViewItem(params: {
+    itemId: string;
+    name: string;
+    brand?: string | null;
+    variantLabel?: string;
+    category?: string | null;
+    priceInCents: number;
+  }): void {
+    this.push({
+      event: 'view_item',
+      ecommerce: {
+        currency: 'PLN',
+        value: params.priceInCents / 100,
+        items: [
+          {
+            item_id: params.itemId,
+            item_name: params.name,
+            item_brand: params.brand ?? undefined,
+            item_variant: params.variantLabel,
+            item_category: params.category ?? undefined,
+            price: params.priceInCents / 100,
+            quantity: 1,
+          } satisfies AnalyticsItem,
+        ],
+      },
+    });
+  }
+
   trackAddToCart(params: {
     itemId: string;
     name: string;

@@ -148,4 +148,15 @@ export type EmailJobData =
   | {
       type: 'magic_link_login';
       payload: { to: string; firstName: string; magicUrl: string };
+    }
+  | {
+      type: 'fraud_review_alert';
+      payload: {
+        to: string;
+        orderNumber: string;
+        customerEmail: string;
+        totalInCents: number;
+        radarRiskLevel: string;
+        adminUrl?: string;
+      };
     };

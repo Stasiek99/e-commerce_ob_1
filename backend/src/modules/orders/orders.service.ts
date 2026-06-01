@@ -40,7 +40,8 @@ const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
 // Explicit state-machine allowlist. Any transition not listed here is invalid.
 // Terminal states (CANCELLED, REFUNDED) have empty arrays — no exit.
 const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  [OrderStatus.PENDING_PAYMENT]:    [OrderStatus.PAID, OrderStatus.CANCELLED],
+  [OrderStatus.PENDING_PAYMENT]:    [OrderStatus.PAID, OrderStatus.CANCELLED, OrderStatus.FRAUD_REVIEW],
+  [OrderStatus.FRAUD_REVIEW]:       [OrderStatus.PAID, OrderStatus.REFUNDED, OrderStatus.CANCELLED],
   [OrderStatus.PAID]:               [OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
   [OrderStatus.PROCESSING]:         [OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
   [OrderStatus.SHIPPED]:            [OrderStatus.DELIVERED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
@@ -153,8 +154,9 @@ export class OrdersService implements OnModuleInit {
     const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
     const itemsTotalInCents = cart.totalInCents;
 
-    // Resolve coupon discount before entering the transaction
-    let discountInCents = 0;
+    // Validate coupon before the transaction so the user gets an early error.
+    // The actual discount amount is recomputed inside the transaction against
+    // fresh prices to prevent race conditions.
     let resolvedCouponId: string | null = null;
     const resolvedCouponCode = dto.couponCode ? dto.couponCode.trim().toUpperCase() : null;
 
@@ -169,15 +171,8 @@ export class OrdersService implements OnModuleInit {
       if (!couponResult.valid) {
         throw new BadRequestException(couponResult.message ?? 'Nieprawidłowy kod rabatowy.');
       }
-      if (couponResult.discountType === DiscountType.FREE_SHIPPING) {
-        discountInCents = shippingCostInCents;
-      } else {
-        discountInCents = couponResult.discountAmountInCents ?? 0;
-      }
       resolvedCouponId = couponResult.couponId!;
     }
-
-    const totalInCents = Math.max(0, itemsTotalInCents + shippingCostInCents - discountInCents);
 
     // Resolve NIP: DTO value takes priority, else fall back to user's stored NIP
     let snapshotNip: string | null = dto.nip ?? null;
@@ -678,6 +673,32 @@ export class OrdersService implements OnModuleInit {
         isRefund: true,
       })
       .catch((err) => this.logger.warn('Partial refund cancellation email failed', err));
+  }
+
+  async approveFraudReview(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (order.status !== OrderStatus.FRAUD_REVIEW) {
+      throw new BadRequestException(
+        `Order is not in FRAUD_REVIEW status (current: ${order.status})`,
+      );
+    }
+    await this.paymentsService.approveFraudReview(orderId, 'ADMIN');
+  }
+
+  async rejectFraudReview(orderId: string): Promise<void> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (order.status !== OrderStatus.FRAUD_REVIEW) {
+      throw new BadRequestException(
+        `Order is not in FRAUD_REVIEW status (current: ${order.status})`,
+      );
+    }
+    await this.paymentsService.refundPayment(orderId, 'ADMIN:fraud-reject');
   }
 
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {

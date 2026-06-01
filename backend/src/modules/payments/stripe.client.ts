@@ -75,8 +75,7 @@ export class StripeClient {
 
     const session = await this.stripe.checkout.sessions.create({
       mode: 'payment',
-      // Polish market: cards + BLIK + P24 + Apple/Google Pay (last two auto via 'card').
-      payment_method_types: ['card'],
+      payment_method_types: ['card', 'blik', 'p24'],
       customer_email: input.customerEmail,
       expires_at: expiresAt,
       line_items: input.lineItems.map((item) => ({
@@ -125,6 +124,12 @@ export class StripeClient {
 
   async expireCheckoutSession(sessionId: string): Promise<void> {
     await this.stripe.checkout.sessions.expire(sessionId);
+  }
+
+  async retrievePaymentIntentWithCharge(paymentIntentId: string): Promise<Stripe.PaymentIntent & { latest_charge: Stripe.Charge | null }> {
+    return this.stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['latest_charge'],
+    }) as Promise<Stripe.PaymentIntent & { latest_charge: Stripe.Charge | null }>;
   }
 
   async createRefund(paymentIntentId: string, idempotencyKey: string): Promise<Stripe.Refund> {

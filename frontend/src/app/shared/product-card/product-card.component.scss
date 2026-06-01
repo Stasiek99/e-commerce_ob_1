@@ -153,12 +153,43 @@
   letter-spacing: 0.06em;
 }
 
+.product-card__price-block {
+  margin-top: 4px;
+}
+
+.product-card__price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .product-card__price {
   font-size: 1rem;
   font-weight: 600;
   color: var(--color-accent);
   font-variant-numeric: tabular-nums;
   margin: 4px 0 0;
+
+  &--sale {
+    color: var(--color-error);
+    margin: 0;
+  }
+
+  &--was {
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--color-secondary);
+    text-decoration: line-through;
+    margin: 0;
+  }
+}
+
+.product-card__omnibus {
+  font-size: 0.7rem;
+  color: var(--color-secondary);
+  margin: 3px 0 0;
+  font-variant-numeric: tabular-nums;
 }
 
 // ── Footer (CTA) ──────────────────────────────────────────────────────────

@@ -151,9 +151,6 @@ Done:
 - **Issue:** `deleteAccount()` anonymises `snapshotEmail`/`snapshotFirstName`/`snapshotLastName` on orders but never touches `ReturnRequest`, which has its own `email`, `firstName`, `lastName`, `phone`, and `bankAccount` (IBAN) fields — with no FK to `User` and no cascade.
 - **Fix:** Add inside the deletion transaction: `prisma.returnRequest.updateMany({ where: { email: user.email }, data: { firstName: '[usunięto]', lastName: '[usunięto]', email: 'deleted@deleted', phone: null, bankAccount: null } })`.
 
-Not yet:
-## 🔴 BLOCKER
-
 ### 26 — Cookie `SameSite`/`Secure` attributes computed from a stale module-load constant
 - **File:** `backend/src/modules/auth/auth.controller.ts:33-48`
 - **Issue:** `const CROSS_SITE = process.env.FRONTEND_URL?.startsWith('https://')` is evaluated at module import time — before NestJS `ConfigModule` has loaded. During Railway's `prisma migrate deploy` pre-deploy step (which imports the app module tree), `FRONTEND_URL` may not yet be in `process.env`, locking `CROSS_SITE = false` for the life of the process. All refresh-token cookies are then issued as `SameSite=Lax; Secure=false` in production.
@@ -173,10 +170,6 @@ Not yet:
 - **File:** `backend/src/modules/reviews/reviews.controller.ts:44-49`
 - **Issue:** No `@UseGuards`, no per-user deduplication. A bot can inflate any review's `helpfulCount` without limit, poisoning the "sort by helpful" order.
 - **Fix:** Require `JwtAuthGuard`. Add a `ReviewHelpfulVote` join table with `@@unique([reviewId, userId])` to enforce one vote per user.
-
----
-
-## 🟡 MEDIUM
 
 ### 30 — No `@@unique([couponId, userId])` on `CouponUse` — per-user coupon limit bypassable under concurrency
 - **File:** `backend/prisma/schema.prisma` — `CouponUse` model
@@ -243,6 +236,7 @@ Not yet:
 - **Issue:** Prisma throws `P2002` when a user submits a second review for the same product. This propagates as an unhandled 500 instead of a friendly 409.
 - **Fix:** Catch `PrismaClientKnownRequestError` with code `P2002` and throw `ConflictException('You have already reviewed this product')`.
 
+
 ### 42 — Login/register routes have no guest guard — authenticated users can re-register
 - **File:** `frontend/src/app/app.routes.ts:69-78`
 - **Issue:** An authenticated user navigating to `/auth/register` sees the form. They can create a duplicate account. Authenticated users navigating to `/auth/login` get a confusing UX.
@@ -277,10 +271,6 @@ Not yet:
 - **File:** `frontend/src/app/features/account/addresses/addresses.component.ts:612`
 - **Issue:** `window.confirm()` always returns `false` in PWA WebViews and cross-origin iframes, silently blocking the delete.
 - **Fix:** Use `TuiDialogService.open()` confirmation, matching the pattern in `order-detail.component.ts`.
-
----
-
-## 🟢 LOW
 
 ### 49 — `logout` doesn't clear the `oauth_access_token` cookie
 - **File:** `backend/src/modules/auth/auth.controller.ts:104-110`
@@ -326,8 +316,6 @@ Not yet:
 - **File:** `frontend/src/app/features/account/orders/order-list.component.ts:120`
 - **Issue:** `loading` initialised to `false` → the empty-state renders for one frame before `ngOnInit` sets it to `true`.
 - **Fix:** `readonly loading = signal(true)`.
-
----
 
 ## Prioritised Fix Order
 

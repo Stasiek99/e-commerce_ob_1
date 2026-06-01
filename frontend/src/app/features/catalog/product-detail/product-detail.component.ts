@@ -18,6 +18,7 @@ import { WishlistService } from '../../../core/services/wishlist.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { StockStreamService } from '../../../core/services/stock-stream.service';
 import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
+import { TurnstileService } from '../../../core/services/turnstile.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
@@ -27,6 +28,7 @@ interface ProductVariantDetail {
   label: string;
   priceInCents: number;
   compareAtPriceInCents?: number | null;
+  lowestPrice30dInCents?: number | null;
   stock: number;
   sku: string;
   volume?: number | null;
@@ -172,7 +174,12 @@ const CATEGORY_LABELS: Record<string, string> = {
           <!-- Price + stock -->
           @if (selectedVariant()) {
             <div class="detail__price-row">
-              <span class="detail__price">{{ selectedVariant()!.priceInCents | price }}</span>
+              @if (selectedVariant()!.compareAtPriceInCents) {
+                <span class="detail__price detail__price--sale">{{ selectedVariant()!.priceInCents | price }}</span>
+                <span class="detail__price detail__price--was">{{ selectedVariant()!.compareAtPriceInCents | price }}</span>
+              } @else {
+                <span class="detail__price">{{ selectedVariant()!.priceInCents | price }}</span>
+              }
               @if (selectedVariant()!.stock > 0) {
                 <span class="detail__stock detail__stock--ok">
                   <tui-icon icon="@tui.check-circle"></tui-icon>
@@ -195,6 +202,11 @@ const CATEGORY_LABELS: Record<string, string> = {
                 </span>
               }
             </div>
+            @if (selectedVariant()!.compareAtPriceInCents) {
+              <p class="detail__omnibus">
+                Najniższa cena z 30 dni: {{ (selectedVariant()!.lowestPrice30dInCents ?? selectedVariant()!.priceInCents) | price }}
+              </p>
+            }
 
             <!-- Quantity + Add to cart + Wishlist -->
             <div class="detail__cta">
@@ -592,6 +604,9 @@ const CATEGORY_LABELS: Record<string, string> = {
     /* Price + stock */
     .detail__price-row { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
+    .detail__price--sale { color: var(--color-error); }
+    .detail__price--was { font-size: 18px; font-weight: 400; color: var(--color-secondary); text-decoration: line-through; }
+    .detail__omnibus { font-size: 12px; color: var(--color-secondary); margin: -12px 0 20px; font-variant-numeric: tabular-nums; }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
     .detail__stock--ok { color: var(--color-success); }
@@ -892,6 +907,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly stockStream = inject(StockStreamService);
   private readonly analytics = inject(AnalyticsService);
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly turnstile = inject(TurnstileService);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -1008,6 +1024,17 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.product.set(p);
           if (p.variants?.length) this.selectedVariant.set(p.variants[0]);
           if (p.images?.length) this.activeImage.set(p.images[0].url);
+          const firstVariant = p.variants?.[0];
+          if (firstVariant) {
+            this.analytics.trackViewItem({
+              itemId: firstVariant.id,
+              name: p.name,
+              brand: p.brand,
+              variantLabel: firstVariant.label,
+              category: p.category?.name,
+              priceInCents: firstVariant.priceInCents,
+            });
+          }
           const seoInput = {
             name: p.name,
             brand: p.brand,
@@ -1017,6 +1044,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
             variants: p.variants,
             avgRating: p.avgRating,
             reviewCount: p.reviewCount,
+            category: p.category ? { name: p.category.name, slug: p.category.slug } : null,
           };
           this.seo.updateProductMeta(seoInput);
           this.seo.setProductJsonLd(seoInput);
@@ -1166,9 +1194,10 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
     const variant = this.selectedVariant();
     if (!variant || variant.stock === 0) return;
     this.adding.set(true);
-    this.cartService
-      .addItem(variant.id, this.quantity)
-      .subscribe({
+    this.turnstile.getToken().then((token) => {
+      this.cartService
+        .addItem(variant.id, this.quantity, token)
+        .subscribe({
         next: (cart) => {
           this.cartService.refreshFromServer(cart);
           const p = this.product();
@@ -1189,6 +1218,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.adding.set(false);
         },
       });
+    });
   }
 
   back(): void { this.location.back(); }

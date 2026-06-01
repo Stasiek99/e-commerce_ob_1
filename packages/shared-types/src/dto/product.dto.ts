@@ -7,6 +7,8 @@ export interface ProductVariantDto {
   volume?: number;
   priceInCents: number;
   compareAtPriceInCents?: number;
+  /** EU Omnibus Directive — lowest price in the 30 days preceding this promotion. */
+  lowestPrice30dInCents?: number;
   stock: number;
   isActive: boolean;
 }

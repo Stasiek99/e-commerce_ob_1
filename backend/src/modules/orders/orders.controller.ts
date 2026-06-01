@@ -25,13 +25,14 @@ import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { UserOrdersQueryDto } from './dto/user-orders-query.dto';
 import { CancelItemsDto } from './dto/cancel-items.dto';
 import { SessionId } from '../../common/decorators/session-id.decorator';
+import { TurnstileGuard } from '../../common/guards/turnstile.guard';
 
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Post()
-  @UseGuards(OptionalJwtGuard)
+  @UseGuards(OptionalJwtGuard, TurnstileGuard)
   createOrder(
     @CurrentUser() user: User | undefined,
     @SessionId() sessionId: string | undefined,
@@ -129,6 +130,22 @@ export class OrdersController {
     @Body() dto: UpdateOrderStatusDto,
   ) {
     return this.ordersService.updateStatus(id, dto.status);
+  }
+
+  @Post('admin/:id/fraud-review/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  approveFraudReview(@Param('id') id: string) {
+    return this.ordersService.approveFraudReview(id);
+  }
+
+  @Post('admin/:id/fraud-review/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  rejectFraudReview(@Param('id') id: string) {
+    return this.ordersService.rejectFraudReview(id);
   }
 
   @Post('admin/:id/invoice')
