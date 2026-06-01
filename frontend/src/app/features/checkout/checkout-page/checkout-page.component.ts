@@ -989,10 +989,15 @@ export class CheckoutPageComponent implements OnInit {
     const headers: Record<string, string> = { 'x-session-id': this.cart.getSessionId() };
     if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
 
+    const savedId = this.selectedSavedId();
+    const addressPayload = savedId
+      ? { addressId: savedId }
+      : { newAddress: addrPayload };
+
     this.http.post<any>(
       `${environment.apiUrl}/orders`,
       {
-        newAddress: addrPayload,
+        ...addressPayload,
         carrierCode: carrier.code,
         inpostLockerCode: this.lockerCode() ?? undefined,
         dpdPickupPointCode: this.selectedDpdPoint()?.code ?? undefined,
