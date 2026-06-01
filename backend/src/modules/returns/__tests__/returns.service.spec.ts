@@ -3,7 +3,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { ReturnsService } from '../returns.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { ReturnType as ReturnRequestType } from '../dto/create-return.dto';
 
@@ -93,7 +93,7 @@ describe('ReturnsService', () => {
   let prisma: ReturnType<typeof buildPrismaMock>;
   let emailService: jest.Mocked<
     Pick<
-      EmailService,
+      EmailQueueService,
       'sendReturnConfirmation' | 'sendReturnAdminNotification' | 'sendReturnStatusUpdate'
     >
   >;
@@ -112,7 +112,7 @@ describe('ReturnsService', () => {
       providers: [
         ReturnsService,
         { provide: PrismaService, useValue: prismaMock },
-        { provide: EmailService, useValue: emailService },
+        { provide: EmailQueueService, useValue: emailService },
         { provide: PaymentsService, useValue: paymentsService },
         {
           provide: ConfigService,

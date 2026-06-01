@@ -4,7 +4,7 @@ import { Observable } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { Prisma } from '@prisma/client';
 
 // Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
@@ -59,7 +59,7 @@ export class ProductsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly emailService: EmailService,
+    private readonly emailService: EmailQueueService,
     private readonly configService: ConfigService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}

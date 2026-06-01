@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { PaymentsService } from '../payments/payments.service';
 import { CreateReturnRequestDto } from './dto/create-return.dto';
 
@@ -18,7 +18,7 @@ export class ReturnsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly email: EmailService,
+    private readonly email: EmailQueueService,
     private readonly config: ConfigService,
     private readonly payments: PaymentsService,
   ) {

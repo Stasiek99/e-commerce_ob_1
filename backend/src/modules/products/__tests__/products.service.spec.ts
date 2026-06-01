@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 
 const makeVariant = (overrides: Partial<Record<string, unknown>> = {}) => ({
   id: 'var-1',
@@ -101,7 +101,7 @@ describe('ProductsService — findRelated', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -279,7 +279,7 @@ describe('ProductsService — createVariant', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -353,7 +353,7 @@ describe('ProductsService — updateVariant', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -410,7 +410,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
