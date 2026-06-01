@@ -96,7 +96,7 @@ export class AuthService {
           }),
           tap((res) => this.setToken(res.accessToken)),
           finalize(() => { this._refresh$ = null; }),
-          shareReplay({ bufferSize: 1, refCount: true }),
+          shareReplay({ bufferSize: 1, refCount: false }),
         );
     }
     return this._refresh$;
