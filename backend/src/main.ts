@@ -84,6 +84,8 @@ async function bootstrap() {
 
   app.useLogger(app.get(Logger));
 
+  app.enableShutdownHooks();
+
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
   app.get(Logger).log(`Backend running on http://localhost:${port}`, 'Bootstrap');

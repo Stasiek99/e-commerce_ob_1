@@ -1,15 +1,19 @@
-import { Logger } from '@nestjs/common';
+import { Logger, OnApplicationShutdown } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
 
 @Processor('email')
-export class EmailQueueProcessor extends WorkerHost {
+export class EmailQueueProcessor extends WorkerHost implements OnApplicationShutdown {
   private readonly logger = new Logger(EmailQueueProcessor.name);
 
   constructor(private readonly emailService: EmailService) {
     super();
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.worker.close(true);
   }
 
   async process(job: Job<EmailJobData>): Promise<void> {

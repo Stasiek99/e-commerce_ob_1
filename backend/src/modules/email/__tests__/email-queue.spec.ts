@@ -683,4 +683,57 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendPasswordReset).not.toHaveBeenCalled();
     expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
   });
+
+  // ── graceful shutdown (SIGTERM drain) ─────────────────────────────────────────
+  // Invariant: onApplicationShutdown must drain the BullMQ worker before the
+  // process exits. Without worker.close(true), a mid-flight job is interrupted:
+  //   • new container starts within lockDuration → job re-queued → duplicate email
+  //   • new container starts after lock expires  → job dropped  → no confirmation
+  // The `true` argument is the drain flag — it blocks until the active job finishes.
+
+  describe('onApplicationShutdown — graceful BullMQ drain', () => {
+    function stubWorker(processor: EmailQueueProcessor, close: jest.Mock) {
+      Object.defineProperty(processor, 'worker', {
+        get: () => ({ close }),
+        configurable: true,
+      });
+    }
+
+    it('calls worker.close with drain=true on shutdown', async () => {
+      const mockWorkerClose = jest.fn().mockResolvedValue(undefined);
+      stubWorker(processor, mockWorkerClose);
+
+      await processor.onApplicationShutdown();
+
+      expect(mockWorkerClose).toHaveBeenCalledWith(true);
+    });
+
+    it('calls worker.close exactly once — no double-drain', async () => {
+      const mockWorkerClose = jest.fn().mockResolvedValue(undefined);
+      stubWorker(processor, mockWorkerClose);
+
+      await processor.onApplicationShutdown();
+
+      expect(mockWorkerClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('awaits worker.close — does not return before drain completes', async () => {
+      let drainResolved = false;
+      const mockWorkerClose = jest.fn().mockImplementation(
+        () => new Promise<void>((resolve) => setTimeout(() => { drainResolved = true; resolve(); }, 10)),
+      );
+      stubWorker(processor, mockWorkerClose);
+
+      await processor.onApplicationShutdown();
+
+      expect(drainResolved).toBe(true);
+    });
+
+    it('propagates worker.close rejection so the process exits with an error signal', async () => {
+      const mockWorkerClose = jest.fn().mockRejectedValue(new Error('Worker close timed out'));
+      stubWorker(processor, mockWorkerClose);
+
+      await expect(processor.onApplicationShutdown()).rejects.toThrow('Worker close timed out');
+    });
+  });
 });
