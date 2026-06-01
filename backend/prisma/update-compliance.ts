@@ -211,11 +211,31 @@ async function main() {
   console.log('Updating compliance data (ingredients, warnings, PAO)...');
 
   for (const [baseCode, data] of Object.entries(COMPLIANCE)) {
-    // Find product whose primary variant SKU = base_code
-    const product = await prisma.product.findFirst({
+    // Try by SKU first (exact match); fall back to slug suffix (base_code without letter suffix)
+    let product = await prisma.product.findFirst({
       where: { variants: { some: { sku: baseCode } } },
       select: { id: true, name: true },
     });
+
+    if (!product) {
+      // Some products have variant SKU without the trailing letter (e.g. "006" for "006W")
+      const numericCode = baseCode.replace(/[A-Za-z]+$/, '');
+      if (numericCode !== baseCode) {
+        product = await prisma.product.findFirst({
+          where: { variants: { some: { sku: numericCode } } },
+          select: { id: true, name: true },
+        });
+      }
+    }
+
+    if (!product) {
+      // Last resort: slug ends with the base_code (lowercased, hyphenated)
+      const slugSuffix = `-${baseCode.toLowerCase()}`;
+      product = await prisma.product.findFirst({
+        where: { slug: { endsWith: slugSuffix } },
+        select: { id: true, name: true },
+      });
+    }
 
     if (!product) {
       console.warn(`  SKIP: no product found for code ${baseCode}`);
