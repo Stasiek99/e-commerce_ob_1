@@ -217,6 +217,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -238,6 +239,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -268,43 +270,47 @@ describe('PaymentsService', () => {
 
     // ── Stripe event deduplication ──────────────────────────────────────
 
-    it('skips all processing when the event_id is already in processed_stripe_events (duplicate delivery)', async () => {
+    it('skips payment processing when the event_id is already in processed_stripe_events (duplicate delivery)', async () => {
       const duplicateError = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed on the fields: (`event_id`)',
         { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
       );
-      prisma.processedStripeEvent.create.mockRejectedValue(duplicateError);
+      // payment.findUnique is called before the transaction (Radar check needs the payment)
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      // $transaction rejects with P2002 because processedStripeEvent.create is inside it
+      prisma.$transaction.mockRejectedValue(duplicateError);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.completed', mockSession),
       );
 
-      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
     });
 
-    it('skips processing for expired event duplicate without touching stock', async () => {
+    it('skips failure processing for expired event duplicate without touching stock', async () => {
       const duplicateError = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed on the fields: (`event_id`)',
         { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
       );
-      prisma.processedStripeEvent.create.mockRejectedValue(duplicateError);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(duplicateError);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.expired', mockSession),
       );
 
-      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      // $transaction was attempted but P2002 from processedStripeEvent.create caused early return
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
-    it('re-throws non-P2002 errors from processedStripeEvent.create', async () => {
+    it('re-throws non-P2002 errors from the transaction (DB connection failure)', async () => {
       const dbError = new Prisma.PrismaClientKnownRequestError(
         'Connection timed out',
         { code: 'P1001', clientVersion: '6.0.0', meta: {} },
       );
-      prisma.processedStripeEvent.create.mockRejectedValue(dbError);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(dbError);
 
       await expect(
         service.handleWebhookEvent(buildEvent('checkout.session.completed', mockSession)),
@@ -1204,6 +1210,7 @@ describe('PaymentsService', () => {
       async (fn: any) => {
         capturedState.stockRestored = [];
         await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedState.paymentStatus = args.data.status;
