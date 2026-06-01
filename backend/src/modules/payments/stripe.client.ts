@@ -126,6 +126,12 @@ export class StripeClient {
     await this.stripe.checkout.sessions.expire(sessionId);
   }
 
+  async retrievePaymentIntentWithCharge(paymentIntentId: string): Promise<Stripe.PaymentIntent & { latest_charge: Stripe.Charge | null }> {
+    return this.stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['latest_charge'],
+    }) as Promise<Stripe.PaymentIntent & { latest_charge: Stripe.Charge | null }>;
+  }
+
   async createRefund(paymentIntentId: string, idempotencyKey: string): Promise<Stripe.Refund> {
     return this.stripe.refunds.create(
       { payment_intent: paymentIntentId },

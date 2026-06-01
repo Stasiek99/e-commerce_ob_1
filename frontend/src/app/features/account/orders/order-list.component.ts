@@ -18,11 +18,12 @@ interface OrderSummary {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT: 'Oczekuje na płatność',
-  PAID:            'Opłacone',
-  PROCESSING:      'W realizacji',
-  SHIPPED:         'Wysłane',
-  DELIVERED:       'Dostarczone',
+  PENDING_PAYMENT:    'Oczekuje na płatność',
+  FRAUD_REVIEW:       'Weryfikacja',
+  PAID:               'Opłacone',
+  PROCESSING:         'W realizacji',
+  SHIPPED:            'Wysłane',
+  DELIVERED:          'Dostarczone',
   CANCELLED:          'Anulowane',
   REFUNDED:           'Zwrócone',
   PARTIALLY_REFUNDED: 'Częściowo zwrócone',

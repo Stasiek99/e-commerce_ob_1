@@ -131,6 +131,22 @@ export class OrdersController {
     return this.ordersService.updateStatus(id, dto.status);
   }
 
+  @Post('admin/:id/fraud-review/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  approveFraudReview(@Param('id') id: string) {
+    return this.ordersService.approveFraudReview(id);
+  }
+
+  @Post('admin/:id/fraud-review/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  rejectFraudReview(@Param('id') id: string) {
+    return this.ordersService.rejectFraudReview(id);
+  }
+
   @Post('admin/:id/invoice')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)

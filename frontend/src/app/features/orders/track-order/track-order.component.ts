@@ -8,6 +8,7 @@ import { PricePipe } from '../../../shared/pipes/price.pipe';
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING_PAYMENT: 'Oczekuje na płatność',
+  FRAUD_REVIEW:    'Weryfikacja',
   PAID:            'Opłacone',
   PROCESSING:      'W realizacji',
   SHIPPED:         'Wysłane',

@@ -4,28 +4,25 @@
 Done:
 Legal / Compliance
 - EU Omnibus Directive — when displaying a promotional price, you must show the lowest price from the preceding 30 days. Your discount logic needs to store price history, not just the current price.
-
+Financial / Tax
+- Chargeback ratio — Stripe will flag and eventually close accounts above ~1% dispute rate. You need a fraud review step before fulfillment, not just after disputes arrive.
+Technical
+- 
 ---
 Not yet:
 
 Legal / Compliance
-- Kasa fiskalna (fiscal printer) — B2C sales in Poland above the annual threshold require issuing fiscal receipts via a registered fiscal device or cloud fiscal service (e.g. Novitus Cloud). Software invoices alone don't
-  satisfy this.
 - Regulamin (terms of service) — Polish consumer law has specific mandatory clauses (UOKiK checklist) that differ from generic EU T&Cs. A lawyer review is cheaper than a UOKiK fine.
 
 Financial / Tax
-- JPK_V7 reporting — Polish VAT registered businesses must submit a combined SAF-T + VAT return file monthly. Your accounting tool (not your e-commerce platform) must generate this, but your order/invoice data must be
-  structured to feed it.
 - EU VAT OSS — if you sell to consumers in other EU countries above the €10k threshold, you register once in Poland and file a quarterly OSS return instead of 27 separate VAT registrations. Plan your checkout to capture
   customer country accurately.
-- Chargeback ratio — Stripe will flag and eventually close accounts above ~1% dispute rate. You need a fraud review step before fulfillment, not just after disputes arrive.
 
 Technical
 - Bot protection on checkout — scalpers and stockout bots hit fragrance stores heavily (limited editions). Consider Cloudflare Turnstile or similar on cart add and checkout start, not just login.
 - Crawl budget and faceted navigation — if you add filters (size, brand, concentration), each combination generates a URL. Without noindex or canonical tagging on filter pages, Google wastes crawl budget and you get duplicate
   content penalties.
 - Structured data (Schema.org Product) — price, availability, aggregateRating, and breadcrumb markup directly affects Google Shopping and rich results CTR. Worth doing before launch, not after.
-- Load testing before first campaign — Railway hobby tier has cold starts. Run a simple k6 or locust test simulating a flash sale traffic spike before you send your first email blast.
 
 Operations
 - Returns physical process — your software handles RMA logic, but do you have a returns address, a policy for opened vs. sealed bottles, and a process for re-stocking vs. destroying returned goods? Opened fragrance bottles

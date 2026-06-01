@@ -17,6 +17,7 @@ enum Role {
 
 enum OrderStatus {
   PENDING_PAYMENT
+  FRAUD_REVIEW
   PAID
   PROCESSING
   SHIPPED

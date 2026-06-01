@@ -355,6 +355,8 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Google OAuth: update Authorized redirect URIs to production domain
 - [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
+- [ ] **[LEGAL — VAT registration required]** JPK_V7 reporting — if VAT-registered, you must submit a combined SAF-T + VAT return file monthly to the tax authority. The e-commerce platform does not generate this — your accounting tool does (inFakt, wFirma, Fakturownia, etc.). Invoice data is already structured correctly: `snapshotVatRate` is snapshotted per `OrderItem` at purchase time, the PDF invoice renders a per-rate VAT breakdown (art. 106e pkt 10 Ustawy o VAT), and invoice numbers are sequential via a PostgreSQL sequence. Action required: pick an accounting tool before your first VAT return, confirm it supports JPK_V7 export, and set up a monthly process to import order/invoice data from the DB or PDF invoices.
+- [ ] **[LEGAL — after crossing ~20 000 PLN/year B2C threshold]** Kasa fiskalna (fiscal receipt) integration — Polish law (Ustawa o VAT + rozporządzenie MF) requires issuing fiscal receipts for B2C sales above the annual exemption threshold. Software VAT invoices alone do not satisfy this. Options: (a) cloud fiscal service e.g. Novitus Cloud or inFakt Kasa — integrates via REST API, no physical device needed; (b) physical fiscal printer connected to the server. Pre-requisites before any software work: register a fiscal device with your local tax office (Urząd Skarbowy) — the registration process takes 2–4 weeks. Start the registration as soon as B2C revenue approaches the threshold, not after crossing it.
 - ### 🟢 LOW — No newsletter signup *(not yet scheduled)*
 - No `POST /newsletter/subscribe` backend endpoint
 - No signup form in footer, homepage hero, or post-purchase flow
@@ -363,6 +365,12 @@ Everything in this phase MUST be done before the first real order.
 
 
 **Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · **At least one verified DB backup exists before Stripe live mode**
+
+---
+
+## Phase 8 — POST-LAUNCH OPERATIONS (Stability + Campaigns) — ongoing
+
+- [ ] **Load testing before first campaign** — Railway hobby tier has cold starts. Run a simple k6 or locust test simulating a flash sale traffic spike before you send your first email blast.
 
 ---
 

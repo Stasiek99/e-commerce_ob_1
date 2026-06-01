@@ -51,6 +51,7 @@ interface PartialCancelLine {
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING_PAYMENT:    'Oczekuje na płatność',
+  FRAUD_REVIEW:       'Weryfikacja',
   PAID:               'Opłacone',
   PROCESSING:         'W realizacji',
   SHIPPED:            'Wysłane',
