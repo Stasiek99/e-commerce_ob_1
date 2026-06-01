@@ -547,7 +547,7 @@ model CouponUse {
   discountAppliedInCents Int
   createdAt              DateTime @default(now())
 
-  @@unique([couponId, userId])
+  @@unique([couponId, orderId])
   @@index([couponId])
   @@index([userId])
   @@map("coupon_uses")

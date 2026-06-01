@@ -444,19 +444,33 @@ describe('CouponService', () => {
       expect(tx.couponUse.create).not.toHaveBeenCalled();
     });
 
-    it('propagates P2002 unique constraint error when a concurrent request wins the race on (couponId, userId)', async () => {
-      // Simulates two requests both passing the SQL subquery check simultaneously.
-      // The DB unique index on (coupon_id, user_id) ensures only one insert succeeds.
+    it('propagates P2002 unique constraint error when the same coupon is applied to the same order twice', async () => {
+      // The DB unique index on (couponId, orderId) ensures a coupon cannot be
+      // double-applied to a single order even under concurrent requests.
+      // (The old @@unique([couponId, userId]) was removed because it broke
+      //  maxUsesPerUser > 1 — multi-use coupons would P2002 on the second redemption.)
       tx.$executeRaw.mockResolvedValue(1);
       const uniqueViolation = new Prisma.PrismaClientKnownRequestError(
-        'Unique constraint failed on the fields: (`couponId`,`userId`)',
-        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['couponId', 'userId'] } },
+        'Unique constraint failed on the fields: (`couponId`,`orderId`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['couponId', 'orderId'] } },
       );
       tx.couponUse.create.mockRejectedValue(uniqueViolation);
 
       await expect(
         service.applyInsideTransaction(tx, 'coupon-1', 'order-1', 'user-1', 1000),
       ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
+    });
+
+    it('allows the same user to apply a multi-use coupon more than once (maxUsesPerUser > 1)', async () => {
+      // Verifies the bug fix: with @@unique([couponId, userId]) removed, a user can
+      // redeem the same coupon up to maxUsesPerUser times without hitting P2002.
+      tx.$executeRaw.mockResolvedValue(1);
+      tx.couponUse.create.mockResolvedValue({});
+
+      await service.applyInsideTransaction(tx, 'coupon-1', 'order-1', 'user-1', 1000);
+      await service.applyInsideTransaction(tx, 'coupon-1', 'order-2', 'user-1', 1000);
+
+      expect(tx.couponUse.create).toHaveBeenCalledTimes(2);
     });
   });
 
