@@ -47,6 +47,7 @@ describe('UsersService', () => {
             },
             returnRequest: {
               findMany: jest.fn(),
+              updateMany: jest.fn(),
             },
             $transaction: jest.fn(),
           },
@@ -146,23 +147,41 @@ describe('UsersService', () => {
   // ─── deleteAccount ──────────────────────────────────────────────────────
 
   describe('deleteAccount', () => {
-    it('runs order anonymisation and user hard-delete in a single transaction', async () => {
-      prisma.$transaction.mockResolvedValue([{ count: 2 }, mockUser]);
+    beforeEach(() => {
+      // New: findUnique is called before the transaction to get the email
+      // for matching ReturnRequest records (no FK to User by design).
+      prisma.user.findUnique.mockResolvedValue({ email: 'jan@example.com' });
+      prisma.$transaction.mockResolvedValue([{ count: 2 }, { count: 1 }, mockUser]);
+      prisma.order.updateMany.mockReturnValue({});
+      prisma.returnRequest.updateMany.mockReturnValue({});
+      prisma.user.delete.mockReturnValue({});
+    });
 
+    it('throws NotFoundException when user does not exist', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.deleteAccount('ghost-id')).rejects.toThrow(NotFoundException);
+    });
+
+    it('does not call $transaction when user is not found', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.deleteAccount('ghost-id')).rejects.toThrow(NotFoundException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('runs order anonymisation, returnRequest scrubbing, and user delete in a single transaction', async () => {
       await service.deleteAccount('user-1');
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
 
-      // Verify the two Prisma calls that were passed to the transaction
+      // Transaction now has three operations: order.updateMany, returnRequest.updateMany, user.delete
       const [ops] = prisma.$transaction.mock.calls[0];
-      expect(ops).toHaveLength(2);
+      expect(ops).toHaveLength(3);
     });
 
     it('anonymises order snapshot PII with GDPR-compliant placeholder values', async () => {
-      prisma.$transaction.mockResolvedValue([{ count: 1 }, mockUser]);
-      prisma.order.updateMany.mockReturnValue({});
-      prisma.user.delete.mockReturnValue({});
-
       await service.deleteAccount('user-1');
 
       expect(prisma.order.updateMany).toHaveBeenCalledWith(
@@ -179,26 +198,50 @@ describe('UsersService', () => {
       );
     });
 
-    it('hard-deletes the user row with the correct id', async () => {
-      prisma.$transaction.mockResolvedValue([{ count: 0 }, mockUser]);
-      prisma.order.updateMany.mockReturnValue({});
-      prisma.user.delete.mockReturnValue({});
+    // ── GDPR Art. 17 — ReturnRequest PII scrubbing ───────────────────────────
+    // ReturnRequest has no FK to User (by design, so returns survive account
+    // deletion). PII must be scrubbed by matching on email, which is the only
+    // persistent link after the user row is deleted.
 
+    it('scrubs ReturnRequest PII using the user email as the match key', async () => {
+      await service.deleteAccount('user-1');
+
+      expect(prisma.returnRequest.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { email: 'jan@example.com' },
+          data: expect.objectContaining({
+            firstName:   '[usunięto]',
+            lastName:    '[usunięto]',
+            email:       'deleted@deleted',
+            phone:       null,
+            bankAccount: null,
+          }),
+        }),
+      );
+    });
+
+    it('nullifies phone and bankAccount (IBAN) in ReturnRequest — not empty string', async () => {
+      await service.deleteAccount('user-1');
+
+      const callArg = prisma.returnRequest.updateMany.mock.calls[0][0];
+      expect(callArg.data.phone).toBeNull();
+      expect(callArg.data.bankAccount).toBeNull();
+    });
+
+    it('hard-deletes the user row with the correct id', async () => {
       await service.deleteAccount('user-1');
 
       expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 'user-1' } });
     });
 
     it('resolves without returning a value', async () => {
-      prisma.$transaction.mockResolvedValue([{ count: 0 }, mockUser]);
-
       const result = await service.deleteAccount('user-1');
 
       expect(result).toBeUndefined();
     });
   });
 
-  // ─── deleteAddress — ownership guard ────────────────────────────────────
+  // ─── deleteAddress — ownership guard + default promotion ────────────────
 
   describe('deleteAddress', () => {
     it('throws NotFoundException when address does not belong to the user', async () => {
@@ -208,13 +251,55 @@ describe('UsersService', () => {
     });
 
     it('deletes only when the address belongs to the requesting user', async () => {
-      const addr = { id: 'addr-1', userId: 'user-1' };
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: false };
       prisma.address.findFirst.mockResolvedValue(addr);
       prisma.address.delete.mockResolvedValue(addr);
 
       await service.deleteAddress('user-1', 'addr-1');
 
       expect(prisma.address.delete).toHaveBeenCalledWith({ where: { id: 'addr-1' } });
+    });
+
+    it('promotes the most recently created remaining address when the deleted address was default', async () => {
+      const deleted = { id: 'addr-1', userId: 'user-1', isDefault: true };
+      const next    = { id: 'addr-2', userId: 'user-1', isDefault: false };
+
+      // first findFirst: ownership check; second findFirst: next address lookup
+      prisma.address.findFirst
+        .mockResolvedValueOnce(deleted)
+        .mockResolvedValueOnce(next);
+      prisma.address.delete.mockResolvedValue(deleted);
+      prisma.address.update.mockResolvedValue({ ...next, isDefault: true });
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'addr-2' },
+        data: { isDefault: true },
+      });
+    });
+
+    it('does not promote any address when no remaining addresses exist after deleting the default', async () => {
+      const deleted = { id: 'addr-1', userId: 'user-1', isDefault: true };
+
+      prisma.address.findFirst
+        .mockResolvedValueOnce(deleted)
+        .mockResolvedValueOnce(null); // no remaining addresses
+      prisma.address.delete.mockResolvedValue(deleted);
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.update).not.toHaveBeenCalled();
+    });
+
+    it('does not promote any address when the deleted address was not the default', async () => {
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: false };
+      prisma.address.findFirst.mockResolvedValue(addr);
+      prisma.address.delete.mockResolvedValue(addr);
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.update).not.toHaveBeenCalled();
     });
   });
 });

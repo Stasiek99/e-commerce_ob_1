@@ -35,7 +35,8 @@ type EmailKind =
   | 'return_admin_notification'
   | 'return_status_update'
   | 'email_change'
-  | 'magic_link_login';
+  | 'magic_link_login'
+  | 'fraud_review_alert';
 
 @Injectable()
 export class EmailService {
@@ -136,6 +137,36 @@ export class EmailService {
   }) {
     const { subject, html } = newOrderNotificationTemplate(data);
     return this.send('new_order_notification', data.to, subject, html, { orderNumber: data.orderNumber });
+  }
+
+  async sendFraudReviewAlert(data: {
+    to: string;
+    orderNumber: string;
+    customerEmail: string;
+    totalInCents: number;
+    radarRiskLevel: string;
+    adminUrl?: string;
+  }) {
+    const amount = (data.totalInCents / 100).toFixed(2);
+    const subject = `[FRAUD REVIEW] Zamówienie ${data.orderNumber} wymaga weryfikacji`;
+    const reviewLink = data.adminUrl
+      ? `<p><a href="${data.adminUrl}">Przejdź do zamówienia →</a></p>`
+      : '';
+    const html = `
+      <h2>Zamówienie wstrzymane — weryfikacja antyfraudowa</h2>
+      <p>Stripe Radar oznaczył płatność jako ryzykowną i zamówienie zostało wstrzymane przed realizacją.</p>
+      <table>
+        <tr><td><strong>Zamówienie:</strong></td><td>${data.orderNumber}</td></tr>
+        <tr><td><strong>Klient:</strong></td><td>${data.customerEmail}</td></tr>
+        <tr><td><strong>Kwota:</strong></td><td>${amount} PLN</td></tr>
+        <tr><td><strong>Poziom ryzyka Radar:</strong></td><td>${data.radarRiskLevel}</td></tr>
+      </table>
+      ${reviewLink}
+      <p>Aby zatwierdzić zamówienie: <code>POST /orders/admin/${data.orderNumber}/fraud-review/approve</code></p>
+      <p>Aby odrzucić i zwrócić środki: <code>POST /orders/admin/${data.orderNumber}/fraud-review/reject</code></p>
+      <p><em>Klient nie otrzymał żadnego powiadomienia — nie ujawniaj wstrzymania.</em></p>
+    `;
+    return this.send('fraud_review_alert', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async sendLowStockAlert(data: {

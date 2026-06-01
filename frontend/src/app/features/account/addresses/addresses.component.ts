@@ -287,22 +287,38 @@ interface Address {
             <p class="addr-detail">{{ addr.street }}</p>
             <p class="addr-detail">{{ addr.postalCode }} {{ addr.city }}</p>
             <p class="addr-detail">Tel: {{ addr.phone }}</p>
-            <div class="addr-actions">
-              @if (!addr.isDefault) {
-                <button tuiButton appearance="flat" size="s" type="button"
-                  [disabled]="!!working()" (click)="setDefault(addr.id)">
-                  Ustaw jako domyślny
+            @if (confirmingDeleteId() === addr.id) {
+              <div class="confirm-box">
+                <p>Czy na pewno chcesz usunąć ten adres?</p>
+                <div class="confirm-actions">
+                  <button tuiButton appearance="negative" size="s" type="button"
+                          [disabled]="working() === addr.id" (click)="confirmDelete(addr.id)">
+                    {{ working() === addr.id ? 'Usuwanie…' : 'Tak, usuń' }}
+                  </button>
+                  <button tuiButton appearance="secondary" size="s" type="button"
+                          [disabled]="working() === addr.id" (click)="cancelDeleteConfirm()">
+                    Anuluj
+                  </button>
+                </div>
+              </div>
+            } @else {
+              <div class="addr-actions">
+                @if (!addr.isDefault) {
+                  <button tuiButton appearance="flat" size="s" type="button"
+                    [disabled]="!!working()" (click)="setDefault(addr.id)">
+                    Ustaw jako domyślny
+                  </button>
+                }
+                <button tuiButton appearance="secondary" size="s" type="button"
+                  [disabled]="!!working()" (click)="startEdit(addr)">
+                  Edytuj
                 </button>
-              }
-              <button tuiButton appearance="secondary" size="s" type="button"
-                [disabled]="!!working()" (click)="startEdit(addr)">
-                Edytuj
-              </button>
-              <button tuiButton appearance="secondary" size="s" type="button"
-                class="btn-delete" [disabled]="!!working()" (click)="deleteAddr(addr.id)">
-                Usuń
-              </button>
-            </div>
+                <button tuiButton appearance="secondary" size="s" type="button"
+                  class="btn-delete" [disabled]="!!working()" (click)="startDeleteConfirm(addr.id)">
+                  Usuń
+                </button>
+              </div>
+            }
           </div>
         }
       } @empty {
@@ -364,6 +380,16 @@ interface Address {
     }
     .city-chip:hover { border-color: var(--color-primary); background: var(--tui-background-neutral-2, #e8e8f0); }
 
+    .confirm-box {
+      padding: 16px;
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      border-radius: var(--border-radius-md);
+      margin-top: 14px;
+    }
+    .confirm-box p { font-size: 14px; margin: 0 0 12px; }
+    .confirm-actions { display: flex; gap: 10px; }
+
     .field-disabled { opacity: 0.6; pointer-events: none; }
 
     .street-hint { font-size: 12px; margin-top: 4px; }
@@ -381,12 +407,13 @@ export class AddressesComponent implements OnInit {
   private readonly location = inject(Location);
   private readonly destroyRef = inject(DestroyRef);
 
-  readonly addresses    = signal<Address[]>([]);
-  readonly showAddForm  = signal(false);
-  readonly editingId    = signal<string | null>(null);
-  readonly adding       = signal(false);
-  readonly saving       = signal(false);
-  readonly working      = signal<string | null>(null);
+  readonly addresses          = signal<Address[]>([]);
+  readonly showAddForm        = signal(false);
+  readonly editingId          = signal<string | null>(null);
+  readonly confirmingDeleteId = signal<string | null>(null);
+  readonly adding             = signal(false);
+  readonly saving             = signal(false);
+  readonly working            = signal<string | null>(null);
 
   // City suggestion state — separate for add and edit since both can exist in DOM
   readonly addCitySuggestions  = signal<string[]>([]);
@@ -609,16 +636,27 @@ export class AddressesComponent implements OnInit {
     });
   }
 
-  deleteAddr(id: string): void {
-    if (!confirm('Usunąć ten adres?')) return;
+  startDeleteConfirm(id: string): void {
+    this.confirmingDeleteId.set(id);
+  }
+
+  cancelDeleteConfirm(): void {
+    this.confirmingDeleteId.set(null);
+  }
+
+  confirmDelete(id: string): void {
     this.working.set(id);
     this.http.delete(`${environment.apiUrl}/users/me/addresses/${id}`).subscribe({
       next: () => {
         this.addresses.update((l) => l.filter((a) => a.id !== id));
+        this.confirmingDeleteId.set(null);
         this.working.set(null);
         this.toast.success('Adres usunięty');
       },
-      error: () => { this.toast.error('Błąd usuwania adresu'); this.working.set(null); },
+      error: () => {
+        this.toast.error('Błąd usuwania adresu');
+        this.working.set(null);
+      },
     });
   }
 }

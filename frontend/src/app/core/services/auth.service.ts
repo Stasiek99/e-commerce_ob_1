@@ -66,8 +66,17 @@ export class AuthService {
   }
 
   exchangeOAuthToken() {
+    // The backend embeds a one-time nonce in the redirect fragment (#state=<nonce>).
+    // We read it here (never sent to the server as a URL param) and POST it with
+    // the exchange request so the backend can verify + consume it atomically.
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const nonce = new URLSearchParams(hash.replace(/^#/, '')).get('state') ?? '';
     return this.http
-      .get<TokensResponse>(`${environment.apiUrl}/auth/token/exchange`, { withCredentials: true })
+      .post<TokensResponse>(
+        `${environment.apiUrl}/auth/token/exchange`,
+        { nonce },
+        { withCredentials: true },
+      )
       .pipe(tap((res) => this.setToken(res.accessToken)));
   }
 

@@ -4,7 +4,8 @@ import { InvoiceService, InvoiceOrder } from '../invoice.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 
-const MOCK_URL = 'https://cdn.example.com/FV-ORD-2026-000001.pdf';
+const MOCK_URL = 'https://cdn.example.com/FV-2026-000001.pdf';
+const MOCK_SEQ = 1n; // BigInt — matches Postgres nextval return type
 
 function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
   return {
@@ -19,6 +20,8 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
     snapshotPostalCode: '00-001',
     itemsTotalInCents: 34900,
     shippingCostInCents: 1999,
+    discountInCents: 0,
+    couponCode: null,
     totalInCents: 36899,
     createdAt: new Date('2026-05-01T10:00:00Z'),
     items: [
@@ -31,11 +34,15 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
 describe('InvoiceService', () => {
   let service: InvoiceService;
   let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice'>>;
-  let mockPrisma: { order: { update: jest.Mock } };
+  let mockPrisma: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
 
   beforeEach(async () => {
     mockStorage = { uploadInvoice: jest.fn().mockResolvedValue(MOCK_URL) };
-    mockPrisma = { order: { update: jest.fn().mockResolvedValue({}) } };
+    mockPrisma = {
+      $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: MOCK_SEQ }]),
+      order: { update: jest.fn().mockResolvedValue({}) },
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -82,22 +89,50 @@ describe('InvoiceService', () => {
       expect(pdf.slice(0, 4).toString()).toBe('%PDF');
     });
 
-    it('calls storage.uploadInvoice with the correct filename', async () => {
+    it('calls storage.uploadInvoice with the sequence-based filename', async () => {
       await service.processInvoice(buildOrder());
 
+      // filename is derived from the invoice number: FV/2026/000001 → FV-2026-000001.pdf
       expect(mockStorage.uploadInvoice).toHaveBeenCalledWith(
         expect.any(Buffer),
-        'FV-ORD-2026-000001.pdf',
+        'FV-2026-000001.pdf',
       );
     });
 
-    it('saves the invoice URL on the order via prisma', async () => {
+    it('saves both invoiceUrl and invoiceNumber on the order via prisma', async () => {
       await service.processInvoice(buildOrder());
 
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
-        data: { invoiceUrl: MOCK_URL },
+        data: { invoiceUrl: MOCK_URL, invoiceNumber: 'FV/2026/000001' },
       });
+    });
+
+    it('returns invoiceNumber alongside url and pdf', async () => {
+      const result = await service.processInvoice(buildOrder());
+
+      expect(result.invoiceNumber).toBe('FV/2026/000001');
+    });
+
+    it('invoice number uses the year from order.createdAt, not system clock', async () => {
+      const order2024 = buildOrder({ createdAt: new Date('2024-06-15T10:00:00Z') });
+      mockPrisma.$queryRawUnsafe.mockResolvedValue([{ nextval: 5n }]);
+
+      const result = await service.processInvoice(order2024);
+
+      expect(result.invoiceNumber).toBe('FV/2024/000005');
+      expect(mockStorage.uploadInvoice).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        'FV-2024-000005.pdf',
+      );
+    });
+
+    it('does not persist invoiceNumber when upload fails', async () => {
+      mockStorage.uploadInvoice.mockRejectedValue(new Error('upload failed'));
+
+      await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
+
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
     it('propagates storage errors without swallowing them', async () => {
@@ -169,6 +204,38 @@ describe('InvoiceService', () => {
             { snapshotName: 'Rose 50ml',  snapshotPrice: 19900, snapshotVatRate: 2300, quantity: 2 },
           ],
         }),
+      );
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+  });
+
+  // ── discount line item (Art. 106e pkt 7 Ustawy o VAT) ────────────────────
+
+  describe('processInvoice — discount / coupon line item', () => {
+    it('generates a valid PDF when order has a coupon discount', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({
+          discountInCents: 5000,
+          couponCode: 'SUMMER10',
+          totalInCents: 31899, // 36899 - 5000
+        }),
+      );
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('generates a valid PDF when discountInCents is 0 (no coupon)', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({ discountInCents: 0, couponCode: null }),
+      );
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('generates a valid PDF when couponCode is null but discount is non-zero', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({ discountInCents: 2000, couponCode: null, totalInCents: 34899 }),
       );
 
       expect(pdf.slice(0, 4).toString()).toBe('%PDF');

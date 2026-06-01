@@ -15,7 +15,14 @@ export interface ProductCardData {
   gender?: string | null;
   catalogNumber?: string | null;
   images?: Array<{ url: string }>;
-  variants?: Array<{ id: string; label: string; priceInCents: number; stock: number }>;
+  variants?: Array<{
+    id: string;
+    label: string;
+    priceInCents: number;
+    compareAtPriceInCents?: number | null;
+    lowestPrice30dInCents?: number | null;
+    stock: number;
+  }>;
 }
 
 @Component({
@@ -80,7 +87,10 @@ export class ProductCardComponent {
         this.toast.success('Dodano do koszyka!');
         this.adding.set(false);
       },
-      error: () => this.adding.set(false),
+      error: () => {
+        this.adding.set(false);
+        this.toast.error('Nie udało się dodać do koszyka.');
+      },
     });
   }
 }

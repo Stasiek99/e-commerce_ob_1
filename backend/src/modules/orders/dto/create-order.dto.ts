@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsEmail,
   IsEnum,
   IsNotEmpty,
   IsOptional,
@@ -82,7 +83,9 @@ export class CreateOrderDto {
   notes?: string;
 
   @IsOptional()
-  @IsString()
+  @IsNotEmpty()
+  @IsEmail()
+  @MaxLength(254)
   guestEmail?: string;
 
   @IsOptional()

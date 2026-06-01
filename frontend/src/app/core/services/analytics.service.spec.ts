@@ -92,6 +92,43 @@ describe('AnalyticsService', () => {
         );
         expect(gtmScript).toBeUndefined();
       });
+
+      // ── placeholder GTM ID guard (fix #39) ─────────────────────────────────
+      // Invariant: init() must not fire a real Google CDN request when the
+      // environment file still contains the 'GTM-XXXXXXX' placeholder.
+
+      it('is a no-op when gtmId is the exact placeholder GTM-XXXXXXX', () => {
+        const svc = setup('browser');
+
+        svc.init('GTM-XXXXXXX');
+
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('googletagmanager.com'),
+        );
+        expect(gtmScript).toBeUndefined();
+      });
+
+      it('is a no-op for any id starting with GTM-XXX (placeholder family)', () => {
+        const svc = setup('browser');
+
+        svc.init('GTM-XXXABC');
+
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('googletagmanager.com'),
+        );
+        expect(gtmScript).toBeUndefined();
+      });
+
+      it('proceeds normally for a real container ID that starts with GTM- but not GTM-XXX', () => {
+        const svc = setup('browser');
+
+        svc.init('GTM-ABC1234');
+
+        const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
+          s => s.textContent?.includes('GTM-ABC1234'),
+        );
+        expect(gtmScript).toBeDefined();
+      });
     });
 
     // push()
@@ -110,6 +147,80 @@ describe('AnalyticsService', () => {
         const svc = setup('browser', false);
         svc.push({ event: 'add_to_cart' });
         expect(window.dataLayer).toBeUndefined();
+      });
+    });
+
+    // trackViewItem()
+    describe('trackViewItem()', () => {
+      it('fires view_item with correct GA4 structure and cents→PLN conversion', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({
+          itemId: 'var-1',
+          name: 'Santal 33',
+          brand: 'Le Labo',
+          variantLabel: '50 ml',
+          category: 'Niszowe',
+          priceInCents: 49900,
+        });
+
+        const event = window.dataLayer[1] as Record<string, unknown>;
+        expect(event['event']).toBe('view_item');
+
+        const ec = event['ecommerce'] as Record<string, unknown>;
+        expect(ec['currency']).toBe('PLN');
+        expect(ec['value']).toBe(499);
+
+        const items = ec['items'] as Record<string, unknown>[];
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({
+          item_id: 'var-1',
+          item_name: 'Santal 33',
+          item_brand: 'Le Labo',
+          item_variant: '50 ml',
+          item_category: 'Niszowe',
+          price: 499,
+          quantity: 1,
+        });
+      });
+
+      it('always sends quantity: 1 regardless of params', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({ itemId: 'v', name: 'X', priceInCents: 1000 });
+
+        const items = (
+          (window.dataLayer[1] as Record<string, unknown>)['ecommerce'] as Record<string, unknown>
+        )['items'] as Record<string, unknown>[];
+        expect(items[0]['quantity']).toBe(1);
+      });
+
+      it('omits item_brand / item_category when brand / category are null', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({
+          itemId: 'var-2',
+          name: 'Aqua di Gio',
+          brand: null,
+          category: null,
+          variantLabel: '100 ml',
+          priceInCents: 30000,
+        });
+
+        const items = (
+          (window.dataLayer[1] as Record<string, unknown>)['ecommerce'] as Record<string, unknown>
+        )['items'] as Record<string, unknown>[];
+        expect(items[0]['item_brand']).toBeUndefined();
+        expect(items[0]['item_category']).toBeUndefined();
+      });
+
+      it('drops the event silently when analytics consent is not granted', () => {
+        const svc = setup('browser', false);
+        svc.trackViewItem({ itemId: 'v', name: 'X', priceInCents: 1000 });
+        expect(window.dataLayer).toBeUndefined();
+      });
+
+      it('clears the previous ecommerce object before pushing view_item', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({ itemId: 'v', name: 'X', priceInCents: 1000 });
+        expect(window.dataLayer[0]).toEqual({ ecommerce: null });
       });
     });
 

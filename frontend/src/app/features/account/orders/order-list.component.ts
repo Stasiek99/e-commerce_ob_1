@@ -18,11 +18,12 @@ interface OrderSummary {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT: 'Oczekuje na płatność',
-  PAID:            'Opłacone',
-  PROCESSING:      'W realizacji',
-  SHIPPED:         'Wysłane',
-  DELIVERED:       'Dostarczone',
+  PENDING_PAYMENT:    'Oczekuje na płatność',
+  FRAUD_REVIEW:       'Weryfikacja',
+  PAID:               'Opłacone',
+  PROCESSING:         'W realizacji',
+  SHIPPED:            'Wysłane',
+  DELIVERED:          'Dostarczone',
   CANCELLED:          'Anulowane',
   REFUNDED:           'Zwrócone',
   PARTIALLY_REFUNDED: 'Częściowo zwrócone',
@@ -117,7 +118,7 @@ export class OrderListComponent implements OnInit {
   readonly orders = signal<OrderSummary[]>([]);
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
-  readonly loading = signal(false);
+  readonly loading = signal(true);
   readonly skeletonRows = Array(5).fill(null);
 
   ngOnInit(): void {

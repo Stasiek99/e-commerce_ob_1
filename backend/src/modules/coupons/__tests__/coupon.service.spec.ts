@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { DiscountType, CouponType } from '@prisma/client';
+import { DiscountType, CouponType, Prisma } from '@prisma/client';
 import { CouponService } from '../coupon.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -37,6 +37,7 @@ describe('CouponService', () => {
         {
           provide: PrismaService,
           useValue: {
+            $executeRaw: jest.fn(),
             coupon: {
               findUnique: jest.fn(),
               findMany: jest.fn(),
@@ -442,6 +443,21 @@ describe('CouponService', () => {
 
       expect(tx.couponUse.create).not.toHaveBeenCalled();
     });
+
+    it('propagates P2002 unique constraint error when a concurrent request wins the race on (couponId, userId)', async () => {
+      // Simulates two requests both passing the SQL subquery check simultaneously.
+      // The DB unique index on (coupon_id, user_id) ensures only one insert succeeds.
+      tx.$executeRaw.mockResolvedValue(1);
+      const uniqueViolation = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`couponId`,`userId`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['couponId', 'userId'] } },
+      );
+      tx.couponUse.create.mockRejectedValue(uniqueViolation);
+
+      await expect(
+        service.applyInsideTransaction(tx, 'coupon-1', 'order-1', 'user-1', 1000),
+      ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
+    });
   });
 
   // ─── create ─────────────────────────────────────────────────────────────
@@ -499,6 +515,30 @@ describe('CouponService', () => {
       await expect(
         service.create({ ...validDto, value: 100 }),
       ).resolves.not.toThrow();
+    });
+  });
+
+  // ─── reconcileCurrentUses ────────────────────────────────────────────────
+
+  describe('reconcileCurrentUses', () => {
+    it('executes a raw SQL UPDATE to sync currentUses from coupon_uses COUNT', async () => {
+      prisma.$executeRaw.mockResolvedValue(undefined);
+
+      await service.reconcileCurrentUses();
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves without throwing when $executeRaw succeeds', async () => {
+      prisma.$executeRaw.mockResolvedValue(undefined);
+
+      await expect(service.reconcileCurrentUses()).resolves.toBeUndefined();
+    });
+
+    it('propagates database errors so the scheduler can log and retry', async () => {
+      prisma.$executeRaw.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.reconcileCurrentUses()).rejects.toThrow('DB connection lost');
     });
   });
 

@@ -17,8 +17,12 @@
     "node": ">=20",
     "pnpm": ">=9"
   },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  },
   "pnpm": {
     "overrides": {
+      "typescript": "~5.9.3",
       "@tiptap/core": "2.1.13",
       "@tiptap/extension-bubble-menu": "2.1.13",
       "@tiptap/extension-character-count": "2.1.13",

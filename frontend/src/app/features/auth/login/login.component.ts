@@ -29,11 +29,13 @@ import { ToastService } from '../../../core/services/toast.service';
           <label tuiLabel>Email</label>
           <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
         </tui-textfield>
+        @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
 
         <tui-textfield>
           <label tuiLabel>Hasło</label>
           <input tuiTextfield type="password" formControlName="password" autocomplete="current-password" />
         </tui-textfield>
+        @if (errorMsg('password'); as msg) { <p class="field-error">{{ msg }}</p> }
 
         <p class="forgot-link">
           <a [routerLink]="['/auth/forgot-password']">Nie pamiętasz hasła?</a>
@@ -80,6 +82,7 @@ import { ToastService } from '../../../core/services/toast.service';
     .forgot-link { text-align: right; font-size: 13px; margin: 0; }
     .forgot-link a { color: var(--color-secondary); }
     .forgot-link a:hover { color: var(--color-primary); }
+    .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
   `],
 })
 export class LoginComponent {
@@ -99,8 +102,20 @@ export class LoginComponent {
     password: ['', Validators.required],
   });
 
+  errorMsg(field: string): string | null {
+    const ctrl = this.form.get(field);
+    if (!ctrl?.touched || ctrl.valid) return null;
+    const e = ctrl.errors!;
+    if (e['required']) return 'To pole jest wymagane';
+    if (e['email']) return 'Podaj prawidłowy adres e-mail';
+    return null;
+  }
+
   submit(): void {
-    if (this.form.invalid) return;
+    if (this.form.invalid) {
+      this.form.markAllAsTouched();
+      return;
+    }
     this.loading = true;
     const { email, password } = this.form.getRawValue();
     this.auth.login(email!, password!).subscribe({

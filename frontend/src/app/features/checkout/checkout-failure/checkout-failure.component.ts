@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { HttpClient } from '@angular/common/http';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 
 @Component({
@@ -12,9 +13,35 @@ import { TuiButton, TuiIcon } from '@taiga-ui/core';
       <tui-icon icon="@tui.circle-x" class="page__icon page__icon--error" />
       <h1>Płatność nie powiodła się</h1>
       <p>Coś poszło nie tak. Spróbuj ponownie lub wybierz inną metodę płatności.</p>
-      <a routerLink="/cart" tuiButton appearance="outline" size="l" type="button">
-        Wróć do koszyka
-      </a>
+
+      @if (orderId()) {
+        <div class="actions">
+          <button
+            tuiButton
+            appearance="primary"
+            size="l"
+            type="button"
+            [disabled]="retrying()"
+            (click)="retryPayment()"
+          >
+            {{ retrying() ? 'Przekierowuję...' : 'Spróbuj ponownie' }}
+          </button>
+          <button
+            tuiButton
+            appearance="outline"
+            size="l"
+            type="button"
+            [disabled]="cancelling()"
+            (click)="cancelOrder()"
+          >
+            {{ cancelling() ? 'Anulowanie...' : 'Anuluj zamówienie' }}
+          </button>
+        </div>
+      } @else {
+        <a routerLink="/cart" tuiButton appearance="outline" size="l" type="button">
+          Wróć do koszyka
+        </a>
+      }
     </div>
   `,
   styles: [`
@@ -48,6 +75,41 @@ import { TuiButton, TuiIcon } from '@taiga-ui/core';
       margin: 0 0 8px;
       max-width: 400px;
     }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
   `],
 })
-export class CheckoutFailureComponent {}
+export class CheckoutFailureComponent {
+  private readonly route  = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly http   = inject(HttpClient);
+
+  readonly orderId   = signal<string | null>(this.route.snapshot.queryParamMap.get('orderId'));
+  readonly retrying  = signal(false);
+  readonly cancelling = signal(false);
+
+  retryPayment(): void {
+    const id = this.orderId();
+    if (!id) return;
+    this.retrying.set(true);
+    this.http.post<{ paymentUrl: string }>(`/api/orders/${id}/retry-payment`, {}).subscribe({
+      next: ({ paymentUrl }) => { window.location.href = paymentUrl; },
+      error: () => { this.retrying.set(false); },
+    });
+  }
+
+  cancelOrder(): void {
+    const id = this.orderId();
+    if (!id) return;
+    this.cancelling.set(true);
+    this.http.post(`/api/orders/${id}/cancel`, {}).subscribe({
+      next: () => { this.router.navigate(['/cart']); },
+      error: () => { this.cancelling.set(false); },
+    });
+  }
+}

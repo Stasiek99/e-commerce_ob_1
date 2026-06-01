@@ -1,8 +1,10 @@
-import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Injectable, PLATFORM_ID, computed, effect, inject, signal, untracked } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { switchMap, catchError } from 'rxjs';
 import { ProductCardData } from '../../shared/product-card/product-card.component';
 import { AuthService } from './auth.service';
+import { LOCAL_STORAGE } from '../tokens/storage.tokens';
 import { environment } from '../../../environments/environment';
 
 export interface WishlistItemData extends ProductCardData {
@@ -13,6 +15,9 @@ export interface WishlistItemData extends ProductCardData {
 export class WishlistService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
+  private readonly platformId = inject(PLATFORM_ID);
+  private readonly isBrowser = isPlatformBrowser(this.platformId);
+  private readonly storage = inject(LOCAL_STORAGE);
 
   private readonly STORAGE_KEY = 'wishlist_v1';
   private readonly _items = signal<WishlistItemData[]>(this.loadFromStorage());
@@ -93,21 +98,22 @@ export class WishlistService {
     sync$.subscribe({
       next: (items) => {
         this._items.set(items);
-        localStorage.removeItem(this.STORAGE_KEY);
+        if (this.isBrowser) this.storage.removeItem(this.STORAGE_KEY);
         this.loading.set(false);
       },
       error: () => {
         // Always clear localStorage even on total failure — prevents infinite re-merge
         // on subsequent loads when the guest items were already partially processed.
-        localStorage.removeItem(this.STORAGE_KEY);
+        if (this.isBrowser) this.storage.removeItem(this.STORAGE_KEY);
         this.loading.set(false);
       },
     });
   }
 
   private loadFromStorage(): WishlistItemData[] {
+    if (!this.isBrowser) return [];
     try {
-      const raw: any[] = JSON.parse(localStorage.getItem(this.STORAGE_KEY) ?? '[]');
+      const raw: any[] = JSON.parse(this.storage.getItem(this.STORAGE_KEY) ?? '[]');
       return raw.map((p) => ({ ...p, notifyOnRestock: p.notifyOnRestock ?? false }));
     } catch {
       return [];
@@ -115,6 +121,7 @@ export class WishlistService {
   }
 
   private saveToStorage(): void {
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this._items()));
+    if (!this.isBrowser) return;
+    this.storage.setItem(this.STORAGE_KEY, JSON.stringify(this._items()));
   }
 }

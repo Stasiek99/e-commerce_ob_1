@@ -43,9 +43,19 @@
         <p class="product-card__brand">{{ product.brand }}</p>
       }
 
-      <p class="product-card__price">
-        od {{ firstVariant?.priceInCents | price }}
-      </p>
+      <div class="product-card__price-block">
+        @if (firstVariant?.compareAtPriceInCents) {
+          <div class="product-card__price-row">
+            <span class="product-card__price product-card__price--sale">{{ firstVariant!.priceInCents | price }}</span>
+            <span class="product-card__price product-card__price--was">{{ firstVariant!.compareAtPriceInCents | price }}</span>
+          </div>
+          <p class="product-card__omnibus">
+            Najniższa cena z 30 dni: {{ (firstVariant!.lowestPrice30dInCents ?? firstVariant!.priceInCents) | price }}
+          </p>
+        } @else {
+          <p class="product-card__price">od {{ firstVariant?.priceInCents | price }}</p>
+        }
+      </div>
     </div>
   </a>
 

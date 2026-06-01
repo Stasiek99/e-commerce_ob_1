@@ -1,4 +1,5 @@
-import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -19,6 +20,7 @@ import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { AnalyticsService } from '../../../core/services/analytics.service';
+import { TurnstileService } from '../../../core/services/turnstile.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
 
@@ -588,10 +590,12 @@ export class CheckoutPageComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(FormBuilder);
   private readonly toast = inject(ToastService);
+  private readonly platformId = inject(PLATFORM_ID);
 
   readonly cart = inject(CartService);
   readonly auth = inject(AuthService);
   private readonly analytics = inject(AnalyticsService);
+  private readonly turnstile = inject(TurnstileService);
 
   index = 0;
   direction = 0;
@@ -786,7 +790,10 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   onStep(newIndex: number): void {
-    if (newIndex >= this.index) return;
+    if (newIndex > this.index) {
+      this.onNext();
+      return;
+    }
     this.direction = newIndex - this.index;
     this.index = newIndex;
   }
@@ -917,6 +924,7 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   openLockerPicker(): void {
+    if (!isPlatformBrowser(this.platformId)) return;
     if (typeof easyPack === 'undefined') {
       this.toast.error('Nie udało się załadować mapy paczkomatów. Odśwież stronę.');
       return;
@@ -964,6 +972,7 @@ export class CheckoutPageComponent implements OnInit {
 
   placeOrder(): void {
     this.placing.set(true);
+    this.turnstile.getToken().then((turnstileToken) => {
     const a = this.addressForm.getRawValue();
     const carrier = this.selectedCarrier()!;
     const addrPayload = {
@@ -975,6 +984,9 @@ export class CheckoutPageComponent implements OnInit {
       postalCode: a.postalCode!,
       phone: a.phone!,
     };
+
+    const headers: Record<string, string> = { 'x-session-id': this.cart.getSessionId() };
+    if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
 
     this.http.post<any>(
       `${environment.apiUrl}/orders`,
@@ -988,7 +1000,7 @@ export class CheckoutPageComponent implements OnInit {
         termsAcceptedAt: new Date().toISOString(),
         couponCode: this.appliedCoupon()?.code ?? undefined,
       },
-      { headers: new HttpHeaders({ 'x-session-id': this.cart.getSessionId() }) },
+      { headers: new HttpHeaders(headers) },
     ).subscribe({
       next: (res) => {
         if (this.saveAddress() && this.auth.currentUser() && this.selectedSavedId() === null) {
@@ -1002,6 +1014,7 @@ export class CheckoutPageComponent implements OnInit {
           }));
         } catch { /* sessionStorage unavailable (private browsing quota) */ }
         this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
+        this.cart.clear();
         window.location.href = res.paymentUrl;
       },
       error: (err) => {
@@ -1016,6 +1029,7 @@ export class CheckoutPageComponent implements OnInit {
         }
         this.placing.set(false);
       },
+    });
     });
   }
 }

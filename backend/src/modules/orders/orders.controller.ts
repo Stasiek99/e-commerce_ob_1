@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -10,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Role, User } from '@prisma/client';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -23,23 +25,28 @@ import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { UserOrdersQueryDto } from './dto/user-orders-query.dto';
 import { CancelItemsDto } from './dto/cancel-items.dto';
 import { SessionId } from '../../common/decorators/session-id.decorator';
+import { TurnstileGuard } from '../../common/guards/turnstile.guard';
 
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Post()
-  @UseGuards(OptionalJwtGuard)
+  @UseGuards(OptionalJwtGuard, TurnstileGuard)
   createOrder(
     @CurrentUser() user: User | undefined,
     @SessionId() sessionId: string | undefined,
     @Body() dto: CreateOrderDto,
   ) {
     const userEmail = user?.email ?? dto.guestEmail;
-    return this.ordersService.createFromCart(user?.id, sessionId, userEmail!, dto);
+    if (!userEmail) {
+      throw new BadRequestException('Guest email is required for unauthenticated orders');
+    }
+    return this.ordersService.createFromCart(user?.id, sessionId, userEmail, dto);
   }
 
   @Get('track')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   trackOrder(
     @Query('email') email: string,
     @Query('orderNumber') orderNumber: string,
@@ -69,6 +76,13 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard)
   getMyOrder(@CurrentUser() user: User, @Param('id') id: string) {
     return this.ordersService.findOneForUser(id, user.id);
+  }
+
+  @Post(':id/retry-payment')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  retryPayment(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.retryPayment(id, user.id);
   }
 
   @Post(':id/cancel')
@@ -101,6 +115,13 @@ export class OrdersController {
     return this.ordersService.findAllAdmin(query);
   }
 
+  @Get('admin/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  getOneAdmin(@Param('id') id: string) {
+    return this.ordersService.findOneAdmin(id);
+  }
+
   @Patch('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
@@ -109,6 +130,22 @@ export class OrdersController {
     @Body() dto: UpdateOrderStatusDto,
   ) {
     return this.ordersService.updateStatus(id, dto.status);
+  }
+
+  @Post('admin/:id/fraud-review/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  approveFraudReview(@Param('id') id: string) {
+    return this.ordersService.approveFraudReview(id);
+  }
+
+  @Post('admin/:id/fraud-review/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  rejectFraudReview(@Param('id') id: string) {
+    return this.ordersService.rejectFraudReview(id);
   }
 
   @Post('admin/:id/invoice')

@@ -43,9 +43,10 @@ export class ReviewsController {
 
   @Post(':id/helpful')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
-  markHelpful(@Param('id') id: string) {
-    return this.reviews.markHelpful(id);
+  markHelpful(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.reviews.markHelpful(id, user.id);
   }
 
   @Get('mine')

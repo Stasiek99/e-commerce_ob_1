@@ -7,11 +7,13 @@ import {
   Post,
   RawBodyRequest,
   Req,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
 import { Request } from 'express';
 import { Webhook } from 'svix';
+import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../prisma/prisma.service';
 
 interface ResendEmailData {
@@ -44,6 +46,7 @@ export class EmailWebhookController {
 
   @Post()
   @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 60 } })
   async handle(
     @Req() req: RawBodyRequest<Request>,
     @Headers('svix-id') svixId: string,
@@ -51,18 +54,18 @@ export class EmailWebhookController {
     @Headers('svix-signature') svixSignature: string,
   ) {
     if (!this.webhookSecret) {
-      this.logger.warn('RESEND_WEBHOOK_SECRET not set — skipping signature verification');
-    } else {
-      const wh = new Webhook(this.webhookSecret);
-      try {
-        wh.verify(req.rawBody!.toString('utf8'), {
-          'svix-id': svixId,
-          'svix-timestamp': svixTimestamp,
-          'svix-signature': svixSignature,
-        });
-      } catch {
-        throw new BadRequestException('Invalid webhook signature');
-      }
+      throw new ServiceUnavailableException('Webhook signature verification not configured');
+    }
+
+    const wh = new Webhook(this.webhookSecret);
+    try {
+      wh.verify(req.rawBody!.toString('utf8'), {
+        'svix-id': svixId,
+        'svix-timestamp': svixTimestamp,
+        'svix-signature': svixSignature,
+      });
+    } catch {
+      throw new BadRequestException('Invalid webhook signature');
     }
 
     const event = req.body as ResendWebhookEvent;

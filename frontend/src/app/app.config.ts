@@ -33,6 +33,7 @@ import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
 import { environment } from '../environments/environment';
+import { LOCAL_STORAGE } from './core/tokens/storage.tokens';
 
 const sentryProviders = environment.sentryDsn
   ? [
@@ -71,6 +72,22 @@ export const appConfig: ApplicationConfig = {
       const auth = inject(AuthService);
       await firstValueFrom(auth.refresh().pipe(catchError(() => of(null))));
     }),
+    // Browser: real window.localStorage. SSR: overridden per-request in server.ts
+    // so the factory below is never reached on the server.
+    {
+      provide: LOCAL_STORAGE,
+      useFactory: (): Storage =>
+        isPlatformBrowser(inject(PLATFORM_ID))
+          ? window.localStorage
+          : ({
+              getItem: () => null,
+              setItem: () => {},
+              removeItem: () => {},
+              clear: () => {},
+              key: () => null,
+              length: 0,
+            } as Storage),
+    },
     ...sentryProviders,
     provideServiceWorker('ngsw-worker.js', {
       enabled: !isDevMode(),

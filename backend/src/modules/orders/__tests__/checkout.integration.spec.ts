@@ -105,7 +105,9 @@ describe('Checkout Integration Flow', () => {
           updateMany: jest.fn().mockResolvedValue({
             count: overrides.insufficientStock ? 0 : 1,
           }),
+          findMany: jest.fn().mockResolvedValue([{ id: IDS.variantId, priceInCents: 34900 }]),
         },
+        coupon: { findUnique: jest.fn().mockResolvedValue(null) },
         order: {
           create: jest.fn().mockResolvedValue(
             overrides.orderResult ?? mockOrder,
@@ -135,7 +137,7 @@ describe('Checkout Integration Flow', () => {
             productVariant: { findUnique: jest.fn() },
             order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
             orderEvent: { create: jest.fn() },
-            payment: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+            payment: { findUnique: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'payment-1' }), update: jest.fn().mockResolvedValue({}) },
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             $transaction: jest.fn(),
           },
@@ -160,7 +162,7 @@ describe('Checkout Integration Flow', () => {
         {
           provide: InvoiceService,
           useValue: {
-            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from('') }),
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
           },
         },
         {
@@ -168,6 +170,7 @@ describe('Checkout Integration Flow', () => {
           useValue: {
             validate: jest.fn().mockResolvedValue({ valid: false }),
             applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            calculateDiscount: jest.fn().mockReturnValue(0),
           },
         },
         {
@@ -291,18 +294,21 @@ describe('Checkout Integration Flow', () => {
         },
       );
 
+      // payment.create is called first (before Stripe), so stripeCheckoutSessionId is absent
       expect(prisma.payment.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
-            orderId: IDS.orderId,
-            stripeCheckoutSessionId: IDS.sessionId,
-            provider: 'stripe',
-          }),
+          data: expect.objectContaining({ orderId: IDS.orderId, provider: 'stripe' }),
+        }),
+      );
+      // stripeCheckoutSessionId is attached via payment.update after Stripe confirms
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ stripeCheckoutSessionId: IDS.sessionId }),
         }),
       );
     });
 
-    it('enqueues order confirmation email job', async () => {
+    it('does NOT enqueue order confirmation email at order creation — must fire only after Stripe webhook confirms payment', async () => {
       await ordersService.createFromCart(
         'user-1',
         undefined,
@@ -323,12 +329,7 @@ describe('Checkout Integration Flow', () => {
 
       // Allow the fire-and-forget promise to settle
       await Promise.resolve();
-      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'test@example.com',
-          orderNumber: IDS.orderNumber,
-        }),
-      );
+      expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
     });
   });
 

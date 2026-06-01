@@ -17,6 +17,7 @@ enum Role {
 
 enum OrderStatus {
   PENDING_PAYMENT
+  FRAUD_REVIEW
   PAID
   PROCESSING
   SHIPPED
@@ -116,6 +117,7 @@ model User {
   carts                   Cart[]
   wishlistItems           WishlistItem[]
   reviews                 Review[]
+  reviewHelpfulVotes      ReviewHelpfulVote[]
   customerNotes           CustomerNote[]
 
   @@map("users")
@@ -248,6 +250,13 @@ model Product {
   luxuryReferenceId   Int?
   luxuryReference     LuxuryReference? @relation(fields: [luxuryReferenceId], references: [id], onDelete: SetNull)
   sortOrder        Int      @default(0)
+
+  // EU Cosmetics Regulation 1223/2009 — mandatory for distance selling
+  ingredients      String?   // full INCI string as printed on the data sheet
+  allergens        String[]  // allergens listed individually above threshold (>0.001% for leave-on)
+  paoMonths        Int?      // Period After Opening in months (PAO symbol)
+  warnings         String?   // safety warnings (Ostrzeżenia) from data sheet
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -279,10 +288,26 @@ model ProductVariant {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  orderItems OrderItem[]
-  cartItems  CartItem[]
+  orderItems    OrderItem[]
+  cartItems     CartItem[]
+  priceHistory  ProductVariantPriceHistory[]
 
   @@map("product_variants")
+}
+
+// EU Omnibus Directive (2019/2161) — when a promotional price is displayed
+// alongside a strikethrough compareAtPriceInCents, Polish law requires showing
+// the lowest price charged in the preceding 30 days. This table is the
+// append-only log that makes that calculation possible.
+model ProductVariantPriceHistory {
+  id           String         @id @default(uuid())
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  priceInCents Int
+  recordedAt   DateTime       @default(now())
+
+  @@index([variantId, recordedAt])
+  @@map("product_variant_price_history")
 }
 
 model ProductImage {
@@ -370,17 +395,20 @@ model Order {
   termsVersion    String?
   termsAcceptedAt DateTime?
 
-  invoiceUrl String?
+  invoiceUrl    String?
+  invoiceNumber String? @unique
+  isRead        Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items    OrderItem[]
-  payment  Payment?
-  shipment Shipment?
-  events   OrderEvent[]
-  couponUse CouponUse?
-  reviews   Review[]
+  items          OrderItem[]
+  payment        Payment?
+  shipment       Shipment?
+  events         OrderEvent[]
+  couponUse      CouponUse?
+  reviews        Review[]
+  returnRequests ReturnRequest[]
 
   @@index([userId])
   @@index([status])
@@ -410,7 +438,7 @@ model OrderItem {
 model Payment {
   id                       String        @id @default(uuid())
   orderId                  String        @unique
-  order                    Order         @relation(fields: [orderId], references: [id])
+  order                    Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   status                   PaymentStatus @default(PENDING)
   provider                 String        @default("stripe")
   stripeCheckoutSessionId  String?       @unique
@@ -432,7 +460,7 @@ model Payment {
 model Shipment {
   id               String         @id @default(uuid())
   orderId          String         @unique
-  order            Order          @relation(fields: [orderId], references: [id])
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   status           ShipmentStatus @default(LABEL_PENDING)
   carrierCode      CarrierCode
   trackingNumber   String?
@@ -441,6 +469,7 @@ model Shipment {
   shipmentId       String?
   targetLockerCode String?
   dispatchNumber   String?
+  labelGeneratedAt DateTime?
   shippedAt        DateTime?
   deliveredAt      DateTime?
   estimatedDelivery DateTime?
@@ -518,6 +547,7 @@ model CouponUse {
   discountAppliedInCents Int
   createdAt              DateTime @default(now())
 
+  @@unique([couponId, userId])
   @@index([couponId])
   @@index([userId])
   @@map("coupon_uses")
@@ -541,6 +571,7 @@ model Review {
   helpfulCount Int          @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+  helpfulVotes ReviewHelpfulVote[]
 
   @@unique([userId, productId])
   @@index([productId, status])
@@ -548,10 +579,23 @@ model Review {
   @@map("reviews")
 }
 
+model ReviewHelpfulVote {
+  reviewId  String
+  userId    String
+  review    Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([reviewId, userId])
+  @@map("review_helpful_votes")
+}
+
 // ─── Returns ─────────────────────────────────────────────────────────────────
 
 model ReturnRequest {
   id                  String       @id @default(cuid())
+  orderId             String?
+  order               Order?       @relation(fields: [orderId], references: [id])
   orderNumber         String
   email               String
   firstName           String
@@ -569,6 +613,7 @@ model ReturnRequest {
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 
+  @@index([orderId])
   @@index([email])
   @@index([orderNumber])
   @@map("return_requests")

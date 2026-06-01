@@ -40,7 +40,7 @@ export class AnalyticsService {
   // if the user already consented on a prior visit. For new visitors the
   // effect() above handles loading once they click "Accept all".
   init(gtmId: string): void {
-    if (!this.isBrowser || !gtmId) return;
+    if (!this.isBrowser || !gtmId || gtmId.startsWith('GTM-XXX')) return;
     this.gtmId = gtmId;
     if (this.consent.analyticsConsented() && !this.gtmLoaded) {
       this.loadGtm();
@@ -52,6 +52,34 @@ export class AnalyticsService {
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({ ecommerce: null });
     window.dataLayer.push(event);
+  }
+
+  trackViewItem(params: {
+    itemId: string;
+    name: string;
+    brand?: string | null;
+    variantLabel?: string;
+    category?: string | null;
+    priceInCents: number;
+  }): void {
+    this.push({
+      event: 'view_item',
+      ecommerce: {
+        currency: 'PLN',
+        value: params.priceInCents / 100,
+        items: [
+          {
+            item_id: params.itemId,
+            item_name: params.name,
+            item_brand: params.brand ?? undefined,
+            item_variant: params.variantLabel,
+            item_category: params.category ?? undefined,
+            price: params.priceInCents / 100,
+            quantity: 1,
+          } satisfies AnalyticsItem,
+        ],
+      },
+    });
   }
 
   trackAddToCart(params: {

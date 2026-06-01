@@ -29,6 +29,7 @@ describe('AuthService', () => {
   let prisma: any;
   let jwtService: jest.Mocked<JwtService>;
   let emailService: any;
+  let redis: { set: jest.Mock; get: jest.Mock };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -42,18 +43,21 @@ describe('AuthService', () => {
               findUnique: jest.fn(),
               update: jest.fn(),
               updateMany: jest.fn(),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             emailVerificationToken: {
               updateMany: jest.fn().mockResolvedValue({}),
               create: jest.fn().mockResolvedValue({}),
               findUnique: jest.fn(),
               update: jest.fn().mockResolvedValue({}),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             passwordResetToken: {
               updateMany: jest.fn().mockResolvedValue({}),
               create: jest.fn().mockResolvedValue({}),
               findUnique: jest.fn(),
               update: jest.fn().mockResolvedValue({}),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             user: {
               update: jest.fn().mockResolvedValue({}),
@@ -87,8 +91,16 @@ describe('AuthService', () => {
           provide: EmailQueueService,
           useValue: {
             sendEmailVerification: jest.fn().mockResolvedValue(undefined),
+            sendEmailChangeVerification: jest.fn().mockResolvedValue(undefined),
             sendPasswordReset: jest.fn().mockResolvedValue(undefined),
             sendMagicLink: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'),
+            get: jest.fn(),
           },
         },
       ],
@@ -99,6 +111,7 @@ describe('AuthService', () => {
     usersService = module.get(UsersService);
     jwtService = module.get(JwtService);
     emailService = module.get(EmailQueueService);
+    redis = module.get('REDIS_CLIENT');
   });
 
   describe('register', () => {
@@ -682,6 +695,92 @@ describe('AuthService', () => {
     });
   });
 
+  // ─── Request Email Change ─────────────────────────────────────────────────────
+
+  describe('requestEmailChange', () => {
+    it('throws ConflictException when the new email is already taken by another account', async () => {
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, id: 'other-user' } as any);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await expect(service.requestEmailChange('user-1', 'taken@example.com')).rejects.toThrow(
+        ConflictException,
+      );
+
+      expect(prisma.emailVerificationToken.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the requesting user does not exist', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(service.requestEmailChange('ghost-user', 'new@example.com')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('revokes ALL existing email verification tokens — including MAGIC_LINK — before issuing the change token', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      // Must NOT include a type filter — both EMAIL_VERIFICATION and MAGIC_LINK must be revoked
+      expect(prisma.emailVerificationToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ type: expect.anything() }),
+          data: { usedAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('scopes the revocation to the requesting user only', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(prisma.emailVerificationToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-1', usedAt: null }),
+        }),
+      );
+    });
+
+    it('stores the new email as pendingEmail on the user record', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(usersService.update).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ pendingEmail: 'new@example.com' }),
+      );
+    });
+
+    it('creates a new email verification token and sends the change-confirmation email', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(prisma.emailVerificationToken.create).toHaveBeenCalledTimes(1);
+      expect(emailService.sendEmailChangeVerification).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'new@example.com', newEmail: 'new@example.com' }),
+      );
+    });
+
+    it('allows the change when the new email matches the requesting user own current email (no-op conflict check)', async () => {
+      // findByEmail returns the same user → should not throw ConflictException
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await expect(
+        service.requestEmailChange('user-1', 'test@example.com'),
+      ).resolves.toBeUndefined();
+    });
+  });
+
   describe('requestPasswordReset', () => {
     it('returns silently when user is not found (never reveal registration status)', async () => {
       usersService.findByEmail.mockResolvedValue(null);
@@ -761,6 +860,35 @@ describe('AuthService', () => {
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
+
+    it('writes the access token revocation fence to Redis after a successful password reset', async () => {
+      prisma.passwordResetToken.findUnique.mockResolvedValue({
+        id: 'prt-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        user: mockUser,
+      });
+
+      await service.resetPassword('valid-token', 'newStrongPassword123');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.stringMatching(/^\d+$/),
+        'EX',
+        900,
+      );
+    });
+
+    it('does not write revocation fence when reset token is invalid', async () => {
+      prisma.passwordResetToken.findUnique.mockResolvedValue(null);
+
+      await expect(service.resetPassword('bad-token', 'newpass')).rejects.toThrow(
+        BadRequestException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalled();
+    });
   });
 
   // ─── Change Password ──────────────────────────────────────────────────────────
@@ -836,6 +964,66 @@ describe('AuthService', () => {
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(prisma.user.update).toHaveBeenCalledTimes(1);
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    // ─── Access token revocation fence ─────────────────────────────────────────
+
+    it('writes the access token revocation fence to Redis after a successful password change', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.stringMatching(/^\d+$/),
+        'EX',
+        900,
+      );
+    });
+
+    it('sets the revocation fence TTL to 900 seconds (one access token lifetime)', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      const [, , , ttl] = redis.set.mock.calls[0];
+      expect(ttl).toBe(900);
+    });
+
+    it('stores the current time as the fence value so older tokens are identified by iat', async () => {
+      const hash = await bcrypt.hash('currentpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, id: 'user-1', passwordHash: hash } as any);
+      const before = Date.now();
+
+      await service.changePassword('user-1', 'currentpass', 'brandnewpass');
+
+      const after = Date.now();
+      const fenceMs = parseInt(redis.set.mock.calls[0][1], 10);
+      expect(fenceMs).toBeGreaterThanOrEqual(before);
+      expect(fenceMs).toBeLessThanOrEqual(after);
+    });
+
+    it('does not write revocation fence when current password is wrong', async () => {
+      const hash = await bcrypt.hash('correctpass', 10);
+      usersService.findById.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+      await expect(service.changePassword('user-1', 'wrongpass', 'newpass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalled();
+    });
+
+    it('does not write revocation fence when user is not found', async () => {
+      usersService.findById.mockResolvedValue(null);
+
+      await expect(service.changePassword('user-1', 'pass', 'newpass')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalled();
     });
   });
 
@@ -1046,6 +1234,57 @@ describe('AuthService', () => {
       await service.consumeMagicLink('valid-token');
 
       expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── purgeExpiredTokens ───────────────────────────────────────────────────────
+
+  describe('purgeExpiredTokens', () => {
+    it('calls deleteMany on all three token tables in parallel', async () => {
+      prisma.refreshToken.deleteMany.mockResolvedValue({ count: 5 });
+      prisma.passwordResetToken.deleteMany.mockResolvedValue({ count: 2 });
+      prisma.emailVerificationToken.deleteMany.mockResolvedValue({ count: 8 });
+
+      await service.purgeExpiredTokens();
+
+      expect(prisma.refreshToken.deleteMany).toHaveBeenCalledTimes(1);
+      expect(prisma.passwordResetToken.deleteMany).toHaveBeenCalledTimes(1);
+      expect(prisma.emailVerificationToken.deleteMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes expiresAt: { lt: <current date> } as the where clause to each table', async () => {
+      const before = Date.now();
+
+      await service.purgeExpiredTokens();
+
+      const after = Date.now();
+
+      for (const mock of [
+        prisma.refreshToken.deleteMany,
+        prisma.passwordResetToken.deleteMany,
+        prisma.emailVerificationToken.deleteMany,
+      ]) {
+        const where = (mock as jest.Mock).mock.calls[0][0].where;
+        expect(where).toHaveProperty('expiresAt');
+        const cutoff: Date = where.expiresAt.lt;
+        expect(cutoff).toBeInstanceOf(Date);
+        expect(cutoff.getTime()).toBeGreaterThanOrEqual(before);
+        expect(cutoff.getTime()).toBeLessThanOrEqual(after);
+      }
+    });
+
+    it('resolves without throwing when all tables return count 0 (nothing to purge)', async () => {
+      prisma.refreshToken.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.passwordResetToken.deleteMany.mockResolvedValue({ count: 0 });
+      prisma.emailVerificationToken.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.purgeExpiredTokens()).resolves.toBeUndefined();
+    });
+
+    it('propagates a Prisma rejection so the scheduler surfaces the failure', async () => {
+      prisma.refreshToken.deleteMany.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(service.purgeExpiredTokens()).rejects.toThrow('DB connection lost');
     });
   });
 });

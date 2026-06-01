@@ -88,6 +88,12 @@ Everything in this phase MUST be done before the first real order.
 - [x] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
 - [x] **[HARD GATE — Phase 7]** Database backups — deferred to Phase 7 where it is a go-live hard gate (see Phase 7 checklist). Resolving here marks it acknowledged; action required before Stripe live mode.
 
+### 1E. Analytics (before launch)
+
+- [x] GA4 e-commerce events — `view_item`, `add_to_cart`, `begin_checkout`, `purchase` wired via `AnalyticsService` (consent-gated, fires only after analytics consent)
+- [ ] Set real GTM container ID in `environment.prod.ts` (`gtmId: 'GTM-XXXXXXX'` → actual ID from GTM dashboard)
+- [ ] Verify all four events appear in GA4 DebugView during smoke testing
+
 ### 1D. Smoke Testing (Days 6-7)
 
 - [ ] 13-step checklist (see below) against deployed app
@@ -327,25 +333,41 @@ Everything in this phase MUST be done before the first real order.
 
 **Goal:** Everything that's been deferred with placeholders gets its real value before the first real customer.
 
+- [ ] Set real GTM container ID in `environment.prod.ts` (`gtmId: 'GTM-XXXXXXX'` → actual ID from GTM dashboard)
+- [ ] Verify all four GA4 e-commerce events (`view_item`, `add_to_cart`, `begin_checkout`, `purchase`) appear in GA4 DebugView during smoke testing
+
+- [ ] **[HIGH] `ProcessedStripeEvent` table cleanup cron** — table is append-only with no pruning. At ~50 orders/day × 4 webhook events, Supabase free-tier storage exhausts in under a year. When Postgres runs out of disk, every webhook returns 500 and new payments stop confirming. Add a nightly `@Cron` that deletes rows older than 7 days (safe margin above Stripe's 72-hour retry window). (`backend/prisma/schema.prisma:620–626`, `backend/src/modules/payments/payments.service.ts:129`)
+- [ ] **[HIGH] `processedStripeEvent` insert must be atomic with payment handler** — the idempotency guard inserts into `ProcessedStripeEvent` then calls `markSessionPaid()` as a separate operation. A crash between the two permanently marks the event as processed; every subsequent Stripe retry hits the guard and returns early — the order stays `PENDING_PAYMENT` forever. Fix: move the `processedStripeEvent` upsert inside the same `$transaction` as `markSessionPaid`. (`backend/src/modules/payments/payments.service.ts:128–210`)
+
+- [ ] **[COMPLIANCE — before first product listing]** Download the "Karta Dane" PDF for every product from the Chogan/Olfazeta product detail page. For each product, extract and seed into the DB:
+  - `ingredients` — full INCI string (e.g. `"Alcohol denat., parfum, hexamethylindanopyran, coumarin."`)
+  - `allergens` — allergens listed individually outside "parfum" (e.g. `["hexamethylindanopyran", "coumarin"]`); these are the ones Chogan has already determined exceed the 0.001% leave-on threshold
+  - `paoMonths` — integer from "PAO Termin" field (e.g. `36`)
+  - `warnings` — text from "Ostrzeżenia" section
+  EU Cosmetics Regulation 1223/2009 requires `ingredients` and `allergens` to be visible on the product detail page (not just on the physical label) for distance selling. Missing allergen disclosure is a regulatory violation — UOKiK can issue fines and require product de-listing. All 4 fields are now on the `Product` model; display them in a dedicated "Skład i informacje" section on the product page.
 - [ ] Register business domain + point DNS
 - [ ] Resend domain verification (SPF + DKIM + DMARC) → set `EMAIL_FROM` in Railway
 - [ ] Resend Dashboard → Webhooks → Add endpoint: URL `https://<railway>/email/webhook`, events `email.sent`, `email.delivered`, `email.bounced`, `email.complained` → copy Signing Secret → set `RESEND_WEBHOOK_SECRET` in Railway
 - [ ] **[HARD GATE] Provision Railway Redis service → copy the `REDIS_URL` → set it in Railway backend service env vars.** Without a real Redis instance, BullMQ silently never processes jobs — 100% of transactional emails (order confirmation, invoice, payment failure, shipping notification) queue and never send. Verify by hitting `GET /health` and confirming `"redis": "connected"` alongside `"db": "connected"`.
 - [ ] Stripe: update statement descriptor to real business name
+- [ ] **[LEGAL — before first product listing]** Obtain written confirmation (email) from a Chogan/Olfazeta representative covering four points: (1) **CPNP notification** — confirm the products are notified in the portal and ask for the unique notification number; (2) **Responsible Person** — confirm Chogan/Olfazeta is the registered Responsible Person under EC 1223/2009 and assumes full legal liability; (3) **PIF availability** — confirm a Product Information File (safety report, production method, specifications) exists for each product line; (4) **Allergen data per product line** — which of the 26 INCI-listed fragrance allergens are present above regulatory thresholds (0.001% for leave-on products) per fragrance — required to display on product pages under EC 1223/2009 distance selling rules (customers cannot read the physical label before buying online, so disclosure must appear on the listing). Archive the reply. If UOKiK or Trade Inspection ever audits your listings, this email is proof of due diligence — without it you are personally exposed for placing non-compliant cosmetics on the market even though you are only a reseller. If Chogan cannot provide allergen data, you cannot legally list those products online in the EU.
+- [ ] **[LEGAL — before first product listing]** Add a "Skład i informacje" section to the product detail page that displays all four compliance fields pulled from the DB: full INCI ingredient list (`ingredients`), allergens listed individually above threshold (`allergens` — rendered as a comma-separated list or chips), PAO in months (`paoMonths`), and safety warnings (`warnings`). EC 1223/2009 distance-selling rules require these to be visible on the listing itself — customers cannot read the physical label before buying online. Displaying only the `allergens` array is not sufficient; the full INCI string must also be accessible. Non-disclosure of the 26 regulated fragrance allergens by INCI name when above threshold concentrations is a regulatory violation (not a UX gap) and exposes the seller to UOKiK de-listing and fines.
 - [ ] Seed real product catalog (products, variants, images, categories) — see field guide below
 - [ ] Upload product images to Supabase `product-images` bucket
 - [ ] **[HARD GATE] Configure database backups before enabling Stripe live mode.** Supabase free tier has no PITR — a bad migration or accidental bulk-delete before backups are enabled is unrecoverable and constitutes a potential GDPR Art. 33 breach notification. Options: (a) upgrade to Supabase Pro (enables automatic PITR + daily snapshots, simplest), or (b) set up a weekly `pg_dump` job to S3/R2 (e.g. Railway cron → `pg_dump $DATABASE_URL | gzip | aws s3 cp - s3://<bucket>/backup-$(date +%Y%m%d).sql.gz`). Verify by confirming at least one successful backup exists before flipping Stripe to live mode.
 - [ ] **[HARD GATE — legal pages]** Fill in real company data in `frontend/src/environments/environment.prod.ts` → `seller` object: `legalName`, `street`, `postalCode`, `city`, `nip`, `regon`, `krs`. These values are interpolated into `/privacy`, `/terms`, and `/withdrawal` at build time. Publishing pages that contain `[UZUPEŁNIĆ…]` placeholders violates RODO Art. 13 (obligation to inform data subjects of controller identity) and UoK Art. 12 (pre-contract information obligation) — both carry UODO/UOKiK fine exposure.
 - [ ] **[HARD GATE — legal invoicing]** Set seller identity env vars in Railway: `SELLER_NIP` (10-digit NIP, no spaces), `SELLER_STREET`, `SELLER_CITY`, `SELLER_POSTAL_CODE`, optionally `SELLER_NAME` (defaults to "Aromaterie"). Without these, the SPRZEDAWCA section of every PDF invoice is blank — invoices are legally invalid under art. 106e Ustawy o VAT and cannot be used by B2B customers for VAT deduction.
+- [ ] **[STRIPE — before testing]** Activate BLIK and P24 on your Stripe account: Dashboard → Settings → Payment methods → enable both. Without this, adding them to `payment_method_types` has no effect — Stripe silently ignores unactivated methods. To test: BLIK uses test card `4000004840000008`; P24 has its own test flow in the Stripe docs. The `checkout.session.async_payment_failed` webhook handler already covers BLIK's async confirmation path.
 - [ ] Switch Stripe to live mode in Railway — replace `STRIPE_SECRET_KEY` (`sk_live_…`) and `STRIPE_PUBLISHABLE_KEY` (`pk_live_…`); `config.validation.ts` will boot-reject `sk_test_` keys in production
 - [ ] Register a live-mode Stripe webhook endpoint (Dashboard → Developers → Webhooks → Add endpoint → production URL `/payments/webhook`) → copy the new `whsec_…` signing secret → set `STRIPE_WEBHOOK_SECRET` in Railway; without this every webhook returns 400 and no order ever transitions to PAID
 - [ ] Verify checkout end-to-end with a real card (refund immediately)
-- [ ] Replace `GTM-XXXXXXX` placeholder in `frontend/src/environments/environment.prod.ts` with real Google Tag Manager container ID (tagmanager.google.com → create container → copy ID)
 - [ ] Google Search Console: submit sitemap, verify indexability
 - [ ] Final CORS check — `FRONTEND_URL` matches production domain
 - [ ] Google OAuth: update Authorized redirect URIs to production domain
 - [ ] Rotate any credentials exposed during development (DB password, JWT secrets)
 - [ ] One full end-to-end order: register → cart → checkout → Stripe → confirmation email → verify in DB
+- [ ] **[LEGAL — VAT registration required]** JPK_V7 reporting — if VAT-registered, you must submit a combined SAF-T + VAT return file monthly to the tax authority. The e-commerce platform does not generate this — your accounting tool does (inFakt, wFirma, Fakturownia, etc.). Invoice data is already structured correctly: `snapshotVatRate` is snapshotted per `OrderItem` at purchase time, the PDF invoice renders a per-rate VAT breakdown (art. 106e pkt 10 Ustawy o VAT), and invoice numbers are sequential via a PostgreSQL sequence. Action required: pick an accounting tool before your first VAT return, confirm it supports JPK_V7 export, and set up a monthly process to import order/invoice data from the DB or PDF invoices.
+- [ ] **[LEGAL — after crossing ~20 000 PLN/year B2C threshold]** Kasa fiskalna (fiscal receipt) integration — Polish law (Ustawa o VAT + rozporządzenie MF) requires issuing fiscal receipts for B2C sales above the annual exemption threshold. Software VAT invoices alone do not satisfy this. Options: (a) cloud fiscal service e.g. Novitus Cloud or inFakt Kasa — integrates via REST API, no physical device needed; (b) physical fiscal printer connected to the server. Pre-requisites before any software work: register a fiscal device with your local tax office (Urząd Skarbowy) — the registration process takes 2–4 weeks. Start the registration as soon as B2C revenue approaches the threshold, not after crossing it.
 - ### 🟢 LOW — No newsletter signup *(not yet scheduled)*
 - No `POST /newsletter/subscribe` backend endpoint
 - No signup form in footer, homepage hero, or post-purchase flow
@@ -354,6 +376,16 @@ Everything in this phase MUST be done before the first real order.
 
 
 **Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · **At least one verified DB backup exists before Stripe live mode**
+
+---
+
+## Phase 8 — POST-LAUNCH OPERATIONS (Stability + Campaigns) — ongoing
+
+- [ ] **Load testing before first campaign** — Railway hobby tier has cold starts. Run a simple k6 or locust test simulating a flash sale traffic spike before you send your first email blast.
+- [ ] **Returns physical process** — RMA logic is handled in software, but define: a returns mailing address, a policy for opened vs. sealed bottles, and a workflow for re-stocking vs. destroying returned goods. Opened fragrance bottles cannot legally be resold as new in the EU.
+- [ ] *(optional)* **Carrier damage claims** — InPost and DPD have strict 24–48h windows to file damage claims. Establish a photo-at-packing workflow (photograph every parcel before sealing) or you'll lose every dispute.
+- [ ] **Supplier lead times for reorders** — out-of-stock after a successful launch is a retention killer. Know your reorder lead time per SKU and set reorder-point alerts before running campaigns.
+- [ ] **Conversion baseline before first ad spend** — run organic traffic for 2–4 weeks post-launch before starting paid campaigns. Launching ads on day one means you can't distinguish ad quality from site quality.
 
 ---
 

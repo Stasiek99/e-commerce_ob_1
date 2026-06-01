@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as path from 'path';
 import * as PDFDocument from 'pdfkit';
@@ -19,6 +19,8 @@ export interface InvoiceOrder {
   snapshotPostalCode: string;
   itemsTotalInCents: number;
   shippingCostInCents: number;
+  discountInCents: number;
+  couponCode?: string | null;
   totalInCents: number;
   createdAt: Date;
   items: Array<{
@@ -30,7 +32,7 @@ export interface InvoiceOrder {
 }
 
 @Injectable()
-export class InvoiceService {
+export class InvoiceService implements OnModuleInit {
   private readonly logger = new Logger(InvoiceService.name);
 
   private readonly sellerName: string;
@@ -51,25 +53,55 @@ export class InvoiceService {
     this.sellerPostalCode = config.get('SELLER_POSTAL_CODE', '');
   }
 
-  /**
-   * Generates the invoice PDF, uploads it to Supabase, saves the URL on the
-   * order, and returns both the URL and the raw buffer for email attachment.
-   */
-  async processInvoice(order: InvoiceOrder): Promise<{ url: string; pdf: Buffer }> {
-    const pdf = await this.generatePdf(order);
-    const filename = `FV-${order.orderNumber}.pdf`;
-    const url = await this.storage.uploadInvoice(pdf, filename);
-    await this.prisma.order.update({ where: { id: order.id }, data: { invoiceUrl: url } });
-    this.logger.log(`Invoice generated for order ${order.orderNumber}: ${url}`);
-    return { url, pdf };
+  async onModuleInit() {
+    const year = new Date().getFullYear();
+    await this.ensureSequence(year);
   }
 
-  private generatePdf(order: InvoiceOrder): Promise<Buffer> {
+  private async ensureSequence(year: number): Promise<void> {
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
+    );
+  }
+
+  private async nextInvoiceNumber(year: number): Promise<number> {
+    await this.ensureSequence(year);
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+      `SELECT nextval('invoice_number_seq_${year}')`,
+    );
+    return Number(rows[0].nextval);
+  }
+
+  /**
+   * Generates the invoice PDF, uploads it to Supabase, saves the URL and the
+   * crash-safe sequential invoice number on the order, then returns all three.
+   * The invoice number is only persisted after a successful upload — preventing
+   * permanent sequence gaps from mid-upload crashes.
+   */
+  async processInvoice(order: InvoiceOrder): Promise<{ url: string; pdf: Buffer; invoiceNumber: string }> {
+    const year = order.createdAt.getFullYear();
+    const seq = await this.nextInvoiceNumber(year);
+    const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+
+    const pdf = await this.generatePdf(order, invoiceNumber);
+    const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
+    const url = await this.storage.uploadInvoice(pdf, filename);
+
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { invoiceUrl: url, invoiceNumber },
+    });
+
+    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${url}`);
+    return { url, pdf, invoiceNumber };
+  }
+
+  private generatePdf(order: InvoiceOrder, invoiceNumber: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({
         size: 'A4',
         margin: 50,
-        info: { Title: `Faktura VAT FV-${order.orderNumber}`, Author: this.sellerName },
+        info: { Title: `Faktura VAT ${invoiceNumber}`, Author: this.sellerName },
       });
 
       const chunks: Buffer[] = [];
@@ -83,14 +115,13 @@ export class InvoiceService {
       doc.registerFont('Inter-Bold', path.join(FONTS_DIR, 'Inter-Bold.ttf'));
       doc.font('Inter');
 
-      this.render(doc, order);
+      this.render(doc, order, invoiceNumber);
       doc.end();
     });
   }
 
-  private render(doc: PDFKit.PDFDocument, order: InvoiceOrder) {
+  private render(doc: PDFKit.PDFDocument, order: InvoiceOrder, invoiceNumber: string) {
     const W = 495; // usable width (595 - 2*50)
-    const invoiceNumber = `FV-${order.orderNumber}`;
     const issueDate = this.fmtDate(new Date());
     const saleDate = this.fmtDate(order.createdAt);
 
@@ -170,6 +201,17 @@ export class InvoiceService {
       })),
       ...(order.shippingCostInCents > 0
         ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
+        : []),
+      // Art. 106e pkt 7 Ustawy o VAT: discount must appear as a separate line
+      ...(order.discountInCents > 0
+        ? [
+            {
+              name: `Rabat: ${order.couponCode ?? 'kupon'}`,
+              qty: 1,
+              grossCents: -order.discountInCents,
+              vatRate: 0.23,
+            },
+          ]
         : []),
     ];
 

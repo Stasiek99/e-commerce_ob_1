@@ -97,4 +97,8 @@ export class EmailQueueService {
   sendReturnStatusUpdate(data: Payload<'return_status_update'>) {
     return this.enqueue('return_status_update', { type: 'return_status_update', payload: data });
   }
+
+  sendFraudReviewAlert(data: Payload<'fraud_review_alert'>) {
+    return this.enqueue('fraud_review_alert', { type: 'fraud_review_alert', payload: data });
+  }
 }

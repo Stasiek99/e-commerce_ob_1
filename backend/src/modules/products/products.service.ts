@@ -185,9 +185,10 @@ export class ProductsService {
         return lineOrder(a.line) - lineOrder(b.line);
       });
 
+      const page_data = products.slice(skip, skip + limit);
       const total = products.length;
       return {
-        data: products.slice(skip, skip + limit),
+        data: await this.attachOmnibusData(page_data),
         meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
       };
     }
@@ -198,9 +199,10 @@ export class ProductsService {
       products.sort((a, b) =>
         query.sortBy === 'price_asc' ? minPrice(a) - minPrice(b) : minPrice(b) - minPrice(a),
       );
+      const page_data = products.slice(skip, skip + limit);
       const total = products.length;
       return {
-        data: products.slice(skip, skip + limit),
+        data: await this.attachOmnibusData(page_data),
         meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
       };
     }
@@ -247,8 +249,9 @@ export class ProductsService {
       });
       const byId = new Map(products.map(p => [p.id, p]));
 
+      const page_data = pageIds.map(id => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null);
       return {
-        data: pageIds.map(id => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null),
+        data: await this.attachOmnibusData(page_data),
         meta: { total: interleaved.length, page, limit, totalPages: Math.ceil(interleaved.length / limit) },
       };
     }
@@ -292,8 +295,9 @@ export class ProductsService {
       });
       const byId = new Map(products.map(p => [p.id, p]));
 
+      const page_data2 = pageIds.map(id => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null);
       return {
-        data: pageIds.map(id => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null),
+        data: await this.attachOmnibusData(page_data2),
         meta: { total: interleaved.length, page, limit, totalPages: Math.ceil(interleaved.length / limit) },
       };
     }
@@ -310,7 +314,7 @@ export class ProductsService {
     ]);
 
     return {
-      data: products,
+      data: await this.attachOmnibusData(products),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -362,7 +366,8 @@ export class ProductsService {
       select: PRODUCT_SELECT,
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
-    return product;
+    const [enriched] = await this.attachOmnibusData([product]);
+    return enriched;
   }
 
   async create(data: {
@@ -431,7 +436,7 @@ export class ProductsService {
     return product;
   }
 
-  createVariant(productId: string, data: {
+  async createVariant(productId: string, data: {
     sku: string;
     label: string;
     priceInCents: number;
@@ -441,12 +446,16 @@ export class ProductsService {
     stock?: number;
     isActive?: boolean;
   }) {
-    return this.prisma.productVariant.create({
+    const variant = await this.prisma.productVariant.create({
       data: { ...data, product: { connect: { id: productId } } },
     });
+    await this.prisma.productVariantPriceHistory.create({
+      data: { variantId: variant.id, priceInCents: variant.priceInCents },
+    });
+    return variant;
   }
 
-  updateVariant(variantId: string, data: {
+  async updateVariant(variantId: string, data: {
     sku?: string;
     label?: string;
     priceInCents?: number;
@@ -456,7 +465,13 @@ export class ProductsService {
     stock?: number;
     isActive?: boolean;
   }) {
-    return this.prisma.productVariant.update({ where: { id: variantId }, data });
+    const variant = await this.prisma.productVariant.update({ where: { id: variantId }, data });
+    if (data.priceInCents !== undefined) {
+      await this.prisma.productVariantPriceHistory.create({
+        data: { variantId: variant.id, priceInCents: variant.priceInCents },
+      });
+    }
+    return variant;
   }
 
   async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }) {
@@ -474,7 +489,7 @@ export class ProductsService {
     });
 
     if (wasOutOfStock && newStock > 0) {
-      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch(() => undefined);
+      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
     }
 
     this.invalidateProductCaches();
@@ -658,18 +673,53 @@ export class ProductsService {
     });
     if (!product) return [];
 
-    const related = await this.prisma.product.findMany({
+    const raw = await this.prisma.product.findMany({
       where: { isActive: true, categoryId: product.categoryId, id: { not: product.id } },
       select: PRODUCT_SELECT,
       orderBy: [{ isFeatured: 'desc' }, { sortOrder: 'asc' }],
       take: limit,
     });
 
+    const related = await this.attachOmnibusData(raw);
+
     try {
       await this.redis.setex(cacheKey, 300, JSON.stringify(related));
     } catch {}
 
     return related;
+  }
+
+  // EU Omnibus Directive (2019/2161) — compute the lowest price charged in the
+  // preceding 30 days for variants that have an active promotional price.
+  // Returns the same product objects enriched with `lowestPrice30dInCents` on
+  // every variant. Falls back to the current price when no history exists yet.
+  private async attachOmnibusData<T extends {
+    variants: Array<{ id: string; priceInCents: number; compareAtPriceInCents?: number | null }>;
+  }>(products: T[]): Promise<T[]> {
+    const promoVariantIds = products.flatMap(p =>
+      p.variants.filter(v => v.compareAtPriceInCents != null).map(v => v.id),
+    );
+
+    const minMap = new Map<string, number>();
+    if (promoVariantIds.length) {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const mins = await this.prisma.productVariantPriceHistory.groupBy({
+        by: ['variantId'],
+        where: { variantId: { in: promoVariantIds }, recordedAt: { gte: thirtyDaysAgo } },
+        _min: { priceInCents: true },
+      });
+      for (const m of mins) {
+        if (m._min.priceInCents != null) minMap.set(m.variantId, m._min.priceInCents);
+      }
+    }
+
+    return products.map(p => ({
+      ...p,
+      variants: p.variants.map(v => ({
+        ...v,
+        lowestPrice30dInCents: minMap.get(v.id) ?? v.priceInCents,
+      })),
+    }));
   }
 
   private invalidateProductCaches(): void {

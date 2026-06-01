@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
+import { InvoiceOrder } from '../invoice/invoice.service';
 
 @Injectable()
 export class PaymentsService {
@@ -48,33 +49,68 @@ export class PaymentsService {
       });
     }
 
-    const session = await this.stripeClient.createCheckoutSession({
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      customerEmail: order.snapshotEmail,
-      currency,
-      lineItems,
-      successUrl,
-      cancelUrl,
-    });
-
-    await this.prisma.payment.create({
+    // Create the Payment row BEFORE calling Stripe so there is always a DB record
+    // when a session exists. If the DB write fails here, no Stripe session is created
+    // and no money can move without a traceable payment record.
+    const payment = await this.prisma.payment.create({
       data: {
         orderId,
+        amountInCents: order.totalInCents,
+        currency: currency.toUpperCase(),
+        provider: 'stripe',
+        // stripeCheckoutSessionId / stripePaymentIntentId filled in after Stripe confirms
+      },
+    });
+
+    let session: Awaited<ReturnType<typeof this.stripeClient.createCheckoutSession>>;
+    try {
+      session = await this.stripeClient.createCheckoutSession({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerEmail: order.snapshotEmail,
+        currency,
+        lineItems,
+        successUrl,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}`,
+        ...(order.discountInCents > 0 && {
+          discountAmountInCents: order.discountInCents,
+          couponLabel: order.couponCode ?? undefined,
+        }),
+      });
+    } catch (stripeErr) {
+      // Mark the row FAILED so the reconciliation cron (which filters on
+      // stripeCheckoutSessionId != null) does not attempt to reconcile it.
+      await this.prisma.payment
+        .update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.FAILED, failureReason: (stripeErr as Error).message },
+        })
+        .catch(() => {});
+      throw stripeErr;
+    }
+
+    if (!session.url) {
+      await this.prisma.payment
+        .update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.FAILED, failureReason: 'Stripe session missing redirect URL' },
+        })
+        .catch(() => {});
+      throw new Error('Stripe Checkout Session missing redirect URL');
+    }
+
+    // Stripe confirmed — attach the session identifiers so the webhook and
+    // reconciliation cron can find this record by stripeCheckoutSessionId.
+    await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: {
         stripeCheckoutSessionId: session.id,
         stripePaymentIntentId:
           typeof session.payment_intent === 'string'
             ? session.payment_intent
             : (session.payment_intent?.id ?? null),
-        amountInCents: order.totalInCents,
-        currency: currency.toUpperCase(),
-        provider: 'stripe',
       },
     });
-
-    if (!session.url) {
-      throw new Error('Stripe Checkout Session missing redirect URL');
-    }
 
     return { paymentUrl: session.url };
   }
@@ -155,6 +191,23 @@ export class PaymentsService {
         ? session.payment_intent
         : (session.payment_intent?.id ?? null);
 
+    // Check Stripe Radar risk score before deciding final order status.
+    // Defaults to 'normal' on any error so the payment is never silently dropped.
+    let radarRiskLevel = 'normal';
+    if (paymentIntentId) {
+      try {
+        const pi = await this.stripeClient.retrievePaymentIntentWithCharge(paymentIntentId);
+        radarRiskLevel = pi.latest_charge?.outcome?.risk_level ?? 'normal';
+      } catch (err: unknown) {
+        this.logger.warn(
+          `Could not retrieve Stripe charge for Radar risk check on order ${payment.order.orderNumber}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    const isFraudFlagged = radarRiskLevel === 'elevated' || radarRiskLevel === 'highest';
+    const newOrderStatus = isFraudFlagged ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
+
     await this.prisma.$transaction([
       this.prisma.payment.update({
         where: { id: payment.id },
@@ -167,24 +220,105 @@ export class PaymentsService {
       }),
       this.prisma.order.update({
         where: { id: payment.orderId },
-        data: { status: OrderStatus.PAID },
+        data: { status: newOrderStatus },
       }),
       this.prisma.orderEvent.create({
         data: {
           orderId: payment.orderId,
           fromStatus: OrderStatus.PENDING_PAYMENT,
-          toStatus: OrderStatus.PAID,
+          toStatus: newOrderStatus,
           actor: 'SYSTEM:stripe-webhook',
-          note: `Stripe session ${session.id}`,
+          note: isFraudFlagged
+            ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
+            : `Stripe session ${session.id}`,
         },
       }),
     ]);
+
+    if (isFraudFlagged) {
+      this.logger.warn(
+        `Order ${payment.order.orderNumber} held for FRAUD_REVIEW — Radar risk level: ${radarRiskLevel}`,
+      );
+      const adminEmail =
+        this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+        this.configService.get<string>('EMAIL_FROM');
+      if (adminEmail) {
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+        this.emailService
+          .sendFraudReviewAlert({
+            to: adminEmail,
+            orderNumber: payment.order.orderNumber,
+            customerEmail: payment.order.snapshotEmail,
+            totalInCents: payment.order.totalInCents,
+            radarRiskLevel,
+            adminUrl: frontendUrl
+              ? `${frontendUrl}/admin/orders/${payment.orderId}`
+              : undefined,
+          })
+          .catch((err: Error) => {
+            this.logger.error(
+              `Fraud review alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
+            );
+            Sentry.captureException(err);
+          });
+      }
+      // Customer is NOT notified until admin approves — do not reveal the hold.
+      return;
+    }
 
     this.logger.log(
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
-    // Merchant notification — email + optional Slack push (fire-and-forget)
+    this.dispatchPostPaymentNotifications(payment.order, paymentIntentId);
+  }
+
+  /**
+   * Admin approves a FRAUD_REVIEW order: moves to PAID and triggers the normal
+   * post-payment notifications (invoice PDF + customer confirmation email).
+   */
+  async approveFraudReview(orderId: string, actor = 'ADMIN'): Promise<void> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: {
+        items: {
+          select: {
+            snapshotName: true,
+            snapshotPrice: true,
+            snapshotVatRate: true,
+            quantity: true,
+          },
+        },
+      },
+    });
+
+    if (order.status !== OrderStatus.FRAUD_REVIEW) {
+      throw new Error(`Cannot approve order ${orderId}: status is ${order.status}, expected FRAUD_REVIEW`);
+    }
+
+    const payment = await this.prisma.payment.findUniqueOrThrow({ where: { orderId } });
+
+    await this.prisma.$transaction([
+      this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } }),
+      this.prisma.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: OrderStatus.FRAUD_REVIEW,
+          toStatus: OrderStatus.PAID,
+          actor,
+          note: 'Fraud review cleared — order approved',
+        },
+      }),
+    ]);
+
+    this.logger.log(`Fraud review approved for order ${order.orderNumber} by ${actor}`);
+    this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
+  }
+
+  private dispatchPostPaymentNotifications(
+    order: InvoiceOrder & { snapshotEmail: string; carrierCode: string },
+    _paymentIntentId: string | null,
+  ) {
     const adminEmail =
       this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
       this.configService.get<string>('EMAIL_FROM');
@@ -193,28 +327,25 @@ export class PaymentsService {
       this.emailService
         .sendNewOrderNotification({
           to: adminEmail,
-          orderNumber: payment.order.orderNumber,
-          customerEmail: payment.order.snapshotEmail,
-          totalInCents: payment.order.totalInCents,
-          items: payment.order.items.map((i) => ({
+          orderNumber: order.orderNumber,
+          customerEmail: order.snapshotEmail,
+          totalInCents: order.totalInCents,
+          items: order.items.map((i) => ({
             name: i.snapshotName,
             quantity: i.quantity,
             price: i.snapshotPrice,
           })),
-          carrierCode: payment.order.carrierCode,
+          carrierCode: order.carrierCode,
           adminUrl: frontendUrl
-            ? `${frontendUrl}/admin/orders/${payment.orderId}`
+            ? `${frontendUrl}/admin/orders/${order.id}`
             : undefined,
         })
         .catch((err: Error) => {
           this.logger.error(
-            `Merchant email notification failed for order ${payment.order.orderNumber}: ${err.message}`,
+            `Merchant email notification failed for order ${order.orderNumber}: ${err.message}`,
           );
           Sentry.captureException(err, {
-            tags: {
-              'notification.channel': 'email',
-              'order.number': payment.order.orderNumber,
-            },
+            tags: { 'notification.channel': 'email', 'order.number': order.orderNumber },
           });
         });
     }
@@ -222,12 +353,12 @@ export class PaymentsService {
     const slackWebhookUrl = this.configService.get<string>('MERCHANT_SLACK_WEBHOOK_URL');
     if (slackWebhookUrl) {
       this.postSlackOrderAlert(slackWebhookUrl, {
-        orderNumber: payment.order.orderNumber,
-        snapshotEmail: payment.order.snapshotEmail,
-        totalInCents: payment.order.totalInCents,
+        orderNumber: order.orderNumber,
+        snapshotEmail: order.snapshotEmail,
+        totalInCents: order.totalInCents,
       }).catch((err: Error) => {
         this.logger.warn(
-          `Slack merchant notification failed for order ${payment.order.orderNumber}: ${err.message}`,
+          `Slack merchant notification failed for order ${order.orderNumber}: ${err.message}`,
         );
       });
     }
@@ -235,39 +366,38 @@ export class PaymentsService {
     // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
     // Falls back to a plain payment confirmation if invoice generation fails.
     this.invoiceService
-      .processInvoice(payment.order)
+      .processInvoice(order)
       .then(({ url: _url, pdf }) =>
         this.emailService.sendPaymentConfirmedWithInvoice({
-          to: payment.order.snapshotEmail,
-          orderNumber: payment.order.orderNumber,
-          firstName: payment.order.snapshotFirstName,
-          items: payment.order.items.map((i) => ({
+          to: order.snapshotEmail,
+          orderNumber: order.orderNumber,
+          firstName: order.snapshotFirstName,
+          items: order.items.map((i) => ({
             name: i.snapshotName,
             quantity: i.quantity,
             price: i.snapshotPrice,
           })),
-          shippingCostInCents: payment.order.shippingCostInCents,
-          totalInCents: payment.order.totalInCents,
+          shippingCostInCents: order.shippingCostInCents,
+          totalInCents: order.totalInCents,
           invoiceUrl: _url,
           invoicePdf: pdf,
         }),
       )
       .catch((err: Error) => {
-        this.logger.error(`Invoice generation failed for order ${payment.order.orderNumber}: ${err.message}`);
+        this.logger.error(`Invoice generation failed for order ${order.orderNumber}: ${err.message}`);
         Sentry.withScope((scope) => {
           scope.setTag('payment.event', 'invoice_generation_failed');
-          scope.setContext('order', { orderNumber: payment.order.orderNumber, paymentId: payment.id });
+          scope.setContext('order', { orderNumber: order.orderNumber });
           Sentry.captureException(err);
         });
-        // Still deliver payment confirmation even if invoice failed
         this.emailService
           .sendPaymentConfirmed({
-            to: payment.order.snapshotEmail,
-            orderNumber: payment.order.orderNumber,
-            firstName: payment.order.snapshotFirstName,
-            totalInCents: payment.order.totalInCents,
+            to: order.snapshotEmail,
+            orderNumber: order.orderNumber,
+            firstName: order.snapshotFirstName,
+            totalInCents: order.totalInCents,
           })
-          .catch(() => undefined);
+          .catch((e) => this.logger.warn('Payment confirmed email failed', e));
       });
   }
 

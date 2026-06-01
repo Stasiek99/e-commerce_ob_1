@@ -320,6 +320,39 @@ describe('ShippingService', () => {
         );
       });
 
+      // Fix #52 regression harness — label generation time ≠ actual dispatch time.
+      // Invariant: generateLabel must record when the *label was printed*, not when
+      // the parcel was handed to the carrier. shippedAt is set separately when the
+      // order status transitions to SHIPPED.
+
+      it('sets labelGeneratedAt (not shippedAt) in the upsert create payload', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'DHL001', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'https://dhl.pdf', trackingNumber: 'DHL001' });
+
+        await service.generateLabel('order-1');
+
+        const createPayload = prisma.shipment.upsert.mock.calls[0][0].create;
+        expect(createPayload).toHaveProperty('labelGeneratedAt');
+        expect(createPayload.labelGeneratedAt).toBeInstanceOf(Date);
+        expect(createPayload).not.toHaveProperty('shippedAt');
+      });
+
+      it('sets labelGeneratedAt (not shippedAt) in the upsert update payload', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'DHL001', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'https://dhl.pdf', trackingNumber: 'DHL001' });
+
+        await service.generateLabel('order-1');
+
+        const updatePayload = prisma.shipment.upsert.mock.calls[0][0].update;
+        expect(updatePayload).toHaveProperty('labelGeneratedAt');
+        expect(updatePayload.labelGeneratedAt).toBeInstanceOf(Date);
+        expect(updatePayload).not.toHaveProperty('shippedAt');
+      });
+
       it('upserts shipment with LABEL_ERROR status when carrier throws', async () => {
         const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
         prisma.order.findUnique.mockResolvedValue(mockOrder);
@@ -333,6 +366,63 @@ describe('ShippingService', () => {
             create: expect.objectContaining({ status: ShipmentStatus.LABEL_ERROR }),
           }),
         );
+      });
+
+      // Fix #28 regression harness — carrier identifiers must survive a Supabase failure.
+      // Invariant: if the carrier API succeeds but the label upload fails, the committed
+      // shipmentId and trackingNumber are persisted in the LABEL_ERROR row so support
+      // can locate the shipment on the carrier dashboard without manual searching.
+
+      it('preserves InPost shipmentId and trackingNumber in LABEL_ERROR upsert when Supabase upload fails', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.INPOST };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+
+        // InPost API commits the shipment successfully
+        inpost.createShipment.mockResolvedValue({ id: 'INPOST_COMMITTED_999', trackingNumber: 'TRK-INPOST-999' });
+        // fetchLabelPdf returns a real PDF, so uploadShippingLabel will be called
+        inpost.fetchLabelPdf.mockResolvedValue(Buffer.from('%PDF-mock'));
+        // Supabase upload fails AFTER InPost has already committed
+        storage.uploadShippingLabel.mockRejectedValue(new Error('Supabase upload timeout'));
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('Supabase upload timeout');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.shipmentId).toBe('INPOST_COMMITTED_999');
+        expect(upsertCall.create.trackingNumber).toBe('TRK-INPOST-999');
+        expect(upsertCall.update.shipmentId).toBe('INPOST_COMMITTED_999');
+        expect(upsertCall.update.trackingNumber).toBe('TRK-INPOST-999');
+      });
+
+      it('includes raw carrier response in LABEL_ERROR upsert when Supabase upload fails', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.INPOST };
+        const carrierResult = { id: 'INPOST_COMMITTED_999', trackingNumber: 'TRK-INPOST-999' };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        inpost.createShipment.mockResolvedValue(carrierResult);
+        inpost.fetchLabelPdf.mockResolvedValue(Buffer.from('%PDF-mock'));
+        storage.uploadShippingLabel.mockRejectedValue(new Error('Supabase timeout'));
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow();
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.rawCarrierResponse).toMatchObject({
+          error: 'Supabase timeout',
+          carrierResponse: carrierResult,
+        });
+      });
+
+      it('upserts null shipmentId and trackingNumber in LABEL_ERROR when carrier itself fails (no carrier ID was ever returned)', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.INPOST };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        inpost.createShipment.mockRejectedValue(new Error('InPost API down'));
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('InPost API down');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.shipmentId).toBeNull();
+        expect(upsertCall.create.trackingNumber).toBeNull();
       });
     });
 

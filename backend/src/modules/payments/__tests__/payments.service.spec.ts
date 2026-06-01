@@ -84,9 +84,10 @@ describe('PaymentsService', () => {
           useValue: {
             payment: {
               findUnique: jest.fn(),
+              findUniqueOrThrow: jest.fn(),
               findMany: jest.fn(),
-              create: jest.fn(),
-              update: jest.fn(),
+              create: jest.fn().mockResolvedValue({ id: 'payment-1' }),
+              update: jest.fn().mockResolvedValue({}),
             },
             order: {
               findUniqueOrThrow: jest.fn(),
@@ -114,6 +115,9 @@ describe('PaymentsService', () => {
             createCheckoutSession: jest.fn(),
             constructWebhookEvent: jest.fn(),
             retrieveCheckoutSession: jest.fn(),
+            retrievePaymentIntentWithCharge: jest.fn().mockResolvedValue({
+              latest_charge: { outcome: { risk_level: 'normal' } },
+            }),
             createRefund: jest.fn(),
             createPartialRefund: jest.fn(),
           },
@@ -124,12 +128,13 @@ describe('PaymentsService', () => {
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
             sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+            sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
           provide: InvoiceService,
           useValue: {
-            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from('') }),
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
           },
         },
         {
@@ -334,6 +339,152 @@ describe('PaymentsService', () => {
       // No transaction means no stock restoration attempted
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
+
+    // ── Stripe Radar fraud review path ───────────────────────────────────────
+
+    describe('fraud review path (Stripe Radar)', () => {
+      const mockPaymentForFraud = {
+        ...mockPayment,
+        order: {
+          ...mockPayment.order,
+          snapshotLastName: 'Kowalski',
+          snapshotStreet: 'ul. Testowa 1',
+          snapshotCity: 'Kraków',
+          snapshotPostalCode: '30-001',
+          snapshotCompany: null,
+          snapshotNip: null,
+          itemsTotalInCents: 13500,
+          shippingCostInCents: 1499,
+          discountInCents: 0,
+          couponCode: null,
+          carrierCode: 'INPOST',
+          createdAt: new Date('2026-01-15'),
+          items: [
+            { snapshotName: 'Dior 100ml', snapshotPrice: 13500, snapshotVatRate: 2300, quantity: 1 },
+          ],
+        },
+      };
+
+      it('sets order status to FRAUD_REVIEW and alerts admin when Radar risk_level is elevated', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'elevated' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
+        );
+        await Promise.resolve();
+        expect(emailService.sendFraudReviewAlert).toHaveBeenCalled();
+      });
+
+      it('sets order status to FRAUD_REVIEW when Radar risk_level is highest', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'highest' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
+        );
+      });
+
+      it('does not send customer confirmation when order is held for fraud review', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'elevated' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
+        expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
+      });
+
+      it('sets order status to PAID and sends customer email when risk_level is normal', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'normal' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+        );
+        await Promise.resolve();
+        expect(emailService.sendFraudReviewAlert).not.toHaveBeenCalled();
+        expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalled();
+      });
+
+      it('defaults to PAID when retrievePaymentIntentWithCharge throws (resilience)', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+        stripeClient.retrievePaymentIntentWithCharge.mockRejectedValue(
+          new Error('Stripe API timeout'),
+        );
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+        );
+        expect(emailService.sendFraudReviewAlert).not.toHaveBeenCalled();
+      });
+
+      it('defaults to PAID and skips Radar check when paymentIntentId is null', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, payment_intent: null }),
+        );
+
+        expect(stripeClient.retrievePaymentIntentWithCharge).not.toHaveBeenCalled();
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+        );
+      });
+
+      it('includes the Radar risk level in the orderEvent note when flagged', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
+        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'elevated' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              note: expect.stringContaining('elevated'),
+            }),
+          }),
+        );
+      });
+    });
   });
 
   describe('initiatePayment', () => {
@@ -352,7 +503,7 @@ describe('PaymentsService', () => {
     it('returns paymentUrl on success', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       const result = await service.initiatePayment('order-1');
       expect(result.paymentUrl).toBe(mockSession.url);
@@ -366,7 +517,7 @@ describe('PaymentsService', () => {
     it('throws when Stripe session returns no redirect URL', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
       stripeClient.createCheckoutSession.mockResolvedValue({ ...mockSession, url: null } as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await expect(service.initiatePayment('order-1')).rejects.toThrow(
         'missing redirect URL',
@@ -379,12 +530,148 @@ describe('PaymentsService', () => {
         ...mockSession,
         payment_intent: { id: 'pi_nested_id' } as any,
       } as any);
-      prisma.payment.create.mockResolvedValue({} as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
-      const createCall = prisma.payment.create.mock.calls[0][0];
-      expect(createCall.data.stripePaymentIntentId).toBe('pi_nested_id');
+      // stripePaymentIntentId is now set via payment.update (after Stripe confirms), not payment.create
+      const updateCall = prisma.payment.update.mock.calls[0][0];
+      expect(updateCall.data.stripePaymentIntentId).toBe('pi_nested_id');
+    });
+
+    // ── coupon discount forwarding ────────────────────────────────────────
+    // Guards the fix: discountInCents must be forwarded to StripeClient so
+    // Stripe charges order.totalInCents, not the pre-discount item sum.
+
+    it('does not pass discount fields to createCheckoutSession when discountInCents is 0', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ ...mockOrderWithItems, discountInCents: 0 });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.discountAmountInCents).toBeUndefined();
+      expect(callArg.couponLabel).toBeUndefined();
+    });
+
+    it('passes discountAmountInCents and couponLabel when order has a coupon discount', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        discountInCents: 2000,
+        couponCode: 'SUMMER20',
+      });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          discountAmountInCents: 2000,
+          couponLabel: 'SUMMER20',
+        }),
+      );
+    });
+
+    it('passes couponLabel as undefined when discountInCents > 0 but couponCode is null', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        discountInCents: 1500,
+        couponCode: null,
+      });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          discountAmountInCents: 1500,
+          couponLabel: undefined,
+        }),
+      );
+    });
+
+    // ─── Fix #16 regression harness — DB row created before Stripe call ──────
+    // Invariant: payment.create must be called BEFORE createCheckoutSession so
+    // a DB record always exists when a Stripe session exists.
+
+    it('creates the Payment DB row before calling Stripe (no orphan session on DB failure)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      const callOrder: string[] = [];
+      prisma.payment.create.mockImplementation(() => {
+        callOrder.push('db-create');
+        return Promise.resolve({ id: 'payment-1' });
+      });
+      stripeClient.createCheckoutSession.mockImplementation(() => {
+        callOrder.push('stripe');
+        return Promise.resolve(mockSession as any);
+      });
+
+      await service.initiatePayment('order-1');
+
+      expect(callOrder[0]).toBe('db-create');
+      expect(callOrder[1]).toBe('stripe');
+    });
+
+    it('attaches stripeCheckoutSessionId via update after Stripe confirms, not in create', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      await service.initiatePayment('order-1');
+
+      const createData = prisma.payment.create.mock.calls[0][0].data;
+      expect(createData.stripeCheckoutSessionId).toBeUndefined();
+
+      const updateData = prisma.payment.update.mock.calls[0][0].data;
+      expect(updateData.stripeCheckoutSessionId).toBe(mockSession.id);
+    });
+
+    it('marks Payment FAILED and rethrows when Stripe throws, without leaving a dangling PENDING row', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockRejectedValue(new Error('Stripe API down'));
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow('Stripe API down');
+
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: PaymentStatus.FAILED }),
+        }),
+      );
+    });
+
+    it('marks Payment FAILED when Stripe returns no redirect URL', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue({ ...mockSession, url: null } as any);
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow('missing redirect URL');
+
+      expect(prisma.payment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: PaymentStatus.FAILED,
+            failureReason: expect.stringContaining('missing redirect URL'),
+          }),
+        }),
+      );
+    });
+
+    // ── cancel URL orderId injection ─────────────────────────────────────────
+    // Invariant: cancelUrl passed to Stripe must include ?orderId=<order.id>
+    // so the failure page can offer "Retry Payment" without creating a duplicate order.
+
+    it('appends ?orderId to the cancel URL passed to createCheckoutSession', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.cancelUrl).toMatch(/[?&]orderId=order-1/);
     });
   });
 
@@ -1407,6 +1694,9 @@ describe('PaymentsService', () => {
               createCheckoutSession: jest.fn(),
               constructWebhookEvent: jest.fn(),
               retrieveCheckoutSession: jest.fn(),
+              retrievePaymentIntentWithCharge: jest.fn().mockResolvedValue({
+                latest_charge: { outcome: { risk_level: 'normal' } },
+              }),
               createRefund: jest.fn(),
               createPartialRefund: jest.fn(),
             },
@@ -1417,12 +1707,13 @@ describe('PaymentsService', () => {
               sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
               sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
               sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+              sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
             },
           },
           {
             provide: InvoiceService,
             useValue: {
-              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', pdf: Buffer.from('') }),
+              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
             },
           },
           {
@@ -1570,6 +1861,107 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', { id: 'cs_notif', payment_intent: 'pi_notif' }),
         ),
       ).resolves.not.toThrow();
+    });
+  });
+
+  // ── approveFraudReview ──────────────────────────────────────────────────────
+  // Invariants:
+  //  - Only FRAUD_REVIEW orders can be approved; any other status throws
+  //  - On approval: order moves to PAID and post-payment notifications fire
+  //  - Customer confirmation email IS sent after admin approves
+
+  describe('approveFraudReview', () => {
+    const mockFraudOrder = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.FRAUD_REVIEW,
+      snapshotEmail: 'customer@example.com',
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Testowa 1',
+      snapshotCity: 'Kraków',
+      snapshotPostalCode: '30-001',
+      totalInCents: 14999,
+      itemsTotalInCents: 13500,
+      shippingCostInCents: 1499,
+      discountInCents: 0,
+      couponCode: null,
+      carrierCode: 'INPOST',
+      createdAt: new Date('2026-01-15'),
+      items: [
+        { snapshotName: 'Dior 100ml', snapshotPrice: 13500, snapshotVatRate: 2300, quantity: 1 },
+      ],
+    };
+
+    it('throws when the order is not in FRAUD_REVIEW status', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockFraudOrder,
+        status: OrderStatus.PAID,
+      });
+
+      await expect(service.approveFraudReview('order-1')).rejects.toThrow(
+        /Cannot approve order/,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('transitions order from FRAUD_REVIEW to PAID in a single transaction', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(prisma.order.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+      );
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            fromStatus: OrderStatus.FRAUD_REVIEW,
+            toStatus: OrderStatus.PAID,
+          }),
+        }),
+      );
+    });
+
+    it('dispatches customer confirmation email after approval', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      await Promise.resolve();
+      expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalled();
+    });
+
+    it('records the approving actor in the orderEvent', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: null,
+      });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.approveFraudReview('order-1', 'ADMIN:analyst');
+
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ actor: 'ADMIN:analyst' }),
+        }),
+      );
     });
   });
 });

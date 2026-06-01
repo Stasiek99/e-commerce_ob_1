@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { ReturnsService } from '../returns.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailService } from '../../email/email.service';
+import { PaymentsService } from '../../payments/payments.service';
 import { ReturnType as ReturnRequestType } from '../dto/create-return.dto';
 
 const ADMIN_EMAIL = 'admin@aromaterie.pl';
@@ -33,10 +34,10 @@ const COMPLAINT_DTO = {
   sealedOnReturn: undefined,
 };
 
-// orderRow: { userId } when order exists, null when order does not exist.
+// orderRow: { id, userId } when order exists, null when order does not exist.
 function buildPrismaMock(
   overrides: Partial<{ id: string; type: string; requestedResolution: string }> = {},
-  orderRow: { userId: string | null } | null = { userId: OWNER_ID },
+  orderRow: { id?: string; userId: string | null } | null = { id: 'order-uuid-1', userId: OWNER_ID },
 ) {
   const record = {
     id: 'return-id-001',
@@ -66,6 +67,7 @@ function buildPrismaMock(
 function buildReturnRecord(overrides: Record<string, unknown> = {}) {
   return {
     id: 'return-id-001',
+    orderId: 'order-uuid-1',
     orderNumber: 'ORD-2026-001',
     firstName: 'Jan',
     lastName: 'Kowalski',
@@ -90,6 +92,7 @@ describe('ReturnsService', () => {
       'sendReturnConfirmation' | 'sendReturnAdminNotification' | 'sendReturnStatusUpdate'
     >
   >;
+  let paymentsService: jest.Mocked<Pick<PaymentsService, 'refundPayment'>>;
 
   async function createModule(prismaMock = buildPrismaMock()) {
     prisma = prismaMock;
@@ -98,12 +101,14 @@ describe('ReturnsService', () => {
       sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
       sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
     };
+    paymentsService = { refundPayment: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ReturnsService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: EmailService, useValue: emailService },
+        { provide: PaymentsService, useValue: paymentsService },
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue(ADMIN_EMAIL) },
@@ -183,6 +188,16 @@ describe('ReturnsService', () => {
       expect(prisma.returnRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ deliveryDate: null }),
+        }),
+      );
+    });
+
+    it('persists orderId from the order FK lookup', async () => {
+      await createModule();
+      await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+      expect(prisma.returnRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ orderId: 'order-uuid-1' }),
         }),
       );
     });
@@ -571,6 +586,71 @@ describe('ReturnsService', () => {
       emailService.sendReturnStatusUpdate.mockRejectedValue(new Error('Resend down'));
 
       await expect(service.markRefunded('return-id-001')).resolves.toBeUndefined();
+    });
+
+    // ── Stripe refund integration ─────────────────────────────────────────────
+    // Guards the fix: markRefunded() must issue the Stripe refund + stock restore
+    // before flipping the return request status to COMPLETED.
+
+    it('throws BadRequestException when orderId is null (legacy row without FK)', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', orderId: null }),
+      );
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('calls paymentsService.refundPayment with orderId and RETURN_APPROVAL actor', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-uuid-1', 'RETURN_APPROVAL');
+    });
+
+    it('updates return status to COMPLETED after refundPayment succeeds', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
+      );
+    });
+
+    it('does not update return status when refundPayment throws — leaves it APPROVED for retry', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+      (paymentsService.refundPayment as jest.Mock).mockRejectedValue(new Error('Stripe API error'));
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow('Stripe API error');
+      expect(mock.returnRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('calls refundPayment before updating the DB — ordering is intentional', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      const callOrder: string[] = [];
+      (paymentsService.refundPayment as jest.Mock).mockImplementation(async () => {
+        callOrder.push('refundPayment');
+      });
+      mock.returnRequest.update.mockImplementation(async () => {
+        callOrder.push('statusUpdate');
+        return {};
+      });
+
+      await service.markRefunded('return-id-001');
+
+      expect(callOrder).toEqual(['refundPayment', 'statusUpdate']);
     });
   });
 });

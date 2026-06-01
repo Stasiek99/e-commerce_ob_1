@@ -87,9 +87,13 @@ export class EmailQueueProcessor extends WorkerHost {
         await this.emailService.sendMagicLink(payload);
         break;
 
+      case 'fraud_review_alert':
+        await this.emailService.sendFraudReviewAlert(payload);
+        break;
+
       default: {
         const _exhaustive: never = job.data;
-        this.logger.warn(`Unknown email job type received: ${(_exhaustive as any).type}`);
+        throw new Error(`Unknown email job type: ${(_exhaustive as any).type}`);
       }
     }
   }

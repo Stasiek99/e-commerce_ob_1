@@ -122,6 +122,11 @@ describe('OrdersService', () => {
           useValue: {
             validate: jest.fn().mockResolvedValue({ valid: false }),
             applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            calculateDiscount: jest.fn().mockImplementation((type: DiscountType, value: number, cartTotal: number) => {
+              if (type === DiscountType.PERCENTAGE) return Math.round((cartTotal * value) / 100);
+              if (type === DiscountType.FIXED_AMOUNT) return Math.min(value, cartTotal);
+              return 0;
+            }),
           },
         },
         {
@@ -153,29 +158,60 @@ describe('OrdersService', () => {
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
 
-  describe('onModuleInit', () => {
-    it('creates sequences for the current and next year outside any transaction', async () => {
-      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
+  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
+  // Fix #56 — DDL wrapped in pg_advisory_xact_lock to serialise concurrent
+  // pod startup. Without the lock two Railway replicas hold competing
+  // AccessExclusive locks and add cold-start latency under load.
 
+  describe('onModuleInit', () => {
+    let txExecuteRaw: jest.Mock;
+    let txExecuteRawUnsafe: jest.Mock;
+
+    beforeEach(() => {
+      txExecuteRaw = jest.fn().mockResolvedValue(undefined);
+      txExecuteRawUnsafe = jest.fn().mockResolvedValue(undefined);
+
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ $executeRaw: txExecuteRaw, $executeRawUnsafe: txExecuteRawUnsafe }),
+      );
+    });
+
+    it('runs DDL inside a transaction (not bare on the top-level client)', async () => {
+      await service.onModuleInit();
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('acquires pg_advisory_xact_lock before creating sequences', async () => {
+      await service.onModuleInit();
+
+      expect(txExecuteRaw).toHaveBeenCalledTimes(1);
+      const [query] = txExecuteRaw.mock.calls[0];
+      expect(String(query)).toContain('pg_advisory_xact_lock');
+    });
+
+    it('creates order_number_seq for the current year inside the transaction', async () => {
       await service.onModuleInit();
 
       const year = new Date().getFullYear();
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
       );
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+    });
+
+    it('creates order_number_seq for next year inside the transaction', async () => {
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
       );
     });
 
-    it('uses the top-level prisma client (not a transaction client) for sequence DDL', async () => {
-      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
-
+    it('does NOT call the top-level $executeRawUnsafe — all DDL goes through the tx', async () => {
       await service.onModuleInit();
 
-      // prisma.$executeRawUnsafe is the service-level client; tx.$executeRawUnsafe
-      // is the transaction-scoped client — DDL must never reach the latter
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     });
   });
 
@@ -223,7 +259,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
@@ -249,7 +285,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
@@ -282,7 +318,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedShipping = args.data.shippingCostInCents;
@@ -314,7 +350,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedShipping = args.data.shippingCostInCents;
@@ -364,6 +400,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -407,7 +444,7 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
@@ -447,6 +484,7 @@ describe('OrdersService', () => {
               });
               return { count: 1 };
             }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -506,6 +544,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -547,6 +586,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -579,6 +619,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -612,6 +653,65 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    // ─── IDOR guard: guest + saved addressId ─────────────────────────────────
+
+    it('throws BadRequestException when a guest supplies an addressId — IDOR guard', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        // userId = undefined → guest checkout
+        service.createFromCart(undefined, 'session-abc', 'guest@example.com', {
+          addressId: 'addr-belonging-to-registered-user',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not query the address table when the IDOR guard fires', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart(undefined, 'session-abc', 'guest@example.com', {
+          addressId: 'addr-belonging-to-registered-user',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prisma.address.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('allows an authenticated user to reference a saved addressId', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.address.findFirst.mockResolvedValue({
+        firstName: 'Jan', lastName: 'K', street: 'ul. X 1',
+        city: 'Kraków', postalCode: '30-001', country: 'PL', phone: '+48111111111',
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'user@example.com', {
+          addressId: 'addr-1',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).resolves.not.toThrow();
+
+      expect(prisma.address.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 'addr-1', userId: 'user-1' }) }),
+      );
+    });
+
     it('falls back to sessionId cart when userId cart is empty', async () => {
       const emptyCart = { id: 'cart-user', items: [], totalInCents: 0, itemCount: 0 };
       const sessionCart = mockCart;
@@ -627,6 +727,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -655,6 +756,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
           cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
@@ -677,28 +779,71 @@ describe('OrdersService', () => {
 
   describe('findAllForUser', () => {
     it('returns all orders for a user', async () => {
-      const orders = [{ id: 'o-1' }, { id: 'o-2' }];
+      const orders = [
+        { id: 'o-1', items: [], payment: null },
+        { id: 'o-2', items: [], payment: null },
+      ];
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.count.mockResolvedValue(2);
 
       const result = await service.findAllForUser('user-1');
 
-      expect(result.data).toEqual(orders);
+      expect(result.data).toMatchObject([{ id: 'o-1' }, { id: 'o-2' }]);
       expect(result.meta.total).toBe(2);
       expect(prisma.order.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { userId: 'user-1' } }),
       );
     });
+
+    it('appends totalPrice = quantity * snapshotPrice to each item', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [
+          { id: 'oi-1', quantity: 2, snapshotPrice: 34900, snapshotName: 'Sauvage', snapshotSku: 'DS-1' },
+          { id: 'oi-2', quantity: 1, snapshotPrice: 44900, snapshotName: 'No 5', snapshotSku: 'CN-1' },
+        ],
+        payment: null,
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllForUser('user-1');
+      const items = result.data[0].items;
+
+      expect(items[0].totalPrice).toBe(69800);
+      expect(items[1].totalPrice).toBe(44900);
+    });
+
+    it('hoists refundedAmountInCents from the payment relation', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [],
+        payment: { refundedAmountInCents: 5000 },
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllForUser('user-1');
+
+      expect(result.data[0].refundedAmountInCents).toBe(5000);
+    });
+
+    it('defaults refundedAmountInCents to 0 when payment is null', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'o-1', items: [], payment: null }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllForUser('user-1');
+
+      expect(result.data[0].refundedAmountInCents).toBe(0);
+    });
   });
 
   describe('findOneForUser', () => {
     it('returns the order when found', async () => {
-      const order = { id: 'o-1', userId: 'user-1' };
+      const order = { id: 'o-1', userId: 'user-1', items: [], payment: null };
       prisma.order.findFirst.mockResolvedValue(order);
 
       const result = await service.findOneForUser('o-1', 'user-1');
 
-      expect(result).toEqual(order);
+      expect(result).toMatchObject({ id: 'o-1', userId: 'user-1' });
     });
 
     it('throws NotFoundException when order does not belong to user', async () => {
@@ -707,6 +852,38 @@ describe('OrdersService', () => {
       await expect(service.findOneForUser('o-1', 'user-1')).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('appends totalPrice = quantity * snapshotPrice to each item', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'o-1',
+        items: [{ id: 'oi-1', quantity: 3, snapshotPrice: 10000, snapshotName: 'X', snapshotSku: 'X-1' }],
+        payment: null,
+      });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.items[0].totalPrice).toBe(30000);
+    });
+
+    it('hoists refundedAmountInCents from the payment relation', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'o-1',
+        items: [],
+        payment: { refundedAmountInCents: 12500 },
+      });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.refundedAmountInCents).toBe(12500);
+    });
+
+    it('defaults refundedAmountInCents to 0 when payment is null', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o-1', items: [], payment: null });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.refundedAmountInCents).toBe(0);
     });
   });
 
@@ -854,6 +1031,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       const result = await service.generateInvoice('order-1');
@@ -872,6 +1050,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/invoice.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
@@ -884,6 +1063,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await service.generateInvoice('order-1');
@@ -903,6 +1083,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/invoice.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       await service.generateInvoice('order-1');
@@ -963,6 +1144,7 @@ describe('OrdersService', () => {
       invoiceService.processInvoice.mockResolvedValue({
         url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
         pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
       });
 
       const result = await service.generateInvoiceForUser('order-1', 'user-1');
@@ -997,15 +1179,16 @@ describe('OrdersService', () => {
   });
 
   describe('updateStatus', () => {
-    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock }> = {}) => ({
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock; shipmentUpdateMany: jest.Mock }> = {}) => ({
       productVariant: { update: overrides.variantUpdate ?? jest.fn() },
       order: { update: overrides.orderUpdate ?? jest.fn() },
       orderEvent: { create: jest.fn() },
+      shipment: { updateMany: overrides.shipmentUpdateMany ?? jest.fn() },
     });
 
     it('transitions non-terminal status without restoring stock', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PENDING_PAYMENT,
+        status: OrderStatus.PAID,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
       const txVariantUpdate = jest.fn();
@@ -1064,34 +1247,30 @@ describe('OrdersService', () => {
       expect(increments).toEqual([{ id: 'pv-1', amount: 1 }]);
     });
 
-    it('does not restore stock when transitioning from CANCELLED (already restored)', async () => {
+    it('throws BadRequestException when attempting to exit terminal state CANCELLED', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         status: OrderStatus.CANCELLED,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
-      const txVariantUpdate = jest.fn();
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn(makeTx({ variantUpdate: txVariantUpdate })),
-      );
 
-      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+      await expect(
+        service.updateStatus('o-1', OrderStatus.REFUNDED),
+      ).rejects.toThrow(BadRequestException);
 
-      expect(txVariantUpdate).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('does not restore stock when transitioning from REFUNDED (already restored)', async () => {
+    it('throws BadRequestException when attempting to exit terminal state REFUNDED', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         status: OrderStatus.REFUNDED,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
-      const txVariantUpdate = jest.fn();
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn(makeTx({ variantUpdate: txVariantUpdate })),
-      );
 
-      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(BadRequestException);
 
-      expect(txVariantUpdate).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('is a no-op (no DB calls) when status is already the target', async () => {
@@ -1122,7 +1301,7 @@ describe('OrdersService', () => {
         })),
       );
 
-      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
 
       expect(increments).toHaveLength(1);
       expect(increments[0]).toEqual({ id: 'pv-2', amount: 2 });
@@ -1130,7 +1309,7 @@ describe('OrdersService', () => {
 
     it('fires review-request email (fire-and-forget) when status becomes DELIVERED', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PROCESSING,
+        status: OrderStatus.SHIPPED,
         items: [],
       });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
@@ -1141,15 +1320,151 @@ describe('OrdersService', () => {
 
       expect(prisma.order.findUnique).toHaveBeenCalled();
     });
+
+    // Fix #52 regression harness — shippedAt must reflect actual parcel dispatch,
+    // not label generation. Invariant: when updateStatus transitions an order to
+    // SHIPPED, it must call shipment.updateMany({ where: { orderId, shippedAt: null },
+    // data: { shippedAt: <now> } }) inside the same transaction.
+
+    it('sets shippedAt on the shipment when transitioning to SHIPPED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PROCESSING,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.SHIPPED);
+
+      expect(shipmentUpdateMany).toHaveBeenCalledWith({
+        where: { orderId: 'o-1', shippedAt: null },
+        data: { shippedAt: expect.any(Date) },
+      });
+    });
+
+    it('does not set shippedAt on the shipment for non-SHIPPED transitions', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(shipmentUpdateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── updateStatus — state machine transition guard ───────────────────────────
+
+  describe('updateStatus — state machine transition guard', () => {
+    const makeTx = () => ({
+      productVariant: { update: jest.fn() },
+      order: { update: jest.fn() },
+      orderEvent: { create: jest.fn() },
+      shipment: { updateMany: jest.fn() },
+    });
+
+    it('throws BadRequestException for every impossible transition from a terminal state', async () => {
+      const terminalToTarget: Array<[OrderStatus, OrderStatus]> = [
+        [OrderStatus.CANCELLED, OrderStatus.PAID],
+        [OrderStatus.CANCELLED, OrderStatus.PROCESSING],
+        [OrderStatus.CANCELLED, OrderStatus.SHIPPED],
+        [OrderStatus.CANCELLED, OrderStatus.DELIVERED],
+        [OrderStatus.CANCELLED, OrderStatus.REFUNDED],
+        [OrderStatus.CANCELLED, OrderStatus.PARTIALLY_REFUNDED],
+        [OrderStatus.REFUNDED,  OrderStatus.PAID],
+        [OrderStatus.REFUNDED,  OrderStatus.PROCESSING],
+        [OrderStatus.REFUNDED,  OrderStatus.SHIPPED],
+        [OrderStatus.REFUNDED,  OrderStatus.DELIVERED],
+        [OrderStatus.REFUNDED,  OrderStatus.CANCELLED],
+        [OrderStatus.REFUNDED,  OrderStatus.PARTIALLY_REFUNDED],
+      ];
+
+      for (const [current, target] of terminalToTarget) {
+        prisma.order.findUniqueOrThrow.mockResolvedValue({ status: current, items: [] });
+
+        await expect(service.updateStatus('o-1', target)).rejects.toThrow(BadRequestException);
+      }
+    });
+
+    it('throws BadRequestException for illegal forward skips (e.g. PENDING_PAYMENT → DELIVERED)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PENDING_PAYMENT,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.DELIVERED),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException for illegal backwards transitions (e.g. SHIPPED → PROCESSING)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.PROCESSING),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not enter the transaction when the guard fires', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.REFUNDED,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.PROCESSING),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('allows every valid transition in the happy path', async () => {
+      const validTransitions: Array<[OrderStatus, OrderStatus]> = [
+        [OrderStatus.PENDING_PAYMENT,    OrderStatus.PAID],
+        [OrderStatus.PENDING_PAYMENT,    OrderStatus.CANCELLED],
+        [OrderStatus.PAID,               OrderStatus.PROCESSING],
+        [OrderStatus.PAID,               OrderStatus.SHIPPED],
+        [OrderStatus.PAID,               OrderStatus.CANCELLED],
+        [OrderStatus.PAID,               OrderStatus.REFUNDED],
+        [OrderStatus.PROCESSING,         OrderStatus.SHIPPED],
+        [OrderStatus.PROCESSING,         OrderStatus.CANCELLED],
+        [OrderStatus.PROCESSING,         OrderStatus.REFUNDED],
+        [OrderStatus.SHIPPED,            OrderStatus.DELIVERED],
+        [OrderStatus.SHIPPED,            OrderStatus.REFUNDED],
+        [OrderStatus.DELIVERED,          OrderStatus.REFUNDED],
+        [OrderStatus.PARTIALLY_REFUNDED, OrderStatus.REFUNDED],
+      ];
+
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail early-exit
+
+      for (const [current, target] of validTransitions) {
+        prisma.order.findUniqueOrThrow.mockResolvedValue({ status: current, items: [] });
+
+        await expect(service.updateStatus('o-1', target)).resolves.not.toThrow();
+      }
+    });
   });
 
   describe('createFromCart (coupon branches)', () => {
-    const buildTx = (_overrides: { couponApply?: jest.Mock } = {}) => ({
+    const buildTx = (coupon: { id: string; discountType: DiscountType; value: number; minSpendInCents: number | null } | null = null) => ({
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
       },
+      coupon: { findUnique: jest.fn().mockResolvedValue(coupon) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
@@ -1182,7 +1497,7 @@ describe('OrdersService', () => {
 
       let capturedTotal: number | undefined;
       prisma.$transaction.mockImplementation(async (fn: any) => {
-        const tx = buildTx();
+        const tx = buildTx({ id: 'coupon-1', discountType: DiscountType.FIXED_AMOUNT, value: 1000, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedTotal = args.data.totalInCents;
           return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
@@ -1197,7 +1512,7 @@ describe('OrdersService', () => {
         couponCode: 'SAVE10',
       });
 
-      // itemsTotal=114700, shipping=1999, discount=1000 → total=115699
+      // itemsTotal=114700 (fresh prices unchanged), shipping=1999, discount=min(1000,114700)=1000 → total=115699
       expect(capturedTotal).toBe(114700 + 1999 - 1000);
     });
 
@@ -1213,7 +1528,7 @@ describe('OrdersService', () => {
 
       let capturedDiscount: number | undefined;
       prisma.$transaction.mockImplementation(async (fn: any) => {
-        const tx = buildTx();
+        const tx = buildTx({ id: 'coupon-2', discountType: DiscountType.FREE_SHIPPING, value: 0, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedDiscount = args.data.discountInCents;
           return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
@@ -1278,7 +1593,7 @@ describe('OrdersService', () => {
 
   describe('findAllAdmin', () => {
     it('returns all orders without status filter', async () => {
-      prisma.order.findMany.mockResolvedValue([{ id: 'o-1' }]);
+      prisma.order.findMany.mockResolvedValue([{ id: 'o-1', items: [], payment: null }]);
       prisma.order.count.mockResolvedValue(1);
 
       const result = await service.findAllAdmin({});
@@ -1298,6 +1613,32 @@ describe('OrdersService', () => {
       expect(prisma.order.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { status: OrderStatus.PAID } }),
       );
+    });
+
+    it('appends totalPrice to each item in admin response', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [{ id: 'oi-1', quantity: 1, snapshotPrice: 49900, snapshotName: 'Y', snapshotSku: 'Y-1' }],
+        payment: { refundedAmountInCents: 0 },
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllAdmin({});
+
+      expect(result.data[0].items[0].totalPrice).toBe(49900);
+    });
+
+    it('hoists refundedAmountInCents from payment in admin response', async () => {
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        items: [],
+        payment: { refundedAmountInCents: 9900 },
+      }]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.findAllAdmin({});
+
+      expect(result.data[0].refundedAmountInCents).toBe(9900);
     });
   });
 
@@ -1427,7 +1768,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
@@ -1461,7 +1802,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -1478,7 +1819,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -1548,37 +1889,26 @@ describe('OrdersService', () => {
       expect(stockRestored).toContain('pv-1');
     });
 
-    it('adds PAID orders to needsRefund list', async () => {
+    it('calls refundPayment for PAID orders instead of the manual transaction', async () => {
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PAID)];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.$transaction.mockImplementation(async (fn: any) => {
-        await fn({
-          productVariant: { update: jest.fn() },
-          order: { update: jest.fn() },
-          orderEvent: { create: jest.fn() },
-        });
-      });
 
       const result = await service.bulkCancel(['o-1']);
 
       expect(result.succeeded).toBe(1);
-      expect(result.needsRefund).toContain('ORD-001');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('o-1', 'ADMIN');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('adds PROCESSING orders to needsRefund list', async () => {
+    it('calls refundPayment for PROCESSING orders instead of the manual transaction', async () => {
       const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PROCESSING)];
       prisma.order.findMany.mockResolvedValue(orders);
-      prisma.$transaction.mockImplementation(async (fn: any) => {
-        await fn({
-          productVariant: { update: jest.fn() },
-          order: { update: jest.fn() },
-          orderEvent: { create: jest.fn() },
-        });
-      });
 
       const result = await service.bulkCancel(['o-1']);
 
-      expect(result.needsRefund).toContain('ORD-001');
+      expect(result.succeeded).toBe(1);
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('o-1', 'ADMIN');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('rejects non-cancellable statuses: CANCELLED, REFUNDED, SHIPPED, DELIVERED', async () => {
@@ -1594,7 +1924,6 @@ describe('OrdersService', () => {
 
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(4);
-      expect(result.needsRefund).toHaveLength(0);
     });
 
     it('sends cancellation email for each cancelled order', async () => {
@@ -1657,7 +1986,110 @@ describe('OrdersService', () => {
 
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(0);
-      expect(result.needsRefund).toHaveLength(0);
+    });
+
+    // ─── Issue #13 regression harness ────────────────────────────────────────
+
+    it('blocks PARTIALLY_REFUNDED orders — adds to failed without entering the transaction', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.PARTIALLY_REFUNDED)];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0].orderNumber).toBe('ORD-001');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('restores only active quantity (quantity − cancelledQuantity) per item, not full quantity', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT, [
+          { productVariantId: 'pv-1', quantity: 5, cancelledQuantity: 2 }, // activeQty = 3
+          { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 0 }, // activeQty = 3
+        ] as any[]),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const increments: Array<{ id: string; amount: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              increments.push({ id: args.where.id, amount: args.data.stock.increment });
+            }),
+          },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.bulkCancel(['o-1']);
+
+      expect(increments).toEqual([
+        { id: 'pv-1', amount: 3 },
+        { id: 'pv-2', amount: 3 },
+      ]);
+    });
+
+    it('skips stock restore for items where all units were already cancelled (activeQty = 0)', async () => {
+      const orders = [
+        makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT, [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — must be skipped
+          { productVariantId: 'pv-2', quantity: 4, cancelledQuantity: 1 }, // activeQty = 3 — must be restored
+        ] as any[]),
+      ];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const updatedVariants: string[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              updatedVariants.push(args.where.id);
+            }),
+          },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.bulkCancel(['o-1']);
+
+      expect(updatedVariants).toEqual(['pv-2']);
+      expect(updatedVariants).not.toContain('pv-1');
+    });
+  });
+
+  describe('retryPayment', () => {
+    it('throws NotFoundException when order does not exist or belongs to a different user', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when order status is not PENDING_PAYMENT', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1', userId: 'user-1', status: OrderStatus.PAID });
+
+      await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('returns a new paymentUrl when order is PENDING_PAYMENT and owned by the user', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1', userId: 'user-1', status: OrderStatus.PENDING_PAYMENT });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe.com/pay/session-abc' });
+
+      const result = await service.retryPayment('order-1', 'user-1');
+
+      expect(paymentsService.initiatePayment).toHaveBeenCalledWith('order-1');
+      expect(result).toEqual({ paymentUrl: 'https://stripe.com/pay/session-abc' });
+    });
+
+    it('does not call initiatePayment when order is not PENDING_PAYMENT', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1', userId: 'user-1', status: OrderStatus.CANCELLED });
+
+      await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(BadRequestException);
+
+      expect(paymentsService.initiatePayment).not.toHaveBeenCalled();
     });
   });
 
@@ -1779,6 +2211,23 @@ describe('OrdersService', () => {
       ).rejects.toThrow('Invalid quantity 0');
     });
 
+    it('throws BadRequestException when cancelledQuantity already equals quantity (remaining is 0)', async () => {
+      // Guards the DB CHECK: 0 <= cancelledQuantity <= quantity.
+      // When an item is fully cancelled, no further quantity can be removed.
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        items: [
+          { id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 3, snapshotName: 'Dior', snapshotSku: 'DS', snapshotPrice: 34900 },
+        ],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('delegates to paymentsService.partialRefund with resolved items and CUSTOMER actor', async () => {
       prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
 
@@ -1890,17 +2339,18 @@ describe('OrdersService', () => {
     });
   });
 
-  // Merchant notification was removed from createFromCart — it now fires only
-  // on checkout.session.completed (confirmed payment). Tests in
-  // payments.service.spec.ts cover the notification payload and channels.
-  describe('createFromCart — no premature merchant notification', () => {
+  // Fix #27: order confirmation email moved to markSessionPaid() (Stripe webhook).
+  // Neither the merchant notification nor the customer confirmation email may fire
+  // from createFromCart — they must only trigger after payment is confirmed.
+  describe('createFromCart — no premature emails (fix #27)', () => {
     let svc: OrdersService;
     let emailService: any;
 
     const buildTx = () => ({
       $executeRawUnsafe: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
+      coupon: { findUnique: jest.fn().mockResolvedValue(null) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
@@ -1954,6 +2404,11 @@ describe('OrdersService', () => {
             useValue: {
               validate: jest.fn().mockResolvedValue({ valid: false }),
               applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+              calculateDiscount: jest.fn().mockImplementation((type: DiscountType, value: number, cartTotal: number) => {
+                if (type === DiscountType.PERCENTAGE) return Math.round((cartTotal * value) / 100);
+                if (type === DiscountType.FIXED_AMOUNT) return Math.min(value, cartTotal);
+                return 0;
+              }),
             },
           },
           {
@@ -1984,34 +2439,226 @@ describe('OrdersService', () => {
       expect(emailService.sendNewOrderNotification).not.toHaveBeenCalled();
     });
 
-    it('still sends order confirmation email to the customer from createFromCart', async () => {
+    it('does NOT fire sendOrderConfirmation from createFromCart — email must only fire from markSessionPaid after Stripe webhook', async () => {
       await svc.createFromCart('user-1', undefined, 'customer@example.com', DHL_DTO);
       await Promise.resolve();
 
-      expect(emailService.sendOrderConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'customer@example.com' }),
-      );
+      expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
     });
   });
 
   describe('getUnreadCount', () => {
-    it('returns count of orders with PAID status', async () => {
+    // Fix #53 — filter by isRead: false so the badge resets after admin views orders
+
+    it('filters by status PAID AND isRead false — no longer a monotonic all-time count', async () => {
       prisma.order.count.mockResolvedValue(7);
 
       const result = await service.getUnreadCount();
 
       expect(result).toEqual({ count: 7 });
       expect(prisma.order.count).toHaveBeenCalledWith({
-        where: { status: OrderStatus.PAID },
+        where: { status: OrderStatus.PAID, isRead: false },
       });
     });
 
-    it('returns { count: 0 } when no PAID orders exist', async () => {
+    it('returns { count: 0 } when no unread PAID orders exist', async () => {
       prisma.order.count.mockResolvedValue(0);
 
       const result = await service.getUnreadCount();
 
       expect(result).toEqual({ count: 0 });
+    });
+
+    it('does NOT pass isRead: true in the where clause (read orders are excluded)', async () => {
+      prisma.order.count.mockResolvedValue(3);
+
+      await service.getUnreadCount();
+
+      const whereClause = prisma.order.count.mock.calls[0][0].where;
+      expect(whereClause.isRead).toBe(false);
+    });
+  });
+
+  // ─── findOneAdmin — marks order as read on first access ──────────────────────
+
+  describe('findOneAdmin', () => {
+    const mockOrderUnread = {
+      id: 'order-1',
+      status: OrderStatus.PAID,
+      isRead: false,
+      items: [],
+      payment: null,
+      shipment: null,
+      user: { email: 'jan@example.com' },
+    };
+
+    const mockOrderAlreadyRead = { ...mockOrderUnread, isRead: true };
+
+    it('throws NotFoundException when order does not exist', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.findOneAdmin('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the order when it exists', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderUnread);
+      prisma.order.update.mockResolvedValue({ ...mockOrderUnread, isRead: true });
+
+      const result = await service.findOneAdmin('order-1');
+
+      expect(result).toMatchObject({ id: 'order-1' });
+    });
+
+    it('marks an unread order as isRead: true when admin opens it', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderUnread);
+      prisma.order.update.mockResolvedValue({ ...mockOrderUnread, isRead: true });
+
+      await service.findOneAdmin('order-1');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { isRead: true },
+      });
+    });
+
+    it('does NOT call order.update when order is already read', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderAlreadyRead);
+
+      await service.findOneAdmin('order-1');
+
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Fix #15 regression harness — price-change race condition ────────────────
+  // Invariant: snapshotPrice, itemsTotalInCents, and discountInCents must all be
+  // computed from the DB price at commit time, not from the stale cart read.
+
+  describe('createFromCart — price-change race condition (fix #15 regression harness)', () => {
+    const buildRaceTx = (
+      freshPrices: Array<{ id: string; priceInCents: number }>,
+      coupon: { id: string; discountType: DiscountType; value: number; minSpendInCents: number | null } | null = null,
+    ) => ({
+      $executeRawUnsafe: jest.fn(),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+      productVariant: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue(freshPrices),
+      },
+      coupon: { findUnique: jest.fn().mockResolvedValue(coupon) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+      cartItem: { deleteMany: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    it('uses the fresh DB price as snapshotPrice, not the stale cart price', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      // pv-1 price increased from 34900 (in cart) to 39900 (DB at commit time)
+      const freshPrices = [{ id: 'pv-1', priceInCents: 39900 }, { id: 'pv-2', priceInCents: 44900 }];
+      let capturedItems: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildRaceTx(freshPrices);
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedItems = args.data.items.create;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const item1 = capturedItems.find((i: any) => i.productVariantId === 'pv-1');
+      expect(item1.snapshotPrice).toBe(39900);
+      expect(item1.snapshotPrice).not.toBe(34900); // must not use the stale cart price
+    });
+
+    it('recomputes itemsTotalInCents and totalInCents from fresh variant prices, not stale cart total', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      // pv-1 price went from 34900 to 39900 → fresh total = 2*39900 + 44900 = 124700
+      const freshPrices = [{ id: 'pv-1', priceInCents: 39900 }, { id: 'pv-2', priceInCents: 44900 }];
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildRaceTx(freshPrices);
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedOrderData = args.data;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const freshItemsTotal = 2 * 39900 + 44900; // 124700
+      expect(capturedOrderData.itemsTotalInCents).toBe(freshItemsTotal);
+      expect(capturedOrderData.totalInCents).toBe(freshItemsTotal + 1999); // + DHL
+      expect(capturedOrderData.itemsTotalInCents).not.toBe(mockCart.totalInCents); // not stale
+    });
+
+    it('recomputes PERCENTAGE coupon discount against the fresh items total', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      couponService.validate.mockResolvedValue({
+        valid: true,
+        couponId: 'coupon-pct',
+        discountType: DiscountType.PERCENTAGE,
+        discountAmountInCents: Math.round(mockCart.totalInCents * 10 / 100), // stale outer amount
+      });
+      // pv-1 price increased → fresh total 124700 → 10% = 12470 (not 11470 from stale cart)
+      const freshPrices = [{ id: 'pv-1', priceInCents: 39900 }, { id: 'pv-2', priceInCents: 44900 }];
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = buildRaceTx(freshPrices, { id: 'coupon-pct', discountType: DiscountType.PERCENTAGE, value: 10, minSpendInCents: null });
+        tx.order.create = jest.fn().mockImplementation((args: any) => {
+          capturedOrderData = args.data;
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+        });
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        couponCode: 'SAVE10PCT',
+      });
+
+      const freshItemsTotal = 2 * 39900 + 44900; // 124700
+      expect(capturedOrderData.discountInCents).toBe(Math.round(freshItemsTotal * 10 / 100)); // 12470
+      expect(capturedOrderData.discountInCents).not.toBe(Math.round(mockCart.totalInCents * 10 / 100)); // not 11470
+    });
+
+    it('throws BadRequestException inside the transaction when fresh prices drop below coupon minSpendInCents', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      const couponService = (service as any).couponService;
+      // Outer validation passes — stale cart total (114700) is above the 50000 minimum
+      couponService.validate.mockResolvedValue({
+        valid: true,
+        couponId: 'coupon-min',
+        discountType: DiscountType.FIXED_AMOUNT,
+        discountAmountInCents: 500,
+      });
+      // Fresh prices collapsed: total = 2*1000 + 1000 = 3000, below 50000 minimum
+      const cheapPrices = [{ id: 'pv-1', priceInCents: 1000 }, { id: 'pv-2', priceInCents: 1000 }];
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(buildRaceTx(cheapPrices, { id: 'coupon-min', discountType: DiscountType.FIXED_AMOUNT, value: 500, minSpendInCents: 50000 })),
+      );
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+          couponCode: 'MINSPEND',
+        }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 
@@ -2032,6 +2679,7 @@ describe('OrdersService', () => {
           ...tx,
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -2077,6 +2725,7 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -2100,6 +2749,135 @@ describe('OrdersService', () => {
 
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000001`);
+    });
+  });
+
+  // ─── fire-and-forget email error handling (fix #38) ─────────────────────────
+  // Invariant: email failures must be logged via logger.warn, never swallowed.
+  // Each fire-and-forget call must resolve the outer function even when the
+  // email service rejects, and the rejection must be captured in a warn log.
+
+  describe('fire-and-forget email error handling', () => {
+    const flush = () => new Promise<void>((r) => setImmediate(r));
+
+    it('cancelByUser logs warning and resolves when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Queue connection refused');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 10000,
+        items: [{ productVariantId: 'pv-1', quantity: 1 }],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        }),
+      );
+
+      await expect(service.cancelByUser('order-1', 'user-1')).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('cancellation email'),
+        emailError,
+      );
+    });
+
+    it('cancelItemsByUser logs warning and resolves when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Redis write timeout');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PAID,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 100000,
+        items: [{ id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 0, snapshotName: 'X', snapshotSku: 'X-1', snapshotPrice: 34900 }],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', { items: [{ orderItemId: 'item-1', quantity: 1 }] }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('cancellation email'),
+        emailError,
+      );
+    });
+
+    it('updateStatus logs warning and resolves when dispatchReviewRequestEmail rejects', async () => {
+      const emailError = new Error('BullMQ not reachable');
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        }),
+      );
+      // dispatchReviewRequestEmail reads from DB — make it throw to simulate full pipeline failure
+      prisma.order.findUnique.mockRejectedValue(emailError);
+
+      await expect(service.updateStatus('order-1', OrderStatus.DELIVERED)).resolves.not.toThrow();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Review request email'),
+        emailError,
+      );
+    });
+
+    it('bulkMarkAsShipped logs warning and still counts order as succeeded when shipping email rejects', async () => {
+      const emailError = new Error('SMTP timeout');
+      const emailService = (service as any).emailService;
+      emailService.sendShippingNotification.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PAID,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        carrierCode: CarrierCode.DHL,
+        shipment: { trackingNumber: 'TRK001' },
+      }]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
+      );
+
+      const result = await service.bulkMarkAsShipped(['o-1']);
+      await flush();
+
+      expect(result.succeeded).toBe(1);
+      expect(result.failed).toHaveLength(0);
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('shipping notification email'),
+        emailError,
+      );
     });
   });
 });

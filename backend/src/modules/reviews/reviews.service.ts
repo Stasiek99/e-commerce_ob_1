@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,27 +13,25 @@ export class ReviewsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(userId: string, dto: CreateReviewDto) {
-    if (dto.orderId) {
-      const order = await this.prisma.order.findFirst({
-        where: { id: dto.orderId, userId },
-        include: {
-          items: { include: { productVariant: { select: { productId: true } } } },
-        },
-      });
-      if (!order) throw new NotFoundException('Order not found');
-      if (order.status !== OrderStatus.DELIVERED) {
-        throw new BadRequestException(
-          'Możesz ocenić produkt tylko po jego dostarczeniu.',
-        );
-      }
-      const hasProduct = order.items.some(
-        (i) => i.productVariant.productId === dto.productId,
+    const order = await this.prisma.order.findFirst({
+      where: { id: dto.orderId, userId },
+      include: {
+        items: { include: { productVariant: { select: { productId: true } } } },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== OrderStatus.DELIVERED) {
+      throw new BadRequestException(
+        'Możesz ocenić produkt tylko po jego dostarczeniu.',
       );
-      if (!hasProduct) {
-        throw new BadRequestException(
-          'Ten produkt nie znajduje się w wybranym zamówieniu.',
-        );
-      }
+    }
+    const hasProduct = order.items.some(
+      (i) => i.productVariant.productId === dto.productId,
+    );
+    if (!hasProduct) {
+      throw new BadRequestException(
+        'Ten produkt nie znajduje się w wybranym zamówieniu.',
+      );
     }
 
     const product = await this.prisma.product.findUnique({
@@ -40,17 +39,24 @@ export class ReviewsService {
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
 
-    return this.prisma.review.create({
-      data: {
-        productId: dto.productId,
-        userId,
-        orderId: dto.orderId ?? null,
-        rating: dto.rating,
-        title: dto.title?.trim() ?? null,
-        body: dto.body?.trim() ?? null,
-        status: 'PENDING',
-      },
-    });
+    try {
+      return await this.prisma.review.create({
+        data: {
+          productId: dto.productId,
+          userId,
+          orderId: dto.orderId,
+          rating: dto.rating,
+          title: dto.title?.trim() ?? null,
+          body: dto.body?.trim() ?? null,
+          status: 'PENDING',
+        },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('You have already reviewed this product');
+      }
+      throw err;
+    }
   }
 
   async getByProduct(
@@ -142,14 +148,29 @@ export class ReviewsService {
     }));
   }
 
-  async markHelpful(id: string) {
-    const review = await this.prisma.review.findUnique({ where: { id } });
+  async markHelpful(reviewId: string, userId: string) {
+    const review = await this.prisma.review.findUnique({ where: { id: reviewId } });
     if (!review || review.status !== 'APPROVED') {
       throw new NotFoundException('Review not found');
     }
-    return this.prisma.review.update({
-      where: { id },
-      data: { helpfulCount: { increment: 1 } },
+
+    try {
+      await this.prisma.$transaction([
+        this.prisma.reviewHelpfulVote.create({ data: { reviewId, userId } }),
+        this.prisma.review.update({
+          where: { id: reviewId },
+          data: { helpfulCount: { increment: 1 } },
+        }),
+      ]);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('You have already marked this review as helpful');
+      }
+      throw err;
+    }
+
+    return this.prisma.review.findUnique({
+      where: { id: reviewId },
       select: { id: true, helpfulCount: true },
     });
   }
