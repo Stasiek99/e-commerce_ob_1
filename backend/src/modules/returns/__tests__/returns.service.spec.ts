@@ -12,13 +12,17 @@ const OWNER_ID = 'user-owner-1';
 // Distinct from dto.email — confirms the service uses the DB record, not the caller-supplied value.
 const USER_ACCOUNT_EMAIL = 'authenticated-user@account.example.com';
 
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+}
+
 const WITHDRAWAL_DTO = {
   orderNumber: 'ORD-2026-001',
   email: 'jan@example.com',
   firstName: 'Jan',
   lastName: 'Kowalski',
   type: ReturnRequestType.WITHDRAWAL,
-  deliveryDate: '2026-05-15',
+  deliveryDate: daysAgo(5), // 5 days ago — always within the 14-day window
   items: [{ productName: 'Perfumy Gold 50ml', quantity: 1 }],
   sealedOnReturn: true,
   reason: undefined,
@@ -182,7 +186,7 @@ describe('ReturnsService', () => {
       expect(prisma.returnRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            deliveryDate: new Date('2026-05-15'),
+            deliveryDate: new Date(WITHDRAWAL_DTO.deliveryDate),
           }),
         }),
       );
@@ -291,7 +295,7 @@ describe('ReturnsService', () => {
       await createModule();
       await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
       expect(emailService.sendReturnAdminNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ deliveryDate: '2026-05-15' }),
+        expect.objectContaining({ deliveryDate: WITHDRAWAL_DTO.deliveryDate }),
       );
     });
 
@@ -375,6 +379,59 @@ describe('ReturnsService', () => {
           data: expect.objectContaining({ sealedOnReturn: null }),
         }),
       );
+    });
+  });
+
+  // ── 14-day withdrawal window guard (Art. 27 UoK) ─────────────────────────
+
+  describe('14-day withdrawal window guard', () => {
+    it('throws BadRequestException for WITHDRAWAL when deliveryDate is absent', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO } as any;
+      delete dto.deliveryDate;
+
+      await expect(service.create(dto, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException for WITHDRAWAL when deliveryDate is 15 days ago', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(15) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks a WITHDRAWAL with a backdated deliveryDate of 20 days ago', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(20) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('allows WITHDRAWAL when deliveryDate is 5 days ago (within the 14-day window)', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(5) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows WITHDRAWAL when deliveryDate is today (0 days ago)', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(0) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('does not apply the 14-day check for COMPLAINT type', async () => {
+      await createModule(buildPrismaMock({ type: ReturnRequestType.COMPLAINT }));
+      const dto = { ...COMPLAINT_DTO, deliveryDate: daysAgo(30) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
     });
   });
 

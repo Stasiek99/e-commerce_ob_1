@@ -52,6 +52,23 @@ export class ReturnsService {
       );
     }
 
+    // Art. 27 UoK: right of withdrawal expires 14 days after delivery. Enforce server-side
+    // so a direct API call with a backdated deliveryDate cannot open the admin refund flow.
+    if (dto.type === 'WITHDRAWAL') {
+      if (!dto.deliveryDate) {
+        throw new BadRequestException(
+          'Odstąpienie od umowy wymaga podania daty dostarczenia przesyłki.',
+        );
+      }
+      const windowEnd = new Date(dto.deliveryDate).getTime() + 14 * 24 * 60 * 60 * 1000;
+      if (Date.now() > windowEnd) {
+        throw new BadRequestException(
+          'Termin na odstąpienie od umowy (14 dni od daty dostarczenia) już minął ' +
+          '(art. 27 Ustawy o prawach konsumenta).',
+        );
+      }
+    }
+
     const request = await this.prisma.returnRequest.create({
       data: {
         orderId: order.id,
