@@ -7,7 +7,7 @@ export default {
   transform: {
     '^.+\\.(ts|js|html|svg)$': [
       'jest-preset-angular',
-      { tsconfig: '<rootDir>/tsconfig.spec.json' },
+      { tsconfig: '<rootDir>/tsconfig.spec.json', stringifyContentPathRegex: '\\.html$' },
     ],
   },
   moduleNameMapper: {

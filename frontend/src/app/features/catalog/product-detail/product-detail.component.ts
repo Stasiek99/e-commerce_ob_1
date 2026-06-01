@@ -133,7 +133,13 @@ const CATEGORY_LABELS: Record<string, string> = {
           <!-- Price + stock -->
           @if (selectedVariant()) {
             <div class="detail__price-row">
-              <span class="detail__price">{{ selectedVariant()!.priceInCents | price }}</span>
+              @if (selectedVariant()!.compareAtPriceInCents) {
+                <span class="detail__sale-badge">PROMOCJA</span>
+              }
+              <span class="detail__price" [class.detail__price--sale]="!!selectedVariant()!.compareAtPriceInCents">{{ selectedVariant()!.priceInCents | price }}</span>
+              @if (selectedVariant()!.compareAtPriceInCents) {
+                <span class="detail__compare-price">{{ selectedVariant()!.compareAtPriceInCents | price }}</span>
+              }
               @if (selectedVariant()!.stock > 0) {
                 <span class="detail__stock detail__stock--ok">
                   <tui-icon icon="@tui.check-circle" />
@@ -403,6 +409,13 @@ const CATEGORY_LABELS: Record<string, string> = {
     /* Price + stock */
     .detail__price-row { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
+    .detail__price--sale { color: var(--color-error); }
+    .detail__compare-price { font-size: 17px; font-weight: 500; color: var(--color-secondary); text-decoration: line-through; }
+    .detail__sale-badge {
+      background: var(--color-error); color: #fff;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+      padding: 3px 7px; border-radius: 3px; text-transform: uppercase;
+    }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
     .detail__stock--ok { color: var(--color-success); }

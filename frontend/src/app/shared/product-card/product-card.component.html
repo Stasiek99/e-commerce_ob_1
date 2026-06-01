@@ -37,9 +37,15 @@
         <p class="product-card__brand">{{ product.brand }}</p>
       }
 
-      <p class="product-card__price">
+      @if (firstVariant?.compareAtPriceInCents) {
+        <span class="product-card__sale-badge">PROMOCJA</span>
+      }
+      <p class="product-card__price" [class.product-card__price--sale]="!!firstVariant?.compareAtPriceInCents">
         od {{ firstVariant?.priceInCents | price }}
       </p>
+      @if (firstVariant?.compareAtPriceInCents) {
+        <p class="product-card__compare-price">od {{ firstVariant?.compareAtPriceInCents | price }}</p>
+      }
     </div>
   </a>
 

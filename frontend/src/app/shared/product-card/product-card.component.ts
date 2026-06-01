@@ -12,7 +12,7 @@ export interface ProductCardData {
   slug: string;
   brand?: string | null;
   images?: Array<{ url: string }>;
-  variants?: Array<{ id: string; label: string; priceInCents: number; stock: number }>;
+  variants?: Array<{ id: string; label: string; priceInCents: number; compareAtPriceInCents?: number | null; stock: number }>;
 }
 
 @Component({
