@@ -4,10 +4,16 @@
 Done:
 Legal / Compliance
 - EU Omnibus Directive — when displaying a promotional price, you must show the lowest price from the preceding 30 days. Your discount logic needs to store price history, not just the current price.
+
 Financial / Tax
 - Chargeback ratio — Stripe will flag and eventually close accounts above ~1% dispute rate. You need a fraud review step before fulfillment, not just after disputes arrive.
+
 Technical
-- 
+- Bot protection on checkout — scalpers and stockout bots hit fragrance stores heavily (limited editions). Consider Cloudflare Turnstile or similar on cart add and checkout start, not just login.
+- Crawl budget and faceted navigation — if you add filters (size, brand, concentration), each combination generates a URL. Without noindex or canonical tagging on filter pages, Google wastes crawl budget and you get duplicate
+  content penalties.
+- Structured data (Schema.org Product) — price, availability, aggregateRating, and breadcrumb markup directly affects Google Shopping and rich results CTR. Worth doing before launch, not after.
+
 ---
 Not yet:
 
@@ -17,23 +23,9 @@ Legal / Compliance
 Financial / Tax
 - EU VAT OSS — if you sell to consumers in other EU countries above the €10k threshold, you register once in Poland and file a quarterly OSS return instead of 27 separate VAT registrations. Plan your checkout to capture
   customer country accurately.
-
-Technical
-- Bot protection on checkout — scalpers and stockout bots hit fragrance stores heavily (limited editions). Consider Cloudflare Turnstile or similar on cart add and checkout start, not just login.
-- Crawl budget and faceted navigation — if you add filters (size, brand, concentration), each combination generates a URL. Without noindex or canonical tagging on filter pages, Google wastes crawl budget and you get duplicate
-  content penalties.
-- Structured data (Schema.org Product) — price, availability, aggregateRating, and breadcrumb markup directly affects Google Shopping and rich results CTR. Worth doing before launch, not after.
-
-Operations
-- Returns physical process — your software handles RMA logic, but do you have a returns address, a policy for opened vs. sealed bottles, and a process for re-stocking vs. destroying returned goods? Opened fragrance bottles
-  can't legally be resold as new in the EU.
-- Carrier damage claims — InPost and DPD have strict time windows (usually 24–48h) to file damage claims. You need a photo-at-packing workflow or you'll lose every dispute.
-- Supplier lead times for reorders — out-of-stock after a successful launch is a retention killer. Know your reorder lead time per SKU and set reorder-point alerts before you run campaigns.
-
+- 
 Analytics / Measurement
 - GA4 e-commerce events — view_item, add_to_cart, begin_checkout, purchase — need to be wired before launch or you have no funnel data from day one.
-- Conversion baseline before first ad spend — run organic traffic for 2–4 weeks first so you have a baseline CVR to measure paid campaigns against. Launching ads the same day as the site means you can't distinguish ad quality
-  from site quality.
 
 ## Prioritized Fix Order (shortest path to safe first order)
 

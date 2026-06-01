@@ -88,6 +88,12 @@ Everything in this phase MUST be done before the first real order.
 - [x] Production env vars — Stripe live keys + webhook secret, Resend domain verification (SPF/DKIM)
 - [x] **[HARD GATE — Phase 7]** Database backups — deferred to Phase 7 where it is a go-live hard gate (see Phase 7 checklist). Resolving here marks it acknowledged; action required before Stripe live mode.
 
+### 1E. Analytics (before launch)
+
+- [x] GA4 e-commerce events — `view_item`, `add_to_cart`, `begin_checkout`, `purchase` wired via `AnalyticsService` (consent-gated, fires only after analytics consent)
+- [ ] Set real GTM container ID in `environment.prod.ts` (`gtmId: 'GTM-XXXXXXX'` → actual ID from GTM dashboard)
+- [ ] Verify all four events appear in GA4 DebugView during smoke testing
+
 ### 1D. Smoke Testing (Days 6-7)
 
 - [ ] 13-step checklist (see below) against deployed app
@@ -327,6 +333,12 @@ Everything in this phase MUST be done before the first real order.
 
 **Goal:** Everything that's been deferred with placeholders gets its real value before the first real customer.
 
+- [ ] Set real GTM container ID in `environment.prod.ts` (`gtmId: 'GTM-XXXXXXX'` → actual ID from GTM dashboard)
+- [ ] Verify all four GA4 e-commerce events (`view_item`, `add_to_cart`, `begin_checkout`, `purchase`) appear in GA4 DebugView during smoke testing
+
+- [ ] **[HIGH] `ProcessedStripeEvent` table cleanup cron** — table is append-only with no pruning. At ~50 orders/day × 4 webhook events, Supabase free-tier storage exhausts in under a year. When Postgres runs out of disk, every webhook returns 500 and new payments stop confirming. Add a nightly `@Cron` that deletes rows older than 7 days (safe margin above Stripe's 72-hour retry window). (`backend/prisma/schema.prisma:620–626`, `backend/src/modules/payments/payments.service.ts:129`)
+- [ ] **[HIGH] `processedStripeEvent` insert must be atomic with payment handler** — the idempotency guard inserts into `ProcessedStripeEvent` then calls `markSessionPaid()` as a separate operation. A crash between the two permanently marks the event as processed; every subsequent Stripe retry hits the guard and returns early — the order stays `PENDING_PAYMENT` forever. Fix: move the `processedStripeEvent` upsert inside the same `$transaction` as `markSessionPaid`. (`backend/src/modules/payments/payments.service.ts:128–210`)
+
 - [ ] **[COMPLIANCE — before first product listing]** Download the "Karta Dane" PDF for every product from the Chogan/Olfazeta product detail page. For each product, extract and seed into the DB:
   - `ingredients` — full INCI string (e.g. `"Alcohol denat., parfum, hexamethylindanopyran, coumarin."`)
   - `allergens` — allergens listed individually outside "parfum" (e.g. `["hexamethylindanopyran", "coumarin"]`); these are the ones Chogan has already determined exceed the 0.001% leave-on threshold
@@ -349,7 +361,6 @@ Everything in this phase MUST be done before the first real order.
 - [ ] Switch Stripe to live mode in Railway — replace `STRIPE_SECRET_KEY` (`sk_live_…`) and `STRIPE_PUBLISHABLE_KEY` (`pk_live_…`); `config.validation.ts` will boot-reject `sk_test_` keys in production
 - [ ] Register a live-mode Stripe webhook endpoint (Dashboard → Developers → Webhooks → Add endpoint → production URL `/payments/webhook`) → copy the new `whsec_…` signing secret → set `STRIPE_WEBHOOK_SECRET` in Railway; without this every webhook returns 400 and no order ever transitions to PAID
 - [ ] Verify checkout end-to-end with a real card (refund immediately)
-- [ ] Replace `GTM-XXXXXXX` placeholder in `frontend/src/environments/environment.prod.ts` with real Google Tag Manager container ID (tagmanager.google.com → create container → copy ID)
 - [ ] Google Search Console: submit sitemap, verify indexability
 - [ ] Final CORS check — `FRONTEND_URL` matches production domain
 - [ ] Google OAuth: update Authorized redirect URIs to production domain
@@ -371,6 +382,10 @@ Everything in this phase MUST be done before the first real order.
 ## Phase 8 — POST-LAUNCH OPERATIONS (Stability + Campaigns) — ongoing
 
 - [ ] **Load testing before first campaign** — Railway hobby tier has cold starts. Run a simple k6 or locust test simulating a flash sale traffic spike before you send your first email blast.
+- [ ] **Returns physical process** — RMA logic is handled in software, but define: a returns mailing address, a policy for opened vs. sealed bottles, and a workflow for re-stocking vs. destroying returned goods. Opened fragrance bottles cannot legally be resold as new in the EU.
+- [ ] *(optional)* **Carrier damage claims** — InPost and DPD have strict 24–48h windows to file damage claims. Establish a photo-at-packing workflow (photograph every parcel before sealing) or you'll lose every dispute.
+- [ ] **Supplier lead times for reorders** — out-of-stock after a successful launch is a retention killer. Know your reorder lead time per SKU and set reorder-point alerts before running campaigns.
+- [ ] **Conversion baseline before first ad spend** — run organic traffic for 2–4 weeks post-launch before starting paid campaigns. Launching ads on day one means you can't distinguish ad quality from site quality.
 
 ---
 

@@ -28,157 +28,99 @@ Additionally, `checkout.session.async_payment_failed` is already wired in the we
 | 🟢 LOW | Polish / hardening |lets p
 
 ## 🟠 HIGH — `processedStripeEvent` table grows forever — eventual checkout blockage *(3/7 agents)*
-
 **Files:** `backend/prisma/schema.prisma:620–626`, `backend/src/modules/payments/payments.service.ts:129`
-
 The `ProcessedStripeEvent` table is a pure append-only deduplication log with no cleanup. A modest store doing 50 orders/day × 4 webhook events each accumulates ~73 000 rows/year. Supabase free-tier storage at ~500 MB exhausts in under a year. When Postgres runs out of disk, `processedStripeEvent.create` starts throwing; because the insert happens **before** any payment processing, every subsequent webhook returns 500. Stripe begins exponential backoff. New payments stop being confirmed. Orders stay `PENDING_PAYMENT` until the reconciliation cron cancels them 30+ minutes later — after the customer has already been charged.
-
 The `@@index([createdAt])` on the model suggests cleanup was planned but was never implemented; there is no `@Cron` in the codebase that prunes this table.
-
 **Fix:** Add a nightly `@Cron` that deletes rows older than 7 days (safe margin above Stripe's 72-hour retry window).
-
 ---
 
 ## 🟠 HIGH — `processedStripeEvent` insert not atomic with the payment handler — crash creates permanently skipped events *(2/7 agents)*
-
 **File:** `backend/src/modules/payments/payments.service.ts:128–210`
-
 The idempotency guard inserts into `ProcessedStripeEvent` (line 128) then calls `markSessionPaid()` as a separate operation. If the process crashes, times out, or the Supabase connection pool exhausts **between** the successful insert and the start of `markSessionPaid`, the event is permanently recorded as processed. Every subsequent Stripe webhook retry hits the `P2002` guard and returns early. The order stays `PENDING_PAYMENT` forever. The reconciliation cron will eventually cancel it — but if the Stripe session's 30-minute TTL has already passed, the customer paid and gets nothing.
-
 **Fix:** Move the `processedStripeEvent` upsert inside the same `$transaction` as the `payment.update + order.update` in `markSessionPaid()`. A single atomic commit means either both succeed or both roll back, allowing the next Stripe retry to succeed.
-
 ---
 
 ## 🟠 HIGH — Invoice PDF stored as base64 in Redis BullMQ job payload — evictable under memory pressure *(3/7 agents)*
-
 **File:** `backend/src/modules/email/email-queue.service.ts:59–63`
-
 ```ts
 invoicePdfBase64: invoicePdf.toString('base64')
 ```
-
 A typical invoice PDF is 80–200 KB; base64 adds ~33% → 110–270 KB per job stored in Redis. With `removeOnComplete: { age: 86400 }` (24 hours of completed job retention), a busy day's orders can accumulate tens of MB in Redis purely in job payloads. On Railway's smallest Redis tier (256 MB), this becomes a risk during flash sales or promotions.
-
 When Redis hits its `maxmemory` limit with `allkeys-lru` policy (Railway's default): BullMQ job payloads are eligible for eviction. An evicted `payment_confirmed_with_invoice` job is dequeued, the processor finds it missing, and the customer never receives their invoice email — no exception raised, no Sentry event.
-
 The fix also applies to the `invoiceUrl` already being generated and passed alongside the base64 blob — it is redundant to store both.
-
 **Fix:** Store only `invoiceUrl` in the job payload. The processor downloads the PDF bytes from the Supabase URL at processing time (idempotent, no size in Redis).
-
 ---
 
 ## 🟠 HIGH — Throttler `getTracker` broken: Express `trust proxy` never configured, all clients share one token bucket *(2/7 agents)*
-
 **Files:** `backend/src/app.module.ts:74–78`, `backend/src/main.ts`
-
 ```ts
 getTracker: (req) => req['ips']?.[0] ?? req.ip
 ```
-
 This reads `req.ips[0]`, which Express populates from `X-Forwarded-For` only when `app.set('trust proxy', ...)` is explicitly configured. `NestExpressApplication` does not call this automatically. Without it, `req.ips` is always `[]`, so `req['ips']?.[0]` is `undefined` and the fallback `req.ip` resolves to the **Railway load-balancer's IP** — the same for every client.
-
 Every customer, every bot, and every attacker share a single rate-limit bucket. The 5 req/s burst is exhausted by normal organic traffic, returning 429 to legitimate users. The per-endpoint limits on login and register are similarly broken. A bot trivially exhausts the shared bucket to DoS checkout for everyone.
-
 Additionally, `ThrottlerStorageRedisService` (line 71) creates a **second** independent IORedis connection with no `retryStrategy` and no error handler. If this connection silently fails, throttling degrades to per-replica in-memory storage — with 2 Railway replicas the effective burst limit doubles for an attacker using multiple IPs.
-
 **Fix:** Add `app.set('trust proxy', 1)` in `main.ts` before the Throttler middleware. Wire the `ThrottlerStorageRedisService` connection to the same `REDIS_CLIENT` provider from `RedisModule` to avoid the second disconnected pool.
-
 ---
 
 ## 🟠 HIGH — AdminJS full Helmet bypass enables clickjacking against admin sessions *(3/7 agents)*
-
 **File:** `backend/src/main.ts:40–44`
-
 ```ts
 app.use((req, res, next) => {
   if (req.path.startsWith('/admin')) return next();
   helmet()(req, res, next);
 });
 ```
-
 The blanket skip removes **all** Helmet headers from every admin response — including `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy`. The absence of `X-Frame-Options` means the AdminJS panel can be embedded in a third-party `<iframe>`, enabling clickjacking: an attacker frames the admin panel over decoy buttons and tricks a logged-in admin into clicking "Approve Return" or "Generate Label" unknowingly.
-
 The justification for the bypass (AdminJS inline scripts) only requires relaxing `content-security-policy` — all other Helmet headers are safe to keep.
-
 **Fix:** Replace the blanket bypass with a targeted Helmet config: apply all headers but override `contentSecurityPolicy: false` (or a permissive CSP) for the `/admin` scope. Keep `X-Frame-Options`, `X-Content-Type-Options`, `hsts`, and `Referrer-Policy` active.
-
 ---
 
 ## 🟠 HIGH — `CouponUse @@unique([couponId, userId])` contradicts `maxUsesPerUser > 1` — **prior audit fix introduces this bug** *(2/7 agents)*
-
 **File:** `backend/prisma/schema.prisma` — `CouponUse` model
-
 > ⚠️ This directly contradicts `audit-round-2.md` finding #30, which recommended adding `@@unique([couponId, userId])` as a fix. That fix is correct for preventing the race, but introduces a new bug for multi-use coupons.
-
 If `@@unique([couponId, userId])` is added, a user can never redeem the same coupon twice — even when `Coupon.maxUsesPerUser = 3`. The second attempt throws P2002 inside `applyInsideTransaction`, which is caught as a generic `BadRequestException('Kod rabatowy jest nieważny')` — indistinguishable from an expired coupon. Any loyalty coupon with `maxUsesPerUser > 1` silently behaves as single-use.
-
 Additionally, for coupons with `maxUsesPerUser = 1` used by a guest (`userId = null`): the unique constraint treats all null userIds as a single identity. The first guest to redeem exhausts the per-user slot for all future guests, making welcome-code promotions globally single-use rather than per-person.
-
 **Correct fix:** Remove `@@unique([couponId, userId])`. Use `SELECT ... FOR UPDATE` on the `Coupon` row inside `applyInsideTransaction` to serialize concurrent redemption checks — the existing `count(CouponUse)` check plus a row lock is the correct pattern. Add `@@unique([couponId, orderId])` to prevent double-use per order (the actual uniqueness requirement).
-
 ---
 
 ## 🟠 HIGH — Guest customers cannot cancel PENDING_PAYMENT orders and cannot poll payment status *(2/7 agents)*
-
 **Files:**
 - `backend/src/modules/orders/orders.controller.ts` — `@UseGuards(JwtAuthGuard)` on `POST /orders/:id/cancel`
 - `backend/src/modules/payments/payments.controller.ts` — `@UseGuards(JwtAuthGuard)` on `GET /payments/:orderId/status`
-
 Guests can place orders (`OptionalJwtGuard`) and pay via Stripe. Two gaps:
-
 1. **Cancellation:** `POST /orders/:id/cancel` requires a JWT. A guest cannot cancel a `PENDING_PAYMENT` order before the 30-minute Stripe session expires. Under Art. 12 UoK, the merchant must provide a pre-shipment management path. The guest must wait 30+ minutes for auto-cancellation.
-
 2. **Success page poll:** `GET /payments/:orderId/status` also requires a JWT and checks `order.userId === requestingUserId`. A guest landing on `/checkout/success?orderId=...` immediately gets 401, the poll fails, and the page shows "Płatność w toku" permanently even after successful payment — unless the webhook fires before the first poll.
-
 **Fix:** Implement token-based cancellation: send a signed `cancelToken` in the order confirmation email URL. Add a `GET /payments/:orderId/status?token=` path that validates the token against `order.snapshotEmail` + HMAC without requiring JWT.
-
 ---
 
 ## 🟠 HIGH — DPD pickup-point widget `postMessage` handler accepts any origin *(1/7 agents)*
-
 **File:** `frontend/src/app/features/checkout/checkout-page/checkout-page.component.ts:904–910`
-
 ```ts
 this.dpdMessageListener = (e: MessageEvent) => {
   if (!e.data?.dpdWidget) return;  // no e.origin check
   this.dpdPickupPointCode.set(e.data.dpdWidget.id);
 ```
-
 The handler checks only `e.data?.dpdWidget` but never validates `e.origin`. Any page that can reference the checkout window can send a crafted `postMessage({ dpdWidget: { id: 'FAKE_POINT' } })` to inject an arbitrary DPD pickup-point code into the order — rerouting the parcel to a location the attacker controls.
-
 Additionally, the widget is loaded from `https://api.dpd.cz` (Czech domain), which is not the official Polish DPD geowidget endpoint (`geowidget.dpd.com.pl`). This URL could change or become unavailable without notice.
-
 **Fix:** Add `if (e.origin !== 'https://api.dpd.cz') return;` before processing the event data. Evaluate migrating to the official Polish DPD widget.
-
 ---
 
 ## 🟠 HIGH — File upload accepts any MIME type — stored XSS via Supabase CDN *(1/7 agents)*
-
 **File:** `backend/src/modules/products/products.controller.ts:128`, `backend/src/modules/storage/storage.service.ts:27–33`
-
 `FileInterceptor` only limits file size (10 MB). No `fileFilter` callback validates the actual content type. `StorageService.uploadProductImage` passes `file.mimetype` directly to Supabase as `contentType` — but Multer's `mimetype` is taken from the request `Content-Type` header, **never verified against actual file bytes**.
-
 An authenticated admin (or a compromised admin session) can upload an SVG containing embedded JavaScript by sending `Content-Type: image/jpeg`. Supabase stores it and serves it from its public CDN. Any user loading the "image" URL receives attacker-controlled content. Browsers execute inline scripts in SVGs served as `image/svg+xml` (and sometimes even `image/jpeg` under MIME-sniff). This is a stored XSS vector on the product catalog served to all visitors.
-
 **Fix:** Add `fileFilter` using the `file-type` npm package to verify magic bytes match an allowlist (`image/jpeg`, `image/png`, `image/webp`). Reject mismatches before the file reaches Supabase.
-
 ---
 
 ## 🟠 HIGH — Return notification email uses caller-supplied `dto.email`, not the authenticated user's email *(1/7 agents)*
-
 **File:** `backend/src/modules/returns/returns.service.ts:49–62`, `backend/src/modules/returns/dto/create-return.dto.ts`
-
 `ReturnsService.create()` correctly verifies ownership (`order.userId !== userId`), but then uses `dto.email` — not the authenticated user's account email — as the notification destination for both the customer confirmation and the admin notification:
-
 ```ts
 await this.email.sendReturnConfirmation({ to: request.email, ... });
 await this.email.sendReturnAdminNotification({ email: request.email, ... });
 ```
-
 An authenticated user can submit a return for their own order but put an arbitrary third-party address in `dto.email`. The return details (order number, item list, return ID) are delivered to the victim address from the store's verified sending domain — a spam and phishing vector. The legitimate customer never receives their own confirmation.
-
 **Fix:** Derive the notification address from `user.email` (from the authenticated session), ignoring `dto.email` entirely for notification routing.
-
 ---
 
 ## 🟠 HIGH — `ReturnsService` and `ProductsService` inject `EmailService` directly, bypassing BullMQ retry queue *(2/7 agents)*

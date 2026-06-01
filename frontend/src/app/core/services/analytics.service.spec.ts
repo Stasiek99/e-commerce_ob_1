@@ -150,6 +150,80 @@ describe('AnalyticsService', () => {
       });
     });
 
+    // trackViewItem()
+    describe('trackViewItem()', () => {
+      it('fires view_item with correct GA4 structure and cents→PLN conversion', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({
+          itemId: 'var-1',
+          name: 'Santal 33',
+          brand: 'Le Labo',
+          variantLabel: '50 ml',
+          category: 'Niszowe',
+          priceInCents: 49900,
+        });
+
+        const event = window.dataLayer[1] as Record<string, unknown>;
+        expect(event['event']).toBe('view_item');
+
+        const ec = event['ecommerce'] as Record<string, unknown>;
+        expect(ec['currency']).toBe('PLN');
+        expect(ec['value']).toBe(499);
+
+        const items = ec['items'] as Record<string, unknown>[];
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({
+          item_id: 'var-1',
+          item_name: 'Santal 33',
+          item_brand: 'Le Labo',
+          item_variant: '50 ml',
+          item_category: 'Niszowe',
+          price: 499,
+          quantity: 1,
+        });
+      });
+
+      it('always sends quantity: 1 regardless of params', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({ itemId: 'v', name: 'X', priceInCents: 1000 });
+
+        const items = (
+          (window.dataLayer[1] as Record<string, unknown>)['ecommerce'] as Record<string, unknown>
+        )['items'] as Record<string, unknown>[];
+        expect(items[0]['quantity']).toBe(1);
+      });
+
+      it('omits item_brand / item_category when brand / category are null', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({
+          itemId: 'var-2',
+          name: 'Aqua di Gio',
+          brand: null,
+          category: null,
+          variantLabel: '100 ml',
+          priceInCents: 30000,
+        });
+
+        const items = (
+          (window.dataLayer[1] as Record<string, unknown>)['ecommerce'] as Record<string, unknown>
+        )['items'] as Record<string, unknown>[];
+        expect(items[0]['item_brand']).toBeUndefined();
+        expect(items[0]['item_category']).toBeUndefined();
+      });
+
+      it('drops the event silently when analytics consent is not granted', () => {
+        const svc = setup('browser', false);
+        svc.trackViewItem({ itemId: 'v', name: 'X', priceInCents: 1000 });
+        expect(window.dataLayer).toBeUndefined();
+      });
+
+      it('clears the previous ecommerce object before pushing view_item', () => {
+        const svc = setup('browser');
+        svc.trackViewItem({ itemId: 'v', name: 'X', priceInCents: 1000 });
+        expect(window.dataLayer[0]).toEqual({ ecommerce: null });
+      });
+    });
+
     // trackAddToCart()
     describe('trackAddToCart()', () => {
       it('fires add_to_cart with correct GA4 structure and cents→PLN conversion', () => {

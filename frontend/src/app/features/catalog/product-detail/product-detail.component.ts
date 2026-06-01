@@ -1024,6 +1024,17 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.product.set(p);
           if (p.variants?.length) this.selectedVariant.set(p.variants[0]);
           if (p.images?.length) this.activeImage.set(p.images[0].url);
+          const firstVariant = p.variants?.[0];
+          if (firstVariant) {
+            this.analytics.trackViewItem({
+              itemId: firstVariant.id,
+              name: p.name,
+              brand: p.brand,
+              variantLabel: firstVariant.label,
+              category: p.category?.name,
+              priceInCents: firstVariant.priceInCents,
+            });
+          }
           const seoInput = {
             name: p.name,
             brand: p.brand,

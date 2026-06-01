@@ -349,6 +349,66 @@ describe('ProductDetailComponent — related products carousel', () => {
   });
 });
 
+// ─── GA4 view_item tracking ───────────────────────────────────────────────────
+
+describe('ProductDetailComponent — view_item tracking', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  function getAnalyticsMock() {
+    const { component, httpMock, fixture } = setup();
+    const analytics = TestBed.inject(AnalyticsService) as jest.Mocked<AnalyticsService>;
+    return { component, httpMock, fixture, analytics };
+  }
+
+  it('calls trackViewItem once after the product loads', () => {
+    const { fixture, httpMock, analytics } = getAnalyticsMock();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    httpMock.verify();
+
+    expect(analytics.trackViewItem).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the first variant id, product name, brand, label, category and price', () => {
+    const { fixture, httpMock, analytics } = getAnalyticsMock();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    httpMock.verify();
+
+    expect(analytics.trackViewItem).toHaveBeenCalledWith({
+      itemId: 'var-1',
+      name: 'Rose Oud',
+      brand: 'Maison',
+      variantLabel: '50ml',
+      category: 'Perfumes',
+      priceInCents: 9900,
+    });
+  });
+
+  it('does not call trackViewItem when the product has no variants', () => {
+    const { fixture, httpMock, analytics } = getAnalyticsMock();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse({ variants: [] }));
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    httpMock.verify();
+
+    expect(analytics.trackViewItem).not.toHaveBeenCalled();
+  });
+
+  it('does not call trackViewItem before the HTTP response arrives', () => {
+    const { fixture, analytics } = getAnalyticsMock();
+
+    fixture.detectChanges(); // ngOnInit — HTTP pending
+
+    expect(analytics.trackViewItem).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Catalog number rendering ─────────────────────────────────────────────────
 
 describe('ProductDetailComponent — catalog number in heading', () => {
