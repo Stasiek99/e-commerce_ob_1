@@ -18,6 +18,7 @@ import { OrdersService } from './modules/orders/orders.service';
 import { PaymentsService } from './modules/payments/payments.service';
 import { ReturnsService } from './modules/returns/returns.service';
 import { TimeoutInterceptor } from './common/interceptors/timeout.interceptor';
+import { PrismaPoolExceptionFilter } from './common/filters/prisma-pool-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -53,6 +54,7 @@ async function bootstrap() {
   });
   app.use(cookieParser());
 
+  app.useGlobalFilters(new PrismaPoolExceptionFilter());
   app.useGlobalInterceptors(new TimeoutInterceptor(30_000));
 
   app.useGlobalPipes(
