@@ -29,7 +29,15 @@ describe('AuthService', () => {
   let prisma: any;
   let jwtService: jest.Mocked<JwtService>;
   let emailService: any;
-  let redis: { set: jest.Mock; get: jest.Mock };
+  let redis: {
+    set: jest.Mock;
+    get: jest.Mock;
+    exists: jest.Mock;
+    incr: jest.Mock;
+    expire: jest.Mock;
+    setex: jest.Mock;
+    del: jest.Mock;
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -101,6 +109,11 @@ describe('AuthService', () => {
           useValue: {
             set: jest.fn().mockResolvedValue('OK'),
             get: jest.fn(),
+            exists: jest.fn().mockResolvedValue(0),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            setex: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(1),
           },
         },
       ],
@@ -181,6 +194,95 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('accessToken', 'mock-access-token');
       expect(result).toHaveProperty('refreshToken');
       expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+
+    describe('per-email lockout', () => {
+      it('throws UnauthorizedException with lockout message when account is locked', async () => {
+        redis.exists.mockResolvedValue(1);
+
+        await expect(service.login('victim@example.com', 'anypass')).rejects.toThrow(
+          'Account temporarily locked',
+        );
+
+        expect(usersService.findByEmail).not.toHaveBeenCalled();
+      });
+
+      it('normalizes email to lowercase before checking the lock key', async () => {
+        redis.exists.mockResolvedValue(1);
+
+        await expect(service.login('VICTIM@Example.COM', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.exists).toHaveBeenCalledWith('auth:login-locked:victim@example.com');
+      });
+
+      it('increments failure counter and sets expire on first failed attempt (user not found)', async () => {
+        usersService.findByEmail.mockResolvedValue(null);
+        redis.incr.mockResolvedValue(1);
+
+        await expect(service.login('missing@example.com', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.incr).toHaveBeenCalledWith('auth:login-failures:missing@example.com');
+        expect(redis.expire).toHaveBeenCalledWith('auth:login-failures:missing@example.com', 900);
+      });
+
+      it('increments failure counter but skips expire on subsequent failures', async () => {
+        usersService.findByEmail.mockResolvedValue(null);
+        redis.incr.mockResolvedValue(5);
+
+        await expect(service.login('missing@example.com', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.incr).toHaveBeenCalledTimes(1);
+        expect(redis.expire).not.toHaveBeenCalled();
+      });
+
+      it('sets lock key with 900-second TTL after the 10th failure on wrong password', async () => {
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.incr.mockResolvedValue(10);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.setex).toHaveBeenCalledWith('auth:login-locked:test@example.com', 900, '1');
+      });
+
+      it('does not set lock key before the 10th failure', async () => {
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.incr.mockResolvedValue(9);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.setex).not.toHaveBeenCalled();
+      });
+
+      it('deletes failure counter on successful login', async () => {
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        await service.login('test@example.com', 'correctpass');
+
+        expect(redis.del).toHaveBeenCalledWith('auth:login-failures:test@example.com');
+      });
+
+      it('does not delete failure counter when login fails', async () => {
+        usersService.findByEmail.mockResolvedValue(null);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.del).not.toHaveBeenCalled();
+      });
     });
   });
 
