@@ -1,8 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { ReviewsService } from '../reviews.service';
 import { PrismaService } from '../../prisma/prisma.service';
+
+const VERIFIED_USER = { isEmailVerified: true, createdAt: new Date('2020-01-01') };
+const UNVERIFIED_USER = { isEmailVerified: false, createdAt: new Date('2020-01-01') };
 
 const makeReview = (overrides: Partial<Record<string, any>> = {}) => ({
   id: 'review-1',
@@ -31,6 +35,7 @@ describe('ReviewsService', () => {
         {
           provide: PrismaService,
           useValue: {
+            user: { findUnique: jest.fn() },
             order: { findFirst: jest.fn() },
             product: { findUnique: jest.fn() },
             review: {
@@ -64,8 +69,13 @@ describe('ReviewsService', () => {
     const validOrder = {
       id: 'order-1',
       status: OrderStatus.DELIVERED,
+      createdAt: new Date('2020-01-01'),
       items: [{ productVariant: { productId: 'product-1' } }],
     };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(VERIFIED_USER);
+    });
 
     it('creates review with PENDING status when order is DELIVERED', async () => {
       prisma.order.findFirst.mockResolvedValue(validOrder);
@@ -605,8 +615,13 @@ describe('ReviewsService', () => {
     const validOrder = {
       id: 'order-1',
       status: OrderStatus.DELIVERED,
+      createdAt: new Date('2020-01-01'),
       items: [{ productVariant: { productId: 'product-1' } }],
     };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(VERIFIED_USER);
+    });
 
     it('stores empty string title as-is (not coerced to null)', async () => {
       prisma.order.findFirst.mockResolvedValue(validOrder);
@@ -750,6 +765,128 @@ describe('ReviewsService', () => {
 
       const interpolatedValues: unknown[] = prisma.$executeRaw.mock.calls[0].slice(1);
       expect(interpolatedValues).toContain(targetProductId);
+    });
+  });
+
+  // ─── create — email verification gate ────────────────────────────────────────
+
+  describe('create — email verification gate', () => {
+    const dto = { productId: 'product-1', orderId: 'order-1', rating: 5 };
+
+    it('throws NotFoundException when the user does not exist', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.create('ghost-user', dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException when user email is not verified', async () => {
+      prisma.user.findUnique.mockResolvedValue(UNVERIFIED_USER);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('does not proceed to order lookup when email is not verified', async () => {
+      prisma.user.findUnique.mockResolvedValue(UNVERIFIED_USER);
+
+      await service.create('user-1', dto).catch(() => {});
+
+      expect(prisma.order.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('allows review creation when user email is verified', async () => {
+      prisma.user.findUnique.mockResolvedValue(VERIFIED_USER);
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        status: OrderStatus.DELIVERED,
+        createdAt: new Date('2020-01-01'),
+        items: [{ productVariant: { productId: 'product-1' } }],
+      });
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+      prisma.review.create.mockResolvedValue({ id: 'review-1', status: 'PENDING' });
+
+      await expect(service.create('user-1', dto)).resolves.toMatchObject({ status: 'PENDING' });
+    });
+  });
+
+  // ─── create — suspicious activity detection ───────────────────────────────────
+
+  describe('create — suspicious activity detection', () => {
+    const dto = { productId: 'product-1', orderId: 'order-1', rating: 5 };
+    let sentrySpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      sentrySpy = jest.spyOn(Sentry, 'captureMessage').mockReturnValue(undefined as any);
+
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+      prisma.review.create.mockResolvedValue({ id: 'review-1', status: 'PENDING' });
+    });
+
+    const recentOrder = {
+      id: 'order-1',
+      status: OrderStatus.DELIVERED,
+      createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000), // 1 hour ago
+      items: [{ productVariant: { productId: 'product-1' } }],
+    };
+
+    const oldOrder = {
+      id: 'order-1',
+      status: OrderStatus.DELIVERED,
+      createdAt: new Date('2020-01-01'),
+      items: [{ productVariant: { productId: 'product-1' } }],
+    };
+
+    const newUser = { isEmailVerified: true, createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) };
+    const oldUser = VERIFIED_USER;
+
+    it('fires a Sentry warning when account and order are both created within 24h', async () => {
+      prisma.user.findUnique.mockResolvedValue(newUser);
+      prisma.order.findFirst.mockResolvedValue(recentOrder);
+
+      await service.create('user-1', dto);
+
+      expect(sentrySpy).toHaveBeenCalledWith(
+        expect.stringContaining('Suspicious review activity'),
+        'warning',
+      );
+    });
+
+    it('includes the userId in the Sentry message', async () => {
+      prisma.user.findUnique.mockResolvedValue(newUser);
+      prisma.order.findFirst.mockResolvedValue(recentOrder);
+
+      await service.create('user-1', dto);
+
+      expect(sentrySpy).toHaveBeenCalledWith(
+        expect.stringContaining('user-1'),
+        'warning',
+      );
+    });
+
+    it('does not alert Sentry when account is old even if order is recent', async () => {
+      prisma.user.findUnique.mockResolvedValue(oldUser);
+      prisma.order.findFirst.mockResolvedValue(recentOrder);
+
+      await service.create('user-1', dto);
+
+      expect(sentrySpy).not.toHaveBeenCalled();
+    });
+
+    it('does not alert Sentry when order is old even if account is new', async () => {
+      prisma.user.findUnique.mockResolvedValue(newUser);
+      prisma.order.findFirst.mockResolvedValue(oldOrder);
+
+      await service.create('user-1', dto);
+
+      expect(sentrySpy).not.toHaveBeenCalled();
+    });
+
+    it('does not alert Sentry for a normal verified user with an old order', async () => {
+      prisma.user.findUnique.mockResolvedValue(oldUser);
+      prisma.order.findFirst.mockResolvedValue(oldOrder);
+
+      await service.create('user-1', dto);
+
+      expect(sentrySpy).not.toHaveBeenCalled();
     });
   });
 });
