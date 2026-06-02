@@ -65,8 +65,10 @@ export { PINO_REDACT_PATHS };
         const isProd = config.get<string>('NODE_ENV') === 'production';
         return {
           throttlers: [
-            { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
-            { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
+            { name: 'burst',       ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+            { name: 'sustained',   ttl: 60_000, limit: 60 },  // 60 req/min per IP
+            { name: 'coupon-anon', ttl: 60_000, limit: 3  },  // 3 req/min for unauthenticated coupon validation
+            { name: 'coupon-auth', ttl: 60_000, limit: 10 },  // 10 req/min for authenticated coupon validation
           ],
           // Reuse the shared REDIS_CLIENT (retryStrategy + error handler already
           // wired). Avoids a second disconnected IORedis connection whose silent
