@@ -370,11 +370,11 @@ export class ProductsService {
   }
 
   async findBySlug(slug: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { slug },
+    const product = await this.prisma.product.findFirst({
+      where: { slug, isActive: true },
       select: PRODUCT_SELECT,
     });
-    if (!product || !product.isActive) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException('Product not found');
     const [enriched] = await this.attachOmnibusData([product]);
     return enriched;
   }

@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -55,6 +56,7 @@ const enrich = (products: ReturnType<typeof makeProduct>[]) =>
 
 const mockPrisma = {
   product: {
+    findFirst: jest.fn(),
     findUnique: jest.fn(),
     findMany: jest.fn(),
     create: jest.fn(),
@@ -584,7 +586,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
       { variantId: 'var-promo', _min: { priceInCents: 7500 } },
     ]);
@@ -598,7 +600,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     // groupBy _min already gives us the minimum; verify the service passes it through
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
       { variantId: 'var-promo', _min: { priceInCents: 6000 } },
@@ -613,7 +615,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     // No history records for this variant
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
 
@@ -624,7 +626,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
 
   it('does not query price history when no variant has a promotional price', async () => {
     // Default makeProduct has compareAtPriceInCents: null — no promotion active
-    mockPrisma.product.findUnique.mockResolvedValue(makeProduct());
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct());
 
     await service.findBySlug('test-perfume');
 
@@ -638,7 +640,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
         makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 }),
       ],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(mixedProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(mixedProduct);
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
       { variantId: 'var-promo', _min: { priceInCents: 7200 } },
     ]);
@@ -664,7 +666,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
 
     const before = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000 - 1000);
@@ -675,5 +677,84 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const gte: Date = call.where.recordedAt.gte;
     expect(gte).toBeInstanceOf(Date);
     expect(gte.getTime()).toBeGreaterThan(before.getTime());
+  });
+});
+
+// ─── findBySlug — isActive DB-level filter ────────────────────────────────────
+
+describe('ProductsService — findBySlug isActive DB-level filter', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('throws NotFoundException when the product slug does not exist in the database', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(null);
+
+    await expect(service.findBySlug('ghost-slug')).rejects.toThrow(NotFoundException);
+  });
+
+  it('throws NotFoundException for a deactivated product (Prisma returns null because isActive:true is in the WHERE)', async () => {
+    // The key regression: Prisma returns null — not an inactive product object.
+    // Before the fix, a deactivated product was fetched then rejected in app code.
+    // After the fix, Prisma never returns it because isActive:true is in the query.
+    mockPrisma.product.findFirst.mockResolvedValue(null);
+
+    await expect(service.findBySlug('inactive-perfume')).rejects.toThrow(NotFoundException);
+
+    // Verify the WHERE clause passed to Prisma includes isActive: true
+    expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ isActive: true }),
+      }),
+    );
+  });
+
+  it('returns enriched product data when the product is active', async () => {
+    const activeProduct = makeProduct({ slug: 'active-perfume' });
+    mockPrisma.product.findFirst.mockResolvedValue(activeProduct);
+
+    const result = await service.findBySlug('active-perfume');
+
+    expect(result).toMatchObject({ id: 'product-1', slug: 'active-perfume' });
+  });
+
+  it('includes isActive:true in the findFirst WHERE clause so deactivation is enforced at DB level', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct());
+
+    await service.findBySlug('test-perfume');
+
+    expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ slug: 'test-perfume', isActive: true }),
+      }),
+    );
+  });
+
+  it('does not call findUnique — uses findFirst to allow the isActive filter alongside the slug', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct());
+
+    await service.findBySlug('test-perfume');
+
+    expect(mockPrisma.product.findUnique).not.toHaveBeenCalled();
   });
 });
