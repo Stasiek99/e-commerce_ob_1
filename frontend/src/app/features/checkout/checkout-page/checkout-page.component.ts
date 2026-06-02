@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, computed, inject, signal, PLATFORM_ID } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -631,6 +631,17 @@ export class CheckoutPageComponent implements OnInit {
   readonly couponValidating = signal(false);
   readonly couponError = signal<string | null>(null);
   readonly appliedCoupon = signal<AppliedCoupon | null>(null);
+
+  // When a FREE_SHIPPING coupon is active and the customer switches carrier,
+  // keep discountAmountInCents in sync with the new carrier price so the
+  // pre-payment summary shown to the customer is accurate (Art. 8 UoUP).
+  private readonly _freeShippingCarrierSync = effect(() => {
+    const carrier = this.selectedCarrier();
+    const coupon = untracked(() => this.appliedCoupon());
+    if (coupon?.isFreeShipping) {
+      this.appliedCoupon.set({ ...coupon, discountAmountInCents: carrier?.price ?? 0 });
+    }
+  });
 
   readonly effectiveTotal = computed(() => {
     const items = this.cart.totalInCents();
