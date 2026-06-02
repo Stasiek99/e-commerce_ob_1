@@ -638,6 +638,23 @@ model ProcessedStripeEvent {
   @@map("processed_stripe_events")
 }
 
+// ─── Admin Audit Log ─────────────────────────────────────────────────────────
+
+model AdminLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String
+  actor      String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actor])
+  @@index([createdAt])
+  @@map("admin_logs")
+}
+
 // ─── Email Logs ───────────────────────────────────────────────────────────────
 
 model EmailLog {

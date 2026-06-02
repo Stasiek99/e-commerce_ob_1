@@ -1,4 +1,4 @@
-import { setupAdmin } from '../admin.setup';
+import { setupAdmin, logAdminAction } from '../admin.setup';
 
 // Minimal stubs — only used if execution passes the credential guard.
 // The three "missing creds" cases throw before any of these are touched.
@@ -16,6 +16,46 @@ const callSetupAdmin = () =>
 
 const GUARD_ERROR =
   'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set — refusing to boot with an unprotected admin panel';
+
+describe('logAdminAction', () => {
+  const mockPrismaLog = { adminLog: { create: jest.fn() } } as any;
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('writes the correct fields to prisma.adminLog', async () => {
+    mockPrismaLog.adminLog.create.mockResolvedValue({});
+
+    await logAdminAction(mockPrismaLog, 'approve', 'ReturnRequest', 'rr-123', 'admin@test.com', { adminNote: 'ok' });
+
+    expect(mockPrismaLog.adminLog.create).toHaveBeenCalledWith({
+      data: {
+        action: 'approve',
+        entityType: 'ReturnRequest',
+        entityId: 'rr-123',
+        actor: 'admin@test.com',
+        metadata: { adminNote: 'ok' },
+      },
+    });
+  });
+
+  it('passes undefined metadata when none provided', async () => {
+    mockPrismaLog.adminLog.create.mockResolvedValue({});
+
+    await logAdminAction(mockPrismaLog, 'refundFull', 'Order', 'order-456', 'admin@test.com');
+
+    expect(mockPrismaLog.adminLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ metadata: undefined }),
+    });
+  });
+
+  it('does not propagate errors when prisma.adminLog.create fails', async () => {
+    mockPrismaLog.adminLog.create.mockRejectedValue(new Error('DB connection lost'));
+
+    await expect(
+      logAdminAction(mockPrismaLog, 'approve', 'Review', 'review-789', 'admin@test.com'),
+    ).resolves.toBeUndefined();
+  });
+});
 
 describe('setupAdmin credential guard', () => {
   let savedEmail: string | undefined;
