@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { PaymentsService } from '../payments/payments.service';
 import { CreateReturnRequestDto } from './dto/create-return.dto';
+import { encryptIban } from './iban-crypto';
 
 @Injectable()
 export class ReturnsService {
@@ -85,6 +86,11 @@ export class ReturnsService {
       }
     }
 
+    const ibanKey = this.config.get<string>('IBAN_ENCRYPTION_KEY', '');
+    const plainIban = dto.bankAccount?.trim().toUpperCase() ?? null;
+    const storedIban =
+      plainIban && ibanKey.length === 64 ? encryptIban(plainIban, ibanKey) : plainIban;
+
     const request = await this.prisma.returnRequest.create({
       data: {
         orderId: order.id,
@@ -98,7 +104,7 @@ export class ReturnsService {
         items: dto.items as unknown as import('@prisma/client').Prisma.InputJsonValue,
         reason: dto.reason?.trim() ?? null,
         requestedResolution: dto.requestedResolution ?? null,
-        bankAccount: dto.bankAccount?.trim().toUpperCase() ?? null,
+        bankAccount: storedIban,
         sealedOnReturn: dto.sealedOnReturn ?? null,
       },
     });
@@ -128,7 +134,7 @@ export class ReturnsService {
         items: dto.items,
         reason: request.reason ?? undefined,
         requestedResolution: request.requestedResolution ?? undefined,
-        bankAccount: request.bankAccount ?? undefined,
+        bankAccount: plainIban ?? undefined,
       }),
     ]);
 
