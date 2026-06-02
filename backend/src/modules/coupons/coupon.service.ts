@@ -1,8 +1,27 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DiscountType, Prisma } from '@prisma/client';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCouponDto, UpdateCouponDto } from './dto/create-coupon.dto';
+
+// Converts a possibly naive ISO date string to a UTC Date, interpreting
+// naive strings (no Z / no +HH:MM suffix) as local time in `tz`.
+// Strings that already carry timezone info are parsed as-is.
+function toUtcFromTz(dateStr: string, tz: string): Date {
+  const hasOffset = dateStr.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(dateStr);
+  if (hasOffset) return new Date(dateStr);
+
+  // Treat the naive string as UTC to get a reference Date object, then
+  // compute the Wall-clock difference between that UTC moment and the
+  // same moment rendered in the target timezone. Subtracting that diff
+  // gives us the UTC instant that corresponds to the intended local time.
+  const normalized = dateStr.includes('T') ? dateStr + 'Z' : dateStr + 'T00:00:00Z';
+  const ref = new Date(normalized);
+  const utcMs = Date.parse(ref.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const tzMs = Date.parse(ref.toLocaleString('en-US', { timeZone: tz }));
+  return new Date(ref.getTime() - (tzMs - utcMs));
+}
 
 export interface CouponValidationResult {
   valid: boolean;
@@ -16,7 +35,10 @@ export interface CouponValidationResult {
 export class CouponService {
   private readonly logger = new Logger(CouponService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+  ) {}
 
   async validate(
     code: string,
@@ -122,6 +144,7 @@ export class CouponService {
   calculateDiscount(type: DiscountType, value: number, cartTotalInCents: number): number {
     switch (type) {
       case DiscountType.PERCENTAGE:
+        // Math.round: rounds in customer's favor (standard retail practice)
         return Math.round((cartTotalInCents * value) / 100);
       case DiscountType.FIXED_AMOUNT:
         return Math.min(value, cartTotalInCents);
@@ -139,6 +162,7 @@ export class CouponService {
     const existing = await this.prisma.coupon.findUnique({ where: { code } });
     if (existing) throw new ConflictException(`Coupon code "${code}" already exists.`);
 
+    const tz = 'Europe/Warsaw';
     return this.prisma.coupon.create({
       data: {
         code,
@@ -149,8 +173,9 @@ export class CouponService {
         maxUsesTotal: dto.maxUsesTotal ?? null,
         maxUsesPerUser: dto.maxUsesPerUser ?? null,
         isActive: dto.isActive ?? true,
-        startsAt: dto.startsAt ? new Date(dto.startsAt) : null,
-        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+        timezone: tz,
+        startsAt: dto.startsAt ? toUtcFromTz(dto.startsAt, tz) : null,
+        expiresAt: dto.expiresAt ? toUtcFromTz(dto.expiresAt, tz) : null,
         excludedProductIds: dto.excludedProductIds ?? [],
       },
     });
@@ -160,13 +185,14 @@ export class CouponService {
     const coupon = await this.prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new NotFoundException('Coupon not found');
 
+    const tz = coupon.timezone ?? 'Europe/Warsaw';
     return this.prisma.coupon.update({
       where: { id },
       data: {
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
         ...(dto.maxUsesTotal !== undefined && { maxUsesTotal: dto.maxUsesTotal }),
         ...(dto.maxUsesPerUser !== undefined && { maxUsesPerUser: dto.maxUsesPerUser }),
-        ...(dto.expiresAt !== undefined && { expiresAt: new Date(dto.expiresAt) }),
+        ...(dto.expiresAt !== undefined && { expiresAt: toUtcFromTz(dto.expiresAt, tz) }),
       },
     });
   }
@@ -189,8 +215,11 @@ export class CouponService {
   // Reconciles the denormalized currentUses counter against the actual CouponUse
   // rows. Runs hourly so that a crash mid-rollback cannot permanently inflate the
   // counter and silently block otherwise-valid coupon redemptions.
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_HOUR, { timeZone: 'Europe/Warsaw' })
   async reconcileCurrentUses(): Promise<void> {
+    const acquired = await this.redis.set('cron:reconcile-coupon-uses:lock', '1', 'EX', 3540, 'NX');
+    if (!acquired) return;
+
     await this.prisma.$executeRaw`
       UPDATE coupons
       SET current_uses = (

@@ -443,3 +443,101 @@ describe('ProductDetailComponent — catalog number in heading', () => {
     expect(span).toBeNull();
   });
 });
+
+// ─── Reviews SSR guard (isPlatformBrowser) ─────────────────────────────────────
+// Regression guard: loadReviews must be skipped during SSR/prerender.
+// Without the guard, 200+ products prerendered at Vercel build time each fire
+// a GET /products/{id}/reviews request — inflating Railway request counts and
+// adding 200–500ms to every SSR render.
+
+function setupWithPlatform(platform: 'browser' | 'server') {
+  const mockRoute = {
+    snapshot: {
+      paramMap: { get: jest.fn().mockReturnValue(SLUG) },
+      queryParamMap: { get: jest.fn().mockReturnValue(null) },
+    },
+  };
+
+  const mockAuth = { isAuthenticated: jest.fn().mockReturnValue(false) };
+  const mockCart = { addItem: jest.fn(), refreshFromServer: jest.fn() };
+  const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
+  const mockAnalytics = { trackAddToCart: jest.fn(), trackViewItem: jest.fn() };
+  const mockSeo = { updateProductMeta: jest.fn(), setProductJsonLd: jest.fn() };
+  const mockWishlist = { isInWishlist: jest.fn().mockReturnValue(false), toggle: jest.fn() };
+  const mockStockStream = { connect: jest.fn().mockReturnValue(EMPTY) };
+  const mockReviews = {
+    getByProduct: jest.fn().mockReturnValue(EMPTY),
+    submit: jest.fn(),
+    markHelpful: jest.fn(),
+  };
+
+  TestBed.configureTestingModule({
+    imports: [ProductDetailComponent],
+    providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      { provide: ActivatedRoute, useValue: mockRoute },
+      { provide: Location, useValue: { back: jest.fn() } },
+      { provide: PLATFORM_ID, useValue: platform },
+      { provide: AuthService, useValue: mockAuth },
+      { provide: CartService, useValue: mockCart },
+      { provide: ToastService, useValue: mockToast },
+      { provide: AnalyticsService, useValue: mockAnalytics },
+      { provide: SeoService, useValue: mockSeo },
+      { provide: WishlistService, useValue: mockWishlist },
+      { provide: StockStreamService, useValue: mockStockStream },
+      { provide: ReviewsService, useValue: mockReviews },
+    ],
+    schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
+  });
+
+  TestBed.overrideComponent(ProductDetailComponent, {
+    set: { imports: [PricePipe], schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA] },
+  });
+
+  const fixture = TestBed.createComponent(ProductDetailComponent);
+  const httpMock = TestBed.inject(HttpTestingController);
+  const reviewsService = TestBed.inject(ReviewsService) as unknown as jest.Mocked<Pick<ReviewsService, 'getByProduct'>>;
+
+  return { fixture, httpMock, reviewsService };
+}
+
+describe('ProductDetailComponent — loadReviews SSR guard', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('calls reviewsService.getByProduct after the product loads in browser context', () => {
+    const { fixture, httpMock, reviewsService } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    httpMock.verify();
+
+    expect(reviewsService.getByProduct).toHaveBeenCalledWith('prod-1', 1, 'recent');
+  });
+
+  it('does NOT call reviewsService.getByProduct during SSR (PLATFORM_ID = server)', () => {
+    const { fixture, httpMock, reviewsService } = setupWithPlatform('server');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    httpMock.verify();
+
+    expect(reviewsService.getByProduct).not.toHaveBeenCalled();
+  });
+
+  it('calls getByProduct with the correct product id in browser context', () => {
+    const { fixture, httpMock, reviewsService } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse({ id: 'prod-xyz' }));
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    httpMock.verify();
+
+    expect(reviewsService.getByProduct).toHaveBeenCalledWith('prod-xyz', expect.any(Number), expect.any(String));
+  });
+});

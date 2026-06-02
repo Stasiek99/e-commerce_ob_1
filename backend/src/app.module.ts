@@ -32,6 +32,9 @@ import { ReturnsModule } from './modules/returns/returns.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { RedisModule } from './modules/redis/redis.module';
+import { PINO_REDACT_PATHS } from './logger-redact-paths';
+
+export { PINO_REDACT_PATHS };
 
 @Module({
   imports: [
@@ -42,8 +45,7 @@ import { RedisModule } from './modules/redis/redis.module';
           ? { target: 'pino-pretty', options: { colorize: true, singleLine: true } }
           : undefined,
         level: process.env.LOG_LEVEL ?? 'info',
-        // Redact sensitive headers from request logs
-        redact: ['req.headers.authorization', 'req.headers.cookie'],
+        redact: [...PINO_REDACT_PATHS],
         mixin: () => {
           const correlationId = getCorrelationId();
           return correlationId ? { correlationId } : {};
@@ -63,8 +65,10 @@ import { RedisModule } from './modules/redis/redis.module';
         const isProd = config.get<string>('NODE_ENV') === 'production';
         return {
           throttlers: [
-            { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
-            { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
+            { name: 'burst',       ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+            { name: 'sustained',   ttl: 60_000, limit: 60 },  // 60 req/min per IP
+            { name: 'coupon-anon', ttl: 60_000, limit: 3  },  // 3 req/min for unauthenticated coupon validation
+            { name: 'coupon-auth', ttl: 60_000, limit: 10 },  // 10 req/min for authenticated coupon validation
           ],
           // Reuse the shared REDIS_CLIENT (retryStrategy + error handler already
           // wired). Avoids a second disconnected IORedis connection whose silent

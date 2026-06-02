@@ -31,6 +31,7 @@ describe('PaymentsService', () => {
   let stripeClient: jest.Mocked<StripeClient>;
   let emailService: jest.Mocked<EmailQueueService>;
   let invoiceService: jest.Mocked<InvoiceService>;
+  let redis: any;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
     id: 'cs_test_abc123',
@@ -149,11 +150,16 @@ describe('PaymentsService', () => {
               .mockReturnValue('http://localhost:4200/checkout/success'),
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: { set: jest.fn().mockResolvedValue('OK') },
+        },
       ],
     }).compile();
 
     service = module.get(PaymentsService);
     prisma = module.get(PrismaService);
+    redis = module.get('REDIS_CLIENT');
     stripeClient = module.get(StripeClient);
     emailService = module.get(EmailQueueService);
     invoiceService = module.get(InvoiceService);
@@ -1828,6 +1834,10 @@ describe('PaymentsService', () => {
               getOrThrow: jest.fn().mockReturnValue('http://example.com'),
             },
           },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK') },
+          },
         ],
       }).compile();
 
@@ -2186,6 +2196,83 @@ describe('PaymentsService', () => {
 
       expect(prisma.payment.findMany).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── @Cron timezone configuration ────────────────────────────────────────────
+
+  describe('@Cron timezone configuration', () => {
+    it('reconcilePendingPayments is configured to fire in Europe/Warsaw timezone', () => {
+      const meta = Reflect.getMetadata(
+        'SCHEDULE_CRON_OPTIONS',
+        PaymentsService.prototype['reconcilePendingPayments'],
+      );
+      expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+
+    it('pruneProcessedStripeEvents is configured to fire in Europe/Warsaw timezone', () => {
+      const meta = Reflect.getMetadata(
+        'SCHEDULE_CRON_OPTIONS',
+        PaymentsService.prototype['pruneProcessedStripeEvents'],
+      );
+      expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+  });
+
+  // ─── Distributed lock guard ───────────────────────────────────────────────────
+
+  describe('distributed lock guard', () => {
+    describe('reconcilePendingPayments', () => {
+      it('skips DB query when another replica already holds the lock (redis.set returns null)', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await service.reconcilePendingPayments();
+
+        expect(prisma.payment.findMany).not.toHaveBeenCalled();
+      });
+
+      it('runs the reconciliation body when the lock is acquired (redis.set returns OK)', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.payment.findMany.mockResolvedValue([]);
+
+        await service.reconcilePendingPayments();
+
+        expect(prisma.payment.findMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('acquires the lock with NX and a 540-second TTL', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.payment.findMany.mockResolvedValue([]);
+
+        await service.reconcilePendingPayments();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:reconcile-payments:lock',
+          '1',
+          'EX',
+          540,
+          'NX',
+        );
+      });
+    });
+
+    describe('pruneProcessedStripeEvents', () => {
+      it('skips pruning when another replica already holds the lock', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await service.pruneProcessedStripeEvents();
+
+        expect(prisma.processedStripeEvent.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('executes the prune when the lock is acquired', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 3 });
+
+        await service.pruneProcessedStripeEvents();
+
+        expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

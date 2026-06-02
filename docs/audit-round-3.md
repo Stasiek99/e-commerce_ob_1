@@ -205,14 +205,6 @@ The success page displays `orderId` (a UUID like `3f7a8b2c-...`) as "Numer zamó
 The `PaymentStatusResponse` DTO returned by `GET /payments/:orderId/status` does not include `orderNumber` — the field is never fetched or displayed.
 **Fix:** Add `orderNumber` to `PaymentStatusResponse` and display it on the success page. The order is already loaded in the success component — `orderNumber` just needs to be included in the backend response.
 ---
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🔴 BLOCKER | Must fix before any real customer |
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
 
 ## 🟡 MEDIUM — `compareAtPriceInCents` modelled in the DTO but never rendered — sale prices invisible *(1/7 agents)*
 **Files:** `frontend/src/app/features/catalog/product-detail/product-detail.component.ts:29`, `frontend/src/app/shared/product-card/product-card.component.html`
@@ -229,14 +221,7 @@ this.http.post(`/api/orders/${id}/cancel`, {})
 ```
 These use absolute `/api/...` paths rather than `environment.apiUrl`. In development, the Angular proxy rewrites `/api/*` → `localhost:3000`. On Vercel, there is no equivalent rewrite rule in `vercel.json` for this path — Vercel would serve a 404 from the CDN. The retry and cancel buttons silently fail.
 **Fix:** Prefix with `this.env.apiUrl + '/orders/...'` matching the pattern used everywhere else in the codebase.
----
-
-## 🟡 MEDIUM — `inspiredBy` trademark exposed via search scoring — IP/trademark litigation vector *(2/7 agents)*
-**Files:** `backend/src/modules/products/products.service.ts:10–37` (PRODUCT_SELECT exclusion), lines `135–162` (search SQL)
-`PRODUCT_SELECT` explicitly excludes `inspiredBy` with a comment about not leaking the inspiration mapping. However the search ranking SQL uses `p."inspiredBy" ILIKE '%Sauvage%'` in the `WHERE` clause. A customer searching "Sauvage" receives the inspired products ranked to the top — revealing the mapping through search result ordering even without the field in the response body.
-Polish courts (and EU Trademark Regulation 2017/1001) consider using a trademark in trade for commercial advantage actionable even when the field is not displayed, if the search algorithm is optimized on the brand name. Luxury houses (Dior, Chanel) actively monitor the Polish clone/inspiration market.
-**Fix:** This is primarily a legal strategy decision. At minimum: require legal review before launching `inspiredBy`-driven search ranking. As a technical hedge, store the `luxuryReferenceId` only, not the brand name string, and filter search on an allowlist of approved inspiration categories rather than brand names.
----
+--
 
 ## 🟡 MEDIUM — `retryPayment` always tries to create a new `Payment` row — hits `@unique orderId` constraint *(1/7 agents)*
 **File:** `backend/src/modules/payments/payments.service.ts:25–75`, `backend/src/modules/orders/orders.service.ts`
@@ -296,6 +281,21 @@ For `price_desc`, a product with no active variants (all `isActive: false`) has 
 **File:** `backend/src/modules/products/products.service.ts:721–728`
 `invalidateProductCaches()` is `void` — it returns before the stream finishes. Under concurrent stock adjustments or product updates, multiple `scanStream` instances run in parallel. A lagging stream from a previous request can DEL a freshly written cache key from the current request immediately after it is set. The product list cache is effectively invalidated twice, and the fresh DB result is evicted before it can be served.
 **Fix:** Use a monotonically incrementing `product_cache_version` counter in Redis. Embed the version in all cache keys. Invalidation means incrementing the version counter (O(1)) rather than scanning all keys.
+---
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🔴 BLOCKER | Must fix before any real customer |
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
+
+don't know: ## 🟡 MEDIUM — `inspiredBy` trademark exposed via search scoring — IP/trademark litigation vector *(2/7 agents)*
+**Files:** `backend/src/modules/products/products.service.ts:10–37` (PRODUCT_SELECT exclusion), lines `135–162` (search SQL)
+`PRODUCT_SELECT` explicitly excludes `inspiredBy` with a comment about not leaking the inspiration mapping. However the search ranking SQL uses `p."inspiredBy" ILIKE '%Sauvage%'` in the `WHERE` clause. A customer searching "Sauvage" receives the inspired products ranked to the top — revealing the mapping through search result ordering even without the field in the response body.
+Polish courts (and EU Trademark Regulation 2017/1001) consider using a trademark in trade for commercial advantage actionable even when the field is not displayed, if the search algorithm is optimized on the brand name. Luxury houses (Dior, Chanel) actively monitor the Polish clone/inspiration market.
+**Fix:** This is primarily a legal strategy decision. At minimum: require legal review before launching `inspiredBy`-driven search ranking. As a technical hedge, store the `luxuryReferenceId` only, not the brand name string, and filter search on an allowlist of approved inspiration categories rather than brand names.
 ---
 
 ## Prioritised Fix Order

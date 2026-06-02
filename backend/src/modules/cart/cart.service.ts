@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+const MAX_CART_QTY_PER_VARIANT = 2;
+
 const CART_INCLUDE = {
   items: {
     include: {
@@ -69,6 +71,8 @@ export class CartService {
       });
 
       const newQty = (existing?.quantity ?? 0) + quantity;
+      if (newQty > MAX_CART_QTY_PER_VARIANT)
+        throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
       if (variant.stock < newQty) throw new BadRequestException('Insufficient stock');
 
       if (existing) {
@@ -108,6 +112,8 @@ export class CartService {
       `;
       const variant = rows[0];
       if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
+      if (quantity > MAX_CART_QTY_PER_VARIANT)
+        throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
       if (variant.stock < quantity) throw new BadRequestException('Insufficient stock');
 
       await tx.cartItem.updateMany({

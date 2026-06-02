@@ -18,9 +18,23 @@ export class EmailQueueService {
 
   constructor(@InjectQueue('email') private readonly queue: Queue<EmailJobData>) {}
 
+  private deriveJobId(name: string, data: EmailJobData): string | undefined {
+    const p = data.payload as Record<string, unknown>;
+    if (typeof p['requestId'] === 'string') {
+      // Return events: include newStatus so each state transition gets its own key
+      const suffix = typeof p['newStatus'] === 'string' ? `-${p['newStatus']}` : '';
+      return `${name}-${p['requestId']}${suffix}`;
+    }
+    if (typeof p['orderNumber'] === 'string') {
+      return `${name}-${p['orderNumber']}`;
+    }
+    return undefined;
+  }
+
   private async enqueue(name: string, data: EmailJobData): Promise<void> {
     try {
-      await this.queue.add(name, data, JOB_OPTIONS);
+      const jobId = this.deriveJobId(name, data);
+      await this.queue.add(name, data, { ...JOB_OPTIONS, ...(jobId && { jobId }) });
     } catch (err: unknown) {
       this.logger.warn(`Email job "${name}" not queued: ${(err as Error).message}`);
       throw err;

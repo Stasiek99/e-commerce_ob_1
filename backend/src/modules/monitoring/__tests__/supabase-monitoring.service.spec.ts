@@ -27,6 +27,7 @@ describe('SupabaseMonitoringService', () => {
       providers: [
         SupabaseMonitoringService,
         { provide: PrismaService, useValue: prisma },
+        { provide: 'REDIS_CLIENT', useValue: { set: jest.fn().mockResolvedValue('OK') } },
       ],
     }).compile();
 

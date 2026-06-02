@@ -15,6 +15,10 @@ if (environment.sentryDsn) {
   });
 }
 
-bootstrapApplication(AppComponent, appConfig).catch((err) =>
-  console.error(err),
-);
+bootstrapApplication(AppComponent, appConfig).catch((err) => {
+  if (err?.name === 'ChunkLoadError' || err?.message?.includes('chunk')) {
+    window.location.reload();
+    return;
+  }
+  console.error(err);
+});
