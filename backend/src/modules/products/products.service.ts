@@ -228,7 +228,7 @@ export class ProductsService {
       const slim = await this.prisma.product.findMany({
         where,
         select: { id: true, line: true, category: { select: { slug: true } } },
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
       });
 
       type Slim = (typeof slim)[0];
@@ -271,7 +271,7 @@ export class ProductsService {
       const slim = await this.prisma.product.findMany({
         where,
         select: { id: true, line: true, category: { select: { slug: true } } },
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
       });
 
       type Slim = (typeof slim)[0];
@@ -316,7 +316,7 @@ export class ProductsService {
         select: PRODUCT_SELECT,
         skip,
         take: limit,
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
       }),
       this.prisma.product.count({ where }),
     ]);
@@ -370,11 +370,11 @@ export class ProductsService {
   }
 
   async findBySlug(slug: string) {
-    const product = await this.prisma.product.findUnique({
-      where: { slug },
+    const product = await this.prisma.product.findFirst({
+      where: { slug, isActive: true },
       select: PRODUCT_SELECT,
     });
-    if (!product || !product.isActive) throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException('Product not found');
     const [enriched] = await this.attachOmnibusData([product]);
     return enriched;
   }
@@ -483,7 +483,7 @@ export class ProductsService {
     return variant;
   }
 
-  async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }) {
+  async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }, actorId?: string) {
     const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('Variant not found');
 
@@ -491,6 +491,8 @@ export class ProductsService {
     const newStock = dto.set !== undefined
       ? dto.set
       : Math.max(0, variant.stock + (dto.adjustment ?? 0));
+
+    this.logger.log({ variantId, before: variant.stock, after: newStock, actor: actorId ?? 'unknown' }, 'stock_update');
 
     const updated = await this.prisma.productVariant.update({
       where: { id: variantId },

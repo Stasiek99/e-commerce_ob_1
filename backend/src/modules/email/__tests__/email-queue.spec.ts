@@ -339,6 +339,138 @@ describe('EmailQueueService', () => {
       expect(queueAdd.mock.calls[0][1].payload.type).toBe('COMPLAINT');
     });
   });
+
+  // ── deterministic jobId (deduplication) ─────────────────────────────────────
+  // Invariant: webhook + reconciliation cron both call sendPaymentConfirmedWithInvoice
+  // for the same order. Without a deterministic jobId, BullMQ treats them as two
+  // distinct jobs and sends two emails. The fix keys the job by name + orderNumber
+  // so the second add is a no-op while the first is active/completed.
+
+  describe('deterministic jobId (deduplication)', () => {
+    it('sets jobId = payment_confirmed_with_invoice-{orderNumber} to block duplicate sends', async () => {
+      await service.sendPaymentConfirmedWithInvoice({
+        to: 'u@t.com',
+        orderNumber: 'ORD-2026-000042',
+        firstName: 'Jan',
+        items: [],
+        shippingCostInCents: 900,
+        totalInCents: 10000,
+        invoiceUrl: 'https://storage/inv.pdf',
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('payment_confirmed_with_invoice-ORD-2026-000042');
+    });
+
+    it('sets jobId = order_confirmation-{orderNumber} for order_confirmation', async () => {
+      await service.sendOrderConfirmation({
+        to: 'u@t.com',
+        orderNumber: 'ORD-2026-000001',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('order_confirmation-ORD-2026-000001');
+    });
+
+    it('sets jobId = payment_confirmed-{orderNumber} for payment_confirmed', async () => {
+      await service.sendPaymentConfirmed({
+        to: 'u@t.com',
+        orderNumber: 'ORD-2026-000007',
+        firstName: 'Jan',
+        totalInCents: 5000,
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('payment_confirmed-ORD-2026-000007');
+    });
+
+    it('sets jobId = return_confirmation-{requestId} (uses requestId over orderNumber for returns)', async () => {
+      await service.sendReturnConfirmation({
+        to: 'u@t.com',
+        firstName: 'Jan',
+        orderNumber: 'ORD-1',
+        requestId: 'ret-abc-999',
+        type: 'WITHDRAWAL',
+        items: [],
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('return_confirmation-ret-abc-999');
+    });
+
+    it('sets jobId = return_status_update-{requestId}-{newStatus} so each status transition is distinct', async () => {
+      await service.sendReturnStatusUpdate({
+        to: 'u@t.com',
+        firstName: 'Jan',
+        orderNumber: 'ORD-1',
+        requestId: 'ret-xyz',
+        type: 'COMPLAINT',
+        newStatus: 'APPROVED',
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('return_status_update-ret-xyz-APPROVED');
+    });
+
+    it('two different return status transitions produce different jobIds', async () => {
+      await service.sendReturnStatusUpdate({
+        to: 'u@t.com',
+        firstName: 'Jan',
+        orderNumber: 'ORD-1',
+        requestId: 'ret-xyz',
+        type: 'COMPLAINT',
+        newStatus: 'APPROVED',
+      });
+
+      await service.sendReturnStatusUpdate({
+        to: 'u@t.com',
+        firstName: 'Jan',
+        orderNumber: 'ORD-1',
+        requestId: 'ret-xyz',
+        type: 'COMPLAINT',
+        newStatus: 'COMPLETED',
+      });
+
+      const firstJobId = queueAdd.mock.calls[0][2].jobId;
+      const secondJobId = queueAdd.mock.calls[1][2].jobId;
+      expect(firstJobId).not.toBe(secondJobId);
+    });
+
+    it('does NOT set jobId for email_verification (user-level, no dedup risk)', async () => {
+      await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBeUndefined();
+    });
+
+    it('does NOT set jobId for password_reset (user may legitimately resend)', async () => {
+      await service.sendPasswordReset({ to: 'u@t.com', firstName: 'Jan', resetUrl: 'https://x' });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBeUndefined();
+    });
+
+    it('two calls for same order + same event type produce identical jobIds', async () => {
+      const payload = {
+        to: 'u@t.com',
+        orderNumber: 'ORD-SAME',
+        firstName: 'Jan',
+        totalInCents: 5000,
+        isRefund: false,
+      };
+
+      await service.sendOrderCancellation(payload);
+      await service.sendOrderCancellation(payload);
+
+      const firstJobId = queueAdd.mock.calls[0][2].jobId;
+      const secondJobId = queueAdd.mock.calls[1][2].jobId;
+      expect(firstJobId).toBe(secondJobId);
+      expect(firstJobId).toBe('order_cancellation-ORD-SAME');
+    });
+  });
 });
 
 // ─── EmailQueueProcessor ──────────────────────────────────────────────────────

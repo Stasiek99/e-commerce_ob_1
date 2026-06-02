@@ -17,6 +17,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.$connect();
+    await this.$queryRaw`SELECT 1`;
   }
 
   async onModuleDestroy() {

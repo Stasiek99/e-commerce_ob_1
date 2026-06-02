@@ -30,6 +30,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Public } from '../auth/decorators/public.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import {
   CreateProductDto,
   UpdateProductDto,
@@ -180,8 +181,9 @@ export class ProductsController {
   updateVariantStock(
     @Param('variantId') variantId: string,
     @Body() dto: UpdateVariantStockDto,
+    @CurrentUser() user: { id: string },
   ) {
-    return this.productsService.updateVariantStock(variantId, dto);
+    return this.productsService.updateVariantStock(variantId, dto, user.id);
   }
 
   @Post(':id/images')

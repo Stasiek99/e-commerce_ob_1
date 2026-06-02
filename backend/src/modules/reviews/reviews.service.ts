@@ -1,18 +1,36 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReviewDto, UpdateReviewStatusDto } from './dto/create-review.dto';
 
+const SUSPICIOUS_ACTIVITY_WINDOW_HOURS = 24;
+
 @Injectable()
 export class ReviewsService {
+  private readonly logger = new Logger(ReviewsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async create(userId: string, dto: CreateReviewDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isEmailVerified: true, createdAt: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.isEmailVerified) {
+      throw new ForbiddenException(
+        'Zweryfikuj adres e-mail, aby móc wystawiać opinie.',
+      );
+    }
+
     const order = await this.prisma.order.findFirst({
       where: { id: dto.orderId, userId },
       include: {
@@ -38,6 +56,19 @@ export class ReviewsService {
       where: { id: dto.productId },
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
+
+    // Detect accounts that register, order, and review all within 24 hours —
+    // a pattern consistent with coordinated review bombing.
+    const windowMs = SUSPICIOUS_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000;
+    const now = Date.now();
+    if (
+      now - user.createdAt.getTime() < windowMs &&
+      now - order.createdAt.getTime() < windowMs
+    ) {
+      const msg = `Suspicious review activity: user ${userId} registered, ordered, and reviewed within ${SUSPICIOUS_ACTIVITY_WINDOW_HOURS}h`;
+      this.logger.warn(msg);
+      Sentry.captureMessage(msg, 'warning');
+    }
 
     try {
       return await this.prisma.review.create({

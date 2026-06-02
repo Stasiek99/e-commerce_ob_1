@@ -12,6 +12,23 @@ import { ReturnsService } from '../returns/returns.service';
 
 const logger = new Logger('AdminJS');
 
+export async function logAdminAction(
+  prisma: PrismaService,
+  action: string,
+  entityType: string,
+  entityId: string,
+  actor: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await prisma.adminLog.create({
+      data: { action, entityType, entityId, actor, metadata: metadata as any },
+    });
+  } catch (err) {
+    logger.error(`AdminLog write failed: ${(err as Error).message}`);
+  }
+}
+
 async function generatePicklistHtml(prisma: PrismaService): Promise<string> {
   const esc = (s: unknown) =>
     String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -132,14 +149,15 @@ export async function setupAdmin(
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
-  const sessionSecret =
-    process.env.ADMIN_SESSION_SECRET ?? adminPassword ?? 'dev-admin-secret';
 
   if (!adminEmail || !adminPassword) {
     throw new Error(
       'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set — refusing to boot with an unprotected admin panel',
     );
   }
+
+  // Computed after guard so TypeScript narrows adminPassword to string
+  const sessionSecret = process.env.ADMIN_SESSION_SECRET ?? adminPassword;
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
   // TypeScript compiles `await import()` to `require()` in commonjs mode, which
@@ -212,6 +230,19 @@ export async function setupAdmin(
                     message: `Niski stan: ${count} ${count === 1 ? 'wariant wymaga' : 'warianty wymagają'} uzupełnienia`,
                     type: 'error',
                   };
+                }
+                return response;
+              },
+            },
+            edit: {
+              after: async (response: any, _request: any, context: any) => {
+                const { record, currentAdmin } = context;
+                if (record?.params?.id) {
+                  await logAdminAction(
+                    prisma, 'edit', 'ProductVariant', record.params.id,
+                    currentAdmin?.email ?? adminEmail,
+                    { sku: record.params.sku, stock: record.params.stock, priceInCents: record.params.priceInCents },
+                  );
                 }
                 return response;
               },
@@ -327,6 +358,7 @@ export async function setupAdmin(
                   }
 
                   const shipment = await shippingService.generateLabel(orderId);
+                  await logAdminAction(prisma, 'generateLabel', 'Order', orderId, context.currentAdmin?.email ?? adminEmail, { trackingNumber: shipment.trackingNumber });
 
                   if (shipment.labelUrl?.startsWith('http')) {
                     return { redirectUrl: shipment.labelUrl, record: record.toJSON() };
@@ -360,6 +392,9 @@ export async function setupAdmin(
                 const { records } = context;
                 const ids: string[] = records.map((r: any) => r.params.id as string);
                 const result = await ordersService.bulkMarkAsShipped(ids);
+                if (result.succeeded > 0) {
+                  await logAdminAction(prisma, 'bulkMarkAsShipped', 'Order', ids.join(','), context.currentAdmin?.email ?? adminEmail, { succeeded: result.succeeded, failed: result.failed.length });
+                }
 
                 const parts: string[] = [];
                 if (result.succeeded > 0) parts.push(`Wysłano: ${result.succeeded}`);
@@ -389,6 +424,7 @@ export async function setupAdmin(
                 const orderId = record.params.id as string;
                 try {
                   await paymentsService.refundPayment(orderId, 'ADMIN');
+                  await logAdminAction(prisma, 'refundFull', 'Order', orderId, context.currentAdmin?.email ?? adminEmail);
                   return {
                     record: record.toJSON(),
                     notice: {
@@ -422,6 +458,9 @@ export async function setupAdmin(
                 const { records } = context;
                 const ids: string[] = records.map((r: any) => r.params.id as string);
                 const result = await ordersService.bulkCancel(ids, 'ADMIN');
+                if (result.succeeded > 0) {
+                  await logAdminAction(prisma, 'bulkCancel', 'Order', ids.join(','), context.currentAdmin?.email ?? adminEmail, { succeeded: result.succeeded, failed: result.failed.length });
+                }
 
                 const parts: string[] = [];
                 if (result.succeeded > 0) parts.push(`Anulowano: ${result.succeeded}`);
@@ -552,6 +591,7 @@ export async function setupAdmin(
                 const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
                 try {
                   await returnsService.approve(record.params.id, adminNote);
+                  await logAdminAction(prisma, 'approve', 'ReturnRequest', record.params.id as string, context.currentAdmin?.email ?? adminEmail, adminNote ? { adminNote } : undefined);
                   return {
                     record: record.toJSON(),
                     notice: { message: 'Wniosek zatwierdzony — klient został powiadomiony.', type: 'success' },
@@ -575,6 +615,7 @@ export async function setupAdmin(
                 const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
                 try {
                   await returnsService.reject(record.params.id, adminNote);
+                  await logAdminAction(prisma, 'reject', 'ReturnRequest', record.params.id as string, context.currentAdmin?.email ?? adminEmail, adminNote ? { adminNote } : undefined);
                   return {
                     record: record.toJSON(),
                     notice: { message: 'Wniosek odrzucony — klient został powiadomiony.', type: 'success' },
@@ -597,6 +638,7 @@ export async function setupAdmin(
                 const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
                 try {
                   await returnsService.markRefunded(record.params.id, adminNote);
+                  await logAdminAction(prisma, 'markRefunded', 'ReturnRequest', record.params.id as string, context.currentAdmin?.email ?? adminEmail, adminNote ? { adminNote } : undefined);
                   return {
                     record: record.toJSON(),
                     notice: { message: 'Zwrot środków oznaczony jako zrealizowany — klient został powiadomiony.', type: 'success' },
@@ -689,6 +731,7 @@ export async function setupAdmin(
                 });
 
                 await updateReviewStats(prisma, review.productId);
+                await logAdminAction(prisma, 'approve', 'Review', reviewId, context.currentAdmin?.email ?? adminEmail);
 
                 return {
                   record: record.toJSON(),
@@ -719,6 +762,7 @@ export async function setupAdmin(
                 });
 
                 await updateReviewStats(prisma, review.productId);
+                await logAdminAction(prisma, 'reject', 'Review', reviewId, context.currentAdmin?.email ?? adminEmail);
 
                 return {
                   record: record.toJSON(),
@@ -750,6 +794,8 @@ export async function setupAdmin(
                 await Promise.allSettled(
                   [...productIds].map((pid) => updateReviewStats(prisma, pid)),
                 );
+                const bulkReviewIds: string[] = records.map((r: any) => r.params.id as string);
+                await logAdminAction(prisma, 'bulkApprove', 'Review', bulkReviewIds.join(','), context.currentAdmin?.email ?? adminEmail, { count: records.length });
 
                 return {
                   records: records.map((r: any) => r.toJSON()),
@@ -761,6 +807,17 @@ export async function setupAdmin(
               },
             },
           },
+        },
+      },
+      // ── Admin Audit Log ───────────────────────────────────────────────
+      {
+        resource: { model: getModelByName('AdminLog'), client: prisma },
+        options: {
+          navigation: { name: 'Administracja' },
+          sort: { sortBy: 'createdAt', direction: 'desc' },
+          listProperties: ['action', 'entityType', 'entityId', 'actor', 'createdAt'],
+          filterProperties: ['action', 'entityType', 'actor'],
+          ...readOnly,
         },
       },
     ],

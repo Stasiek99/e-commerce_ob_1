@@ -17,8 +17,9 @@ export class GoogleCallbackComponent implements OnInit {
     if (!isPlatformBrowser(this.platformId)) return;
     this.auth.exchangeOAuthToken().subscribe({
       next: () => {
-        const returnTo = sessionStorage.getItem('auth_return_to') ?? '/';
+        const raw = sessionStorage.getItem('auth_return_to') ?? '/';
         sessionStorage.removeItem('auth_return_to');
+        const returnTo = raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
         this.router.navigateByUrl(returnTo);
       },
       error: () => {

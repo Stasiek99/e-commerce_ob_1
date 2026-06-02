@@ -17,6 +17,7 @@ const makeCoupon = (overrides: Partial<Record<string, any>> = {}) => ({
   maxUsesTotal: null,
   maxUsesPerUser: null,
   minSpendInCents: null,
+  timezone: 'Europe/Warsaw',
   excludedProductIds: [],
   startsAt: null,
   expiresAt: null,
@@ -27,6 +28,7 @@ const makeCoupon = (overrides: Partial<Record<string, any>> = {}) => ({
 describe('CouponService', () => {
   let service: CouponService;
   let prisma: any;
+  let redis: any;
 
   beforeEach(async () => {
     jest.useFakeTimers().setSystemTime(NOW);
@@ -54,11 +56,16 @@ describe('CouponService', () => {
             },
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: { set: jest.fn().mockResolvedValue('OK') },
+        },
       ],
     }).compile();
 
     service = module.get(CouponService);
     prisma = module.get(PrismaService);
+    redis = module.get('REDIS_CLIENT');
   });
 
   afterEach(() => {
@@ -360,8 +367,23 @@ describe('CouponService', () => {
     });
 
     it('rounds PERCENTAGE discount to whole cents', () => {
-      // 33% of 1000 = 333.33... → should round to 333
+      // 33% of 1000 = 330.0 (exact)
       expect(service.calculateDiscount(DiscountType.PERCENTAGE, 33, 1000)).toBe(330);
+    });
+
+    it('rounds up at exactly .5 — customer receives more discount than Math.floor would give', () => {
+      // 19% of 50 cents = 9.5 → Math.round = 10 (customer's favor), Math.floor = 9 (store's favor)
+      expect(service.calculateDiscount(DiscountType.PERCENTAGE, 19, 50)).toBe(10);
+    });
+
+    it('rounds up when fractional part > 0.5', () => {
+      // 19% of 10003 cents = 1900.57 → Math.round = 1901
+      expect(service.calculateDiscount(DiscountType.PERCENTAGE, 19, 10003)).toBe(1901);
+    });
+
+    it('rounds down when fractional part < 0.5', () => {
+      // 19% of 10001 cents = 1900.19 → Math.round = 1900
+      expect(service.calculateDiscount(DiscountType.PERCENTAGE, 19, 10001)).toBe(1900);
     });
 
     it('FIXED_AMOUNT returns value when cart is large enough', () => {
@@ -530,6 +552,53 @@ describe('CouponService', () => {
         service.create({ ...validDto, value: 100 }),
       ).resolves.not.toThrow();
     });
+
+    describe('timezone-aware date storage', () => {
+      beforeEach(() => {
+        prisma.coupon.findUnique.mockResolvedValue(null);
+        prisma.coupon.create.mockResolvedValue({});
+      });
+
+      it('converts naive expiresAt to UTC using Europe/Warsaw CEST offset (summer: -2h)', async () => {
+        // Warsaw summer midnight = 22:00 UTC the day before
+        await service.create({ ...validDto, expiresAt: '2024-08-15T00:00:00' });
+
+        const { expiresAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(expiresAt).toEqual(new Date('2024-08-14T22:00:00.000Z'));
+      });
+
+      it('converts naive startsAt to UTC using Europe/Warsaw CET offset (winter: -1h)', async () => {
+        // Warsaw winter midnight = 23:00 UTC the day before
+        await service.create({ ...validDto, startsAt: '2024-11-29T00:00:00' });
+
+        const { startsAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(startsAt).toEqual(new Date('2024-11-28T23:00:00.000Z'));
+      });
+
+      it('passes through an expiresAt that already carries a Z offset without shifting it', async () => {
+        await service.create({ ...validDto, expiresAt: '2024-08-15T22:00:00Z' });
+
+        const { expiresAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(expiresAt).toEqual(new Date('2024-08-15T22:00:00.000Z'));
+      });
+
+      it('stores the timezone field as Europe/Warsaw on every new coupon', async () => {
+        await service.create(validDto);
+
+        expect(prisma.coupon.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ timezone: 'Europe/Warsaw' }),
+          }),
+        );
+      });
+
+      it('stores null expiresAt when dto.expiresAt is omitted', async () => {
+        await service.create(validDto);
+
+        const { expiresAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(expiresAt).toBeNull();
+      });
+    });
   });
 
   // ─── reconcileCurrentUses ────────────────────────────────────────────────
@@ -576,6 +645,65 @@ describe('CouponService', () => {
       expect(prisma.coupon.update).toHaveBeenCalledWith({
         where: { id: 'coupon-1' },
         data: { isActive: false },
+      });
+    });
+
+    it('converts naive expiresAt to UTC using the timezone stored on the coupon (CEST -2h)', async () => {
+      prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ timezone: 'Europe/Warsaw' }));
+      prisma.coupon.update.mockResolvedValue({});
+
+      await service.update('coupon-1', { expiresAt: '2024-08-31T23:59:59' });
+
+      const { expiresAt } = prisma.coupon.update.mock.calls[0][0].data;
+      expect(expiresAt).toEqual(new Date('2024-08-31T21:59:59.000Z'));
+    });
+
+    it('falls back to Europe/Warsaw when coupon has no timezone field', async () => {
+      prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ timezone: undefined }));
+      prisma.coupon.update.mockResolvedValue({});
+
+      await service.update('coupon-1', { expiresAt: '2024-11-29T00:00:00' });
+
+      const { expiresAt } = prisma.coupon.update.mock.calls[0][0].data;
+      // CET winter offset = -1h → 23:00 UTC the night before
+      expect(expiresAt).toEqual(new Date('2024-11-28T23:00:00.000Z'));
+    });
+  });
+
+  // ─── Distributed lock guard ───────────────────────────────────────────────────
+
+  describe('distributed lock guard', () => {
+    describe('reconcileCurrentUses', () => {
+      it('skips the SQL UPDATE when another replica already holds the lock', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await service.reconcileCurrentUses();
+
+        expect(prisma.$executeRaw).not.toHaveBeenCalled();
+      });
+
+      it('runs the reconciliation UPDATE when the lock is acquired', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.$executeRaw.mockResolvedValue(undefined);
+
+        await service.reconcileCurrentUses();
+
+        expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      });
+
+      it('acquires the lock with NX and a 3540-second TTL', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.$executeRaw.mockResolvedValue(undefined);
+
+        await service.reconcileCurrentUses();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:reconcile-coupon-uses:lock',
+          '1',
+          'EX',
+          3540,
+          'NX',
+        );
       });
     });
   });

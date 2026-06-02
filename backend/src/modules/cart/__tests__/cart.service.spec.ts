@@ -146,7 +146,7 @@ describe('CartService', () => {
     });
 
     it('increments quantity when variant is already in cart', async () => {
-      const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 2 };
+      const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 1 };
       const tx = makeTx();
       tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
       tx.cart.findFirst.mockResolvedValue(makeCart());
@@ -154,13 +154,27 @@ describe('CartService', () => {
       tx.cartItem.update.mockResolvedValue({});
       setupTx(tx);
 
-      const cartWithItem = { ...makeCart(), items: [makeCartItem(3)] };
+      const cartWithItem = { ...makeCart(), items: [makeCartItem(2)] };
       prisma.cart.findFirst.mockResolvedValue(cartWithItem); // getOrCreate re-fetch
 
       await service.addItem(undefined, 'sess-1', 'pv-1', 1);
 
       expect(tx.cartItem.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { quantity: 3 } }),
+        expect.objectContaining({ data: { quantity: 2 } }),
+      );
+    });
+
+    it('throws BadRequestException when cumulative quantity exceeds MAX_CART_QTY_PER_VARIANT', async () => {
+      const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 2 };
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(existing);
+      setupTx(tx);
+
+      // existing qty 2 + requested 1 = 3 > MAX_CART_QTY_PER_VARIANT (2)
+      await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
+        BadRequestException,
       );
     });
 
@@ -395,7 +409,7 @@ describe('CartService', () => {
 
     it('updates item quantity when stock is sufficient', async () => {
       const cart = makeCart();
-      const cartWithItem = { ...cart, items: [makeCartItem(3)] };
+      const cartWithItem = { ...cart, items: [makeCartItem(2)] };
       prisma.cart.findFirst
         .mockResolvedValueOnce(cart)        // findCart
         .mockResolvedValueOnce(cartWithItem); // getOrCreate re-fetch
@@ -404,10 +418,23 @@ describe('CartService', () => {
       tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
       setupUpdateTx(tx);
 
-      await service.updateItem(undefined, 'sess-1', 'pv-1', 3);
+      await service.updateItem(undefined, 'sess-1', 'pv-1', 2);
 
       expect(tx.cartItem.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { quantity: 3 } }),
+        expect.objectContaining({ data: { quantity: 2 } }),
+      );
+    });
+
+    it('throws BadRequestException when update quantity exceeds MAX_CART_QTY_PER_VARIANT', async () => {
+      const cart = makeCart();
+      prisma.cart.findFirst.mockResolvedValue(cart);
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      setupUpdateTx(tx);
+
+      // quantity=3 > MAX_CART_QTY_PER_VARIANT (2)
+      await expect(service.updateItem(undefined, 'sess-1', 'pv-1', 3)).rejects.toThrow(
+        BadRequestException,
       );
     });
 

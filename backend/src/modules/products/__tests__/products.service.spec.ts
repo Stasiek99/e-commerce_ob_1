@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -55,6 +56,7 @@ const enrich = (products: ReturnType<typeof makeProduct>[]) =>
 
 const mockPrisma = {
   product: {
+    findFirst: jest.fn(),
     findUnique: jest.fn(),
     findMany: jest.fn(),
     create: jest.fn(),
@@ -584,7 +586,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
       { variantId: 'var-promo', _min: { priceInCents: 7500 } },
     ]);
@@ -598,7 +600,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     // groupBy _min already gives us the minimum; verify the service passes it through
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
       { variantId: 'var-promo', _min: { priceInCents: 6000 } },
@@ -613,7 +615,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     // No history records for this variant
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
 
@@ -624,7 +626,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
 
   it('does not query price history when no variant has a promotional price', async () => {
     // Default makeProduct has compareAtPriceInCents: null — no promotion active
-    mockPrisma.product.findUnique.mockResolvedValue(makeProduct());
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct());
 
     await service.findBySlug('test-perfume');
 
@@ -638,7 +640,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
         makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 }),
       ],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(mixedProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(mixedProduct);
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
       { variantId: 'var-promo', _min: { priceInCents: 7200 } },
     ]);
@@ -664,7 +666,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const promoProduct = makeProduct({
       variants: [makeVariant({ id: 'var-promo', priceInCents: 8000, compareAtPriceInCents: 12000 })],
     });
-    mockPrisma.product.findUnique.mockResolvedValue(promoProduct);
+    mockPrisma.product.findFirst.mockResolvedValue(promoProduct);
     mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
 
     const before = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000 - 1000);
@@ -675,5 +677,325 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
     const gte: Date = call.where.recordedAt.gte;
     expect(gte).toBeInstanceOf(Date);
     expect(gte.getTime()).toBeGreaterThan(before.getTime());
+  });
+});
+
+// ─── findBySlug — isActive DB-level filter ────────────────────────────────────
+
+describe('ProductsService — findBySlug isActive DB-level filter', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('throws NotFoundException when the product slug does not exist in the database', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(null);
+
+    await expect(service.findBySlug('ghost-slug')).rejects.toThrow(NotFoundException);
+  });
+
+  it('throws NotFoundException for a deactivated product (Prisma returns null because isActive:true is in the WHERE)', async () => {
+    // The key regression: Prisma returns null — not an inactive product object.
+    // Before the fix, a deactivated product was fetched then rejected in app code.
+    // After the fix, Prisma never returns it because isActive:true is in the query.
+    mockPrisma.product.findFirst.mockResolvedValue(null);
+
+    await expect(service.findBySlug('inactive-perfume')).rejects.toThrow(NotFoundException);
+
+    // Verify the WHERE clause passed to Prisma includes isActive: true
+    expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ isActive: true }),
+      }),
+    );
+  });
+
+  it('returns enriched product data when the product is active', async () => {
+    const activeProduct = makeProduct({ slug: 'active-perfume' });
+    mockPrisma.product.findFirst.mockResolvedValue(activeProduct);
+
+    const result = await service.findBySlug('active-perfume');
+
+    expect(result).toMatchObject({ id: 'product-1', slug: 'active-perfume' });
+  });
+
+  it('includes isActive:true in the findFirst WHERE clause so deactivation is enforced at DB level', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct());
+
+    await service.findBySlug('test-perfume');
+
+    expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ slug: 'test-perfume', isActive: true }),
+      }),
+    );
+  });
+
+  it('does not call findUnique — uses findFirst to allow the isActive filter alongside the slug', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct());
+
+    await service.findBySlug('test-perfume');
+
+    expect(mockPrisma.product.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+// ─── findAll — stable id tiebreaker ───────────────────────────────────────────
+// Regression guard: all three findAll query paths must include { id: 'asc' } as
+// the final orderBy clause so that products with identical sortOrder + createdAt
+// (common after bulk seeding) do not shift between pages on concurrent inserts.
+
+describe('ProductsService — findAll orderBy id tiebreaker', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('includes { id: asc } tiebreaker in the default all-products interleaved slim query (path: no category, no featured)', async () => {
+    mockPrisma.product.findMany
+      .mockResolvedValueOnce([{ id: 'p1', line: null, category: { slug: 'other' } }])
+      .mockResolvedValueOnce([]);
+
+    await service.findAll({});
+
+    const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(slimCall.orderBy).toContainEqual({ id: 'asc' });
+  });
+
+  it('includes { id: asc } tiebreaker in the perfumes-category interleaved slim query (path: category=perfumes, no filters)', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue({ slug: 'perfumes', children: [] });
+    mockPrisma.product.findMany
+      .mockResolvedValueOnce([{ id: 'p1', line: 'Millesime', category: { slug: 'perfumes' } }])
+      .mockResolvedValueOnce([]);
+
+    await service.findAll({ category: 'perfumes' });
+
+    const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(slimCall.orderBy).toContainEqual({ id: 'asc' });
+  });
+
+  it('includes { id: asc } tiebreaker in the paginated fallback query (path: featured=true bypasses interleaving)', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([]);
+    mockPrisma.product.count.mockResolvedValue(0);
+
+    await service.findAll({ featured: true });
+
+    const paginatedCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(paginatedCall.orderBy).toContainEqual({ id: 'asc' });
+  });
+
+  it('preserves sortOrder asc and createdAt desc as the primary sort keys in the default path', async () => {
+    mockPrisma.product.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await service.findAll({});
+
+    const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(slimCall.orderBy[0]).toEqual({ sortOrder: 'asc' });
+    expect(slimCall.orderBy[1]).toEqual({ createdAt: 'desc' });
+    expect(slimCall.orderBy[2]).toEqual({ id: 'asc' });
+  });
+});
+
+// ─── updateVariantStock — stock audit log ─────────────────────────────────────
+
+describe('ProductsService — updateVariantStock stock audit log', () => {
+  let service: ProductsService;
+  let logSpy: jest.SpyInstance;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.incr.mockResolvedValue(1);
+    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    jest.clearAllMocks();
+  });
+
+  describe('variant not found', () => {
+    it('throws NotFoundException before attempting an update when variant does not exist', async () => {
+      mockPrisma.productVariant.findUnique.mockResolvedValue(null);
+
+      await expect(service.updateVariantStock('missing-var', { set: 5 })).rejects.toThrow(NotFoundException);
+
+      expect(mockPrisma.productVariant.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('audit log with actorId', () => {
+    it('logs before/after stock values and actor ID before writing to the database', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 25 });
+
+      await service.updateVariantStock('var-1', { set: 25 }, 'admin-abc');
+
+      expect(logSpy).toHaveBeenCalledWith(
+        { variantId: 'var-1', before: 10, after: 25, actor: 'admin-abc' },
+        'stock_update',
+      );
+    });
+
+    it('logs "unknown" as actor when actorId is not provided', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 5 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 0 });
+
+      await service.updateVariantStock('var-1', { set: 0 });
+
+      expect(logSpy).toHaveBeenCalledWith(
+        { variantId: 'var-1', before: 5, after: 0, actor: 'unknown' },
+        'stock_update',
+      );
+    });
+
+    it('emits the log before the DB update — the log is present even when update throws', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 3 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockRejectedValue(new Error('DB write failed'));
+
+      await expect(
+        service.updateVariantStock('var-1', { set: 10 }, 'admin-xyz'),
+      ).rejects.toThrow('DB write failed');
+
+      expect(logSpy).toHaveBeenCalledWith(
+        { variantId: 'var-1', before: 3, after: 10, actor: 'admin-xyz' },
+        'stock_update',
+      );
+    });
+  });
+
+  describe('stock computation', () => {
+    it('sets stock to the absolute value from dto.set', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 50 });
+
+      await service.updateVariantStock('var-1', { set: 50 }, 'admin-1');
+
+      expect(mockPrisma.productVariant.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stock: 50 } }),
+      );
+    });
+
+    it('applies dto.adjustment as a relative delta on top of current stock', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 15 });
+
+      await service.updateVariantStock('var-1', { adjustment: 5 }, 'admin-1');
+
+      expect(mockPrisma.productVariant.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stock: 15 } }),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ before: 10, after: 15 }),
+        'stock_update',
+      );
+    });
+
+    it('clamps stock to 0 when dto.adjustment would make it negative', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 3 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 0 });
+
+      await service.updateVariantStock('var-1', { adjustment: -99 }, 'admin-1');
+
+      expect(mockPrisma.productVariant.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stock: 0 } }),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ before: 3, after: 0 }),
+        'stock_update',
+      );
+    });
+  });
+
+  describe('back-in-stock notification', () => {
+    it('dispatches back-in-stock emails when stock transitions from 0 to positive', async () => {
+      const outOfStock = makeVariant({ id: 'var-1', productId: 'prod-1', stock: 0 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(outOfStock);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...outOfStock, stock: 5 });
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([
+        {
+          user: { email: 'fan@example.com', firstName: 'Ola' },
+          product: { name: 'Cedar Oud', slug: 'cedar-oud' },
+        },
+      ]);
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
+      mockEmailService.sendBackInStock.mockResolvedValue(undefined);
+      mockConfigService.get.mockReturnValue('https://shop.example.com');
+
+      await service.updateVariantStock('var-1', { set: 5 }, 'admin-1');
+
+      // Allow the fire-and-forget promise to settle
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockEmailService.sendBackInStock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not dispatch notifications when stock was already positive', async () => {
+      const inStock = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(inStock);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...inStock, stock: 20 });
+
+      await service.updateVariantStock('var-1', { set: 20 }, 'admin-1');
+
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockEmailService.sendBackInStock).not.toHaveBeenCalled();
+    });
   });
 });
