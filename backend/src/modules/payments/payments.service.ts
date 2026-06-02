@@ -50,23 +50,44 @@ export class PaymentsService {
       });
     }
 
-    // Create the Payment row BEFORE calling Stripe so there is always a DB record
-    // when a session exists. If the DB write fails here, no Stripe session is created
-    // and no money can move without a traceable payment record.
-    const payment = await this.prisma.payment.create({
-      data: {
-        orderId,
-        amountInCents: order.totalInCents,
-        currency: currency.toUpperCase(),
-        provider: 'stripe',
-        // stripeCheckoutSessionId / stripePaymentIntentId filled in after Stripe confirms
-      },
-    });
+    // Upsert the Payment row: if a prior attempt left a FAILED row (e.g. Stripe
+    // API error without a webhook, order still PENDING_PAYMENT), reuse that row
+    // rather than creating a new one — Payment.orderId is @unique and a plain
+    // create would throw P2002 on every retry.
+    const existingPayment = await this.prisma.payment.findUnique({ where: { orderId } });
+    let payment: { id: string };
+
+    if (existingPayment?.status === PaymentStatus.FAILED) {
+      if (existingPayment.stripeCheckoutSessionId) {
+        await this.stripeClient
+          .expireCheckoutSession(existingPayment.stripeCheckoutSessionId)
+          .catch(() => {});
+      }
+      payment = await this.prisma.payment.update({
+        where: { id: existingPayment.id },
+        data: {
+          status: PaymentStatus.PENDING,
+          stripeCheckoutSessionId: null,
+          stripePaymentIntentId: null,
+          failureReason: null,
+        },
+      });
+    } else {
+      payment = await this.prisma.payment.create({
+        data: {
+          orderId,
+          amountInCents: order.totalInCents,
+          currency: currency.toUpperCase(),
+          provider: 'stripe',
+          // stripeCheckoutSessionId / stripePaymentIntentId filled in after Stripe confirms
+        },
+      });
+    }
 
     const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
     const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
 
-    let session: Awaited<ReturnType<typeof this.stripeClient.createCheckoutSession>>;
+    let session: Awaited<ReturnType<StripeClient['createCheckoutSession']>>;
     try {
       session = await this.stripeClient.createCheckoutSession({
         orderId: order.id,
