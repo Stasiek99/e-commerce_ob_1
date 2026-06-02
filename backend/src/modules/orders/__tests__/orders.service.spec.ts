@@ -889,13 +889,13 @@ describe('OrdersService', () => {
   });
 
   describe('findEventsForUser', () => {
-    const mockEvents = [
+    // Raw DB rows returned by prisma (contain internal actor strings and note)
+    const rawEvents = [
       {
         id: 'evt-1',
         fromStatus: null,
         toStatus: OrderStatus.PENDING_PAYMENT,
         actor: 'CUSTOMER',
-        note: 'Order created from cart',
         createdAt: new Date('2026-05-01T10:00:00Z'),
       },
       {
@@ -903,7 +903,6 @@ describe('OrdersService', () => {
         fromStatus: OrderStatus.PENDING_PAYMENT,
         toStatus: OrderStatus.PAID,
         actor: 'SYSTEM',
-        note: null,
         createdAt: new Date('2026-05-01T10:05:00Z'),
       },
     ];
@@ -928,11 +927,10 @@ describe('OrdersService', () => {
 
     it('returns events sorted ascending by createdAt for the owning user', async () => {
       prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
-      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+      prisma.orderEvent.findMany.mockResolvedValue(rawEvents);
 
-      const result = await service.findEventsForUser('order-1', 'user-1');
+      await service.findEventsForUser('order-1', 'user-1');
 
-      expect(result).toEqual(mockEvents);
       expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { orderId: 'order-1' },
@@ -954,24 +952,14 @@ describe('OrdersService', () => {
       );
     });
 
-    it('returns only the allowed fields via select', async () => {
+    it('does not include note field in the DB select — excludes it at query level', async () => {
       prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
-      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+      prisma.orderEvent.findMany.mockResolvedValue([]);
 
       await service.findEventsForUser('order-1', 'user-1');
 
-      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          select: {
-            id: true,
-            fromStatus: true,
-            toStatus: true,
-            actor: true,
-            note: true,
-            createdAt: true,
-          },
-        }),
-      );
+      const selectArg = (prisma.orderEvent.findMany as jest.Mock).mock.calls[0][0].select;
+      expect(selectArg).not.toHaveProperty('note');
     });
 
     it('returns an empty array when the order has no events yet', async () => {
@@ -981,6 +969,143 @@ describe('OrdersService', () => {
       const result = await service.findEventsForUser('order-1', 'user-1');
 
       expect(result).toEqual([]);
+    });
+
+    // ── actor projection (internal strings → Polish labels) ───────────────
+
+    it('maps ADMIN actor to "Obsługa sklepu"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PROCESSING, actor: 'ADMIN', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('Obsługa sklepu');
+    });
+
+    it('maps SYSTEM actor to "System"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PAID, actor: 'SYSTEM', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('System');
+    });
+
+    it('maps SYSTEM:stripe-webhook actor to "System"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PAID, actor: 'SYSTEM:stripe-webhook', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('System');
+    });
+
+    it('maps CUSTOMER actor to "Klient"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PENDING_PAYMENT, actor: 'CUSTOMER', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('Klient');
+    });
+
+    it('maps a user UUID actor to "Klient"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.CANCELLED, actor: 'a3b4c5d6-dead-beef-cafe-123456789abc', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('Klient');
+    });
+
+    it('does not expose the note field in the customer-facing response', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PAID, actor: 'ADMIN', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0]).not.toHaveProperty('note');
+    });
+  });
+
+  // ── findEventsAdmin ───────────────────────────────────────────────────────
+
+  describe('findEventsAdmin', () => {
+    const rawAdminEvents = [
+      {
+        id: 'evt-1',
+        fromStatus: null,
+        toStatus: OrderStatus.PENDING_PAYMENT,
+        actor: 'CUSTOMER',
+        note: 'Order created from cart',
+        createdAt: new Date('2026-05-01T10:00:00Z'),
+      },
+      {
+        id: 'evt-2',
+        fromStatus: OrderStatus.PENDING_PAYMENT,
+        toStatus: OrderStatus.CANCELLED,
+        actor: 'ADMIN',
+        note: 'Bulk cancelled by admin — reason: suspected fraud',
+        createdAt: new Date('2026-05-02T08:00:00Z'),
+      },
+    ];
+
+    it('returns raw events including note and un-mapped actor for admins', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue(rawAdminEvents);
+
+      const result = await service.findEventsAdmin('order-1');
+
+      expect(result).toEqual(rawAdminEvents);
+    });
+
+    it('includes note field for admins', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue(rawAdminEvents);
+
+      const result = await service.findEventsAdmin('order-1');
+
+      expect(result[1].note).toBe('Bulk cancelled by admin — reason: suspected fraud');
+    });
+
+    it('returns the raw ADMIN actor string without mapping', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue(rawAdminEvents);
+
+      const result = await service.findEventsAdmin('order-1');
+
+      expect(result[1].actor).toBe('ADMIN');
+    });
+
+    it('queries events ordered by createdAt ascending', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsAdmin('order-1');
+
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { orderId: 'order-1' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
+    });
+
+    it('includes note in the DB select for admin queries', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsAdmin('order-1');
+
+      const selectArg = (prisma.orderEvent.findMany as jest.Mock).mock.calls[0][0].select;
+      expect(selectArg).toHaveProperty('note', true);
     });
   });
 

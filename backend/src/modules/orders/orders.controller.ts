@@ -130,6 +130,13 @@ export class OrdersController {
     return this.ordersService.findOneAdmin(id);
   }
 
+  @Get('admin/:id/events')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  getOrderEventsAdmin(@Param('id') id: string) {
+    return this.ordersService.findEventsAdmin(id);
+  }
+
   @Patch('admin/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)

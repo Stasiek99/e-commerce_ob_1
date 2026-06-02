@@ -399,6 +399,28 @@ export class OrdersService implements OnModuleInit {
     });
     if (!order) throw new NotFoundException('Order not found');
 
+    const events = await this.prisma.orderEvent.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        fromStatus: true,
+        toStatus: true,
+        actor: true,
+        createdAt: true,
+      },
+    });
+
+    return events.map((e) => ({
+      id: e.id,
+      fromStatus: e.fromStatus,
+      toStatus: e.toStatus,
+      actor: this.mapActorForCustomer(e.actor),
+      createdAt: e.createdAt,
+    }));
+  }
+
+  async findEventsAdmin(orderId: string) {
     return this.prisma.orderEvent.findMany({
       where: { orderId },
       orderBy: { createdAt: 'asc' },
@@ -411,6 +433,12 @@ export class OrdersService implements OnModuleInit {
         createdAt: true,
       },
     });
+  }
+
+  private mapActorForCustomer(actor: string): string {
+    if (actor === 'ADMIN') return 'Obsługa sklepu';
+    if (actor.startsWith('SYSTEM')) return 'System';
+    return 'Klient';
   }
 
   async generateInvoiceForUser(orderId: string, userId: string): Promise<{ invoiceUrl: string }> {
