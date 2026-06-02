@@ -1187,7 +1187,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.seo.updateProductMeta(seoInput);
           this.seo.setProductJsonLd(seoInput);
           this.loading.set(false);
-          this.loadReviews(p.id);
+          if (isPlatformBrowser(this.platformId)) this.loadReviews(p.id);
           this.loadRelatedProducts(p.slug);
           this.subscribeStockStream(p.variants.map((v) => v.id));
 
