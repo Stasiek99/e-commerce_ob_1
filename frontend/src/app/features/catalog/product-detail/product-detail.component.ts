@@ -179,6 +179,7 @@ const CATEGORY_LABELS: Record<string, string> = {
           @if (selectedVariant()) {
             <div class="detail__price-row">
               @if (selectedVariant()!.compareAtPriceInCents) {
+                <span class="detail__sale-badge">PROMOCJA</span>
                 <span class="detail__price detail__price--sale">{{ selectedVariant()!.priceInCents | price }}</span>
                 <span class="detail__price detail__price--was">{{ selectedVariant()!.compareAtPriceInCents | price }}</span>
               } @else {
@@ -657,6 +658,18 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
     .detail__price--sale { color: var(--color-error); }
     .detail__price--was { font-size: 18px; font-weight: 400; color: var(--color-secondary); text-decoration: line-through; }
+    .detail__sale-badge {
+      display: inline-block;
+      background: var(--color-error);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 4px 9px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
     .detail__omnibus { font-size: 12px; color: var(--color-secondary); margin: -12px 0 20px; font-variant-numeric: tabular-nums; }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
