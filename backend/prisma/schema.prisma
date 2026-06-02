@@ -611,11 +611,12 @@ model ReturnRequest {
   reason              String?
   requestedResolution String?
   bankAccount         String?
-  sealedOnReturn      Boolean?
-  status              ReturnStatus @default(PENDING)
-  adminNote           String?
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
+  sealedOnReturn        Boolean?
+  returnTrackingNumber  String?      @map("return_tracking_number")
+  status                ReturnStatus @default(PENDING)
+  adminNote             String?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
 
   @@index([orderId])
   @@index([email])

@@ -92,6 +92,7 @@ function buildReturnRecord(overrides: Record<string, unknown> = {}) {
     requestedResolution: null,
     bankAccount: null,
     adminNote: null,
+    returnTrackingNumber: null,
     ...overrides,
   };
 }
@@ -708,9 +709,11 @@ describe('ReturnsService', () => {
       await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
     });
 
-    it('updates status to COMPLETED when APPROVED', async () => {
+    it('updates status to COMPLETED when APPROVED and tracking number is present', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
 
       await service.markRefunded('return-id-001', 'Przelew zrealizowany 2026-05-28');
@@ -723,7 +726,9 @@ describe('ReturnsService', () => {
 
     it('sends return_status_update email with newStatus=COMPLETED', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
 
       await service.markRefunded('return-id-001');
@@ -735,7 +740,9 @@ describe('ReturnsService', () => {
 
     it('resolves even if the status email throws', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
       emailService.sendReturnStatusUpdate.mockRejectedValue(new Error('Resend down'));
 
@@ -758,7 +765,9 @@ describe('ReturnsService', () => {
 
     it('calls paymentsService.refundPayment with orderId and RETURN_APPROVAL actor', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
 
       await service.markRefunded('return-id-001');
@@ -768,7 +777,9 @@ describe('ReturnsService', () => {
 
     it('updates return status to COMPLETED after refundPayment succeeds', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
 
       await service.markRefunded('return-id-001');
@@ -780,7 +791,9 @@ describe('ReturnsService', () => {
 
     it('does not update return status when refundPayment throws — leaves it APPROVED for retry', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
       (paymentsService.refundPayment as jest.Mock).mockRejectedValue(new Error('Stripe API error'));
 
@@ -790,7 +803,9 @@ describe('ReturnsService', () => {
 
     it('calls refundPayment before updating the DB — ordering is intentional', async () => {
       const mock = buildPrismaMock();
-      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
       await createModule(mock);
 
       const callOrder: string[] = [];
@@ -805,6 +820,128 @@ describe('ReturnsService', () => {
       await service.markRefunded('return-id-001');
 
       expect(callOrder).toEqual(['refundPayment', 'statusUpdate']);
+    });
+
+    // ── return receipt gate (Art. 32 UoK anti-fraud) ──────────────────────────
+    // Invariant: a fraud ring can file WITHDRAWAL returns and immediately receive
+    // Stripe refunds upon admin approval without ever returning goods. The fix
+    // blocks markRefunded() for WITHDRAWAL type until a tracking number is recorded,
+    // proving the customer shipped the item back (or the admin verified receipt).
+
+    it('throws BadRequestException for WITHDRAWAL with no returnTrackingNumber', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', type: 'WITHDRAWAL', returnTrackingNumber: null }),
+      );
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not call refundPayment when WITHDRAWAL tracking number is missing', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', type: 'WITHDRAWAL', returnTrackingNumber: null }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001').catch(() => undefined);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('proceeds for WITHDRAWAL when returnTrackingNumber is set', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', type: 'WITHDRAWAL', returnTrackingNumber: 'DHL-123456' }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-uuid-1', 'RETURN_APPROVAL');
+    });
+
+    it('does NOT require a tracking number for COMPLAINT type (carrier pickup, no inbound parcel)', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', type: 'COMPLAINT', returnTrackingNumber: null }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-uuid-1', 'RETURN_APPROVAL');
+    });
+  });
+
+  // ── recordReturnTracking() ────────────────────────────────────────────────
+
+  describe('recordReturnTracking()', () => {
+    it('throws NotFoundException when the return request does not exist', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(null);
+      await createModule(mock);
+
+      await expect(service.recordReturnTracking('nonexistent-id', 'INP-001')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws BadRequestException when the return is already COMPLETED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'COMPLETED' }));
+      await createModule(mock);
+
+      await expect(service.recordReturnTracking('return-id-001', 'INP-001')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when the return is already REJECTED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'REJECTED' }));
+      await createModule(mock);
+
+      await expect(service.recordReturnTracking('return-id-001', 'INP-001')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('persists the trimmed tracking number on an APPROVED return request', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.recordReturnTracking('return-id-001', '  INP-TRACK-999  ');
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { returnTrackingNumber: 'INP-TRACK-999' },
+      });
+    });
+
+    it('persists tracking on a PENDING return (admin may record before formal approval)', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'PENDING' }));
+      await createModule(mock);
+
+      await service.recordReturnTracking('return-id-001', 'DHL-99887766');
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { returnTrackingNumber: 'DHL-99887766' },
+      });
+    });
+
+    it('does not call refundPayment — recording tracking is not the refund trigger', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.recordReturnTracking('return-id-001', 'INP-001');
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
     });
   });
 });

@@ -197,6 +197,25 @@ export class ReturnsService {
       );
   }
 
+  // Records the customer's return shipment tracking number without issuing a refund.
+  // An admin must call this before markRefunded() can proceed on a WITHDRAWAL return.
+  async recordReturnTracking(id: string, trackingNumber: string): Promise<void> {
+    const req = await this.prisma.returnRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException(`Return request ${id} not found`);
+    if (req.status === 'COMPLETED' || req.status === 'REJECTED') {
+      throw new BadRequestException(
+        `Cannot record tracking on a ${req.status} return request`,
+      );
+    }
+
+    await this.prisma.returnRequest.update({
+      where: { id },
+      data: { returnTrackingNumber: trackingNumber.trim() },
+    });
+
+    this.logger.log(`Return tracking recorded: ${id} → ${trackingNumber}`);
+  }
+
   // Marks the return as COMPLETED: issues the Stripe refund, restores stock,
   // then flips the return request status. Calling order matters — if the Stripe
   // refund fails the return stays APPROVED so the admin can retry.
@@ -211,6 +230,15 @@ export class ReturnsService {
     if (!req.orderId) {
       throw new BadRequestException(
         `Return request ${id} has no linked order — process the Stripe refund manually then contact support to update this record`,
+      );
+    }
+    // Art. 32 UoK: merchant may withhold refund until the returned item is received
+    // or the customer provides proof of return shipment. Block here so a busy admin
+    // clicking "Refund" cannot accidentally refund before verifying physical receipt.
+    if (req.type === 'WITHDRAWAL' && !req.returnTrackingNumber) {
+      throw new BadRequestException(
+        `Return request ${id} has no return tracking number. ` +
+        'Record the customer\'s shipment tracking via PATCH /returns/:id/tracking before issuing a refund (art. 32 UoK).',
       );
     }
 
