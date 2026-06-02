@@ -40,10 +40,14 @@ const COMPLAINT_DTO = {
   sealedOnReturn: undefined,
 };
 
-// orderRow: { id, userId } when order exists, null when order does not exist.
+// orderRow: { id, userId, status } when order exists, null when order does not exist.
 function buildPrismaMock(
   overrides: Partial<{ id: string; type: string; requestedResolution: string }> = {},
-  orderRow: { id?: string; userId: string | null } | null = { id: 'order-uuid-1', userId: OWNER_ID },
+  orderRow: { id?: string; userId: string | null; status?: string } | null = {
+    id: 'order-uuid-1',
+    userId: OWNER_ID,
+    status: 'SHIPPED',
+  },
 ) {
   const record = {
     id: 'return-id-001',
@@ -445,7 +449,7 @@ describe('ReturnsService', () => {
     });
 
     it('throws ForbiddenException when the order belongs to a different user', async () => {
-      await createModule(buildPrismaMock({}, { userId: 'different-user-id' }));
+      await createModule(buildPrismaMock({}, { userId: 'different-user-id', status: 'SHIPPED' }));
 
       await expect(service.create(WITHDRAWAL_DTO as any, OWNER_ID)).rejects.toThrow(
         ForbiddenException,
@@ -453,11 +457,87 @@ describe('ReturnsService', () => {
     });
 
     it('proceeds when the authenticated user owns the order', async () => {
-      await createModule(buildPrismaMock({}, { userId: OWNER_ID }));
+      await createModule(buildPrismaMock({}, { userId: OWNER_ID, status: 'SHIPPED' }));
 
       const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
 
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
+  // ── status allowlist guard ───────────────────────────────────────────
+
+  describe('status allowlist guard', () => {
+    it('throws BadRequestException when order status is CANCELLED', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'CANCELLED' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is PENDING_PAYMENT', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'PENDING_PAYMENT' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is FRAUD_REVIEW', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'FRAUD_REVIEW' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is REFUNDED', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'REFUNDED' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('allows COMPLAINT when order status is SHIPPED', async () => {
+      await createModule(buildPrismaMock({ type: 'COMPLAINT' }, { id: 'order-uuid-1', userId: OWNER_ID, status: 'SHIPPED' }));
+
+      const result = await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows COMPLAINT when order status is DELIVERED', async () => {
+      await createModule(buildPrismaMock({ type: 'COMPLAINT' }, { id: 'order-uuid-1', userId: OWNER_ID, status: 'DELIVERED' }));
+
+      const result = await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows COMPLAINT when order status is PAID', async () => {
+      await createModule(buildPrismaMock({ type: 'COMPLAINT' }, { id: 'order-uuid-1', userId: OWNER_ID, status: 'PAID' }));
+
+      const result = await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows WITHDRAWAL when order status is PROCESSING', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'PROCESSING' }));
+
+      const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('does not create the return request record for a CANCELLED order', async () => {
+      const mock = buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'CANCELLED' });
+      await createModule(mock);
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+      expect(mock.returnRequest.create).not.toHaveBeenCalled();
+    });
+
+    it('does not fire emails for a CANCELLED order', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'CANCELLED' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+      expect(emailService.sendReturnConfirmation).not.toHaveBeenCalled();
+      expect(emailService.sendReturnAdminNotification).not.toHaveBeenCalled();
     });
   });
 

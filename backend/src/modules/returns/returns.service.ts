@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { OrderStatus } from '@fragrance-store/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { PaymentsService } from '../payments/payments.service';
@@ -30,7 +31,7 @@ export class ReturnsService {
     const [order, user] = await Promise.all([
       this.prisma.order.findFirst({
         where: { orderNumber: normalizedNumber },
-        select: { id: true, userId: true },
+        select: { id: true, userId: true, status: true },
       }),
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -40,6 +41,19 @@ export class ReturnsService {
 
     if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
     if (order.userId !== userId) throw new ForbiddenException();
+
+    const allowedStatuses: string[] = [
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.PAID,
+      OrderStatus.PROCESSING,
+    ];
+    if (!allowedStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        'Zgłoszenie reklamacji lub zwrotu jest możliwe tylko dla zamówień w trakcie realizacji lub dostarczonych. ' +
+        `Aktualny status zamówienia: ${order.status}.`,
+      );
+    }
 
     // Art. 38 pkt 5 UoK: right of withdrawal does not apply to sealed hygiene/fragrance
     // goods whose packaging was opened after delivery. Block at the API level so direct
