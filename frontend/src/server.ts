@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import bootstrap from './main.server';
 import { LOCAL_STORAGE } from './app/core/tokens/storage.tokens';
+import { ssrCacheHeaders } from './ssr-cache-headers';
 
 export interface AppOptions {
   browserDistFolder?: string;
@@ -35,6 +36,8 @@ export function app(opts: AppOptions = {}): express.Express {
 
   server.set('view engine', 'html');
   server.set('views', browserDistFolder);
+
+  server.use(ssrCacheHeaders);
 
   // Serve static files (local dev and Railway; Vercel CDN handles this in production)
   server.get(
