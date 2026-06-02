@@ -32,6 +32,9 @@ import { ReturnsModule } from './modules/returns/returns.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { RedisModule } from './modules/redis/redis.module';
+import { PINO_REDACT_PATHS } from './logger-redact-paths';
+
+export { PINO_REDACT_PATHS };
 
 @Module({
   imports: [
@@ -42,8 +45,7 @@ import { RedisModule } from './modules/redis/redis.module';
           ? { target: 'pino-pretty', options: { colorize: true, singleLine: true } }
           : undefined,
         level: process.env.LOG_LEVEL ?? 'info',
-        // Redact sensitive headers from request logs
-        redact: ['req.headers.authorization', 'req.headers.cookie'],
+        redact: [...PINO_REDACT_PATHS],
         mixin: () => {
           const correlationId = getCorrelationId();
           return correlationId ? { correlationId } : {};
