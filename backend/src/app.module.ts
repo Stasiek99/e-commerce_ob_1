@@ -57,22 +57,22 @@ import { RedisModule } from './modules/redis/redis.module';
       validationOptions: { abortEarly: true },
     }),
     ThrottlerModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
+      imports: [RedisModule],
+      inject: [ConfigService, 'REDIS_CLIENT'],
+      useFactory: (config: ConfigService, redis: IORedis) => {
         const isProd = config.get<string>('NODE_ENV') === 'production';
         return {
           throttlers: [
             { name: 'burst',     ttl: 1_000,  limit: 5  },  // 5 req/s per IP
             { name: 'sustained', ttl: 60_000, limit: 60 },  // 60 req/min per IP
           ],
-          // Redis-backed in prod (distributed, survives restarts); in-memory in dev
-          // so local dev doesn't require a running Redis instance.
+          // Reuse the shared REDIS_CLIENT (retryStrategy + error handler already
+          // wired). Avoids a second disconnected IORedis connection whose silent
+          // failure would degrade per-replica in-memory throttling for all replicas.
           ...(isProd && {
-            storage: new ThrottlerStorageRedisService(
-              config.getOrThrow<string>('REDIS_URL'),
-            ),
+            storage: new ThrottlerStorageRedisService(redis),
           }),
-          // Honour X-Forwarded-For behind Railway's proxy
+          // Honour X-Forwarded-For behind Railway's proxy (requires trust proxy=1 in main.ts)
           getTracker: (req: Record<string, unknown>) =>
             String((req['ips'] as string[] | undefined)?.[0] ?? req['ip'] ?? ''),
         };

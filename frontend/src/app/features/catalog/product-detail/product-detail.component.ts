@@ -53,6 +53,10 @@ interface ProductDetail {
   category?: { id: string; name: string; slug: string } | null;
   avgRating?: number | null;
   reviewCount?: number;
+  sdsUrl?: string | null;
+  ingredients?: string | null;
+  warnings?: string | null;
+  paoMonths?: number | null;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -175,6 +179,7 @@ const CATEGORY_LABELS: Record<string, string> = {
           @if (selectedVariant()) {
             <div class="detail__price-row">
               @if (selectedVariant()!.compareAtPriceInCents) {
+                <span class="detail__sale-badge">PROMOCJA</span>
                 <span class="detail__price detail__price--sale">{{ selectedVariant()!.priceInCents | price }}</span>
                 <span class="detail__price detail__price--was">{{ selectedVariant()!.compareAtPriceInCents | price }}</span>
               } @else {
@@ -308,6 +313,53 @@ const CATEGORY_LABELS: Record<string, string> = {
                   <span class="detail__pyramid-notes">{{ product()!.pyramidBase }}</span>
                 </div>
               }
+            </div>
+          }
+
+          <!-- PAO + Ingredients + Warnings (EU Cosmetics Reg. 1223/2009) -->
+          @if (product()!.paoMonths || product()!.ingredients || product()!.warnings) {
+            <div class="detail__compliance">
+
+              @if (product()!.paoMonths) {
+                <div class="detail__pao">
+                  <span class="detail__pao-symbol" aria-hidden="true">{{ product()!.paoMonths }}M</span>
+                  <span class="detail__pao-label">Okres przydatności po otwarciu: <strong>{{ product()!.paoMonths }} miesięcy</strong></span>
+                </div>
+              }
+
+              @if (product()!.ingredients) {
+                <div class="detail__ingredients-section">
+                  <button tuiButton type="button" appearance="flat" size="s"
+                          class="detail__expand-btn"
+                          [attr.aria-expanded]="inciExpanded"
+                          (click)="inciExpanded = !inciExpanded">
+                    Składniki (INCI)
+                    <tui-icon [icon]="inciExpanded ? '@tui.chevron-up' : '@tui.chevron-down'" aria-hidden="true"></tui-icon>
+                  </button>
+                  <tui-expand [expanded]="inciExpanded">
+                    <p class="detail__inci-body">{{ product()!.ingredients }}</p>
+                  </tui-expand>
+                </div>
+              }
+
+              @if (product()!.warnings) {
+                <ul class="detail__warnings">
+                  @for (w of warningsList(); track $index) {
+                    <li>{{ w }}</li>
+                  }
+                </ul>
+              }
+            </div>
+          }
+
+          <!-- Safety Data Sheet download (diffusers — REACH 2020/878) -->
+          @if (product()!.sdsUrl) {
+            <div class="detail__sds">
+              <a [href]="product()!.sdsUrl!" target="_blank" rel="noopener noreferrer"
+                 class="detail__sds-link" aria-label="Pobierz kartę charakterystyki produktu (PDF)">
+                <tui-icon icon="@tui.file-text" aria-hidden="true"></tui-icon>
+                Karta charakterystyki (SDS, PDF)
+              </a>
             </div>
           }
         </div>
@@ -606,6 +658,18 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__price { font-size: 26px; font-weight: 700; color: var(--color-primary); }
     .detail__price--sale { color: var(--color-error); }
     .detail__price--was { font-size: 18px; font-weight: 400; color: var(--color-secondary); text-decoration: line-through; }
+    .detail__sale-badge {
+      display: inline-block;
+      background: var(--color-error);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 4px 9px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
     .detail__omnibus { font-size: 12px; color: var(--color-secondary); margin: -12px 0 20px; font-variant-numeric: tabular-nums; }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
@@ -662,6 +726,73 @@ const CATEGORY_LABELS: Record<string, string> = {
       min-width: 52px;
     }
     .detail__pyramid-notes { color: var(--color-secondary); text-align: right; line-height: 1.5; }
+
+    /* Compliance block (PAO + INCI + warnings) */
+    .detail__compliance {
+      border-top: 1px solid var(--color-border);
+      padding-top: 16px;
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .detail__pao {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .detail__pao-symbol {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid var(--color-secondary);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--color-secondary);
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+    .detail__pao-label {
+      font-size: 13px;
+      color: var(--color-secondary);
+    }
+    .detail__ingredients-section { }
+    .detail__inci-body {
+      font-size: 11px;
+      color: var(--color-secondary);
+      line-height: 1.6;
+      padding: 8px 0 4px;
+      margin: 0;
+    }
+    .detail__warnings {
+      margin: 0;
+      padding: 0 0 0 16px;
+      list-style: disc;
+    }
+    .detail__warnings li {
+      font-size: 11px;
+      color: var(--color-secondary);
+      line-height: 1.6;
+    }
+
+    /* SDS download */
+    .detail__sds {
+      border-top: 1px solid var(--color-border);
+      padding-top: 16px;
+      margin-top: 4px;
+    }
+    .detail__sds-link {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 500;
+      color: var(--color-secondary);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .detail__sds-link:hover { color: var(--color-accent); text-decoration: underline; }
+    .detail__sds-link tui-icon { font-size: 16px; flex-shrink: 0; }
 
     /* Meta */
     .detail__meta { border-top: 1px solid var(--color-border); padding-top: 16px; }
@@ -911,6 +1042,13 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
+  inciExpanded = false;
+
+  readonly warningsList = computed(() => {
+    const w = this.product()?.warnings;
+    if (!w) return [];
+    return w.split(';').map((s) => s.trim()).filter(Boolean);
+  });
   readonly relatedProducts = signal<ProductCardData[]>([]);
   readonly slideIndex = signal(0);
   readonly itemsPerPage = signal(4);

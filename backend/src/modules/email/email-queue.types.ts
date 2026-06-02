@@ -29,8 +29,6 @@ export type EmailJobData =
         shippingCostInCents: number;
         totalInCents: number;
         invoiceUrl: string;
-        // Buffer serialised to base64 for Redis transport
-        invoicePdfBase64: string;
       };
     }
   | {

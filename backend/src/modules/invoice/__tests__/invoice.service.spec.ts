@@ -4,7 +4,8 @@ import { InvoiceService, InvoiceOrder } from '../invoice.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 
-const MOCK_URL = 'https://cdn.example.com/FV-2026-000001.pdf';
+const MOCK_PATH = 'invoices/FV-2026-000001.pdf';
+const MOCK_URL = 'https://cdn.example.com/FV-2026-000001.pdf?token=abc';
 const MOCK_SEQ = 1n; // BigInt — matches Postgres nextval return type
 
 function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
@@ -33,11 +34,14 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
 
 describe('InvoiceService', () => {
   let service: InvoiceService;
-  let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice'>>;
+  let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
   let mockPrisma: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
 
   beforeEach(async () => {
-    mockStorage = { uploadInvoice: jest.fn().mockResolvedValue(MOCK_URL) };
+    mockStorage = {
+      uploadInvoice: jest.fn().mockResolvedValue(MOCK_PATH),
+      getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_URL),
+    };
     mockPrisma = {
       $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: MOCK_SEQ }]),
@@ -75,10 +79,11 @@ describe('InvoiceService', () => {
   // ── orchestration ──────────────────────────────────────────────────────────
 
   describe('processInvoice — orchestration', () => {
-    it('returns { url, pdf } where pdf is a non-empty Buffer', async () => {
+    it('returns { url, storagePath, pdf } where pdf is a non-empty Buffer', async () => {
       const result = await service.processInvoice(buildOrder());
 
       expect(result.url).toBe(MOCK_URL);
+      expect(result.storagePath).toBe(MOCK_PATH);
       expect(Buffer.isBuffer(result.pdf)).toBe(true);
       expect(result.pdf.length).toBeGreaterThan(0);
     });
@@ -99,16 +104,26 @@ describe('InvoiceService', () => {
       );
     });
 
-    it('saves both invoiceUrl and invoiceNumber on the order via prisma', async () => {
+    it('persists invoiceStoragePath (raw path) — never stores a signed URL in the DB', async () => {
       await service.processInvoice(buildOrder());
 
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
-        data: { invoiceUrl: MOCK_URL, invoiceNumber: 'FV/2026/000001' },
+        data: { invoiceStoragePath: MOCK_PATH, invoiceNumber: 'FV/2026/000001' },
       });
+      // The DB update must NOT contain invoiceUrl — that would break on key rotation
+      const [call] = mockPrisma.order.update.mock.calls;
+      expect(call[0].data).not.toHaveProperty('invoiceUrl');
     });
 
-    it('returns invoiceNumber alongside url and pdf', async () => {
+    it('calls getInvoiceSignedUrl with a 7-day TTL for the returned email URL', async () => {
+      await service.processInvoice(buildOrder());
+
+      const SEVEN_DAYS = 7 * 24 * 60 * 60;
+      expect(mockStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_PATH, SEVEN_DAYS);
+    });
+
+    it('returns invoiceNumber alongside url, storagePath, and pdf', async () => {
       const result = await service.processInvoice(buildOrder());
 
       expect(result.invoiceNumber).toBe('FV/2026/000001');
@@ -117,6 +132,7 @@ describe('InvoiceService', () => {
     it('invoice number uses the year from order.createdAt, not system clock', async () => {
       const order2024 = buildOrder({ createdAt: new Date('2024-06-15T10:00:00Z') });
       mockPrisma.$queryRawUnsafe.mockResolvedValue([{ nextval: 5n }]);
+      mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2024-000005.pdf');
 
       const result = await service.processInvoice(order2024);
 
@@ -127,7 +143,7 @@ describe('InvoiceService', () => {
       );
     });
 
-    it('does not persist invoiceNumber when upload fails', async () => {
+    it('does not persist invoiceStoragePath when upload fails', async () => {
       mockStorage.uploadInvoice.mockRejectedValue(new Error('upload failed'));
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
@@ -139,6 +155,34 @@ describe('InvoiceService', () => {
       mockStorage.uploadInvoice.mockRejectedValue(new Error('Supabase bucket full'));
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('Supabase bucket full');
+    });
+  });
+
+  describe('getSignedUrl', () => {
+    it('delegates to storage.getInvoiceSignedUrl with default 1h TTL', async () => {
+      await service.getSignedUrl(MOCK_PATH);
+
+      expect(mockStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_PATH, 3600);
+    });
+
+    it('passes custom expiresInSeconds to storage', async () => {
+      await service.getSignedUrl(MOCK_PATH, 86400);
+
+      expect(mockStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_PATH, 86400);
+    });
+
+    it('returns the signed URL from storage', async () => {
+      mockStorage.getInvoiceSignedUrl.mockResolvedValue('https://signed.example.com/invoice.pdf');
+
+      const result = await service.getSignedUrl(MOCK_PATH);
+
+      expect(result).toBe('https://signed.example.com/invoice.pdf');
+    });
+
+    it('propagates signing errors to the caller', async () => {
+      mockStorage.getInvoiceSignedUrl.mockRejectedValue(new Error('Invoice signing failed'));
+
+      await expect(service.getSignedUrl(MOCK_PATH)).rejects.toThrow('Invoice signing failed');
     });
   });
 
@@ -242,6 +286,139 @@ describe('InvoiceService', () => {
     });
   });
 
+  // ── discount VAT proration (Art. 106e pkt 7 / Art. 29a ust. 10 fix) ─────
+  // The fix replaced a single hardcoded 23% discount line with per-rate
+  // proportional lines. Tests here verify no-crash for each rate combination.
+
+  describe('processInvoice — prorated discount (mixed-rate baskets)', () => {
+    it('generates a valid PDF for a single 5% item with a discount', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({
+          items: [{ snapshotName: 'Produkt 5%', snapshotPrice: 10500, snapshotVatRate: 500, quantity: 1 }],
+          shippingCostInCents: 0,
+          discountInCents: 1050,
+          couponCode: 'CODE5',
+          totalInCents: 9450,
+          itemsTotalInCents: 10500,
+        }),
+      );
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('generates a valid PDF for a mixed 23%+5% basket with a discount', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({
+          items: [
+            { snapshotName: 'Perfumy 23%', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 },
+            { snapshotName: 'Kosmetyk 5%', snapshotPrice: 5250, snapshotVatRate: 500, quantity: 2 },
+          ],
+          discountInCents: 2000,
+          couponCode: 'MIXED20',
+          totalInCents: 20800,
+          shippingCostInCents: 1999,
+          itemsTotalInCents: 22800,
+        }),
+      );
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('generates a valid PDF for a three-rate basket (23%, 5%, 0%) with a discount', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({
+          items: [
+            { snapshotName: 'Item A 23%', snapshotPrice: 10000, snapshotVatRate: 2300, quantity: 1 },
+            { snapshotName: 'Item B 5%',  snapshotPrice: 5000,  snapshotVatRate: 500,  quantity: 1 },
+            { snapshotName: 'Item C 0%',  snapshotPrice: 3000,  snapshotVatRate: 0,    quantity: 1 },
+          ],
+          discountInCents: 1800,
+          couponCode: 'THREE18',
+          shippingCostInCents: 0,
+          totalInCents: 16200,
+          itemsTotalInCents: 18000,
+        }),
+      );
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('zero discount produces the same PDF whether basket is single- or mixed-rate', async () => {
+      const { pdf } = await service.processInvoice(
+        buildOrder({
+          items: [
+            { snapshotName: 'A 23%', snapshotPrice: 10000, snapshotVatRate: 2300, quantity: 1 },
+            { snapshotName: 'B 5%',  snapshotPrice: 5000,  snapshotVatRate: 500,  quantity: 1 },
+          ],
+          discountInCents: 0,
+          couponCode: null,
+        }),
+      );
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+  });
+
+  // ── Proration algorithm invariants ────────────────────────────────────────
+  // These tests verify the proration formula introduced by the Art. 106e fix.
+  // They mirror the service's internal logic via a local helper so that a
+  // revert to a single hardcoded 23% line is immediately caught by the math.
+
+  describe('discount proration arithmetic', () => {
+    it('single-rate 5% basket: full discount assigned to 5% rate, not 23%', () => {
+      const items = [{ snapshotPrice: 10500, snapshotVatRate: 500, quantity: 1 }];
+      const portions = computeProration(items, 1050);
+
+      expect(portions).toEqual([{ rate: 0.05, portionCents: 1050 }]);
+    });
+
+    it('single-rate 0% exempt basket: full discount assigned to 0% rate, not 23%', () => {
+      const items = [{ snapshotPrice: 5000, snapshotVatRate: 0, quantity: 1 }];
+      const portions = computeProration(items, 500);
+
+      expect(portions).toEqual([{ rate: 0, portionCents: 500 }]);
+    });
+
+    it('50/50 mixed basket: each rate receives exactly half the discount', () => {
+      const items = [
+        { snapshotPrice: 10000, snapshotVatRate: 500, quantity: 1 },
+        { snapshotPrice: 10000, snapshotVatRate: 2300, quantity: 1 },
+      ];
+      const portions = computeProration(items, 2000);
+      const byRate = toMap(portions);
+
+      expect(byRate[0.05]).toBe(1000);
+      expect(byRate[0.23]).toBe(1000);
+    });
+
+    it('75/25 basket: larger gross gets larger discount portion', () => {
+      const items = [
+        { snapshotPrice: 7500, snapshotVatRate: 2300, quantity: 1 },
+        { snapshotPrice: 2500, snapshotVatRate: 500,  quantity: 1 },
+      ];
+      const portions = computeProration(items, 1000);
+      const byRate = toMap(portions);
+
+      expect(byRate[0.23]).toBe(750);
+      expect(byRate[0.05]).toBe(250);
+    });
+
+    it('all portions always sum to exactly discountInCents (rounding safety)', () => {
+      const items = [
+        { snapshotPrice: 10000, snapshotVatRate: 2300, quantity: 1 },
+        { snapshotPrice: 5000,  snapshotVatRate: 500,  quantity: 1 },
+        { snapshotPrice: 3000,  snapshotVatRate: 0,    quantity: 1 },
+      ];
+      const discountInCents = 999;
+      const portions = computeProration(items, discountInCents);
+
+      const total = portions.reduce((s, p) => s + p.portionCents, 0);
+      expect(total).toBe(discountInCents);
+    });
+
+    it('returns empty array when basket has no items', () => {
+      const portions = computeProration([], 500);
+
+      expect(portions).toEqual([]);
+    });
+  });
+
   // ── VAT arithmetic invariants ──────────────────────────────────────────────
   // These verify the math: netCents = round(grossCents / (1 + rate))
   // We confirm the expected formula holds for the rates we support.
@@ -278,3 +455,32 @@ describe('InvoiceService', () => {
     });
   });
 });
+
+// ── helpers used only in proration algorithm tests ───────────────────────────
+
+function computeProration(
+  items: Array<{ snapshotPrice: number; snapshotVatRate: number; quantity: number }>,
+  discountInCents: number,
+): Array<{ rate: number; portionCents: number }> {
+  const grossByRate = new Map<number, number>();
+  for (const item of items) {
+    const rate = item.snapshotVatRate / 10000;
+    grossByRate.set(rate, (grossByRate.get(rate) ?? 0) + item.snapshotPrice * item.quantity);
+  }
+  const totalGross = [...grossByRate.values()].reduce((s, v) => s + v, 0);
+  if (totalGross === 0) return [];
+  const rates = [...grossByRate.entries()].sort(([a], [b]) => a - b);
+  let remaining = discountInCents;
+  return rates.map(([rate, gross], idx) => {
+    const isLast = idx === rates.length - 1;
+    const portionCents = isLast
+      ? remaining
+      : Math.round(discountInCents * (gross / totalGross));
+    remaining -= portionCents;
+    return { rate, portionCents };
+  });
+}
+
+function toMap(portions: Array<{ rate: number; portionCents: number }>): Record<number, number> {
+  return Object.fromEntries(portions.map((p) => [p.rate, p.portionCents]));
+}

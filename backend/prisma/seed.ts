@@ -560,41 +560,85 @@ async function main() {
         isPrimary: i === 0,
       }));
 
-    await prisma.product.create({
-      data: {
-        name: p.name,
-        slug,
-        description: p.description_full,
-        shortDescription: shortDescription(p),
-        categoryId: categoryIdMap[p.category],
-        brand: BRAND_MAP[p.category],
-        isFeatured: p.is_best_seller,
-        sortOrder: p.is_best_seller ? 1 : 10,
-        notes: extractNotes(p.olfactory_pyramid),
-        pyramidTop: p.olfactory_pyramid?.top ?? null,
-        pyramidHeart: p.olfactory_pyramid?.heart ?? null,
-        pyramidBase: p.olfactory_pyramid?.base ?? null,
-        gender: GENDER_MAP[p.gender] ?? p.gender,
-        line: LINE_MAP[p.category] ?? null,
-        inspiredBy: p.inspiration ?? null,
-        luxuryReferenceId: p.inspiration ? (luxRefMap.get(p.inspiration) ?? null) : null,
-        scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
-        variants: {
-          create: p.variants.map((v) => ({
-            sku: v.code,
-            label: v.size,
-            volume: parseVolume(v.size),
-            priceInCents: v.price_pln * 100,
-            stock: randomStock(),
-          })),
+    try {
+      await prisma.product.create({
+        data: {
+          name: p.name,
+          slug,
+          description: p.description_full,
+          shortDescription: shortDescription(p),
+          categoryId: categoryIdMap[p.category],
+          brand: BRAND_MAP[p.category],
+          isFeatured: p.is_best_seller,
+          sortOrder: p.is_best_seller ? 1 : 10,
+          notes: extractNotes(p.olfactory_pyramid),
+          allergens: [],
+          pyramidTop: p.olfactory_pyramid?.top ?? null,
+          pyramidHeart: p.olfactory_pyramid?.heart ?? null,
+          pyramidBase: p.olfactory_pyramid?.base ?? null,
+          gender: GENDER_MAP[p.gender] ?? p.gender,
+          line: LINE_MAP[p.category] ?? null,
+          inspiredBy: p.inspiration ?? null,
+          luxuryReferenceId: p.inspiration ? (luxRefMap.get(p.inspiration) ?? null) : null,
+          scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
+          variants: {
+            create: p.variants.map((v) => ({
+              sku: v.code,
+              label: v.size,
+              volume: parseVolume(v.size),
+              priceInCents: v.price_pln * 100,
+              stock: randomStock(),
+            })),
+          },
+          ...(images.length > 0 && {
+            images: { create: images },
+          }),
         },
-        ...(images.length > 0 && {
-          images: { create: images },
-        }),
-      },
-    });
-
-    created++;
+      });
+      created++;
+    } catch (err: any) {
+      // SKU conflict: a product was renamed in products.json — its variants already exist
+      // under the old slug. Find the owning product and update it to the new slug/data.
+      if (err?.code === 'P2002' && err?.meta?.target?.includes('sku')) {
+        const primarySku = p.variants[0]?.code;
+        if (primarySku) {
+          const orphan = await prisma.productVariant.findUnique({
+            where: { sku: primarySku },
+            select: { productId: true },
+          });
+          if (orphan) {
+            await prisma.product.update({
+              where: { id: orphan.productId },
+              data: {
+                name: p.name,
+                slug,
+                description: p.description_full,
+                shortDescription: shortDescription(p),
+                isFeatured: p.is_best_seller,
+                sortOrder: p.is_best_seller ? 1 : 10,
+                notes: extractNotes(p.olfactory_pyramid),
+                pyramidTop: p.olfactory_pyramid?.top ?? null,
+                pyramidHeart: p.olfactory_pyramid?.heart ?? null,
+                pyramidBase: p.olfactory_pyramid?.base ?? null,
+                gender: GENDER_MAP[p.gender] ?? p.gender,
+                line: LINE_MAP[p.category] ?? null,
+                inspiredBy: p.inspiration ?? null,
+                scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
+              },
+            });
+            for (const v of p.variants) {
+              await prisma.productVariant.updateMany({
+                where: { sku: v.code, productId: orphan.productId },
+                data: { priceInCents: v.price_pln * 100 },
+              });
+            }
+            skipped++;
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
   }
 
   console.log(`  ✔ Products: ${created} created, ${skipped} already existed`);

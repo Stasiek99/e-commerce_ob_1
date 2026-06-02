@@ -37,7 +37,7 @@ interface OrderDetail {
   totalInCents: number;
   refundedAmountInCents: number;
   invoiceUrl: string | null;
-  shipment?: { trackingNumber?: string } | null;
+  shipment?: { trackingNumber?: string; carrierCode?: string } | null;
 }
 
 interface PartialCancelLine {
@@ -48,6 +48,12 @@ interface PartialCancelLine {
   selected: boolean;
   quantity: number;
 }
+
+const TRACKING_URL: Record<string, string> = {
+  INPOST: 'https://inpost.pl/sledzenie-przesylek?number=',
+  DHL:    'https://www.dhl.com/pl-pl/home/tracking.html?tracking-id=',
+  GLS:    'https://gls-group.com/track/?match=',
+};
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING_PAYMENT:    'Oczekuje na płatność',
@@ -131,7 +137,14 @@ const STATUS_LABELS: Record<string, string> = {
 
         @if (order()!.shipment?.trackingNumber) {
           <p class="tracking">
-            Numer śledzenia: <strong>{{ order()!.shipment!.trackingNumber }}</strong>
+            Numer śledzenia:
+            @if (trackingUrl(order()!.shipment); as url) {
+              <a [href]="url" target="_blank" rel="noopener noreferrer" class="tracking-link">
+                {{ order()!.shipment!.trackingNumber }}
+              </a>
+            } @else {
+              <strong>{{ order()!.shipment!.trackingNumber }}</strong>
+            }
           </p>
         }
 
@@ -292,6 +305,7 @@ const STATUS_LABELS: Record<string, string> = {
 
     /* ── Tracking ───────────────────────────────────────── */
     .tracking { font-size: 14px; color: var(--color-secondary); margin-bottom: 20px; }
+    .tracking-link { color: var(--color-primary); font-weight: 500; text-decoration: underline; }
 
     /* ── Full cancel ────────────────────────────────────── */
     .cancel-zone { margin-top: 8px; }
@@ -386,6 +400,12 @@ export class OrderDetailComponent implements OnInit {
   partialLines: PartialCancelLine[] = [];
 
   back(): void { this.location.back(); }
+
+  trackingUrl(shipment: { trackingNumber?: string; carrierCode?: string } | null | undefined): string | null {
+    if (!shipment?.trackingNumber || !shipment.carrierCode) return null;
+    const base = TRACKING_URL[shipment.carrierCode];
+    return base ? base + encodeURIComponent(shipment.trackingNumber) : null;
+  }
 
   statusLabel(status: string): string {
     return STATUS_LABELS[status] ?? status;

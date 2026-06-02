@@ -4,7 +4,7 @@ import { Observable } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { Prisma } from '@prisma/client';
 
 // Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
@@ -31,6 +31,10 @@ const PRODUCT_SELECT = {
   updatedAt: true,
   reviewCount: true,
   avgRating: true,
+  sdsUrl: true,
+  ingredients: true,
+  warnings: true,
+  paoMonths: true,
   variants: { where: { isActive: true }, orderBy: { priceInCents: 'asc' as const } },
   images: { orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }] },
   category: { select: { id: true, name: true, slug: true } },
@@ -59,13 +63,14 @@ export class ProductsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly emailService: EmailService,
+    private readonly emailService: EmailQueueService,
     private readonly configService: ConfigService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   async findAll(query: FindAllQuery) {
-    const key = this.searchCacheKey(query);
+    const version = await this.getCacheVersion();
+    const key = this.searchCacheKey(query, version);
     try {
       const cached = await this.redis.get(key);
       if (cached) return JSON.parse(cached);
@@ -195,7 +200,10 @@ export class ProductsService {
 
     if (query.sortBy === 'price_asc' || query.sortBy === 'price_desc') {
       const products = await this.prisma.product.findMany({ where, select: PRODUCT_SELECT });
-      const minPrice = (p: (typeof products)[0]) => p.variants[0]?.priceInCents ?? Infinity;
+      // Products with no active variants get a sentinel that places them last in both directions:
+      // Infinity → last in ascending order; -Infinity → last in descending order.
+      const sentinel = query.sortBy === 'price_asc' ? Infinity : -Infinity;
+      const minPrice = (p: (typeof products)[0]) => p.variants[0]?.priceInCents ?? sentinel;
       products.sort((a, b) =>
         query.sortBy === 'price_asc' ? minPrice(a) - minPrice(b) : minPrice(b) - minPrice(a),
       );
@@ -320,7 +328,8 @@ export class ProductsService {
   }
 
   async getFacets(query: { category?: string }) {
-    const key = `facets:${query.category ?? 'all'}`;
+    const version = await this.getCacheVersion();
+    const key = `facets:v${version}:${query.category ?? 'all'}`;
     try {
       const cached = await this.redis.get(key);
       if (cached) return JSON.parse(cached);
@@ -618,13 +627,13 @@ export class ProductsService {
     return results;
   }
 
-  private searchCacheKey(query: FindAllQuery): string {
+  private searchCacheKey(query: FindAllQuery, version: string): string {
     const params = Object.entries(query)
       .filter(([, v]) => v !== undefined)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : v}`)
       .join('&');
-    return `search:${createHash('sha256').update(params).digest('hex').slice(0, 16)}`;
+    return `search:v${version}:${createHash('sha256').update(params).digest('hex').slice(0, 16)}`;
   }
 
   createStockStream(variantIds: string[]): Observable<MessageEvent> {
@@ -661,7 +670,8 @@ export class ProductsService {
   }
 
   async findRelated(slug: string, limit = 6) {
-    const cacheKey = `related:${slug}:${limit}`;
+    const version = await this.getCacheVersion();
+    const cacheKey = `related:v${version}:${slug}:${limit}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) return JSON.parse(cached);
@@ -723,14 +733,17 @@ export class ProductsService {
   }
 
   private invalidateProductCaches(): void {
-    for (const pattern of ['search:*', 'facets:*', 'related:*']) {
-      try {
-        const stream = this.redis.scanStream({ match: pattern, count: 100 });
-        const pipeline = this.redis.pipeline();
-        stream.on('data', (keys: string[]) => keys.forEach(k => pipeline.del(k)));
-        stream.on('end', () => { pipeline.exec().catch(() => undefined); });
-        stream.on('error', () => undefined);
-      } catch { /* redis unavailable — invalidation is best-effort */ }
+    // Increment a monotonic version counter instead of scanning all keys.
+    // All cache keys embed the current version, so a stale version means a
+    // guaranteed cache miss — no scanStream, no race conditions.
+    this.redis.incr('product_cache_v').catch(() => undefined);
+  }
+
+  private async getCacheVersion(): Promise<string> {
+    try {
+      return (await this.redis.get('product_cache_v')) ?? '0';
+    } catch {
+      return '0';
     }
   }
 

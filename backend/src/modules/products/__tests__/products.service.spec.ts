@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 
 const makeVariant = (overrides: Partial<Record<string, unknown>> = {}) => ({
   id: 'var-1',
@@ -84,6 +84,7 @@ const mockPrisma = {
 const mockRedis = {
   get: jest.fn(),
   setex: jest.fn(),
+  incr: jest.fn(),
   scanStream: jest.fn(),
   pipeline: jest.fn(),
 };
@@ -101,7 +102,7 @@ describe('ProductsService — findRelated', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -111,6 +112,8 @@ describe('ProductsService — findRelated', () => {
     jest.clearAllMocks();
 
     mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockRedis.incr.mockResolvedValue(1);
     mockRedis.scanStream.mockReturnValue({ on: jest.fn() });
     mockRedis.pipeline.mockReturnValue({ del: jest.fn(), exec: jest.fn().mockResolvedValue(null) });
     // No promotional variants by default → price-history groupBy never fires
@@ -222,7 +225,7 @@ describe('ProductsService — findRelated', () => {
       await service.findRelated('test-perfume');
 
       expect(mockRedis.setex).toHaveBeenCalledWith(
-        'related:test-perfume:6',
+        'related:v0:test-perfume:6',
         300,
         JSON.stringify(enrich(related)),
       );
@@ -236,7 +239,7 @@ describe('ProductsService — findRelated', () => {
       await service.findRelated('my-fragrance', 3);
 
       expect(mockRedis.setex).toHaveBeenCalledWith(
-        'related:my-fragrance:3',
+        'related:v0:my-fragrance:3',
         300,
         expect.any(String),
       );
@@ -279,7 +282,7 @@ describe('ProductsService — createVariant', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -288,6 +291,7 @@ describe('ProductsService — createVariant', () => {
     service = module.get(ProductsService);
     jest.clearAllMocks();
 
+    mockRedis.incr.mockResolvedValue(1);
     mockRedis.scanStream.mockReturnValue({ on: jest.fn() });
     mockRedis.pipeline.mockReturnValue({ del: jest.fn(), exec: jest.fn().mockResolvedValue(null) });
   });
@@ -353,7 +357,7 @@ describe('ProductsService — updateVariant', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -362,6 +366,7 @@ describe('ProductsService — updateVariant', () => {
     service = module.get(ProductsService);
     jest.clearAllMocks();
 
+    mockRedis.incr.mockResolvedValue(1);
     mockRedis.scanStream.mockReturnValue({ on: jest.fn() });
     mockRedis.pipeline.mockReturnValue({ del: jest.fn(), exec: jest.fn().mockResolvedValue(null) });
   });
@@ -400,9 +405,9 @@ describe('ProductsService — updateVariant', () => {
   });
 });
 
-// ─── EU Omnibus compliance ────────────────────────────────────────────────────
+// ─── findAll price sorting ────────────────────────────────────────────────────
 
-describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', () => {
+describe('ProductsService — findAll price sorting', () => {
   let service: ProductsService;
 
   beforeEach(async () => {
@@ -410,7 +415,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailService, useValue: mockEmailService },
+        { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
@@ -421,6 +426,156 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
 
     mockRedis.get.mockResolvedValue(null);
     mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  const makeNoVariantProduct = (id: string) =>
+    makeProduct({ id, slug: id, variants: [] });
+
+  const makePricedProduct = (id: string, priceInCents: number) =>
+    makeProduct({ id, slug: id, variants: [makeVariant({ priceInCents })] });
+
+  it('price_desc: places products with no active variants last, not first', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([
+      makeNoVariantProduct('no-variants'),
+      makePricedProduct('cheap', 5000),
+      makePricedProduct('expensive', 20000),
+    ]);
+
+    const result = await service.findAll({ sortBy: 'price_desc' });
+
+    const ids = (result.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids[0]).toBe('expensive');
+    expect(ids[1]).toBe('cheap');
+    expect(ids[2]).toBe('no-variants');
+  });
+
+  it('price_asc: places products with no active variants last', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([
+      makeNoVariantProduct('no-variants'),
+      makePricedProduct('cheap', 5000),
+      makePricedProduct('expensive', 20000),
+    ]);
+
+    const result = await service.findAll({ sortBy: 'price_asc' });
+
+    const ids = (result.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids[0]).toBe('cheap');
+    expect(ids[1]).toBe('expensive');
+    expect(ids[2]).toBe('no-variants');
+  });
+
+  it('price_desc: correctly orders multiple priced products', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([
+      makePricedProduct('mid', 10000),
+      makePricedProduct('cheap', 5000),
+      makePricedProduct('expensive', 20000),
+    ]);
+
+    const result = await service.findAll({ sortBy: 'price_desc' });
+
+    const ids = (result.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids).toEqual(['expensive', 'mid', 'cheap']);
+  });
+});
+
+// ─── cache version invalidation ──────────────────────────────────────────────
+
+describe('ProductsService — cache version invalidation', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+    // updateVariantStock: variant already in-stock so no back-in-stock path fires
+    const stockedVariant = makeVariant({ id: 'v1', stock: 10 });
+    mockPrisma.productVariant.findUnique.mockResolvedValue(stockedVariant);
+    mockPrisma.productVariant.update.mockResolvedValue({ ...stockedVariant, stock: 15 });
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('increments product_cache_v on cache invalidation (updateVariantStock)', async () => {
+    await service.updateVariantStock('v1', { set: 15 });
+
+    expect(mockRedis.incr).toHaveBeenCalledWith('product_cache_v');
+    expect(mockRedis.incr).toHaveBeenCalledTimes(1);
+  });
+
+  it('never calls scanStream on cache invalidation', async () => {
+    await service.updateVariantStock('v1', { set: 15 });
+
+    expect(mockRedis.scanStream).not.toHaveBeenCalled();
+  });
+
+  it('uses the current version in the findAll cache key', async () => {
+    mockRedis.get
+      .mockResolvedValueOnce('5')  // product_cache_v lookup
+      .mockResolvedValueOnce(null); // cache miss for the search key
+    mockPrisma.product.findMany.mockResolvedValue([]);
+    mockPrisma.product.count.mockResolvedValue(0);
+
+    await service.findAll({});
+
+    // Key must contain v5 — not v0 or unversioned
+    const setexCall = mockRedis.setex.mock.calls[0];
+    expect(setexCall[0]).toMatch(/^search:v5:/);
+  });
+
+  it('uses the current version in the findRelated cache key', async () => {
+    mockRedis.get
+      .mockResolvedValueOnce('3')  // product_cache_v lookup
+      .mockResolvedValueOnce(null); // cache miss
+    mockPrisma.product.findUnique.mockResolvedValue({ id: 'p1', categoryId: 'cat-1' });
+    mockPrisma.product.findMany.mockResolvedValue([]);
+
+    await service.findRelated('my-slug');
+
+    const setexCall = mockRedis.setex.mock.calls[0];
+    expect(setexCall[0]).toBe('related:v3:my-slug:6');
+  });
+});
+
+// ─── EU Omnibus compliance ────────────────────────────────────────────────────
+
+describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
   });
 
   afterEach(() => jest.clearAllMocks());

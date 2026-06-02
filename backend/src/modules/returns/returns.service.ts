@@ -6,8 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { OrderStatus } from '@fragrance-store/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
+import { EmailQueueService } from '../email/email-queue.service';
 import { PaymentsService } from '../payments/payments.service';
 import { CreateReturnRequestDto } from './dto/create-return.dto';
 
@@ -18,7 +19,7 @@ export class ReturnsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly email: EmailService,
+    private readonly email: EmailQueueService,
     private readonly config: ConfigService,
     private readonly payments: PaymentsService,
   ) {
@@ -27,13 +28,32 @@ export class ReturnsService {
 
   async create(dto: CreateReturnRequestDto, userId: string) {
     const normalizedNumber = dto.orderNumber.trim().toUpperCase();
-    const order = await this.prisma.order.findFirst({
-      where: { orderNumber: normalizedNumber },
-      select: { id: true, userId: true },
-    });
+    const [order, user] = await Promise.all([
+      this.prisma.order.findFirst({
+        where: { orderNumber: normalizedNumber },
+        select: { id: true, userId: true, status: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      }),
+    ]);
 
     if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
     if (order.userId !== userId) throw new ForbiddenException();
+
+    const allowedStatuses: string[] = [
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.PAID,
+      OrderStatus.PROCESSING,
+    ];
+    if (!allowedStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        'Zgłoszenie reklamacji lub zwrotu jest możliwe tylko dla zamówień w trakcie realizacji lub dostarczonych. ' +
+        `Aktualny status zamówienia: ${order.status}.`,
+      );
+    }
 
     // Art. 38 pkt 5 UoK: right of withdrawal does not apply to sealed hygiene/fragrance
     // goods whose packaging was opened after delivery. Block at the API level so direct
@@ -46,11 +66,28 @@ export class ReturnsService {
       );
     }
 
+    // Art. 27 UoK: right of withdrawal expires 14 days after delivery. Enforce server-side
+    // so a direct API call with a backdated deliveryDate cannot open the admin refund flow.
+    if (dto.type === 'WITHDRAWAL') {
+      if (!dto.deliveryDate) {
+        throw new BadRequestException(
+          'Odstąpienie od umowy wymaga podania daty dostarczenia przesyłki.',
+        );
+      }
+      const windowEnd = new Date(dto.deliveryDate).getTime() + 14 * 24 * 60 * 60 * 1000;
+      if (Date.now() > windowEnd) {
+        throw new BadRequestException(
+          'Termin na odstąpienie od umowy (14 dni od daty dostarczenia) już minął ' +
+          '(art. 27 Ustawy o prawach konsumenta).',
+        );
+      }
+    }
+
     const request = await this.prisma.returnRequest.create({
       data: {
         orderId: order.id,
         orderNumber: dto.orderNumber.trim().toUpperCase(),
-        email: dto.email.trim().toLowerCase(),
+        email: user!.email,
         firstName: dto.firstName.trim(),
         lastName: dto.lastName.trim(),
         phone: dto.phone?.trim() ?? null,

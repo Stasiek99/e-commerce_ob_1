@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/cor
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-checkout-failure',
@@ -97,7 +98,7 @@ export class CheckoutFailureComponent {
     const id = this.orderId();
     if (!id) return;
     this.retrying.set(true);
-    this.http.post<{ paymentUrl: string }>(`/api/orders/${id}/retry-payment`, {}).subscribe({
+    this.http.post<{ paymentUrl: string }>(`${environment.apiUrl}/orders/${id}/retry-payment`, {}).subscribe({
       next: ({ paymentUrl }) => { window.location.href = paymentUrl; },
       error: () => { this.retrying.set(false); },
     });
@@ -107,7 +108,7 @@ export class CheckoutFailureComponent {
     const id = this.orderId();
     if (!id) return;
     this.cancelling.set(true);
-    this.http.post(`/api/orders/${id}/cancel`, {}).subscribe({
+    this.http.post(`${environment.apiUrl}/orders/${id}/cancel`, {}).subscribe({
       next: () => { this.router.navigate(['/cart']); },
       error: () => { this.cancelling.set(false); },
     });

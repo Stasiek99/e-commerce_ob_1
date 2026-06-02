@@ -20,14 +20,20 @@ export class StorageService {
   async uploadProductImage(
     productId: string,
     file: Express.Multer.File,
+    verifiedMime: 'image/jpeg' | 'image/png' | 'image/webp',
   ): Promise<{ url: string; path: string }> {
-    const ext = file.originalname.split('.').pop();
+    const extMap: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+    };
+    const ext = extMap[verifiedMime];
     const path = `${productId}/${Date.now()}.${ext}`;
 
     const { error } = await this.supabase.storage
       .from(PRODUCT_IMAGES_BUCKET)
       .upload(path, file.buffer, {
-        contentType: file.mimetype,
+        contentType: verifiedMime,
         upsert: false,
       });
 
@@ -65,13 +71,15 @@ export class StorageService {
 
     if (uploadError) throw new Error(`Invoice upload failed: ${uploadError.message}`);
 
-    // 10-year signed URL — invoices are legal documents and must stay accessible long-term
-    const TEN_YEARS_SECONDS = 10 * 365 * 24 * 60 * 60;
-    const { data, error: signError } = await this.supabase.storage
-      .from(INVOICES_BUCKET)
-      .createSignedUrl(storagePath, TEN_YEARS_SECONDS);
+    return storagePath;
+  }
 
-    if (signError || !data) throw new Error(`Invoice signing failed: ${signError?.message}`);
+  async getInvoiceSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
+    const { data, error } = await this.supabase.storage
+      .from(INVOICES_BUCKET)
+      .createSignedUrl(storagePath, expiresInSeconds);
+
+    if (error || !data) throw new Error(`Invoice signing failed: ${error?.message}`);
     return data.signedUrl;
   }
 

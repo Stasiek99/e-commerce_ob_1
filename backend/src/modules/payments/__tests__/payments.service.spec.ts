@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
+import { generateOrderToken } from '../../../common/utils/order-token.util';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -105,6 +106,7 @@ describe('PaymentsService', () => {
             },
             processedStripeEvent: {
               create: jest.fn().mockResolvedValue({}),
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             $transaction: jest.fn(),
           },
@@ -134,7 +136,8 @@ describe('PaymentsService', () => {
         {
           provide: InvoiceService,
           useValue: {
-            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', storagePath: 'invoices/FV-2026-000001.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+            getSignedUrl: jest.fn().mockResolvedValue('https://mock-invoice.pdf'),
           },
         },
         {
@@ -216,6 +219,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -237,6 +241,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -267,43 +272,47 @@ describe('PaymentsService', () => {
 
     // ── Stripe event deduplication ──────────────────────────────────────
 
-    it('skips all processing when the event_id is already in processed_stripe_events (duplicate delivery)', async () => {
+    it('skips payment processing when the event_id is already in processed_stripe_events (duplicate delivery)', async () => {
       const duplicateError = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed on the fields: (`event_id`)',
         { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
       );
-      prisma.processedStripeEvent.create.mockRejectedValue(duplicateError);
+      // payment.findUnique is called before the transaction (Radar check needs the payment)
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      // $transaction rejects with P2002 because processedStripeEvent.create is inside it
+      prisma.$transaction.mockRejectedValue(duplicateError);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.completed', mockSession),
       );
 
-      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
     });
 
-    it('skips processing for expired event duplicate without touching stock', async () => {
+    it('skips failure processing for expired event duplicate without touching stock', async () => {
       const duplicateError = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed on the fields: (`event_id`)',
         { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
       );
-      prisma.processedStripeEvent.create.mockRejectedValue(duplicateError);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(duplicateError);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.expired', mockSession),
       );
 
-      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      // $transaction was attempted but P2002 from processedStripeEvent.create caused early return
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
-    it('re-throws non-P2002 errors from processedStripeEvent.create', async () => {
+    it('re-throws non-P2002 errors from the transaction (DB connection failure)', async () => {
       const dbError = new Prisma.PrismaClientKnownRequestError(
         'Connection timed out',
         { code: 'P1001', clientVersion: '6.0.0', meta: {} },
       );
-      prisma.processedStripeEvent.create.mockRejectedValue(dbError);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(dbError);
 
       await expect(
         service.handleWebhookEvent(buildEvent('checkout.session.completed', mockSession)),
@@ -676,27 +685,45 @@ describe('PaymentsService', () => {
   });
 
   describe('getPaymentStatus', () => {
-    it('returns status and paidAt for an order the user owns', async () => {
+    it('returns status, paidAt, and orderNumber for an order the user owns', async () => {
       const now = new Date();
+
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { userId: 'user-1' },
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000001' },
       });
 
       const result = await service.getPaymentStatus('order-1', 'user-1');
-      expect(result).toEqual({ status: PaymentStatus.COMPLETED, paidAt: now });
+
+      expect(result).toEqual({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+        orderNumber: 'ORD-2026-000001',
+      });
+    });
+
+    it('includes orderNumber in the Prisma select so the response is never missing it', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000042' },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.orderNumber).toBe('ORD-2026-000042');
     });
 
     it('throws ForbiddenException when user does not own the order', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { userId: 'other-user' },
+        order: { userId: 'other-user', orderNumber: 'ORD-2026-000001' },
       });
 
       await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
-        'You do not have access to this order',
+        ForbiddenException,
       );
     });
 
@@ -704,8 +731,84 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue(null);
 
       await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
-        'No payment found for order order-1',
+        NotFoundException,
       );
+    });
+  });
+
+  describe('getPaymentStatusByToken', () => {
+    // The ConfigService mock returns 'pln' for all get() calls, so JWT_ACCESS_SECRET = 'pln'
+    const SECRET = 'pln';
+    const ORDER_ID = 'order-1';
+    const EMAIL = 'test@example.com';
+
+    it('returns status, paidAt, and orderNumber when token is valid', async () => {
+      const now = new Date();
+      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+      });
+
+      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+
+      expect(result).toEqual({
+        status: PaymentStatus.COMPLETED,
+        paidAt: now,
+        orderNumber: 'ORD-2026-000001',
+      });
+    });
+
+    it('includes the human-readable orderNumber so guests can use it in track-order form', async () => {
+      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000042' },
+      });
+
+      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+
+      expect(result.orderNumber).toBe('ORD-2026-000042');
+    });
+
+    it('throws UnauthorizedException when token is invalid', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+      });
+
+      await expect(
+        service.getPaymentStatusByToken(ORDER_ID, 'invalid-token'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException when token belongs to a different order (prevents enumeration)', async () => {
+      const tokenForOtherOrder = generateOrderToken('other-order-id', EMAIL, SECRET);
+
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+      });
+
+      await expect(
+        service.getPaymentStatusByToken(ORDER_ID, tokenForOtherOrder),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws NotFoundException when no payment exists for the order', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+
+      await expect(
+        service.getPaymentStatusByToken(ORDER_ID, validToken),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -1203,6 +1306,7 @@ describe('PaymentsService', () => {
       async (fn: any) => {
         capturedState.stockRestored = [];
         await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedState.paymentStatus = args.data.status;
@@ -1684,7 +1788,7 @@ describe('PaymentsService', () => {
               orderEvent: { create: jest.fn() },
               orderItem: { update: jest.fn(), findMany: jest.fn() },
               productVariant: { update: jest.fn() },
-              processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+              processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
               $transaction: jest.fn().mockResolvedValue([{}, {}]),
             },
           },
@@ -1713,7 +1817,8 @@ describe('PaymentsService', () => {
           {
             provide: InvoiceService,
             useValue: {
-              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', storagePath: 'invoices/FV-2026-000001.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+              getSignedUrl: jest.fn().mockResolvedValue('https://invoice.pdf'),
             },
           },
           {
@@ -1962,6 +2067,125 @@ describe('PaymentsService', () => {
           data: expect.objectContaining({ actor: 'ADMIN:analyst' }),
         }),
       );
+    });
+  });
+
+  // ── markSessionPaid idempotency — session-scoped key ──────────────────
+  // Verifies the fix: markSessionPaid always inserts a paid-{session.id}
+  // processedStripeEvent row regardless of caller (webhook or reconcile cron)
+  // so concurrent callers race on the same unique constraint — only one wins.
+
+  describe('markSessionPaid idempotency — session-scoped key', () => {
+    const paidSession = {
+      ...mockSession,
+      payment_status: 'paid',
+      status: 'complete',
+    } as any;
+
+    it('always inserts paid-{session.id} key in the transaction when called from reconcile path (no eventId)', async () => {
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: `paid-${mockSession.id}` },
+      });
+    });
+
+    it('does not insert a webhook eventId row when called from reconcile path (session key only)', async () => {
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledTimes(1);
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: `paid-${mockSession.id}` },
+      });
+    });
+
+    it('inserts both paid-{session.id} and eventId when called from webhook path', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      const event = buildEvent('checkout.session.completed', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledTimes(2);
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: `paid-${mockSession.id}` },
+      });
+      expect(prisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: event.id },
+      });
+    });
+
+    it('reconcile path resolves without error when session-scoped key already exists (P2002 — webhook already committed)', async () => {
+      const duplicateError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`event_id`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
+      );
+      prisma.payment.findMany.mockResolvedValue([
+        { ...mockPayment, stripeCheckoutSessionId: mockSession.id },
+      ]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(duplicateError);
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+      expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
+      expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── pruneProcessedStripeEvents ─────────────────────────────────────────
+  // Invariant: nightly cron must delete rows older than 7 days so the
+  // dedup table does not grow unboundedly and cause Postgres disk exhaustion.
+
+  describe('pruneProcessedStripeEvents', () => {
+    it('calls deleteMany with a createdAt cutoff exactly 7 days in the past', async () => {
+      const frozenNow = 1_700_000_000_000;
+      jest.spyOn(Date, 'now').mockReturnValue(frozenNow);
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 3 });
+
+      await service.pruneProcessedStripeEvents();
+
+      expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: new Date(frozenNow - 7 * 24 * 60 * 60 * 1000) } },
+      });
+
+      jest.spyOn(Date, 'now').mockRestore();
+    });
+
+    it('resolves without error when no rows are pruned (count = 0)', async () => {
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.pruneProcessedStripeEvents()).resolves.not.toThrow();
+    });
+
+    it('resolves without error when rows are pruned (count > 0)', async () => {
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 42 });
+
+      await expect(service.pruneProcessedStripeEvents()).resolves.not.toThrow();
+    });
+
+    it('does not call any other prisma method (cleanup is self-contained)', async () => {
+      prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+      await service.pruneProcessedStripeEvents();
+
+      expect(prisma.payment.findMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 });

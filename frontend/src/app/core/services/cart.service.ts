@@ -1,8 +1,9 @@
 import { Injectable, signal, computed, inject, effect, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { debounceTime, Subject, switchMap } from 'rxjs';
+import { EMPTY, Subject, catchError, debounceTime, switchMap } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { ToastService } from './toast.service';
 export interface CartItemDto {
   id: string;
   productVariantId: string;
@@ -39,6 +40,7 @@ function getOrCreateSessionId(isBrowser: boolean): string {
 export class CartService {
   private readonly http = inject(HttpClient);
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly toast = inject(ToastService);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
 
   private readonly _items = signal<CartItemDto[]>([]);
@@ -54,26 +56,15 @@ export class CartService {
     this._items().reduce((sum, i) => sum + i.priceInCents * i.quantity, 0),
   );
 
-  private readonly updateQueue = new Subject<{ variantId: string; qty: number }>();
+  // Per-variant Subjects so concurrent updates to different items never cancel
+  // each other. Each Subject owns its own debounce + switchMap pipeline; the
+  // catchError inside keeps the stream alive after a 400 error so subsequent
+  // stepper clicks still fire.
+  private readonly updateQueues = new Map<string, Subject<number>>();
 
   constructor() {
     if (!this.isBrowser) return;
-
     this.loadCart();
-
-    // Debounced quantity updates to avoid hammering the server
-    this.updateQueue
-      .pipe(
-        debounceTime(400),
-        switchMap(({ variantId, qty }) =>
-          this.http.patch(
-            `${environment.apiUrl}/cart/items/${variantId}`,
-            { quantity: qty },
-            { headers: this.sessionHeaders() },
-          ),
-        ),
-      )
-      .subscribe();
   }
 
   loadCart() {
@@ -108,7 +99,7 @@ export class CartService {
         i.productVariantId === productVariantId ? { ...i, quantity } : i,
       ),
     );
-    this.updateQueue.next({ variantId: productVariantId, qty: quantity });
+    this.getOrCreateUpdateQueue(productVariantId).next(quantity);
   }
 
   removeItem(productVariantId: string) {
@@ -141,6 +132,33 @@ export class CartService {
 
   getSessionId(): string {
     return this.sessionId;
+  }
+
+  private getOrCreateUpdateQueue(variantId: string): Subject<number> {
+    if (!this.updateQueues.has(variantId)) {
+      const subject = new Subject<number>();
+      subject
+        .pipe(
+          debounceTime(400),
+          switchMap((qty) =>
+            this.http
+              .patch(
+                `${environment.apiUrl}/cart/items/${variantId}`,
+                { quantity: qty },
+                { headers: this.sessionHeaders() },
+              )
+              .pipe(
+                catchError(() => {
+                  this.toast.error('Nie udało się zaktualizować ilości. Odśwież stronę.');
+                  return EMPTY;
+                }),
+              ),
+          ),
+        )
+        .subscribe();
+      this.updateQueues.set(variantId, subject);
+    }
+    return this.updateQueues.get(variantId)!;
   }
 
   private sessionHeaders(): HttpHeaders {

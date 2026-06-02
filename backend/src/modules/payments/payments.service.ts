@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
@@ -10,6 +10,7 @@ import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
 import { InvoiceOrder } from '../invoice/invoice.service';
+import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
 
 @Injectable()
 export class PaymentsService {
@@ -49,20 +50,44 @@ export class PaymentsService {
       });
     }
 
-    // Create the Payment row BEFORE calling Stripe so there is always a DB record
-    // when a session exists. If the DB write fails here, no Stripe session is created
-    // and no money can move without a traceable payment record.
-    const payment = await this.prisma.payment.create({
-      data: {
-        orderId,
-        amountInCents: order.totalInCents,
-        currency: currency.toUpperCase(),
-        provider: 'stripe',
-        // stripeCheckoutSessionId / stripePaymentIntentId filled in after Stripe confirms
-      },
-    });
+    // Upsert the Payment row: if a prior attempt left a FAILED row (e.g. Stripe
+    // API error without a webhook, order still PENDING_PAYMENT), reuse that row
+    // rather than creating a new one — Payment.orderId is @unique and a plain
+    // create would throw P2002 on every retry.
+    const existingPayment = await this.prisma.payment.findUnique({ where: { orderId } });
+    let payment: { id: string };
 
-    let session: Awaited<ReturnType<typeof this.stripeClient.createCheckoutSession>>;
+    if (existingPayment?.status === PaymentStatus.FAILED) {
+      if (existingPayment.stripeCheckoutSessionId) {
+        await this.stripeClient
+          .expireCheckoutSession(existingPayment.stripeCheckoutSessionId)
+          .catch(() => {});
+      }
+      payment = await this.prisma.payment.update({
+        where: { id: existingPayment.id },
+        data: {
+          status: PaymentStatus.PENDING,
+          stripeCheckoutSessionId: null,
+          stripePaymentIntentId: null,
+          failureReason: null,
+        },
+      });
+    } else {
+      payment = await this.prisma.payment.create({
+        data: {
+          orderId,
+          amountInCents: order.totalInCents,
+          currency: currency.toUpperCase(),
+          provider: 'stripe',
+          // stripeCheckoutSessionId / stripePaymentIntentId filled in after Stripe confirms
+        },
+      });
+    }
+
+    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
+
+    let session: Awaited<ReturnType<StripeClient['createCheckoutSession']>>;
     try {
       session = await this.stripeClient.createCheckoutSession({
         orderId: order.id,
@@ -70,7 +95,7 @@ export class PaymentsService {
         customerEmail: order.snapshotEmail,
         currency,
         lineItems,
-        successUrl,
+        successUrl: `${successUrl}?orderId=${order.id}&token=${cancelToken}`,
         cancelUrl: `${cancelUrl}?orderId=${order.id}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
@@ -123,28 +148,13 @@ export class PaymentsService {
   async handleWebhookEvent(event: Stripe.Event) {
     this.logger.log(`Stripe webhook received: type=${event.type} id=${event.id}`);
 
-    // Idempotency guard: Stripe retries webhook delivery for up to 3 days.
-    // Insert the event ID before any processing. A duplicate insert (P2002)
-    // means this event was already handled — return 200 so Stripe stops retrying.
-    try {
-      await this.prisma.processedStripeEvent.create({ data: { eventId: event.id } });
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        this.logger.warn(
-          `Stripe event ${event.id} (${event.type}) already processed — skipping duplicate delivery`,
-        );
-        return;
-      }
-      throw err;
-    }
-
+    // Idempotency is enforced atomically inside each handler's $transaction:
+    // processedStripeEvent.create is committed together with the state change,
+    // so a crash between the two can never leave the event permanently skipped.
     switch (event.type) {
       case 'checkout.session.completed':
       case 'checkout.session.async_payment_succeeded':
-        await this.markSessionPaid(event.data.object as Stripe.Checkout.Session);
+        await this.markSessionPaid(event.data.object as Stripe.Checkout.Session, event.id);
         break;
 
       case 'checkout.session.expired':
@@ -152,12 +162,13 @@ export class PaymentsService {
         await this.markSessionFailed(
           event.data.object as Stripe.Checkout.Session,
           event.type,
+          event.id,
         );
         break;
 
       case 'charge.refund.updated':
       case 'refund.updated':
-        await this.handleRefundUpdate(event.data.object as Stripe.Refund);
+        await this.handleRefundUpdate(event.data.object as Stripe.Refund, event.id);
         break;
 
       default:
@@ -167,7 +178,7 @@ export class PaymentsService {
     }
   }
 
-  private async markSessionPaid(session: Stripe.Checkout.Session) {
+  private async markSessionPaid(session: Stripe.Checkout.Session, eventId?: string) {
     const payment = await this.prisma.payment.findUnique({
       where: { stripeCheckoutSessionId: session.id },
       include: { order: { include: { items: true } } },
@@ -208,32 +219,48 @@ export class PaymentsService {
     const isFraudFlagged = radarRiskLevel === 'elevated' || radarRiskLevel === 'highest';
     const newOrderStatus = isFraudFlagged ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
 
-    await this.prisma.$transaction([
-      this.prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: PaymentStatus.COMPLETED,
-          stripePaymentIntentId: paymentIntentId,
-          paidAt: new Date(),
-          rawWebhookPayload: session as unknown as object,
-        },
-      }),
-      this.prisma.order.update({
-        where: { id: payment.orderId },
-        data: { status: newOrderStatus },
-      }),
-      this.prisma.orderEvent.create({
-        data: {
-          orderId: payment.orderId,
-          fromStatus: OrderStatus.PENDING_PAYMENT,
-          toStatus: newOrderStatus,
-          actor: 'SYSTEM:stripe-webhook',
-          note: isFraudFlagged
-            ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
-            : `Stripe session ${session.id}`,
-        },
-      }),
-    ]);
+    try {
+      await this.prisma.$transaction([
+        // Always insert a session-scoped key so concurrent callers (webhook + reconcile cron)
+        // racing on the same session both hit P2002 — only one commit wins.
+        this.prisma.processedStripeEvent.create({ data: { eventId: `paid-${session.id}` } }),
+        // Additionally record the webhook event ID when present to deduplicate
+        // multiple deliveries of the exact same Stripe event.
+        ...(eventId ? [this.prisma.processedStripeEvent.create({ data: { eventId } })] : []),
+        this.prisma.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.COMPLETED,
+            stripePaymentIntentId: paymentIntentId,
+            paidAt: new Date(),
+            rawWebhookPayload: session as unknown as object,
+          },
+        }),
+        this.prisma.order.update({
+          where: { id: payment.orderId },
+          data: { status: newOrderStatus },
+        }),
+        this.prisma.orderEvent.create({
+          data: {
+            orderId: payment.orderId,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: newOrderStatus,
+            actor: 'SYSTEM:stripe-webhook',
+            note: isFraudFlagged
+              ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
+              : `Stripe session ${session.id}`,
+          },
+        }),
+      ]);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.warn(
+          `Session ${session.id} already processed (eventId: ${eventId ?? 'reconcile'}) — skipping duplicate`,
+        );
+        return;
+      }
+      throw err;
+    }
 
     if (isFraudFlagged) {
       this.logger.warn(
@@ -367,7 +394,7 @@ export class PaymentsService {
     // Falls back to a plain payment confirmation if invoice generation fails.
     this.invoiceService
       .processInvoice(order)
-      .then(({ url: _url, pdf }) =>
+      .then(({ url: invoiceUrl }) =>
         this.emailService.sendPaymentConfirmedWithInvoice({
           to: order.snapshotEmail,
           orderNumber: order.orderNumber,
@@ -379,8 +406,7 @@ export class PaymentsService {
           })),
           shippingCostInCents: order.shippingCostInCents,
           totalInCents: order.totalInCents,
-          invoiceUrl: _url,
-          invoicePdf: pdf,
+          invoiceUrl,
         }),
       )
       .catch((err: Error) => {
@@ -404,6 +430,7 @@ export class PaymentsService {
   private async markSessionFailed(
     session: Stripe.Checkout.Session,
     reasonType: string,
+    eventId?: string,
   ) {
     const payment = await this.prisma.payment.findUnique({
       where: { stripeCheckoutSessionId: session.id },
@@ -434,6 +461,7 @@ export class PaymentsService {
       payment.orderId,
       payment.order.items,
       `Stripe event: ${reasonType}`,
+      eventId,
     );
   }
 
@@ -449,7 +477,7 @@ export class PaymentsService {
    * For partial refunds: the sync path in `partialRefund()` is authoritative;
    * the webhook validates state consistency and logs if something looks wrong.
    */
-  private async handleRefundUpdate(refund: Stripe.Refund): Promise<void> {
+  private async handleRefundUpdate(refund: Stripe.Refund, eventId?: string): Promise<void> {
     if (refund.status !== 'succeeded' && refund.status !== 'failed') {
       this.logger.debug(`Skipping refund ${refund.id} with transitional status "${refund.status}"`);
       return;
@@ -498,35 +526,46 @@ export class PaymentsService {
     const isFullRefund = refund.amount >= payment.amountInCents;
 
     if (isFullRefund) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: { status: PaymentStatus.REFUNDED },
-        });
-        await tx.order.update({
-          where: { id: payment.orderId },
-          data: { status: OrderStatus.REFUNDED },
-        });
-        // Restore stock only for units not already restored by a prior partial cancel
-        for (const item of payment.order.items) {
-          const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-          if (activeQty > 0) {
-            await tx.productVariant.update({
-              where: { id: item.productVariantId },
-              data: { stock: { increment: activeQty } },
-            });
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          if (eventId) {
+            await tx.processedStripeEvent.create({ data: { eventId } });
           }
-        }
-        await tx.orderEvent.create({
-          data: {
-            orderId: payment.orderId,
-            fromStatus: payment.order.status,
-            toStatus: OrderStatus.REFUNDED,
-            actor: 'SYSTEM:stripe-webhook',
-            note: `Async refund ${refund.id} confirmed succeeded`,
-          },
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { status: PaymentStatus.REFUNDED },
+          });
+          await tx.order.update({
+            where: { id: payment.orderId },
+            data: { status: OrderStatus.REFUNDED },
+          });
+          // Restore stock only for units not already restored by a prior partial cancel
+          for (const item of payment.order.items) {
+            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+            if (activeQty > 0) {
+              await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQty } },
+              });
+            }
+          }
+          await tx.orderEvent.create({
+            data: {
+              orderId: payment.orderId,
+              fromStatus: payment.order.status,
+              toStatus: OrderStatus.REFUNDED,
+              actor: 'SYSTEM:stripe-webhook',
+              note: `Async refund ${refund.id} confirmed succeeded`,
+            },
+          });
         });
-      });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.debug(`Stripe event ${eventId} already processed — skipping duplicate refund update`);
+          return;
+        }
+        throw err;
+      }
 
       this.logger.log(
         `Async full refund ${refund.id} applied for order ${payment.order.orderNumber}`,
@@ -562,25 +601,33 @@ export class PaymentsService {
             'fatal',
           );
         });
-        await this.prisma.$transaction([
-          this.prisma.order.update({
-            where: { id: payment.orderId },
-            data: { status: OrderStatus.PARTIALLY_REFUNDED },
-          }),
-          this.prisma.payment.update({
-            where: { id: payment.id },
-            data: { refundedAmountInCents: { increment: refund.amount } },
-          }),
-          this.prisma.orderEvent.create({
-            data: {
-              orderId: payment.orderId,
-              fromStatus: payment.order.status,
-              toStatus: OrderStatus.PARTIALLY_REFUNDED,
-              actor: 'SYSTEM:stripe-webhook',
-              note: `Async partial refund ${refund.id} — cancelledQuantity requires manual correction`,
-            },
-          }),
-        ]);
+        try {
+          await this.prisma.$transaction([
+            ...(eventId ? [this.prisma.processedStripeEvent.create({ data: { eventId } })] : []),
+            this.prisma.order.update({
+              where: { id: payment.orderId },
+              data: { status: OrderStatus.PARTIALLY_REFUNDED },
+            }),
+            this.prisma.payment.update({
+              where: { id: payment.id },
+              data: { refundedAmountInCents: { increment: refund.amount } },
+            }),
+            this.prisma.orderEvent.create({
+              data: {
+                orderId: payment.orderId,
+                fromStatus: payment.order.status,
+                toStatus: OrderStatus.PARTIALLY_REFUNDED,
+                actor: 'SYSTEM:stripe-webhook',
+                note: `Async partial refund ${refund.id} — cancelledQuantity requires manual correction`,
+              },
+            }),
+          ]);
+        } catch (err) {
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+            return;
+          }
+          throw err;
+        }
       } else {
         this.logger.log(
           `Partial refund ${refund.id} confirmed for order ${payment.order.orderNumber} (sync path already applied)`,
@@ -592,7 +639,7 @@ export class PaymentsService {
   async getPaymentStatus(orderId: string, requestingUserId: string) {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { status: true, paidAt: true, order: { select: { userId: true } } },
+      select: { status: true, paidAt: true, order: { select: { userId: true, orderNumber: true } } },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -601,7 +648,23 @@ export class PaymentsService {
       throw new ForbiddenException('You do not have access to this order');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt };
+    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
+  }
+
+  async getPaymentStatusByToken(orderId: string, token: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { orderId },
+      select: { status: true, paidAt: true, order: { select: { snapshotEmail: true, orderNumber: true } } },
+    });
+
+    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+
+    const secret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    if (!verifyOrderToken(token, orderId, payment.order.snapshotEmail, secret)) {
+      throw new UnauthorizedException('Invalid order token');
+    }
+
+    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
   }
 
   /**
@@ -651,6 +714,21 @@ export class PaymentsService {
           Sentry.captureException(err);
         });
       }
+    }
+  }
+
+  /**
+   * Nightly cleanup of the processedStripeEvent deduplication log.
+   * Stripe retries webhooks for up to 72 hours; 7 days gives a safe margin before rows are purged.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async pruneProcessedStripeEvents() {
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const { count } = await this.prisma.processedStripeEvent.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+    if (count > 0) {
+      this.logger.log(`Pruned ${count} processed Stripe event(s) older than 7 days`);
     }
   }
 
@@ -838,38 +916,53 @@ export class PaymentsService {
     orderId: string,
     orderItems: Array<{ productVariantId: string; quantity: number }>,
     failureReason: string,
+    eventId?: string,
   ) {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.payment.update({
-        where: { id: paymentId },
-        data: {
-          status: PaymentStatus.FAILED,
-          failureReason,
-        },
-      });
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (eventId) {
+          await tx.processedStripeEvent.create({ data: { eventId } });
+        }
 
-      await tx.order.update({
-        where: { id: orderId },
-        data: { status: OrderStatus.CANCELLED },
-      });
-
-      for (const item of orderItems) {
-        await tx.productVariant.update({
-          where: { id: item.productVariantId },
-          data: { stock: { increment: item.quantity } },
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: {
+            status: PaymentStatus.FAILED,
+            failureReason,
+          },
         });
-      }
 
-      await tx.orderEvent.create({
-        data: {
-          orderId,
-          fromStatus: OrderStatus.PENDING_PAYMENT,
-          toStatus: OrderStatus.CANCELLED,
-          actor: 'SYSTEM:stripe-webhook',
-          note: failureReason,
-        },
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: OrderStatus.CANCELLED },
+        });
+
+        for (const item of orderItems) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM:stripe-webhook',
+            note: failureReason,
+          },
+        });
       });
-    });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.warn(
+          `Stripe event ${eventId} already processed — skipping duplicate failure event`,
+        );
+        return;
+      }
+      throw err;
+    }
 
     this.logger.log(
       `Payment failed for order ${orderId} — stock restored, order cancelled (${failureReason})`,

@@ -171,12 +171,12 @@ describe('PaymentsController', () => {
   // ─── GET /payments/:orderId/status ───────────────────────────────────────
 
   describe('getStatus', () => {
-    it('delegates to PaymentsService.getPaymentStatus with orderId and userId', async () => {
+    it('delegates to PaymentsService.getPaymentStatus with orderId and userId when user is authenticated', async () => {
       const user = { id: 'user-1' } as any;
       const statusResult = { status: 'PAID', paidAt: new Date() } as any;
       service.getPaymentStatus.mockResolvedValue(statusResult);
 
-      const result = await controller.getStatus('order-uuid-1', user);
+      const result = await controller.getStatus('order-uuid-1', user, undefined);
 
       expect(service.getPaymentStatus).toHaveBeenCalledWith('order-uuid-1', 'user-1');
       expect(result).toBe(statusResult);
@@ -186,7 +186,7 @@ describe('PaymentsController', () => {
       const user = { id: 'user-99' } as any;
       service.getPaymentStatus.mockResolvedValue({ status: 'PENDING' } as any);
 
-      await controller.getStatus('order-uuid-2', user);
+      await controller.getStatus('order-uuid-2', user, undefined);
 
       expect(service.getPaymentStatus).toHaveBeenCalledWith('order-uuid-2', 'user-99');
     });
@@ -195,9 +195,29 @@ describe('PaymentsController', () => {
       const user = { id: 'user-1' } as any;
       service.getPaymentStatus.mockRejectedValue(new NotFoundException());
 
-      await expect(controller.getStatus('stranger-order', user)).rejects.toThrow(
+      await expect(controller.getStatus('stranger-order', user, undefined)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('delegates to getPaymentStatusByToken when no user but token is present', async () => {
+      const statusResult = { status: 'PENDING', paidAt: null } as any;
+      service.getPaymentStatusByToken = jest.fn().mockResolvedValue(statusResult);
+
+      const result = await controller.getStatus('order-uuid-3', undefined, 'abc123token');
+
+      expect(service.getPaymentStatusByToken).toHaveBeenCalledWith('order-uuid-3', 'abc123token');
+      expect(result).toBe(statusResult);
+    });
+
+    it('throws UnauthorizedException when neither user nor token is present', async () => {
+      let error: unknown;
+      try {
+        await controller.getStatus('order-uuid-4', undefined, undefined);
+      } catch (e) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(UnauthorizedException);
     });
   });
 

@@ -257,6 +257,9 @@ model Product {
   paoMonths        Int?      // Period After Opening in months (PAO symbol)
   warnings         String?   // safety warnings (Ostrzeżenia) from data sheet
 
+  // REACH Regulation 2020/878 — SDS mandatory for hazardous products (diffusers)
+  sdsUrl           String?   // Supabase public URL to Safety Data Sheet PDF
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -395,8 +398,9 @@ model Order {
   termsVersion    String?
   termsAcceptedAt DateTime?
 
-  invoiceUrl    String?
-  invoiceNumber String? @unique
+  invoiceUrl          String?
+  invoiceStoragePath  String?
+  invoiceNumber       String? @unique
   isRead        Boolean @default(false)
 
   createdAt DateTime @default(now())
@@ -547,7 +551,7 @@ model CouponUse {
   discountAppliedInCents Int
   createdAt              DateTime @default(now())
 
-  @@unique([couponId, userId])
+  @@unique([couponId, orderId])
   @@index([couponId])
   @@index([userId])
   @@map("coupon_uses")
