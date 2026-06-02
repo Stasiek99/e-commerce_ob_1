@@ -27,7 +27,7 @@ export class SupabaseMonitoringService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_HOUR, { timeZone: 'Europe/Warsaw' })
   async runChecks() {
     await Promise.allSettled([
       this.checkDatabaseConnections(),

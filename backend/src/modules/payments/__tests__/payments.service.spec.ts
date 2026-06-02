@@ -2188,4 +2188,24 @@ describe('PaymentsService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
+
+  // ─── @Cron timezone configuration ────────────────────────────────────────────
+
+  describe('@Cron timezone configuration', () => {
+    it('reconcilePendingPayments is configured to fire in Europe/Warsaw timezone', () => {
+      const meta = Reflect.getMetadata(
+        'SCHEDULE_CRON_OPTIONS',
+        PaymentsService.prototype['reconcilePendingPayments'],
+      );
+      expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+
+    it('pruneProcessedStripeEvents is configured to fire in Europe/Warsaw timezone', () => {
+      const meta = Reflect.getMetadata(
+        'SCHEDULE_CRON_OPTIONS',
+        PaymentsService.prototype['pruneProcessedStripeEvents'],
+      );
+      expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+  });
 });

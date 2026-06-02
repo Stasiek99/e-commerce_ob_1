@@ -210,7 +210,7 @@ export class CouponService {
   // Reconciles the denormalized currentUses counter against the actual CouponUse
   // rows. Runs hourly so that a crash mid-rollback cannot permanently inflate the
   // counter and silently block otherwise-valid coupon redemptions.
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_HOUR, { timeZone: 'Europe/Warsaw' })
   async reconcileCurrentUses(): Promise<void> {
     await this.prisma.$executeRaw`
       UPDATE coupons

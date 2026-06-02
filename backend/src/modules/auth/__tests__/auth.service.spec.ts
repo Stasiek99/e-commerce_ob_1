@@ -1287,4 +1287,16 @@ describe('AuthService', () => {
       await expect(service.purgeExpiredTokens()).rejects.toThrow('DB connection lost');
     });
   });
+
+  // ─── @Cron timezone configuration ────────────────────────────────────────────
+
+  describe('@Cron timezone configuration', () => {
+    it('purgeExpiredTokens is configured to fire in Europe/Warsaw timezone', () => {
+      const meta = Reflect.getMetadata(
+        'SCHEDULE_CRON_OPTIONS',
+        AuthService.prototype['purgeExpiredTokens'],
+      );
+      expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+  });
 });

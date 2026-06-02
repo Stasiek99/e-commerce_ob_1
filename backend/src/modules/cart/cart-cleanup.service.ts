@@ -10,7 +10,7 @@ export class CartCleanupService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  @Cron(CronExpression.EVERY_DAY_AT_3AM, { timeZone: 'Europe/Warsaw' })
   async deleteStaleAnonymousCarts(): Promise<void> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - STALE_CART_DAYS);

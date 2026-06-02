@@ -41,7 +41,7 @@ export class AuthService {
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
-  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @Cron(CronExpression.EVERY_DAY_AT_4AM, { timeZone: 'Europe/Warsaw' })
   async purgeExpiredTokens(): Promise<void> {
     const now = new Date();
     const [refreshResult, resetResult, verificationResult] = await Promise.all([

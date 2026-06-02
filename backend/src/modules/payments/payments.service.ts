@@ -672,7 +672,7 @@ export class PaymentsService {
    * Finds payments stuck in PENDING for >30 min and reconciles against
    * Stripe. Catches webhook delivery failures or server restarts mid-flow.
    */
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_10_MINUTES, { timeZone: 'Europe/Warsaw' })
   async reconcilePendingPayments() {
     const cutoff = new Date(Date.now() - 30 * 60 * 1000);
     const stale = await this.prisma.payment.findMany({
@@ -721,7 +721,7 @@ export class PaymentsService {
    * Nightly cleanup of the processedStripeEvent deduplication log.
    * Stripe retries webhooks for up to 72 hours; 7 days gives a safe margin before rows are purged.
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, { timeZone: 'Europe/Warsaw' })
   async pruneProcessedStripeEvents() {
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const { count } = await this.prisma.processedStripeEvent.deleteMany({
