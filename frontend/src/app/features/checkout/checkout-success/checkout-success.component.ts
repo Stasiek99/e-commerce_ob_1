@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { timer, switchMap, takeWhile, take } from 'rxjs';
 import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
@@ -159,6 +159,7 @@ interface PaymentStatusResponse {
 })
 export class CheckoutSuccessComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly http = inject(HttpClient);
   private readonly analytics = inject(AnalyticsService);
   private readonly cart = inject(CartService);
@@ -173,6 +174,13 @@ export class CheckoutSuccessComponent implements OnInit {
     const id = this.route.snapshot.queryParamMap.get('orderId');
     const token = this.route.snapshot.queryParamMap.get('token');
     this.orderId.set(id);
+
+    // Strip session_id (and any other Stripe params) from the URL so the
+    // Checkout Session ID never appears in browser history or referrer headers.
+    this.router.navigate([], {
+      queryParams: { orderId: id ?? undefined },
+      replaceUrl: true,
+    });
 
     if (!id) {
       this.loading.set(false);
