@@ -85,7 +85,42 @@ describe('ssrCacheHeaders middleware', () => {
     expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
   });
 
-  // ── No Cache-Control on public routes ──────────────────────────────────────
+  // ── Cache-Control: public CDN cache (catalog routes) ─────────────────────
+
+  it('sets public s-maxage cache header for /products', () => {
+    const res = makeResMock();
+
+    ssrCacheHeaders(makeReq('/products') as Request, res as unknown as Response, jest.fn());
+
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, s-maxage=60, stale-while-revalidate=300',
+    );
+  });
+
+  it('sets public s-maxage cache header for /products/:slug', () => {
+    const res = makeResMock();
+
+    ssrCacheHeaders(makeReq('/products/rose-eau-de-parfum') as Request, res as unknown as Response, jest.fn());
+
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, s-maxage=60, stale-while-revalidate=300',
+    );
+  });
+
+  it('sets public s-maxage cache header for /categories/:slug', () => {
+    const res = makeResMock();
+
+    ssrCacheHeaders(makeReq('/categories/niche') as Request, res as unknown as Response, jest.fn());
+
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, s-maxage=60, stale-while-revalidate=300',
+    );
+  });
+
+  // ── No Cache-Control on other public routes ────────────────────────────────
 
   it('does NOT set Cache-Control: no-store on /products/:slug (CDN-cacheable)', () => {
     const res = makeResMock();
@@ -103,12 +138,12 @@ describe('ssrCacheHeaders middleware', () => {
     expect(res.setHeader).not.toHaveBeenCalledWith('Cache-Control', 'no-store');
   });
 
-  it('does NOT set Cache-Control: no-store on the home page', () => {
+  it('does NOT set any Cache-Control on the home page (not a catalog or private prefix)', () => {
     const res = makeResMock();
 
     ssrCacheHeaders(makeReq('/') as Request, res as unknown as Response, jest.fn());
 
-    expect(res.setHeader).not.toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(res.setHeader).not.toHaveBeenCalledWith('Cache-Control', expect.anything());
   });
 
   // ── Path prefix boundary check ─────────────────────────────────────────────
