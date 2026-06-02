@@ -1,6 +1,7 @@
+import { DOCUMENT } from '@angular/common';
 import { Component, inject } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { NavigationStart, Router, RouterOutlet } from '@angular/router';
+import { NavigationError, NavigationStart, Router, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { TuiRoot } from '@taiga-ui/core';
 import { HeaderComponent } from './shared/components/header/header.component';
@@ -36,6 +37,7 @@ import { SeoService } from './core/services/seo.service';
 export class AppComponent {
   private readonly router = inject(Router);
   private readonly seo = inject(SeoService);
+  private readonly doc = inject(DOCUMENT);
 
   constructor() {
     this.seo.applyDefaults(this.router.url || '/');
@@ -45,5 +47,17 @@ export class AppComponent {
         takeUntilDestroyed(),
       )
       .subscribe((e) => this.seo.applyDefaults(e.url));
+
+    this.router.events
+      .pipe(
+        filter((e): e is NavigationError => e instanceof NavigationError),
+        takeUntilDestroyed(),
+      )
+      .subscribe((e) => {
+        const err = e.error as { name?: string; message?: string } | null;
+        if (err?.name === 'ChunkLoadError' || err?.message?.includes('chunk')) {
+          this.doc.defaultView?.location.reload();
+        }
+      });
   }
 }
