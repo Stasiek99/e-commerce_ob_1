@@ -758,3 +758,79 @@ describe('ProductsService — findBySlug isActive DB-level filter', () => {
     expect(mockPrisma.product.findUnique).not.toHaveBeenCalled();
   });
 });
+
+// ─── findAll — stable id tiebreaker ───────────────────────────────────────────
+// Regression guard: all three findAll query paths must include { id: 'asc' } as
+// the final orderBy clause so that products with identical sortOrder + createdAt
+// (common after bulk seeding) do not shift between pages on concurrent inserts.
+
+describe('ProductsService — findAll orderBy id tiebreaker', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('includes { id: asc } tiebreaker in the default all-products interleaved slim query (path: no category, no featured)', async () => {
+    mockPrisma.product.findMany
+      .mockResolvedValueOnce([{ id: 'p1', line: null, category: { slug: 'other' } }])
+      .mockResolvedValueOnce([]);
+
+    await service.findAll({});
+
+    const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(slimCall.orderBy).toContainEqual({ id: 'asc' });
+  });
+
+  it('includes { id: asc } tiebreaker in the perfumes-category interleaved slim query (path: category=perfumes, no filters)', async () => {
+    mockPrisma.category.findUnique.mockResolvedValue({ slug: 'perfumes', children: [] });
+    mockPrisma.product.findMany
+      .mockResolvedValueOnce([{ id: 'p1', line: 'Millesime', category: { slug: 'perfumes' } }])
+      .mockResolvedValueOnce([]);
+
+    await service.findAll({ category: 'perfumes' });
+
+    const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(slimCall.orderBy).toContainEqual({ id: 'asc' });
+  });
+
+  it('includes { id: asc } tiebreaker in the paginated fallback query (path: featured=true bypasses interleaving)', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([]);
+    mockPrisma.product.count.mockResolvedValue(0);
+
+    await service.findAll({ featured: true });
+
+    const paginatedCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(paginatedCall.orderBy).toContainEqual({ id: 'asc' });
+  });
+
+  it('preserves sortOrder asc and createdAt desc as the primary sort keys in the default path', async () => {
+    mockPrisma.product.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await service.findAll({});
+
+    const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+    expect(slimCall.orderBy[0]).toEqual({ sortOrder: 'asc' });
+    expect(slimCall.orderBy[1]).toEqual({ createdAt: 'desc' });
+    expect(slimCall.orderBy[2]).toEqual({ id: 'asc' });
+  });
+});

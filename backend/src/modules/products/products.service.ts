@@ -228,7 +228,7 @@ export class ProductsService {
       const slim = await this.prisma.product.findMany({
         where,
         select: { id: true, line: true, category: { select: { slug: true } } },
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
       });
 
       type Slim = (typeof slim)[0];
@@ -271,7 +271,7 @@ export class ProductsService {
       const slim = await this.prisma.product.findMany({
         where,
         select: { id: true, line: true, category: { select: { slug: true } } },
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
       });
 
       type Slim = (typeof slim)[0];
@@ -316,7 +316,7 @@ export class ProductsService {
         select: PRODUCT_SELECT,
         skip,
         take: limit,
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }, { id: 'asc' }],
       }),
       this.prisma.product.count({ where }),
     ]);
