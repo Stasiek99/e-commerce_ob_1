@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 
 // Supabase free tier: 60 direct connections, Pro: 200
@@ -25,10 +26,16 @@ interface StorageBucketRow {
 export class SupabaseMonitoringService {
   private readonly logger = new Logger(SupabaseMonitoringService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+  ) {}
 
   @Cron(CronExpression.EVERY_HOUR, { timeZone: 'Europe/Warsaw' })
   async runChecks() {
+    const acquired = await this.redis.set('cron:supabase-monitoring:lock', '1', 'EX', 3540, 'NX');
+    if (!acquired) return;
+
     await Promise.allSettled([
       this.checkDatabaseConnections(),
       this.checkStorageUsage(),

@@ -1,4 +1,5 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
@@ -22,6 +23,7 @@ export class PaymentsService {
     private readonly emailService: EmailQueueService,
     private readonly invoiceService: InvoiceService,
     private readonly configService: ConfigService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   async initiatePayment(orderId: string): Promise<{ paymentUrl: string }> {
@@ -674,6 +676,9 @@ export class PaymentsService {
    */
   @Cron(CronExpression.EVERY_10_MINUTES, { timeZone: 'Europe/Warsaw' })
   async reconcilePendingPayments() {
+    const acquired = await this.redis.set('cron:reconcile-payments:lock', '1', 'EX', 540, 'NX');
+    if (!acquired) return;
+
     const cutoff = new Date(Date.now() - 30 * 60 * 1000);
     const stale = await this.prisma.payment.findMany({
       where: {
@@ -723,6 +728,9 @@ export class PaymentsService {
    */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, { timeZone: 'Europe/Warsaw' })
   async pruneProcessedStripeEvents() {
+    const acquired = await this.redis.set('cron:prune-stripe-events:lock', '1', 'EX', 82800, 'NX');
+    if (!acquired) return;
+
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const { count } = await this.prisma.processedStripeEvent.deleteMany({
       where: { createdAt: { lt: cutoff } },

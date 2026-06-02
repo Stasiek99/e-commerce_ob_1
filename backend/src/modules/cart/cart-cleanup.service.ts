@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 
 const STALE_CART_DAYS = 30;
@@ -8,10 +9,16 @@ const STALE_CART_DAYS = 30;
 export class CartCleanupService {
   private readonly logger = new Logger(CartCleanupService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+  ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { timeZone: 'Europe/Warsaw' })
   async deleteStaleAnonymousCarts(): Promise<void> {
+    const acquired = await this.redis.set('cron:cleanup-carts:lock', '1', 'EX', 82800, 'NX');
+    if (!acquired) return;
+
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - STALE_CART_DAYS);
 

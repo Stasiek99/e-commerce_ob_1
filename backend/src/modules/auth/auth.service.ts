@@ -43,6 +43,9 @@ export class AuthService {
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM, { timeZone: 'Europe/Warsaw' })
   async purgeExpiredTokens(): Promise<void> {
+    const acquired = await this.redis.set('cron:purge-tokens:lock', '1', 'EX', 82800, 'NX');
+    if (!acquired) return;
+
     const now = new Date();
     const [refreshResult, resetResult, verificationResult] = await Promise.all([
       this.prisma.refreshToken.deleteMany({ where: { expiresAt: { lt: now } } }),

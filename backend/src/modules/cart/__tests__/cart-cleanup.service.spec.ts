@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 describe('CartCleanupService', () => {
   let service: CartCleanupService;
   let prisma: any;
+  let redis: any;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -23,11 +24,16 @@ describe('CartCleanupService', () => {
             },
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: { set: jest.fn().mockResolvedValue('OK') },
+        },
       ],
     }).compile();
 
     service = module.get(CartCleanupService);
     prisma = module.get(PrismaService);
+    redis = module.get('REDIS_CLIENT');
   });
 
   afterEach(() => {
@@ -93,6 +99,44 @@ describe('CartCleanupService', () => {
         CartCleanupService.prototype['deleteStaleAnonymousCarts'],
       );
       expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+  });
+
+  // ─── Distributed lock guard ───────────────────────────────────────────────────
+
+  describe('distributed lock guard', () => {
+    describe('deleteStaleAnonymousCarts', () => {
+      it('skips cart lookup when another replica already holds the lock', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await service.deleteStaleAnonymousCarts();
+
+        expect(prisma.cart.findMany).not.toHaveBeenCalled();
+      });
+
+      it('runs the cleanup when the lock is acquired', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.cart.findMany.mockResolvedValue([]);
+
+        await service.deleteStaleAnonymousCarts();
+
+        expect(prisma.cart.findMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('acquires the lock with NX and an 82800-second TTL', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.cart.findMany.mockResolvedValue([]);
+
+        await service.deleteStaleAnonymousCarts();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:cleanup-carts:lock',
+          '1',
+          'EX',
+          82800,
+          'NX',
+        );
+      });
     });
   });
 });

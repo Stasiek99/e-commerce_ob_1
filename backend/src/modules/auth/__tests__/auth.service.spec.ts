@@ -1299,4 +1299,42 @@ describe('AuthService', () => {
       expect(meta?.timeZone).toBe('Europe/Warsaw');
     });
   });
+
+  // ─── Distributed lock guard ───────────────────────────────────────────────────
+
+  describe('distributed lock guard', () => {
+    describe('purgeExpiredTokens', () => {
+      it('skips token deletion when another replica already holds the lock', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await service.purgeExpiredTokens();
+
+        expect(prisma.refreshToken.deleteMany).not.toHaveBeenCalled();
+        expect(prisma.passwordResetToken.deleteMany).not.toHaveBeenCalled();
+        expect(prisma.emailVerificationToken.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('runs the token purge when the lock is acquired', async () => {
+        redis.set.mockResolvedValue('OK');
+
+        await service.purgeExpiredTokens();
+
+        expect(prisma.refreshToken.deleteMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('acquires the lock with NX and an 82800-second TTL', async () => {
+        redis.set.mockResolvedValue('OK');
+
+        await service.purgeExpiredTokens();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:purge-tokens:lock',
+          '1',
+          'EX',
+          82800,
+          'NX',
+        );
+      });
+    });
+  });
 });

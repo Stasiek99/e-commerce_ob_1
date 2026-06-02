@@ -1,6 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DiscountType, Prisma } from '@prisma/client';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCouponDto, UpdateCouponDto } from './dto/create-coupon.dto';
 
@@ -34,7 +35,10 @@ export interface CouponValidationResult {
 export class CouponService {
   private readonly logger = new Logger(CouponService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+  ) {}
 
   async validate(
     code: string,
@@ -212,6 +216,9 @@ export class CouponService {
   // counter and silently block otherwise-valid coupon redemptions.
   @Cron(CronExpression.EVERY_HOUR, { timeZone: 'Europe/Warsaw' })
   async reconcileCurrentUses(): Promise<void> {
+    const acquired = await this.redis.set('cron:reconcile-coupon-uses:lock', '1', 'EX', 3540, 'NX');
+    if (!acquired) return;
+
     await this.prisma.$executeRaw`
       UPDATE coupons
       SET current_uses = (

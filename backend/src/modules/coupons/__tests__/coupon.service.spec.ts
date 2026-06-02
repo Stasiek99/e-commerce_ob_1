@@ -28,6 +28,7 @@ const makeCoupon = (overrides: Partial<Record<string, any>> = {}) => ({
 describe('CouponService', () => {
   let service: CouponService;
   let prisma: any;
+  let redis: any;
 
   beforeEach(async () => {
     jest.useFakeTimers().setSystemTime(NOW);
@@ -55,11 +56,16 @@ describe('CouponService', () => {
             },
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: { set: jest.fn().mockResolvedValue('OK') },
+        },
       ],
     }).compile();
 
     service = module.get(CouponService);
     prisma = module.get(PrismaService);
+    redis = module.get('REDIS_CLIENT');
   });
 
   afterEach(() => {
@@ -646,6 +652,44 @@ describe('CouponService', () => {
       const { expiresAt } = prisma.coupon.update.mock.calls[0][0].data;
       // CET winter offset = -1h → 23:00 UTC the night before
       expect(expiresAt).toEqual(new Date('2024-11-28T23:00:00.000Z'));
+    });
+  });
+
+  // ─── Distributed lock guard ───────────────────────────────────────────────────
+
+  describe('distributed lock guard', () => {
+    describe('reconcileCurrentUses', () => {
+      it('skips the SQL UPDATE when another replica already holds the lock', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await service.reconcileCurrentUses();
+
+        expect(prisma.$executeRaw).not.toHaveBeenCalled();
+      });
+
+      it('runs the reconciliation UPDATE when the lock is acquired', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.$executeRaw.mockResolvedValue(undefined);
+
+        await service.reconcileCurrentUses();
+
+        expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      });
+
+      it('acquires the lock with NX and a 3540-second TTL', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.$executeRaw.mockResolvedValue(undefined);
+
+        await service.reconcileCurrentUses();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:reconcile-coupon-uses:lock',
+          '1',
+          'EX',
+          3540,
+          'NX',
+        );
+      });
     });
   });
 });

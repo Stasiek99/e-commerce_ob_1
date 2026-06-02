@@ -188,6 +188,10 @@ describe('Checkout Integration Flow', () => {
             getRateMap: jest.fn().mockResolvedValue({ INPOST: 1499, DHL: 1999, GLS: 1799, DPD: 1599, DPD_COURIER: 1699 }),
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: { set: jest.fn().mockResolvedValue('OK') },
+        },
       ],
     }).compile();
 
