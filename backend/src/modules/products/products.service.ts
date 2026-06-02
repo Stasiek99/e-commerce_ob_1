@@ -199,7 +199,10 @@ export class ProductsService {
 
     if (query.sortBy === 'price_asc' || query.sortBy === 'price_desc') {
       const products = await this.prisma.product.findMany({ where, select: PRODUCT_SELECT });
-      const minPrice = (p: (typeof products)[0]) => p.variants[0]?.priceInCents ?? Infinity;
+      // Products with no active variants get a sentinel that places them last in both directions:
+      // Infinity → last in ascending order; -Infinity → last in descending order.
+      const sentinel = query.sortBy === 'price_asc' ? Infinity : -Infinity;
+      const minPrice = (p: (typeof products)[0]) => p.variants[0]?.priceInCents ?? sentinel;
       products.sort((a, b) =>
         query.sortBy === 'price_asc' ? minPrice(a) - minPrice(b) : minPrice(b) - minPrice(a),
       );

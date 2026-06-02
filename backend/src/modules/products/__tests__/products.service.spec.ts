@@ -400,6 +400,82 @@ describe('ProductsService — updateVariant', () => {
   });
 });
 
+// ─── findAll price sorting ────────────────────────────────────────────────────
+
+describe('ProductsService — findAll price sorting', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  const makeNoVariantProduct = (id: string) =>
+    makeProduct({ id, slug: id, variants: [] });
+
+  const makePricedProduct = (id: string, priceInCents: number) =>
+    makeProduct({ id, slug: id, variants: [makeVariant({ priceInCents })] });
+
+  it('price_desc: places products with no active variants last, not first', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([
+      makeNoVariantProduct('no-variants'),
+      makePricedProduct('cheap', 5000),
+      makePricedProduct('expensive', 20000),
+    ]);
+
+    const result = await service.findAll({ sortBy: 'price_desc' });
+
+    const ids = (result.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids[0]).toBe('expensive');
+    expect(ids[1]).toBe('cheap');
+    expect(ids[2]).toBe('no-variants');
+  });
+
+  it('price_asc: places products with no active variants last', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([
+      makeNoVariantProduct('no-variants'),
+      makePricedProduct('cheap', 5000),
+      makePricedProduct('expensive', 20000),
+    ]);
+
+    const result = await service.findAll({ sortBy: 'price_asc' });
+
+    const ids = (result.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids[0]).toBe('cheap');
+    expect(ids[1]).toBe('expensive');
+    expect(ids[2]).toBe('no-variants');
+  });
+
+  it('price_desc: correctly orders multiple priced products', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([
+      makePricedProduct('mid', 10000),
+      makePricedProduct('cheap', 5000),
+      makePricedProduct('expensive', 20000),
+    ]);
+
+    const result = await service.findAll({ sortBy: 'price_desc' });
+
+    const ids = (result.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids).toEqual(['expensive', 'mid', 'cheap']);
+  });
+});
+
 // ─── EU Omnibus compliance ────────────────────────────────────────────────────
 
 describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', () => {
