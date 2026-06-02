@@ -1,4 +1,5 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
+import { Injectable, signal, computed, inject, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable, throwError, timer } from 'rxjs';
@@ -24,9 +25,21 @@ interface TokensResponse {
 export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
+  private readonly platformId = inject(PLATFORM_ID);
 
   private readonly _accessToken = signal<string | null>(null);
   private readonly _user = signal<User | null>(null);
+
+  // Syncs explicit logouts across open tabs. Only created in browser — SSR has no BroadcastChannel.
+  private readonly _logoutChannel: BroadcastChannel | null = isPlatformBrowser(this.platformId)
+    ? new BroadcastChannel('fragrance-auth')
+    : null;
+
+  constructor() {
+    this._logoutChannel?.addEventListener('message', (e: MessageEvent<string>) => {
+      if (e.data === 'logout') this.clearSession();
+    });
+  }
 
   // Shared in-flight refresh observable. Concurrent calls during the same refresh
   // window all subscribe to the same request via shareReplay, so only one HTTP
@@ -116,11 +129,13 @@ export class AuthService {
       .post(`${environment.apiUrl}/auth/logout`, {}, { withCredentials: true })
       .pipe(
         tap(() => {
+          this._logoutChannel?.postMessage('logout');
           this.clearSession();
           this.router.navigate(['/']);
         }),
         catchError(() => {
           // Best-effort: clear local state even if the server call fails
+          this._logoutChannel?.postMessage('logout');
           this.clearSession();
           this.router.navigate(['/']);
           return throwError(() => new Error('Logout failed'));
