@@ -4,6 +4,24 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCouponDto, UpdateCouponDto } from './dto/create-coupon.dto';
 
+// Converts a possibly naive ISO date string to a UTC Date, interpreting
+// naive strings (no Z / no +HH:MM suffix) as local time in `tz`.
+// Strings that already carry timezone info are parsed as-is.
+function toUtcFromTz(dateStr: string, tz: string): Date {
+  const hasOffset = dateStr.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(dateStr);
+  if (hasOffset) return new Date(dateStr);
+
+  // Treat the naive string as UTC to get a reference Date object, then
+  // compute the Wall-clock difference between that UTC moment and the
+  // same moment rendered in the target timezone. Subtracting that diff
+  // gives us the UTC instant that corresponds to the intended local time.
+  const normalized = dateStr.includes('T') ? dateStr + 'Z' : dateStr + 'T00:00:00Z';
+  const ref = new Date(normalized);
+  const utcMs = Date.parse(ref.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const tzMs = Date.parse(ref.toLocaleString('en-US', { timeZone: tz }));
+  return new Date(ref.getTime() - (tzMs - utcMs));
+}
+
 export interface CouponValidationResult {
   valid: boolean;
   couponId?: string;
@@ -139,6 +157,7 @@ export class CouponService {
     const existing = await this.prisma.coupon.findUnique({ where: { code } });
     if (existing) throw new ConflictException(`Coupon code "${code}" already exists.`);
 
+    const tz = 'Europe/Warsaw';
     return this.prisma.coupon.create({
       data: {
         code,
@@ -149,8 +168,9 @@ export class CouponService {
         maxUsesTotal: dto.maxUsesTotal ?? null,
         maxUsesPerUser: dto.maxUsesPerUser ?? null,
         isActive: dto.isActive ?? true,
-        startsAt: dto.startsAt ? new Date(dto.startsAt) : null,
-        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+        timezone: tz,
+        startsAt: dto.startsAt ? toUtcFromTz(dto.startsAt, tz) : null,
+        expiresAt: dto.expiresAt ? toUtcFromTz(dto.expiresAt, tz) : null,
         excludedProductIds: dto.excludedProductIds ?? [],
       },
     });
@@ -160,13 +180,14 @@ export class CouponService {
     const coupon = await this.prisma.coupon.findUnique({ where: { id } });
     if (!coupon) throw new NotFoundException('Coupon not found');
 
+    const tz = coupon.timezone ?? 'Europe/Warsaw';
     return this.prisma.coupon.update({
       where: { id },
       data: {
         ...(dto.isActive !== undefined && { isActive: dto.isActive }),
         ...(dto.maxUsesTotal !== undefined && { maxUsesTotal: dto.maxUsesTotal }),
         ...(dto.maxUsesPerUser !== undefined && { maxUsesPerUser: dto.maxUsesPerUser }),
-        ...(dto.expiresAt !== undefined && { expiresAt: new Date(dto.expiresAt) }),
+        ...(dto.expiresAt !== undefined && { expiresAt: toUtcFromTz(dto.expiresAt, tz) }),
       },
     });
   }

@@ -17,6 +17,7 @@ const makeCoupon = (overrides: Partial<Record<string, any>> = {}) => ({
   maxUsesTotal: null,
   maxUsesPerUser: null,
   minSpendInCents: null,
+  timezone: 'Europe/Warsaw',
   excludedProductIds: [],
   startsAt: null,
   expiresAt: null,
@@ -530,6 +531,53 @@ describe('CouponService', () => {
         service.create({ ...validDto, value: 100 }),
       ).resolves.not.toThrow();
     });
+
+    describe('timezone-aware date storage', () => {
+      beforeEach(() => {
+        prisma.coupon.findUnique.mockResolvedValue(null);
+        prisma.coupon.create.mockResolvedValue({});
+      });
+
+      it('converts naive expiresAt to UTC using Europe/Warsaw CEST offset (summer: -2h)', async () => {
+        // Warsaw summer midnight = 22:00 UTC the day before
+        await service.create({ ...validDto, expiresAt: '2024-08-15T00:00:00' });
+
+        const { expiresAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(expiresAt).toEqual(new Date('2024-08-14T22:00:00.000Z'));
+      });
+
+      it('converts naive startsAt to UTC using Europe/Warsaw CET offset (winter: -1h)', async () => {
+        // Warsaw winter midnight = 23:00 UTC the day before
+        await service.create({ ...validDto, startsAt: '2024-11-29T00:00:00' });
+
+        const { startsAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(startsAt).toEqual(new Date('2024-11-28T23:00:00.000Z'));
+      });
+
+      it('passes through an expiresAt that already carries a Z offset without shifting it', async () => {
+        await service.create({ ...validDto, expiresAt: '2024-08-15T22:00:00Z' });
+
+        const { expiresAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(expiresAt).toEqual(new Date('2024-08-15T22:00:00.000Z'));
+      });
+
+      it('stores the timezone field as Europe/Warsaw on every new coupon', async () => {
+        await service.create(validDto);
+
+        expect(prisma.coupon.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ timezone: 'Europe/Warsaw' }),
+          }),
+        );
+      });
+
+      it('stores null expiresAt when dto.expiresAt is omitted', async () => {
+        await service.create(validDto);
+
+        const { expiresAt } = prisma.coupon.create.mock.calls[0][0].data;
+        expect(expiresAt).toBeNull();
+      });
+    });
   });
 
   // ─── reconcileCurrentUses ────────────────────────────────────────────────
@@ -577,6 +625,27 @@ describe('CouponService', () => {
         where: { id: 'coupon-1' },
         data: { isActive: false },
       });
+    });
+
+    it('converts naive expiresAt to UTC using the timezone stored on the coupon (CEST -2h)', async () => {
+      prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ timezone: 'Europe/Warsaw' }));
+      prisma.coupon.update.mockResolvedValue({});
+
+      await service.update('coupon-1', { expiresAt: '2024-08-31T23:59:59' });
+
+      const { expiresAt } = prisma.coupon.update.mock.calls[0][0].data;
+      expect(expiresAt).toEqual(new Date('2024-08-31T21:59:59.000Z'));
+    });
+
+    it('falls back to Europe/Warsaw when coupon has no timezone field', async () => {
+      prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ timezone: undefined }));
+      prisma.coupon.update.mockResolvedValue({});
+
+      await service.update('coupon-1', { expiresAt: '2024-11-29T00:00:00' });
+
+      const { expiresAt } = prisma.coupon.update.mock.calls[0][0].data;
+      // CET winter offset = -1h → 23:00 UTC the night before
+      expect(expiresAt).toEqual(new Date('2024-11-28T23:00:00.000Z'));
     });
   });
 });
