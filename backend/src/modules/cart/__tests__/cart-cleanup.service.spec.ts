@@ -90,6 +90,95 @@ describe('CartCleanupService', () => {
     });
   });
 
+  // ─── expireAuthenticatedCartItems ───────────────────────────────────────────
+
+  describe('expireAuthenticatedCartItems', () => {
+    it('skips cart lookup when another replica holds the lock', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(prisma.cart.findMany).not.toHaveBeenCalled();
+      expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('runs cleanup when the lock is acquired', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(prisma.cart.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('acquires the lock with key cron:expire-auth-cart-items:lock, TTL 3540, and NX', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'cron:expire-auth-cart-items:lock',
+        '1',
+        'EX',
+        3540,
+        'NX',
+      );
+    });
+
+    it('does not call cartItem.deleteMany when no authenticated carts exist', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('queries only carts where userId is not null (authenticated carts only)', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(prisma.cart.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: { not: null } },
+        }),
+      );
+    });
+
+    it('deletes cart items older than 4 hours from authenticated carts', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2025-06-01T12:00:00Z'));
+      redis.set.mockResolvedValue('OK');
+      prisma.cart.findMany.mockResolvedValue([{ id: 'cart-a' }, { id: 'cart-b' }]);
+      prisma.cartItem.deleteMany.mockResolvedValue({ count: 3 });
+
+      await service.expireAuthenticatedCartItems();
+
+      const call = prisma.cartItem.deleteMany.mock.calls[0][0];
+      expect(call.where.cartId).toEqual({ in: ['cart-a', 'cart-b'] });
+
+      const cutoff: Date = call.where.updatedAt.lt;
+      const expectedCutoff = new Date('2025-06-01T08:00:00Z');
+      expect(cutoff.getTime()).toBeCloseTo(expectedCutoff.getTime(), -3);
+
+      jest.useRealTimers();
+    });
+
+    it('does not delete items from anonymous carts', async () => {
+      redis.set.mockResolvedValue('OK');
+      // findMany returns only authenticated carts (userId != null already filtered by query)
+      prisma.cart.findMany.mockResolvedValue([{ id: 'auth-cart-1' }]);
+      prisma.cartItem.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.expireAuthenticatedCartItems();
+
+      const call = prisma.cartItem.deleteMany.mock.calls[0][0];
+      expect(call.where.cartId).toEqual({ in: ['auth-cart-1'] });
+    });
+  });
+
   // ─── @Cron timezone configuration ────────────────────────────────────────────
 
   describe('@Cron timezone configuration', () => {
@@ -97,6 +186,14 @@ describe('CartCleanupService', () => {
       const meta = Reflect.getMetadata(
         'SCHEDULE_CRON_OPTIONS',
         CartCleanupService.prototype['deleteStaleAnonymousCarts'],
+      );
+      expect(meta?.timeZone).toBe('Europe/Warsaw');
+    });
+
+    it('expireAuthenticatedCartItems is configured to fire in Europe/Warsaw timezone', () => {
+      const meta = Reflect.getMetadata(
+        'SCHEDULE_CRON_OPTIONS',
+        CartCleanupService.prototype['expireAuthenticatedCartItems'],
       );
       expect(meta?.timeZone).toBe('Europe/Warsaw');
     });
