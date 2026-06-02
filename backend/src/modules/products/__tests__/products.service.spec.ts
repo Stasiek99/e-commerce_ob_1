@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -832,5 +832,170 @@ describe('ProductsService — findAll orderBy id tiebreaker', () => {
     expect(slimCall.orderBy[0]).toEqual({ sortOrder: 'asc' });
     expect(slimCall.orderBy[1]).toEqual({ createdAt: 'desc' });
     expect(slimCall.orderBy[2]).toEqual({ id: 'asc' });
+  });
+});
+
+// ─── updateVariantStock — stock audit log ─────────────────────────────────────
+
+describe('ProductsService — updateVariantStock stock audit log', () => {
+  let service: ProductsService;
+  let logSpy: jest.SpyInstance;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.incr.mockResolvedValue(1);
+    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    jest.clearAllMocks();
+  });
+
+  describe('variant not found', () => {
+    it('throws NotFoundException before attempting an update when variant does not exist', async () => {
+      mockPrisma.productVariant.findUnique.mockResolvedValue(null);
+
+      await expect(service.updateVariantStock('missing-var', { set: 5 })).rejects.toThrow(NotFoundException);
+
+      expect(mockPrisma.productVariant.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('audit log with actorId', () => {
+    it('logs before/after stock values and actor ID before writing to the database', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 25 });
+
+      await service.updateVariantStock('var-1', { set: 25 }, 'admin-abc');
+
+      expect(logSpy).toHaveBeenCalledWith(
+        { variantId: 'var-1', before: 10, after: 25, actor: 'admin-abc' },
+        'stock_update',
+      );
+    });
+
+    it('logs "unknown" as actor when actorId is not provided', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 5 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 0 });
+
+      await service.updateVariantStock('var-1', { set: 0 });
+
+      expect(logSpy).toHaveBeenCalledWith(
+        { variantId: 'var-1', before: 5, after: 0, actor: 'unknown' },
+        'stock_update',
+      );
+    });
+
+    it('emits the log before the DB update — the log is present even when update throws', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 3 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockRejectedValue(new Error('DB write failed'));
+
+      await expect(
+        service.updateVariantStock('var-1', { set: 10 }, 'admin-xyz'),
+      ).rejects.toThrow('DB write failed');
+
+      expect(logSpy).toHaveBeenCalledWith(
+        { variantId: 'var-1', before: 3, after: 10, actor: 'admin-xyz' },
+        'stock_update',
+      );
+    });
+  });
+
+  describe('stock computation', () => {
+    it('sets stock to the absolute value from dto.set', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 50 });
+
+      await service.updateVariantStock('var-1', { set: 50 }, 'admin-1');
+
+      expect(mockPrisma.productVariant.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stock: 50 } }),
+      );
+    });
+
+    it('applies dto.adjustment as a relative delta on top of current stock', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 15 });
+
+      await service.updateVariantStock('var-1', { adjustment: 5 }, 'admin-1');
+
+      expect(mockPrisma.productVariant.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stock: 15 } }),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ before: 10, after: 15 }),
+        'stock_update',
+      );
+    });
+
+    it('clamps stock to 0 when dto.adjustment would make it negative', async () => {
+      const variant = makeVariant({ id: 'var-1', stock: 3 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 0 });
+
+      await service.updateVariantStock('var-1', { adjustment: -99 }, 'admin-1');
+
+      expect(mockPrisma.productVariant.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stock: 0 } }),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ before: 3, after: 0 }),
+        'stock_update',
+      );
+    });
+  });
+
+  describe('back-in-stock notification', () => {
+    it('dispatches back-in-stock emails when stock transitions from 0 to positive', async () => {
+      const outOfStock = makeVariant({ id: 'var-1', productId: 'prod-1', stock: 0 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(outOfStock);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...outOfStock, stock: 5 });
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([
+        {
+          user: { email: 'fan@example.com', firstName: 'Ola' },
+          product: { name: 'Cedar Oud', slug: 'cedar-oud' },
+        },
+      ]);
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
+      mockEmailService.sendBackInStock.mockResolvedValue(undefined);
+      mockConfigService.get.mockReturnValue('https://shop.example.com');
+
+      await service.updateVariantStock('var-1', { set: 5 }, 'admin-1');
+
+      // Allow the fire-and-forget promise to settle
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockEmailService.sendBackInStock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not dispatch notifications when stock was already positive', async () => {
+      const inStock = makeVariant({ id: 'var-1', stock: 10 });
+      mockPrisma.productVariant.findUnique.mockResolvedValue(inStock);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...inStock, stock: 20 });
+
+      await service.updateVariantStock('var-1', { set: 20 }, 'admin-1');
+
+      await new Promise((r) => setImmediate(r));
+
+      expect(mockEmailService.sendBackInStock).not.toHaveBeenCalled();
+    });
   });
 });

@@ -483,7 +483,7 @@ export class ProductsService {
     return variant;
   }
 
-  async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }) {
+  async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }, actorId?: string) {
     const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('Variant not found');
 
@@ -491,6 +491,8 @@ export class ProductsService {
     const newStock = dto.set !== undefined
       ? dto.set
       : Math.max(0, variant.stock + (dto.adjustment ?? 0));
+
+    this.logger.log({ variantId, before: variant.stock, after: newStock, actor: actorId ?? 'unknown' }, 'stock_update');
 
     const updated = await this.prisma.productVariant.update({
       where: { id: variantId },
