@@ -74,8 +74,10 @@ export class ReturnsService {
           'Odstąpienie od umowy wymaga podania daty dostarczenia przesyłki.',
         );
       }
-      const windowEnd = new Date(dto.deliveryDate).getTime() + 14 * 24 * 60 * 60 * 1000;
-      if (Date.now() > windowEnd) {
+      const windowEnd = new Date(dto.deliveryDate);
+      windowEnd.setDate(windowEnd.getDate() + 14);
+      windowEnd.setHours(23, 59, 59, 999);
+      if (Date.now() > windowEnd.getTime()) {
         throw new BadRequestException(
           'Termin na odstąpienie od umowy (14 dni od daty dostarczenia) już minął ' +
           '(art. 27 Ustawy o prawach konsumenta).',

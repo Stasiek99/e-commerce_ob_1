@@ -438,6 +438,37 @@ describe('ReturnsService', () => {
 
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
     });
+
+    // Regression guard for the calendar-day fix (Art. 27 UoK).
+    // Old code: windowEnd = deliveryDate + 14 * 24h = 2026-01-15T00:00:00Z (UTC midnight).
+    // New code: windowEnd = 2026-01-15 at 23:59:59.999 local time.
+    // Date.now pinned to 2026-01-15T00:01:00Z: old code REJECTS, new code ALLOWS.
+    it('allows WITHDRAWAL submitted just after the old millisecond cutoff but still within the 14th calendar day', async () => {
+      await createModule();
+      const deliveryDate = '2026-01-01';
+      const oneMinuteAfterOldWindowEnd = new Date('2026-01-15T00:01:00.000Z').getTime();
+      const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(oneMinuteAfterOldWindowEnd);
+
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+      dateSpy.mockRestore();
+    });
+
+    it('rejects WITHDRAWAL submitted well past the end of the 14th calendar day (day 16 UTC)', async () => {
+      await createModule();
+      const deliveryDate = '2026-01-01';
+      // 2026-01-16T13:00:00Z is after day-15 end in all timezones from UTC-12 to UTC+14
+      const dayAfterDeadline = new Date('2026-01-16T13:00:00.000Z').getTime();
+      const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(dayAfterDeadline);
+
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+      dateSpy.mockRestore();
+    });
   });
 
   describe('ownership guard', () => {
