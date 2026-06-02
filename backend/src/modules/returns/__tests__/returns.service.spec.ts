@@ -3,12 +3,18 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { ReturnsService } from '../returns.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { EmailService } from '../../email/email.service';
+import { EmailQueueService } from '../../email/email-queue.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { ReturnType as ReturnRequestType } from '../dto/create-return.dto';
 
 const ADMIN_EMAIL = 'admin@aromaterie.pl';
 const OWNER_ID = 'user-owner-1';
+// Distinct from dto.email — confirms the service uses the DB record, not the caller-supplied value.
+const USER_ACCOUNT_EMAIL = 'authenticated-user@account.example.com';
+
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+}
 
 const WITHDRAWAL_DTO = {
   orderNumber: 'ORD-2026-001',
@@ -16,7 +22,7 @@ const WITHDRAWAL_DTO = {
   firstName: 'Jan',
   lastName: 'Kowalski',
   type: ReturnRequestType.WITHDRAWAL,
-  deliveryDate: '2026-05-15',
+  deliveryDate: daysAgo(5), // 5 days ago — always within the 14-day window
   items: [{ productName: 'Perfumy Gold 50ml', quantity: 1 }],
   sealedOnReturn: true,
   reason: undefined,
@@ -34,17 +40,21 @@ const COMPLAINT_DTO = {
   sealedOnReturn: undefined,
 };
 
-// orderRow: { id, userId } when order exists, null when order does not exist.
+// orderRow: { id, userId, status } when order exists, null when order does not exist.
 function buildPrismaMock(
   overrides: Partial<{ id: string; type: string; requestedResolution: string }> = {},
-  orderRow: { id?: string; userId: string | null } | null = { id: 'order-uuid-1', userId: OWNER_ID },
+  orderRow: { id?: string; userId: string | null; status?: string } | null = {
+    id: 'order-uuid-1',
+    userId: OWNER_ID,
+    status: 'SHIPPED',
+  },
 ) {
   const record = {
     id: 'return-id-001',
     orderNumber: 'ORD-2026-001',
     firstName: 'Jan',
     lastName: 'Kowalski',
-    email: 'jan@example.com',
+    email: USER_ACCOUNT_EMAIL,
     phone: null,
     type: ReturnRequestType.WITHDRAWAL,
     reason: null,
@@ -55,6 +65,9 @@ function buildPrismaMock(
   return {
     order: {
       findFirst: jest.fn().mockResolvedValue(orderRow),
+    },
+    user: {
+      findUnique: jest.fn().mockResolvedValue({ email: USER_ACCOUNT_EMAIL }),
     },
     returnRequest: {
       create: jest.fn().mockResolvedValue(record),
@@ -71,7 +84,7 @@ function buildReturnRecord(overrides: Record<string, unknown> = {}) {
     orderNumber: 'ORD-2026-001',
     firstName: 'Jan',
     lastName: 'Kowalski',
-    email: 'jan@example.com',
+    email: USER_ACCOUNT_EMAIL,
     phone: null,
     type: 'WITHDRAWAL',
     status: 'PENDING',
@@ -88,7 +101,7 @@ describe('ReturnsService', () => {
   let prisma: ReturnType<typeof buildPrismaMock>;
   let emailService: jest.Mocked<
     Pick<
-      EmailService,
+      EmailQueueService,
       'sendReturnConfirmation' | 'sendReturnAdminNotification' | 'sendReturnStatusUpdate'
     >
   >;
@@ -107,7 +120,7 @@ describe('ReturnsService', () => {
       providers: [
         ReturnsService,
         { provide: PrismaService, useValue: prismaMock },
-        { provide: EmailService, useValue: emailService },
+        { provide: EmailQueueService, useValue: emailService },
         { provide: PaymentsService, useValue: paymentsService },
         {
           provide: ConfigService,
@@ -160,12 +173,13 @@ describe('ReturnsService', () => {
       );
     });
 
-    it('normalises email to lower-case', async () => {
+    it('stores the authenticated user account email, ignoring dto.email', async () => {
       await createModule();
-      await service.create({ ...WITHDRAWAL_DTO, email: 'JAN@EXAMPLE.COM' } as any, OWNER_ID);
+      // dto.email is a different address — the DB write must use user.email from the DB lookup
+      await service.create({ ...WITHDRAWAL_DTO, email: 'attacker@evil.com' } as any, OWNER_ID);
       expect(prisma.returnRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ email: 'jan@example.com' }),
+          data: expect.objectContaining({ email: USER_ACCOUNT_EMAIL }),
         }),
       );
     });
@@ -176,7 +190,7 @@ describe('ReturnsService', () => {
       expect(prisma.returnRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            deliveryDate: new Date('2026-05-15'),
+            deliveryDate: new Date(WITHDRAWAL_DTO.deliveryDate),
           }),
         }),
       );
@@ -220,11 +234,11 @@ describe('ReturnsService', () => {
       );
     });
 
-    it('sends confirmation to the customer email address', async () => {
+    it('sends confirmation to the authenticated user account email, not dto.email', async () => {
       await createModule();
       await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
       expect(emailService.sendReturnConfirmation).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'jan@example.com' }),
+        expect.objectContaining({ to: USER_ACCOUNT_EMAIL }),
       );
     });
 
@@ -242,6 +256,17 @@ describe('ReturnsService', () => {
       expect(emailService.sendReturnConfirmation).toHaveBeenCalledWith(
         expect.objectContaining({ orderNumber: 'ORD-2026-001' }),
       );
+    });
+
+    it('never delivers to the caller-supplied dto.email — prevents phishing via store sending domain', async () => {
+      await createModule();
+      const attackerEmail = 'victim@third-party.example.com';
+
+      await service.create({ ...WITHDRAWAL_DTO, email: attackerEmail } as any, OWNER_ID);
+
+      const confirmationCall = (emailService.sendReturnConfirmation as jest.Mock).mock.calls[0][0];
+      expect(confirmationCall.to).not.toBe(attackerEmail);
+      expect(confirmationCall.to).toBe(USER_ACCOUNT_EMAIL);
     });
   });
 
@@ -274,7 +299,7 @@ describe('ReturnsService', () => {
       await createModule();
       await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
       expect(emailService.sendReturnAdminNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ deliveryDate: '2026-05-15' }),
+        expect.objectContaining({ deliveryDate: WITHDRAWAL_DTO.deliveryDate }),
       );
     });
 
@@ -361,6 +386,59 @@ describe('ReturnsService', () => {
     });
   });
 
+  // ── 14-day withdrawal window guard (Art. 27 UoK) ─────────────────────────
+
+  describe('14-day withdrawal window guard', () => {
+    it('throws BadRequestException for WITHDRAWAL when deliveryDate is absent', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO } as any;
+      delete dto.deliveryDate;
+
+      await expect(service.create(dto, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException for WITHDRAWAL when deliveryDate is 15 days ago', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(15) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks a WITHDRAWAL with a backdated deliveryDate of 20 days ago', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(20) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('allows WITHDRAWAL when deliveryDate is 5 days ago (within the 14-day window)', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(5) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows WITHDRAWAL when deliveryDate is today (0 days ago)', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(0) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('does not apply the 14-day check for COMPLAINT type', async () => {
+      await createModule(buildPrismaMock({ type: ReturnRequestType.COMPLAINT }));
+      const dto = { ...COMPLAINT_DTO, deliveryDate: daysAgo(30) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
   describe('ownership guard', () => {
     it('throws NotFoundException when the order number does not exist', async () => {
       await createModule(buildPrismaMock({}, null));
@@ -371,7 +449,7 @@ describe('ReturnsService', () => {
     });
 
     it('throws ForbiddenException when the order belongs to a different user', async () => {
-      await createModule(buildPrismaMock({}, { userId: 'different-user-id' }));
+      await createModule(buildPrismaMock({}, { userId: 'different-user-id', status: 'SHIPPED' }));
 
       await expect(service.create(WITHDRAWAL_DTO as any, OWNER_ID)).rejects.toThrow(
         ForbiddenException,
@@ -379,11 +457,87 @@ describe('ReturnsService', () => {
     });
 
     it('proceeds when the authenticated user owns the order', async () => {
-      await createModule(buildPrismaMock({}, { userId: OWNER_ID }));
+      await createModule(buildPrismaMock({}, { userId: OWNER_ID, status: 'SHIPPED' }));
 
       const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
 
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
+  // ── status allowlist guard ───────────────────────────────────────────
+
+  describe('status allowlist guard', () => {
+    it('throws BadRequestException when order status is CANCELLED', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'CANCELLED' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is PENDING_PAYMENT', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'PENDING_PAYMENT' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is FRAUD_REVIEW', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'FRAUD_REVIEW' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is REFUNDED', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'REFUNDED' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('allows COMPLAINT when order status is SHIPPED', async () => {
+      await createModule(buildPrismaMock({ type: 'COMPLAINT' }, { id: 'order-uuid-1', userId: OWNER_ID, status: 'SHIPPED' }));
+
+      const result = await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows COMPLAINT when order status is DELIVERED', async () => {
+      await createModule(buildPrismaMock({ type: 'COMPLAINT' }, { id: 'order-uuid-1', userId: OWNER_ID, status: 'DELIVERED' }));
+
+      const result = await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows COMPLAINT when order status is PAID', async () => {
+      await createModule(buildPrismaMock({ type: 'COMPLAINT' }, { id: 'order-uuid-1', userId: OWNER_ID, status: 'PAID' }));
+
+      const result = await service.create(COMPLAINT_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows WITHDRAWAL when order status is PROCESSING', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'PROCESSING' }));
+
+      const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('does not create the return request record for a CANCELLED order', async () => {
+      const mock = buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'CANCELLED' });
+      await createModule(mock);
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+      expect(mock.returnRequest.create).not.toHaveBeenCalled();
+    });
+
+    it('does not fire emails for a CANCELLED order', async () => {
+      await createModule(buildPrismaMock({}, { id: 'order-uuid-1', userId: OWNER_ID, status: 'CANCELLED' }));
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+      expect(emailService.sendReturnConfirmation).not.toHaveBeenCalled();
+      expect(emailService.sendReturnAdminNotification).not.toHaveBeenCalled();
     });
   });
 
@@ -443,7 +597,7 @@ describe('ReturnsService', () => {
       await service.approve('return-id-001');
 
       expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ newStatus: 'APPROVED', to: 'jan@example.com' }),
+        expect.objectContaining({ newStatus: 'APPROVED', to: USER_ACCOUNT_EMAIL }),
       );
     });
 
@@ -505,7 +659,7 @@ describe('ReturnsService', () => {
       await service.reject('return-id-001');
 
       expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ newStatus: 'REJECTED', to: 'jan@example.com' }),
+        expect.objectContaining({ newStatus: 'REJECTED', to: USER_ACCOUNT_EMAIL }),
       );
     });
 
@@ -575,7 +729,7 @@ describe('ReturnsService', () => {
       await service.markRefunded('return-id-001');
 
       expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ newStatus: 'COMPLETED', to: 'jan@example.com' }),
+        expect.objectContaining({ newStatus: 'COMPLETED', to: USER_ACCOUNT_EMAIL }),
       );
     });
 

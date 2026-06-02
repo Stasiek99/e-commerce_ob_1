@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { timer, switchMap, takeWhile, take } from 'rxjs';
 import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
@@ -10,7 +10,7 @@ import { CartService } from '../../../core/services/cart.service';
 
 interface PaymentStatusResponse {
   status: string;
-  orderId: string;
+  orderNumber: string;
 }
 
 @Component({
@@ -29,12 +29,12 @@ interface PaymentStatusResponse {
         <h1>Dziękujemy za zamówienie!</h1>
         <p>Potwierdzenie zostało wysłane na Twój adres e-mail.</p>
 
-        @if (orderId()) {
+        @if (orderNumber()) {
           <div class="page__details">
             <h2>Szczegóły transakcji</h2>
             <div class="page__detail-row">
               <span>Numer zamówienia</span>
-              <strong>{{ orderId() }}</strong>
+              <strong>{{ orderNumber() }}</strong>
             </div>
             <div class="page__detail-row">
               <span>Status płatności</span>
@@ -159,6 +159,7 @@ interface PaymentStatusResponse {
 })
 export class CheckoutSuccessComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly http = inject(HttpClient);
   private readonly analytics = inject(AnalyticsService);
   private readonly cart = inject(CartService);
@@ -167,21 +168,34 @@ export class CheckoutSuccessComponent implements OnInit {
   readonly loading = signal(true);
   readonly paid = signal(false);
   readonly orderId = signal<string | null>(null);
+  readonly orderNumber = signal<string | null>(null);
 
   ngOnInit(): void {
     const id = this.route.snapshot.queryParamMap.get('orderId');
+    const token = this.route.snapshot.queryParamMap.get('token');
     this.orderId.set(id);
+
+    // Strip session_id (and any other Stripe params) from the URL so the
+    // Checkout Session ID never appears in browser history or referrer headers.
+    this.router.navigate([], {
+      queryParams: { orderId: id ?? undefined },
+      replaceUrl: true,
+    });
 
     if (!id) {
       this.loading.set(false);
       return;
     }
 
+    const statusUrl = token
+      ? `${environment.apiUrl}/payments/${id}/status?token=${encodeURIComponent(token)}`
+      : `${environment.apiUrl}/payments/${id}/status`;
+
     // Poll every 3 s for up to 30 s (10 ticks) so a slow webhook race
     // doesn't leave the user stuck on "Płatność w toku" forever.
     timer(0, 3000).pipe(
       switchMap(() =>
-        this.http.get<PaymentStatusResponse>(`${environment.apiUrl}/payments/${id}/status`),
+        this.http.get<PaymentStatusResponse>(statusUrl),
       ),
       takeWhile((res) => res.status !== 'COMPLETED', true),
       take(10),
@@ -190,6 +204,7 @@ export class CheckoutSuccessComponent implements OnInit {
       next: (res) => {
         if (res.status === 'COMPLETED') {
           this.paid.set(true);
+          this.orderNumber.set(res.orderNumber ?? null);
           this.cart.clear();
           this.firePurchaseEvent(id);
           this.loading.set(false);

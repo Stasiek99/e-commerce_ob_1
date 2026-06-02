@@ -9,6 +9,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -21,6 +22,7 @@ import { ConfigService } from '@nestjs/config';
 import { PaymentsService } from './payments.service';
 import { StripeClient } from './stripe.client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -76,12 +78,17 @@ export class PaymentsController {
     return { received: true };
   }
 
+  @Public()
+  @UseGuards(OptionalJwtGuard)
   @Get(':orderId/status')
   getStatus(
     @Param('orderId', ParseUUIDPipe) orderId: string,
-    @CurrentUser() user: User,
+    @CurrentUser() user: User | undefined,
+    @Query('token') token: string | undefined,
   ) {
-    return this.paymentsService.getPaymentStatus(orderId, user.id);
+    if (user) return this.paymentsService.getPaymentStatus(orderId, user.id);
+    if (token) return this.paymentsService.getPaymentStatusByToken(orderId, token);
+    throw new UnauthorizedException('Authentication or order token required');
   }
 
   @Post(':orderId/refund')

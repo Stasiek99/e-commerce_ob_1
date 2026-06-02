@@ -18,6 +18,10 @@
         </div>
       }
 
+      @if (firstVariant?.compareAtPriceInCents) {
+        <span class="product-card__sale-badge">PROMOCJA</span>
+      }
+
       <button
         class="product-card__wishlist"
         type="button"

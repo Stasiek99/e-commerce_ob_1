@@ -73,27 +73,36 @@ export class InvoiceService implements OnModuleInit {
   }
 
   /**
-   * Generates the invoice PDF, uploads it to Supabase, saves the URL and the
-   * crash-safe sequential invoice number on the order, then returns all three.
-   * The invoice number is only persisted after a successful upload — preventing
-   * permanent sequence gaps from mid-upload crashes.
+   * Generates the invoice PDF, uploads it to Supabase, persists the raw storage
+   * path and invoice number on the order, then returns all four values.
+   * The path (not a signed URL) is stored so that key rotations and project
+   * migrations never invalidate historical invoice access — callers re-sign on
+   * demand via getSignedUrl(). The returned url is a 7-day signed URL suitable
+   * for embedding in transactional emails at send time.
    */
-  async processInvoice(order: InvoiceOrder): Promise<{ url: string; pdf: Buffer; invoiceNumber: string }> {
+  async processInvoice(order: InvoiceOrder): Promise<{ url: string; storagePath: string; pdf: Buffer; invoiceNumber: string }> {
     const year = order.createdAt.getFullYear();
     const seq = await this.nextInvoiceNumber(year);
     const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
 
     const pdf = await this.generatePdf(order, invoiceNumber);
     const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
-    const url = await this.storage.uploadInvoice(pdf, filename);
+    const storagePath = await this.storage.uploadInvoice(pdf, filename);
 
     await this.prisma.order.update({
       where: { id: order.id },
-      data: { invoiceUrl: url, invoiceNumber },
+      data: { invoiceStoragePath: storagePath, invoiceNumber },
     });
 
-    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${url}`);
-    return { url, pdf, invoiceNumber };
+    const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+    const url = await this.storage.getInvoiceSignedUrl(storagePath, SEVEN_DAYS_SECONDS);
+
+    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
+    return { url, storagePath, pdf, invoiceNumber };
+  }
+
+  async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
+    return this.storage.getInvoiceSignedUrl(storagePath, expiresInSeconds);
   }
 
   private generatePdf(order: InvoiceOrder, invoiceNumber: string): Promise<Buffer> {
@@ -203,15 +212,34 @@ export class InvoiceService implements OnModuleInit {
         ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
         : []),
       // Art. 106e pkt 7 Ustawy o VAT: discount must appear as a separate line
+      // Art. 106e pkt 7 / Art. 29a ust. 10 — discount must be prorated across each VAT
+      // rate proportional to the gross amount of items at that rate. A single 23% line
+      // produces an incorrect VAT split for mixed-rate baskets (KAS audit finding).
       ...(order.discountInCents > 0
-        ? [
-            {
-              name: `Rabat: ${order.couponCode ?? 'kupon'}`,
-              qty: 1,
-              grossCents: -order.discountInCents,
-              vatRate: 0.23,
-            },
-          ]
+        ? (() => {
+            const grossByRate = new Map<number, number>();
+            for (const item of order.items) {
+              const rate = item.snapshotVatRate / 10000;
+              grossByRate.set(rate, (grossByRate.get(rate) ?? 0) + item.snapshotPrice * item.quantity);
+            }
+            const totalItemsGross = [...grossByRate.values()].reduce((s, v) => s + v, 0);
+            if (totalItemsGross === 0) return [];
+            const rates = [...grossByRate.entries()].sort(([a], [b]) => a - b);
+            let remaining = order.discountInCents;
+            return rates.map(([rate, gross], idx) => {
+              const isLast = idx === rates.length - 1;
+              const portionCents = isLast
+                ? remaining
+                : Math.round(order.discountInCents * (gross / totalItemsGross));
+              remaining -= portionCents;
+              return {
+                name: `Rabat: ${order.couponCode ?? 'kupon'}`,
+                qty: 1,
+                grossCents: -portionCents,
+                vatRate: rate,
+              };
+            });
+          })()
         : []),
     ];
 

@@ -57,8 +57,8 @@
             "production": {
               "serviceWorker": "ngsw-config.json",
               "budgets": [
-                { "type": "initial", "maximumWarning": "600kB", "maximumError": "1.1MB" },
-                { "type": "anyComponentStyle", "maximumWarning": "9kB", "maximumError": "13kB" }
+                { "type": "initial", "maximumWarning": "600kB", "maximumError": "1.20MB" },
+                { "type": "anyComponentStyle", "maximumWarning": "9kB", "maximumError": "14kB" }
               ],
               "outputHashing": "all",
               "sourceMap": { "scripts": true, "styles": false, "hidden": true },

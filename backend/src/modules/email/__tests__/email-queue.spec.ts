@@ -206,9 +206,7 @@ describe('EmailQueueService', () => {
   });
 
   describe('sendPaymentConfirmedWithInvoice', () => {
-    it('serialises Buffer to base64 before enqueuing (Buffer is not Redis-safe)', async () => {
-      const pdfContent = 'fake-pdf-bytes';
-      const invoicePdf = Buffer.from(pdfContent);
+    it('enqueues job with only invoiceUrl — no base64 blob in Redis payload', async () => {
       const data = {
         to: 'user@test.com',
         orderNumber: 'ORD-2026-000001',
@@ -217,19 +215,19 @@ describe('EmailQueueService', () => {
         shippingCostInCents: 1500,
         totalInCents: 16499,
         invoiceUrl: 'https://storage/inv.pdf',
-        invoicePdf,
       };
 
       await service.sendPaymentConfirmedWithInvoice(data);
 
       const [jobName, jobData] = queueAdd.mock.calls[0];
       expect(jobName).toBe('payment_confirmed_with_invoice');
-      expect(jobData.payload.invoicePdfBase64).toBe(invoicePdf.toString('base64'));
-      // raw Buffer must NOT be present — it cannot round-trip through Redis JSON
+      expect(jobData.payload.invoiceUrl).toBe(data.invoiceUrl);
+      // PDF is fetched at processing time — no binary in Redis
+      expect(jobData.payload).not.toHaveProperty('invoicePdfBase64');
       expect(jobData.payload).not.toHaveProperty('invoicePdf');
     });
 
-    it('preserves all other fields unchanged during serialisation', async () => {
+    it('preserves all scalar fields in the enqueued payload', async () => {
       const data = {
         to: 'user@test.com',
         orderNumber: 'ORD-2026-000001',
@@ -238,7 +236,6 @@ describe('EmailQueueService', () => {
         shippingCostInCents: 900,
         totalInCents: 10900,
         invoiceUrl: 'https://storage/inv.pdf',
-        invoicePdf: Buffer.from('pdf'),
       };
 
       await service.sendPaymentConfirmedWithInvoice(data);
@@ -561,9 +558,9 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendMagicLink).toHaveBeenCalledWith(payload);
   });
 
-  // ── Buffer base64 round-trip ─────────────────────────────────────────────────
+  // ── PDF fetched at processing time (no base64 in Redis) ──────────────────────
 
-  describe('payment_confirmed_with_invoice — base64 deserialisation', () => {
+  describe('payment_confirmed_with_invoice — PDF fetched from invoiceUrl at processing time', () => {
     const basePayload = {
       to: 'u@t.com',
       orderNumber: 'ORD-1',
@@ -574,46 +571,53 @@ describe('EmailQueueProcessor', () => {
       invoiceUrl: 'https://storage/inv.pdf',
     };
 
-    it('converts base64 back to Buffer before calling emailService', async () => {
-      const originalContent = 'fake-pdf-content';
-      const invoicePdfBase64 = Buffer.from(originalContent).toString('base64');
+    let fetchSpy: jest.SpyInstance;
 
+    beforeEach(() => {
+      const pdfContent = 'fake-pdf-content';
+      // Use a properly isolated ArrayBuffer (Node.js Buffers share a pool, so
+      // .buffer returns the full pool — slice to get only the content bytes).
+      const src = Buffer.from(pdfContent);
+      const isolatedAB = src.buffer.slice(src.byteOffset, src.byteOffset + src.byteLength);
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => isolatedAB,
+      } as unknown as Response);
+    });
+
+    afterEach(() => fetchSpy.mockRestore());
+
+    it('fetches the invoice PDF from invoiceUrl at processing time', async () => {
       await processor.process(
-        makeJob({
-          type: 'payment_confirmed_with_invoice' as const,
-          payload: { ...basePayload, invoicePdfBase64 },
-        }),
+        makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
+      );
+
+      expect(fetchSpy).toHaveBeenCalledWith(basePayload.invoiceUrl);
+    });
+
+    it('passes the downloaded content as a Buffer to emailService', async () => {
+      await processor.process(
+        makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
 
       expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalledWith(
-        expect.objectContaining({
-          invoicePdf: Buffer.from(originalContent),
-        }),
+        expect.objectContaining({ invoicePdf: Buffer.from('fake-pdf-content') }),
       );
     });
 
-    it('does NOT pass invoicePdfBase64 string through to emailService', async () => {
-      const invoicePdfBase64 = Buffer.from('pdf').toString('base64');
+    it('throws when PDF download returns non-OK status — triggers BullMQ retry', async () => {
+      fetchSpy.mockResolvedValue({ ok: false, status: 404 } as unknown as Response);
 
-      await processor.process(
-        makeJob({
-          type: 'payment_confirmed_with_invoice' as const,
-          payload: { ...basePayload, invoicePdfBase64 },
-        }),
-      );
-
-      const callArg = (emailService.sendPaymentConfirmedWithInvoice as jest.Mock).mock.calls[0][0];
-      expect(callArg).not.toHaveProperty('invoicePdfBase64');
+      await expect(
+        processor.process(
+          makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
+        ),
+      ).rejects.toThrow('Invoice PDF download failed');
     });
 
-    it('preserves all non-binary fields after deserialisation', async () => {
-      const invoicePdfBase64 = Buffer.from('pdf').toString('base64');
-
+    it('preserves all non-binary fields when calling emailService', async () => {
       await processor.process(
-        makeJob({
-          type: 'payment_confirmed_with_invoice' as const,
-          payload: { ...basePayload, invoicePdfBase64 },
-        }),
+        makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
 
       expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalledWith(
@@ -678,5 +682,58 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendEmailVerification).not.toHaveBeenCalled();
     expect(emailService.sendPasswordReset).not.toHaveBeenCalled();
     expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  // ── graceful shutdown (SIGTERM drain) ─────────────────────────────────────────
+  // Invariant: onApplicationShutdown must drain the BullMQ worker before the
+  // process exits. Without worker.close(true), a mid-flight job is interrupted:
+  //   • new container starts within lockDuration → job re-queued → duplicate email
+  //   • new container starts after lock expires  → job dropped  → no confirmation
+  // The `true` argument is the drain flag — it blocks until the active job finishes.
+
+  describe('onApplicationShutdown — graceful BullMQ drain', () => {
+    function stubWorker(processor: EmailQueueProcessor, close: jest.Mock) {
+      Object.defineProperty(processor, 'worker', {
+        get: () => ({ close }),
+        configurable: true,
+      });
+    }
+
+    it('calls worker.close with drain=true on shutdown', async () => {
+      const mockWorkerClose = jest.fn().mockResolvedValue(undefined);
+      stubWorker(processor, mockWorkerClose);
+
+      await processor.onApplicationShutdown();
+
+      expect(mockWorkerClose).toHaveBeenCalledWith(true);
+    });
+
+    it('calls worker.close exactly once — no double-drain', async () => {
+      const mockWorkerClose = jest.fn().mockResolvedValue(undefined);
+      stubWorker(processor, mockWorkerClose);
+
+      await processor.onApplicationShutdown();
+
+      expect(mockWorkerClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('awaits worker.close — does not return before drain completes', async () => {
+      let drainResolved = false;
+      const mockWorkerClose = jest.fn().mockImplementation(
+        () => new Promise<void>((resolve) => setTimeout(() => { drainResolved = true; resolve(); }, 10)),
+      );
+      stubWorker(processor, mockWorkerClose);
+
+      await processor.onApplicationShutdown();
+
+      expect(drainResolved).toBe(true);
+    });
+
+    it('propagates worker.close rejection so the process exits with an error signal', async () => {
+      const mockWorkerClose = jest.fn().mockRejectedValue(new Error('Worker close timed out'));
+      stubWorker(processor, mockWorkerClose);
+
+      await expect(processor.onApplicationShutdown()).rejects.toThrow('Worker close timed out');
+    });
   });
 });

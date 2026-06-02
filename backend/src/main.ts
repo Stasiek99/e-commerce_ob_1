@@ -27,6 +27,11 @@ async function bootstrap() {
     bodyParser: false,
   });
 
+  // Trust Railway's single load-balancer hop so req.ips is populated from
+  // X-Forwarded-For and the throttler getTracker reads the real client IP
+  // instead of the shared load-balancer IP.
+  app.set('trust proxy', 1);
+
   // Register body parsers manually with an explicit limit.
   // The verify callback re-implements the rawBody capture that NestJS's auto
   // parser provides, so req.rawBody remains available for Stripe HMAC verification.
@@ -37,10 +42,14 @@ async function bootstrap() {
   app.use(json({ limit: '5mb', verify: captureRawBody }));
   app.use(urlencoded({ extended: true, limit: '5mb' }));
 
-  // Skip helmet on /admin — AdminJS uses inline scripts/styles that strict CSP blocks.
+  // AdminJS uses inline scripts/styles that strict CSP blocks, so disable only CSP
+  // for /admin. All other Helmet headers (X-Frame-Options, X-Content-Type-Options,
+  // HSTS, Referrer-Policy) remain active on every route including /admin.
+  const helmetDefault = helmet();
+  const helmetAdminJs = helmet({ contentSecurityPolicy: false });
   app.use((req: any, res: any, next: any) => {
-    if (req.path.startsWith('/admin')) return next();
-    helmet()(req, res, next);
+    if (req.path.startsWith('/admin')) return helmetAdminJs(req, res, next);
+    helmetDefault(req, res, next);
   });
   app.use(cookieParser());
 
@@ -74,6 +83,8 @@ async function bootstrap() {
   await setupAdmin(app, prisma, invoiceService, shippingService, ordersService, paymentsService, returnsService);
 
   app.useLogger(app.get(Logger));
+
+  app.enableShutdownHooks();
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

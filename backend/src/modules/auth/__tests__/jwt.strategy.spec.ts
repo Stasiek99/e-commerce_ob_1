@@ -2,8 +2,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Role } from '@prisma/client';
+import * as Sentry from '@sentry/nestjs';
 import { JwtStrategy } from '../strategies/jwt.strategy';
 import { UsersService } from '../../users/users.service';
+
+jest.mock('@sentry/nestjs', () => ({
+  captureException: jest.fn(),
+}));
 
 const mockUser = {
   id: 'user-1',
@@ -131,6 +136,55 @@ describe('JwtStrategy', () => {
 
       expect(redis.get).toHaveBeenCalledWith('auth:revoke-before:user-99');
       expect(redis.get).not.toHaveBeenCalledWith('auth:revoke-before:user-1');
+    });
+  });
+
+  // ─── Redis circuit-breaker ────────────────────────────────────────────────────
+
+  describe('validate — Redis circuit-breaker', () => {
+    it('allows request through and returns user when Redis throws a connection error', async () => {
+      redis.get.mockRejectedValue(new Error('ECONNREFUSED'));
+      usersService.findById.mockResolvedValue(mockUser);
+
+      const result = await strategy.validate(validPayload);
+
+      expect(result).toEqual(mockUser);
+    });
+
+    it('reports to Sentry with auth.redis tag when Redis throws a connection error', async () => {
+      const redisError = new Error('ECONNREFUSED');
+      redis.get.mockRejectedValue(redisError);
+      usersService.findById.mockResolvedValue(mockUser);
+
+      await strategy.validate(validPayload);
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(
+        redisError,
+        expect.objectContaining({ tags: { 'auth.redis': 'unavailable' } }),
+      );
+    });
+
+    it('re-throws UnauthorizedException from the revocation check and does not swallow it', async () => {
+      redis.get.mockResolvedValue(String((ISSUED_AT + 5) * 1000));
+
+      await expect(strategy.validate(validPayload)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('does not call Sentry when revocation check throws UnauthorizedException', async () => {
+      redis.get.mockResolvedValue(String((ISSUED_AT + 5) * 1000));
+
+      await expect(strategy.validate(validPayload)).rejects.toThrow(UnauthorizedException);
+
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+
+    it('proceeds to DB lookup after swallowing a Redis connection error', async () => {
+      redis.get.mockRejectedValue(new Error('Redis timeout'));
+      usersService.findById.mockResolvedValue(mockUser);
+
+      await strategy.validate(validPayload);
+
+      expect(usersService.findById).toHaveBeenCalledWith('user-1');
     });
   });
 

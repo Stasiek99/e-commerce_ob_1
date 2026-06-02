@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -86,10 +87,17 @@ export class OrdersController {
   }
 
   @Post(':id/cancel')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(OptionalJwtGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
-  cancelOrder(@CurrentUser() user: User, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.ordersService.cancelByUser(id, user.id, body.reason);
+  cancelOrder(
+    @CurrentUser() user: User | undefined,
+    @Param('id') id: string,
+    @Query('token') token: string | undefined,
+    @Body() body: { reason?: string },
+  ) {
+    if (user) return this.ordersService.cancelByUser(id, user.id, body.reason);
+    if (token) return this.ordersService.cancelByToken(id, token, body.reason);
+    throw new UnauthorizedException('Authentication or cancel token required');
   }
 
   @Post(':id/cancel-items')
@@ -120,6 +128,13 @@ export class OrdersController {
   @Roles(Role.ADMIN)
   getOneAdmin(@Param('id') id: string) {
     return this.ordersService.findOneAdmin(id);
+  }
+
+  @Get('admin/:id/events')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  getOrderEventsAdmin(@Param('id') id: string) {
+    return this.ordersService.findEventsAdmin(id);
   }
 
   @Patch('admin/:id/status')

@@ -178,10 +178,13 @@ describe('fetchAllProducts() — pagination', () => {
 // ── prerender-routes.txt content ─────────────────────────────────────────────
 // Verifies the set of routes written to prerender-routes.txt is a superset
 // of the static routes and includes product + category slugs.
+//
+// Fix: /products is intentionally absent from STATIC_PRERENDER_ROUTES.
+// It must be SSR-rendered on-demand so prices/stock are always fresh.
+// Including it would bake a stale CDN snapshot at build time (EU Omnibus risk).
 
 const STATIC_PRERENDER = [
   '/',
-  '/products',
   '/cart',
   '/legal/terms',
   '/legal/privacy',
@@ -200,11 +203,18 @@ function buildPrerenderRoutes(
 }
 
 describe('prerender-routes.txt generation', () => {
-  it('always includes the 6 static routes', () => {
+  it('always includes the 5 static routes', () => {
     const routes = buildPrerenderRoutes([], []);
     for (const r of STATIC_PRERENDER) {
       expect(routes).toContain(r);
     }
+    expect(routes.filter(r => !r.includes(':'))).toHaveLength(5);
+  });
+
+  it('does NOT include /products as a static prerender route — catalog must hit SSR for fresh prices', () => {
+    // Regression guard: if /products is re-added to STATIC_PRERENDER, this test fails.
+    const routes = buildPrerenderRoutes([], []);
+    expect(routes).not.toContain('/products');
   });
 
   it('maps product slugs to /products/:slug', () => {

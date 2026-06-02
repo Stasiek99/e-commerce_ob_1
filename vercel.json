@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm --filter frontend build",
+  "buildCommand": "pnpm --filter @fragrance-store/shared-types build && pnpm --filter frontend build",
   "installCommand": "pnpm install --frozen-lockfile",
   "outputDirectory": "frontend/dist/frontend/browser",
   "framework": null,

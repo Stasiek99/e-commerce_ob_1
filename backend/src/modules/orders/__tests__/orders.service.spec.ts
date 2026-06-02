@@ -140,6 +140,7 @@ describe('OrdersService', () => {
           provide: InvoiceService,
           useValue: {
             processInvoice: jest.fn(),
+            getSignedUrl: jest.fn(),
           },
         },
         {
@@ -888,13 +889,13 @@ describe('OrdersService', () => {
   });
 
   describe('findEventsForUser', () => {
-    const mockEvents = [
+    // Raw DB rows returned by prisma (contain internal actor strings and note)
+    const rawEvents = [
       {
         id: 'evt-1',
         fromStatus: null,
         toStatus: OrderStatus.PENDING_PAYMENT,
         actor: 'CUSTOMER',
-        note: 'Order created from cart',
         createdAt: new Date('2026-05-01T10:00:00Z'),
       },
       {
@@ -902,7 +903,6 @@ describe('OrdersService', () => {
         fromStatus: OrderStatus.PENDING_PAYMENT,
         toStatus: OrderStatus.PAID,
         actor: 'SYSTEM',
-        note: null,
         createdAt: new Date('2026-05-01T10:05:00Z'),
       },
     ];
@@ -927,11 +927,10 @@ describe('OrdersService', () => {
 
     it('returns events sorted ascending by createdAt for the owning user', async () => {
       prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
-      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+      prisma.orderEvent.findMany.mockResolvedValue(rawEvents);
 
-      const result = await service.findEventsForUser('order-1', 'user-1');
+      await service.findEventsForUser('order-1', 'user-1');
 
-      expect(result).toEqual(mockEvents);
       expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { orderId: 'order-1' },
@@ -953,24 +952,14 @@ describe('OrdersService', () => {
       );
     });
 
-    it('returns only the allowed fields via select', async () => {
+    it('does not include note field in the DB select — excludes it at query level', async () => {
       prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
-      prisma.orderEvent.findMany.mockResolvedValue(mockEvents);
+      prisma.orderEvent.findMany.mockResolvedValue([]);
 
       await service.findEventsForUser('order-1', 'user-1');
 
-      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          select: {
-            id: true,
-            fromStatus: true,
-            toStatus: true,
-            actor: true,
-            note: true,
-            createdAt: true,
-          },
-        }),
-      );
+      const selectArg = (prisma.orderEvent.findMany as jest.Mock).mock.calls[0][0].select;
+      expect(selectArg).not.toHaveProperty('note');
     });
 
     it('returns an empty array when the order has no events yet', async () => {
@@ -981,13 +970,154 @@ describe('OrdersService', () => {
 
       expect(result).toEqual([]);
     });
+
+    // ── actor projection (internal strings → Polish labels) ───────────────
+
+    it('maps ADMIN actor to "Obsługa sklepu"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PROCESSING, actor: 'ADMIN', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('Obsługa sklepu');
+    });
+
+    it('maps SYSTEM actor to "System"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PAID, actor: 'SYSTEM', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('System');
+    });
+
+    it('maps SYSTEM:stripe-webhook actor to "System"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PAID, actor: 'SYSTEM:stripe-webhook', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('System');
+    });
+
+    it('maps CUSTOMER actor to "Klient"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PENDING_PAYMENT, actor: 'CUSTOMER', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('Klient');
+    });
+
+    it('maps a user UUID actor to "Klient"', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.CANCELLED, actor: 'a3b4c5d6-dead-beef-cafe-123456789abc', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0].actor).toBe('Klient');
+    });
+
+    it('does not expose the note field in the customer-facing response', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
+      prisma.orderEvent.findMany.mockResolvedValue([
+        { id: 'e1', fromStatus: null, toStatus: OrderStatus.PAID, actor: 'ADMIN', createdAt: new Date() },
+      ]);
+
+      const result = await service.findEventsForUser('order-1', 'user-1');
+
+      expect(result[0]).not.toHaveProperty('note');
+    });
+  });
+
+  // ── findEventsAdmin ───────────────────────────────────────────────────────
+
+  describe('findEventsAdmin', () => {
+    const rawAdminEvents = [
+      {
+        id: 'evt-1',
+        fromStatus: null,
+        toStatus: OrderStatus.PENDING_PAYMENT,
+        actor: 'CUSTOMER',
+        note: 'Order created from cart',
+        createdAt: new Date('2026-05-01T10:00:00Z'),
+      },
+      {
+        id: 'evt-2',
+        fromStatus: OrderStatus.PENDING_PAYMENT,
+        toStatus: OrderStatus.CANCELLED,
+        actor: 'ADMIN',
+        note: 'Bulk cancelled by admin — reason: suspected fraud',
+        createdAt: new Date('2026-05-02T08:00:00Z'),
+      },
+    ];
+
+    it('returns raw events including note and un-mapped actor for admins', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue(rawAdminEvents);
+
+      const result = await service.findEventsAdmin('order-1');
+
+      expect(result).toEqual(rawAdminEvents);
+    });
+
+    it('includes note field for admins', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue(rawAdminEvents);
+
+      const result = await service.findEventsAdmin('order-1');
+
+      expect(result[1].note).toBe('Bulk cancelled by admin — reason: suspected fraud');
+    });
+
+    it('returns the raw ADMIN actor string without mapping', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue(rawAdminEvents);
+
+      const result = await service.findEventsAdmin('order-1');
+
+      expect(result[1].actor).toBe('ADMIN');
+    });
+
+    it('queries events ordered by createdAt ascending', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsAdmin('order-1');
+
+      expect(prisma.orderEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { orderId: 'order-1' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
+    });
+
+    it('includes note in the DB select for admin queries', async () => {
+      prisma.orderEvent.findMany.mockResolvedValue([]);
+
+      await service.findEventsAdmin('order-1');
+
+      const selectArg = (prisma.orderEvent.findMany as jest.Mock).mock.calls[0][0].select;
+      expect(selectArg).toHaveProperty('note', true);
+    });
   });
 
   describe('generateInvoice', () => {
+    const MOCK_STORAGE_PATH = 'invoices/FV-2026-000001.pdf';
+    const MOCK_SIGNED_URL = 'https://cdn.example.com/FV-ORD-2026-000001.pdf?token=abc';
+
     const mockOrderRow = {
       id: 'order-1',
       orderNumber: 'ORD-2026-000001',
       status: OrderStatus.PAID,
+      invoiceStoragePath: null,
       snapshotFirstName: 'Jan',
       snapshotLastName: 'Kowalski',
       snapshotCompany: null,
@@ -997,6 +1127,8 @@ describe('OrdersService', () => {
       snapshotPostalCode: '00-001',
       itemsTotalInCents: 34900,
       shippingCostInCents: 1999,
+      discountInCents: 0,
+      couponCode: null,
       totalInCents: 36899,
       createdAt: new Date('2026-05-01T10:00:00Z'),
       items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
@@ -1026,17 +1158,33 @@ describe('OrdersService', () => {
       await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
     });
 
-    it('returns invoiceUrl for a PAID order', async () => {
+    it('returns a fresh 1h signed URL for a PAID order without an existing invoice', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        url: 'https://unused-7day-url.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       const result = await service.generateInvoice('order-1');
 
-      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+      expect(result).toEqual({ invoiceUrl: MOCK_SIGNED_URL });
+    });
+
+    it('re-signs existing invoice without regenerating PDF when invoiceStoragePath is set', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        invoiceStoragePath: MOCK_STORAGE_PATH,
+      });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
+
+      const result = await service.generateInvoice('order-1');
+
+      expect(invoiceService.processInvoice).not.toHaveBeenCalled();
+      expect(invoiceService.getSignedUrl).toHaveBeenCalledWith(MOCK_STORAGE_PATH);
+      expect(result).toEqual({ invoiceUrl: MOCK_SIGNED_URL });
     });
 
     it.each([
@@ -1048,10 +1196,12 @@ describe('OrdersService', () => {
     ])('allows invoice generation for status %s', async (status) => {
       prisma.order.findUnique.mockResolvedValue({ ...mockOrderRow, status });
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/invoice.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       await expect(service.generateInvoice('order-1')).resolves.toMatchObject({
         invoiceUrl: expect.any(String),
@@ -1061,10 +1211,12 @@ describe('OrdersService', () => {
     it('delegates to InvoiceService with the full order payload', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       await service.generateInvoice('order-1');
 
@@ -1081,10 +1233,12 @@ describe('OrdersService', () => {
     it('includes snapshotVatRate in the items passed to InvoiceService', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/invoice.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: MOCK_STORAGE_PATH,
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(MOCK_SIGNED_URL);
 
       await service.generateInvoice('order-1');
 
@@ -1095,11 +1249,21 @@ describe('OrdersService', () => {
       );
     });
 
-    it('propagates errors thrown by InvoiceService', async () => {
+    it('propagates errors thrown by InvoiceService.processInvoice', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockRejectedValue(new Error('Supabase upload failed'));
 
       await expect(service.generateInvoice('order-1')).rejects.toThrow('Supabase upload failed');
+    });
+
+    it('propagates errors thrown by InvoiceService.getSignedUrl', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        invoiceStoragePath: MOCK_STORAGE_PATH,
+      });
+      invoiceService.getSignedUrl.mockRejectedValue(new Error('Invoice signing failed'));
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow('Invoice signing failed');
     });
   });
 
@@ -1108,6 +1272,7 @@ describe('OrdersService', () => {
       id: 'order-1',
       orderNumber: 'ORD-2026-000001',
       status: OrderStatus.PAID,
+      invoiceStoragePath: null,
       snapshotFirstName: 'Jan',
       snapshotLastName: 'Kowalski',
       snapshotCompany: null,
@@ -1117,6 +1282,8 @@ describe('OrdersService', () => {
       snapshotPostalCode: '00-001',
       itemsTotalInCents: 34900,
       shippingCostInCents: 1999,
+      discountInCents: 0,
+      couponCode: null,
       totalInCents: 36899,
       createdAt: new Date('2026-05-01T10:00:00Z'),
       items: [{ snapshotName: 'Dior Sauvage 100ml', snapshotPrice: 34900, snapshotVatRate: 2300, quantity: 1 }],
@@ -1138,18 +1305,22 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('delegates to generateInvoice and returns invoiceUrl when user owns the order', async () => {
+    it('delegates to generateInvoice and returns a fresh signed invoiceUrl when user owns the order', async () => {
+      const SIGNED_URL = 'https://cdn.example.com/FV-ORD-2026-000001.pdf?token=abc';
+
       prisma.order.findFirst.mockResolvedValue({ id: 'order-1' });
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
-        url: 'https://cdn.example.com/FV-ORD-2026-000001.pdf',
+        url: 'https://unused.example.com/invoice.pdf',
+        storagePath: 'invoices/FV-2026-000001.pdf',
         pdf: Buffer.from(''),
         invoiceNumber: 'FV/2026/000001',
       });
+      invoiceService.getSignedUrl.mockResolvedValue(SIGNED_URL);
 
       const result = await service.generateInvoiceForUser('order-1', 'user-1');
 
-      expect(result).toEqual({ invoiceUrl: 'https://cdn.example.com/FV-ORD-2026-000001.pdf' });
+      expect(result).toEqual({ invoiceUrl: SIGNED_URL });
     });
 
     it('passes the correct WHERE clause — id AND userId — to findFirst', async () => {

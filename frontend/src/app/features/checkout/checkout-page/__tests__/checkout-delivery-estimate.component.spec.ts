@@ -162,6 +162,7 @@ describe('CheckoutPageComponent — DPD picker state', () => {
     component.openDpdPicker();
 
     window.dispatchEvent(new MessageEvent('message', {
+      origin: 'https://api.dpd.cz',
       data: {
         dpdWidget: {
           id: 'WAW001',

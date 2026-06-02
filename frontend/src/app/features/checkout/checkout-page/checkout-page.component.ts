@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, computed, inject, signal, PLATFORM_ID } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -632,6 +632,17 @@ export class CheckoutPageComponent implements OnInit {
   readonly couponError = signal<string | null>(null);
   readonly appliedCoupon = signal<AppliedCoupon | null>(null);
 
+  // When a FREE_SHIPPING coupon is active and the customer switches carrier,
+  // keep discountAmountInCents in sync with the new carrier price so the
+  // pre-payment summary shown to the customer is accurate (Art. 8 UoUP).
+  private readonly _freeShippingCarrierSync = effect(() => {
+    const carrier = this.selectedCarrier();
+    const coupon = untracked(() => this.appliedCoupon());
+    if (coupon?.isFreeShipping) {
+      this.appliedCoupon.set({ ...coupon, discountAmountInCents: carrier?.price ?? 0 });
+    }
+  });
+
   readonly effectiveTotal = computed(() => {
     const items = this.cart.totalInCents();
     const shipping = this.selectedCarrier()?.price ?? 0;
@@ -904,6 +915,7 @@ export class CheckoutPageComponent implements OnInit {
   openDpdPicker(): void {
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
+      if (e.origin !== 'https://api.dpd.cz') return;
       if (!e.data?.dpdWidget) return;
       const p = e.data.dpdWidget as { id?: string; company?: string; street?: string; city?: string; zip_code?: string };
       const code = p.id ?? '';
@@ -988,10 +1000,15 @@ export class CheckoutPageComponent implements OnInit {
     const headers: Record<string, string> = { 'x-session-id': this.cart.getSessionId() };
     if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
 
+    const savedId = this.selectedSavedId();
+    const addressPayload = savedId
+      ? { addressId: savedId }
+      : { newAddress: addrPayload };
+
     this.http.post<any>(
       `${environment.apiUrl}/orders`,
       {
-        newAddress: addrPayload,
+        ...addressPayload,
         carrierCode: carrier.code,
         inpostLockerCode: this.lockerCode() ?? undefined,
         dpdPickupPointCode: this.selectedDpdPoint()?.code ?? undefined,

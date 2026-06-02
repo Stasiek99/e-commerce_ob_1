@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
 
 const JOB_OPTIONS = {
@@ -52,13 +51,10 @@ export class EmailQueueService {
     return this.enqueue('payment_confirmed', { type: 'payment_confirmed', payload: data });
   }
 
-  sendPaymentConfirmedWithInvoice(
-    data: Parameters<EmailService['sendPaymentConfirmedWithInvoice']>[0],
-  ) {
-    const { invoicePdf, ...rest } = data;
+  sendPaymentConfirmedWithInvoice(data: Payload<'payment_confirmed_with_invoice'>) {
     return this.enqueue('payment_confirmed_with_invoice', {
       type: 'payment_confirmed_with_invoice',
-      payload: { ...rest, invoicePdfBase64: invoicePdf.toString('base64') },
+      payload: data,
     });
   }
 

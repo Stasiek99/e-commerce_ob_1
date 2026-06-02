@@ -11,7 +11,7 @@ import {
   provideHttpClientTesting,
   HttpTestingController,
 } from '@angular/common/http/testing';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router, provideRouter } from '@angular/router';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { CheckoutSuccessComponent } from '../checkout-success.component';
 import { CartService } from '../../../../core/services/cart.service';
@@ -27,6 +27,7 @@ function setup(orderId: string | null = 'order-1') {
     providers: [
       provideHttpClient(),
       provideHttpClientTesting(),
+      provideRouter([]),
       {
         provide: ActivatedRoute,
         useValue: {
@@ -43,8 +44,10 @@ function setup(orderId: string | null = 'order-1') {
   const fixture   = TestBed.createComponent(CheckoutSuccessComponent);
   const component = fixture.componentInstance;
   const httpMock  = TestBed.inject(HttpTestingController);
+  const router    = TestBed.inject(Router);
+  const navigateSpy = jest.spyOn(router, 'navigate').mockResolvedValue(true);
 
-  return { fixture, component, httpMock, mockCart, mockAnalytics };
+  return { fixture, component, httpMock, mockCart, mockAnalytics, navigateSpy };
 }
 
 const statusUrl = (id = 'order-1') => (req: { url: string }) =>
@@ -55,6 +58,33 @@ describe('CheckoutSuccessComponent — payment status polling', () => {
     TestBed.inject(HttpTestingController).verify();
     TestBed.resetTestingModule();
   });
+
+  // ── session_id cleanup ────────────────────────────────────────────────────
+
+  it('replaces the URL with only orderId to strip session_id from browser history', fakeAsync(() => {
+    const { fixture, navigateSpy, httpMock } = setup('order-1');
+
+    fixture.detectChanges();
+    tick(0);
+    httpMock.expectOne(statusUrl()).flush({ status: 'COMPLETED', orderId: 'order-1' });
+
+    expect(navigateSpy).toHaveBeenCalledWith([], {
+      queryParams: { orderId: 'order-1' },
+      replaceUrl: true,
+    });
+  }));
+
+  it('navigates with orderId undefined when no orderId in query params', fakeAsync(() => {
+    const { fixture, navigateSpy, httpMock } = setup(null);
+
+    fixture.detectChanges();
+
+    expect(navigateSpy).toHaveBeenCalledWith([], {
+      queryParams: { orderId: undefined },
+      replaceUrl: true,
+    });
+    httpMock.expectNone(statusUrl());
+  }));
 
   // ── no orderId ─────────────────────────────────────────────────────────────
 

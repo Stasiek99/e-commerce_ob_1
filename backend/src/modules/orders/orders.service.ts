@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
@@ -14,6 +15,7 @@ import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
+import { verifyOrderToken } from '../../common/utils/order-token.util';
 
 
 interface CartItem {
@@ -397,6 +399,28 @@ export class OrdersService implements OnModuleInit {
     });
     if (!order) throw new NotFoundException('Order not found');
 
+    const events = await this.prisma.orderEvent.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        fromStatus: true,
+        toStatus: true,
+        actor: true,
+        createdAt: true,
+      },
+    });
+
+    return events.map((e) => ({
+      id: e.id,
+      fromStatus: e.fromStatus,
+      toStatus: e.toStatus,
+      actor: this.mapActorForCustomer(e.actor),
+      createdAt: e.createdAt,
+    }));
+  }
+
+  async findEventsAdmin(orderId: string) {
     return this.prisma.orderEvent.findMany({
       where: { orderId },
       orderBy: { createdAt: 'asc' },
@@ -409,6 +433,12 @@ export class OrdersService implements OnModuleInit {
         createdAt: true,
       },
     });
+  }
+
+  private mapActorForCustomer(actor: string): string {
+    if (actor === 'ADMIN') return 'Obsługa sklepu';
+    if (actor.startsWith('SYSTEM')) return 'System';
+    return 'Klient';
   }
 
   async generateInvoiceForUser(orderId: string, userId: string): Promise<{ invoiceUrl: string }> {
@@ -427,6 +457,7 @@ export class OrdersService implements OnModuleInit {
         id: true,
         orderNumber: true,
         status: true,
+        invoiceStoragePath: true,
         snapshotFirstName: true,
         snapshotLastName: true,
         snapshotCompany: true,
@@ -455,8 +486,15 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
-    const { url } = await this.invoiceService.processInvoice(order);
-    return { invoiceUrl: url };
+    // Re-sign with 1h TTL on every request — path is stable across key rotations
+    if (order.invoiceStoragePath) {
+      const invoiceUrl = await this.invoiceService.getSignedUrl(order.invoiceStoragePath);
+      return { invoiceUrl };
+    }
+
+    const { storagePath } = await this.invoiceService.processInvoice(order);
+    const invoiceUrl = await this.invoiceService.getSignedUrl(storagePath);
+    return { invoiceUrl };
   }
 
   async trackByEmailAndNumber(email: string, orderNumber: string) {
@@ -596,6 +634,60 @@ export class OrdersService implements OnModuleInit {
         firstName: order.snapshotFirstName,
         totalInCents: order.totalInCents,
         isRefund,
+      })
+      .catch((err) => this.logger.warn('Order cancellation email failed', err));
+  }
+
+  async cancelByToken(orderId: string, token: string, reason?: string): Promise<void> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const secret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    if (!verifyOrderToken(token, orderId, order.snapshotEmail, secret)) {
+      throw new UnauthorizedException('Invalid cancel token');
+    }
+
+    // Only allow cancelling PENDING_PAYMENT orders via token — paid orders require
+    // proper authentication since a refund triggers financial side-effects.
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new BadRequestException(
+        'Token-based cancellation is only available for orders awaiting payment.',
+      );
+    }
+
+    await this.paymentsService.expirePendingCheckoutSession(orderId);
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of order.items) {
+        await tx.productVariant.update({
+          where: { id: item.productVariantId },
+          data: { stock: { increment: item.quantity } },
+        });
+      }
+      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          fromStatus: OrderStatus.PENDING_PAYMENT,
+          toStatus: OrderStatus.CANCELLED,
+          actor: 'CUSTOMER',
+          note: reason
+            ? `Cancelled by guest before payment. Reason: ${reason}`
+            : 'Cancelled by guest before payment',
+        },
+      });
+    });
+
+    this.emailService
+      .sendOrderCancellation({
+        to: order.snapshotEmail,
+        orderNumber: order.orderNumber,
+        firstName: order.snapshotFirstName,
+        totalInCents: order.totalInCents,
+        isRefund: false,
       })
       .catch((err) => this.logger.warn('Order cancellation email failed', err));
   }

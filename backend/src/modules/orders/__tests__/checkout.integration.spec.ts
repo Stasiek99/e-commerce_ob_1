@@ -162,7 +162,8 @@ describe('Checkout Integration Flow', () => {
         {
           provide: InvoiceService,
           useValue: {
-            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+            processInvoice: jest.fn().mockResolvedValue({ url: 'https://mock-invoice.pdf', storagePath: 'invoices/FV-2026-000001.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+            getSignedUrl: jest.fn().mockResolvedValue('https://mock-invoice.pdf'),
           },
         },
         {
@@ -375,6 +376,7 @@ describe('Checkout Integration Flow', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
