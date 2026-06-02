@@ -367,8 +367,23 @@ describe('CouponService', () => {
     });
 
     it('rounds PERCENTAGE discount to whole cents', () => {
-      // 33% of 1000 = 333.33... → should round to 333
+      // 33% of 1000 = 330.0 (exact)
       expect(service.calculateDiscount(DiscountType.PERCENTAGE, 33, 1000)).toBe(330);
+    });
+
+    it('rounds up at exactly .5 — customer receives more discount than Math.floor would give', () => {
+      // 19% of 50 cents = 9.5 → Math.round = 10 (customer's favor), Math.floor = 9 (store's favor)
+      expect(service.calculateDiscount(DiscountType.PERCENTAGE, 19, 50)).toBe(10);
+    });
+
+    it('rounds up when fractional part > 0.5', () => {
+      // 19% of 10003 cents = 1900.57 → Math.round = 1901
+      expect(service.calculateDiscount(DiscountType.PERCENTAGE, 19, 10003)).toBe(1901);
+    });
+
+    it('rounds down when fractional part < 0.5', () => {
+      // 19% of 10001 cents = 1900.19 → Math.round = 1900
+      expect(service.calculateDiscount(DiscountType.PERCENTAGE, 19, 10001)).toBe(1900);
     });
 
     it('FIXED_AMOUNT returns value when cart is large enough', () => {

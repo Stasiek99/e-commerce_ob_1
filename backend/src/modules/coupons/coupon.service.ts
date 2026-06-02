@@ -144,6 +144,7 @@ export class CouponService {
   calculateDiscount(type: DiscountType, value: number, cartTotalInCents: number): number {
     switch (type) {
       case DiscountType.PERCENTAGE:
+        // Math.round: rounds in customer's favor (standard retail practice)
         return Math.round((cartTotalInCents * value) / 100);
       case DiscountType.FIXED_AMOUNT:
         return Math.min(value, cartTotalInCents);
