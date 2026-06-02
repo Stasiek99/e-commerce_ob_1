@@ -1311,7 +1311,11 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   }
 
   formatDate(value: string | Date): string {
-    return new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value));
+    // Append 'Z' so bare ISO strings are always parsed as UTC, matching the
+    // server's interpretation and preventing hydration mismatches for reviews
+    // submitted near midnight in Polish time (UTC+1/+2).
+    const date = typeof value === 'string' ? new Date(value + 'Z') : value;
+    return new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
   }
 
   starsArray(rating: number): ('full' | 'half' | 'empty')[] {
