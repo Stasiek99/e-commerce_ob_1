@@ -29,6 +29,70 @@ function createComponent(platformId: string, exchangeMock: jest.Mock) {
   return fixture;
 }
 
+function createComponentWithReturnTo(returnTo: string | null, router: { navigate: jest.Mock; navigateByUrl: jest.Mock }) {
+  const exchangeMock = jest.fn().mockReturnValue(of({}));
+  jest.spyOn(Storage.prototype, 'getItem').mockReturnValue(returnTo);
+  jest.spyOn(Storage.prototype, 'removeItem').mockReturnValue(undefined);
+
+  TestBed.configureTestingModule({
+    imports: [GoogleCallbackComponent],
+    providers: [
+      { provide: PLATFORM_ID, useValue: 'browser' },
+      { provide: AuthService, useValue: { exchangeOAuthToken: exchangeMock } },
+      { provide: Router, useValue: router },
+    ],
+  });
+
+  TestBed.createComponent(GoogleCallbackComponent).detectChanges();
+}
+
+describe('GoogleCallbackComponent — open-redirect guard on returnTo', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    jest.restoreAllMocks();
+  });
+
+  it('navigates to / when returnTo is an absolute URL (phishing attempt)', () => {
+    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
+
+    createComponentWithReturnTo('https://attacker.com/steal-token', router);
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/');
+  });
+
+  it('navigates to / when returnTo is a protocol-relative URL (//attacker.com)', () => {
+    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
+
+    createComponentWithReturnTo('//attacker.com', router);
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/');
+  });
+
+  it('navigates to the relative path when returnTo is a safe internal route', () => {
+    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
+
+    createComponentWithReturnTo('/account/profile', router);
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/account/profile');
+  });
+
+  it('navigates to / when sessionStorage has no returnTo entry (returns null)', () => {
+    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
+
+    createComponentWithReturnTo(null, router);
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/');
+  });
+
+  it('navigates to / for a bare empty string returnTo', () => {
+    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
+
+    createComponentWithReturnTo('', router);
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/');
+  });
+});
+
 describe('GoogleCallbackComponent — SSR platform guard', () => {
   afterEach(() => TestBed.resetTestingModule());
 

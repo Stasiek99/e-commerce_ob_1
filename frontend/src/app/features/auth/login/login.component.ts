@@ -95,7 +95,11 @@ export class LoginComponent {
 
   loading = false;
 
-  readonly returnTo: string | null = this.route.snapshot.queryParams['returnTo'] ?? null;
+  readonly returnTo: string | null = (() => {
+    const raw: string | undefined = this.route.snapshot.queryParams['returnTo'];
+    if (!raw) return null;
+    return raw.startsWith('/') && !raw.startsWith('//') ? raw : null;
+  })();
 
   form = this.fb.group({
     email:    ['', [Validators.required, Validators.email]],
