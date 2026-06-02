@@ -76,12 +76,31 @@ export class AuthService {
   }
 
   async login(email: string, password: string) {
+    const normalizedEmail = email.toLowerCase();
+    const failKey = `auth:login-failures:${normalizedEmail}`;
+    const lockKey = `auth:login-locked:${normalizedEmail}`;
+
+    if (await this.redis.exists(lockKey)) {
+      throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
+    }
+
     const user = await this.usersService.findByEmail(email);
-    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    if (!user || !user.passwordHash) {
+      const failures = await this.redis.incr(failKey);
+      if (failures === 1) await this.redis.expire(failKey, 900);
+      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!valid) {
+      const failures = await this.redis.incr(failKey);
+      if (failures === 1) await this.redis.expire(failKey, 900);
+      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
+    await this.redis.del(failKey);
     return this.generateTokenPair(user);
   }
 
