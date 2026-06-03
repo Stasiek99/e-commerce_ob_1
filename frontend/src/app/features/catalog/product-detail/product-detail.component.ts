@@ -1,9 +1,10 @@
 import { Component, HostListener, OnDestroy, OnInit, inject, signal, computed, PLATFORM_ID } from '@angular/core';
 import { Subscription } from 'rxjs';
-import { isPlatformBrowser, Location } from '@angular/common';
+import { isPlatformBrowser, isPlatformServer, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
+import { RESPONSE } from '../../../core/tokens/ssr.tokens';
 import { TuiButton, TuiGroup, TuiIcon, TuiTextfield } from '@taiga-ui/core';
 import { TuiElasticContainer, TuiSlides } from '@taiga-ui/kit';
 import { TuiExpand } from '@taiga-ui/experimental';
@@ -120,7 +121,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                     [attr.aria-label]="'Zdjęcie ' + (i + 1)"
                     [attr.aria-pressed]="activeImage() === img.url"
                     (click)="activeImage.set(img.url)">
-                  <img [src]="img.url" [alt]="" class="detail__thumb"/>
+                  <img [src]="img.url" [alt]="'Zdjęcie ' + (i + 1) + ' – ' + product()!.name" class="detail__thumb"/>
                 </button>
               }
             </div>
@@ -566,7 +567,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                           [attr.aria-label]="'Zdjęcie ' + (i + 1)"
                           [attr.aria-pressed]="i === lightboxIndex()"
                           (click)="lightboxGoTo(i)">
-                    <img [src]="img.url" [alt]="" class="lightbox__thumb"/>
+                    <img [src]="img.url" [alt]="'Zdjęcie ' + (i + 1) + ' – ' + product()!.name" class="lightbox__thumb"/>
                   </button>
                 }
               </div>
@@ -1039,6 +1040,8 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly analytics = inject(AnalyticsService);
   private readonly platformId = inject(PLATFORM_ID);
   private readonly turnstile = inject(TurnstileService);
+  private readonly router = inject(Router);
+  private readonly ssrResponse = inject(RESPONSE, { optional: true });
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -1200,7 +1203,15 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
             }
           }
         },
-        error: () => this.loading.set(false),
+        error: (err) => {
+          this.loading.set(false);
+          if (err.status === 404) {
+            if (isPlatformServer(this.platformId)) {
+              this.ssrResponse?.status(404);
+            }
+            this.router.navigate(['/not-found'], { skipLocationChange: true });
+          }
+        },
       });
   }
 

@@ -94,6 +94,12 @@ export const envValidationSchema = Joi.object({
   DHL_ACCOUNT_NUMBER: Joi.string().optional(),
   DHL_API_KEY: Joi.string().optional(),
   DHL_API_SECRET: Joi.string().optional(),
+  DHL_SHIPPER_NAME: Joi.string().optional(),
+  DHL_SHIPPER_STREET: Joi.string().optional(),
+  DHL_SHIPPER_CITY: Joi.string().optional(),
+  DHL_SHIPPER_POSTAL_CODE: Joi.string().optional(),
+  DHL_SHIPPER_PHONE: Joi.string().optional(),
+  DHL_SHIPPER_EMAIL: Joi.string().email().optional(),
   GLS_SENDER_ID: Joi.string().optional(),
   GLS_USERNAME: Joi.string().optional(),
   GLS_PASSWORD: Joi.string().optional(),
@@ -130,6 +136,21 @@ export const envValidationSchema = Joi.object({
   SENTRY_RELEASE: Joi.string().optional(),
   SENTRY_TRACES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
   SENTRY_PROFILES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
+
+  // ── GDPR / Encryption ──
+  // AES-256-GCM key for IBAN at-rest encryption (ReturnRequest.bankAccount).
+  // Must be a 64-character lowercase hex string (32 bytes). Generate with:
+  //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  // Rotate independently of DB credentials. Never reuse across environments.
+  IBAN_ENCRYPTION_KEY: requiredInProd(
+    Joi.string()
+      .length(64)
+      .pattern(/^[0-9a-f]+$/)
+      .messages({
+        'string.length': 'IBAN_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)',
+        'string.pattern.base': 'IBAN_ENCRYPTION_KEY must be lowercase hex only',
+      }),
+  ),
 
   // ── Admin ──
   // ADMIN_DEFAULT_PASSWORD must be a bcrypt hash (bcrypt.hash('yourpassword', 10)).

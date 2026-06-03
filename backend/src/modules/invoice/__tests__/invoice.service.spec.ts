@@ -419,6 +419,47 @@ describe('InvoiceService', () => {
     });
   });
 
+  // ── ensureSequence — year validation guard ───────────────────────────────
+  // Regression guard for the $executeRawUnsafe interpolation hardening.
+  // Without the bounds check, an out-of-range year would be interpolated
+  // directly into SQL, opening a future injection vector.
+
+  describe('ensureSequence — year validation guard', () => {
+    it('throws when order createdAt year is before 2020', async () => {
+      const order = buildOrder({ createdAt: new Date('2019-06-15T10:00:00Z') });
+
+      await expect(service.processInvoice(order)).rejects.toThrow('Invalid invoice year: 2019');
+    });
+
+    it('throws when order createdAt year is after 2100', async () => {
+      const order = buildOrder({ createdAt: new Date('2101-01-01T00:00:00Z') });
+
+      await expect(service.processInvoice(order)).rejects.toThrow('Invalid invoice year: 2101');
+    });
+
+    it('does not call $executeRawUnsafe when year is out of range', async () => {
+      const order = buildOrder({ createdAt: new Date('2019-01-01T00:00:00Z') });
+
+      await expect(service.processInvoice(order)).rejects.toThrow();
+
+      expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it('accepts year 2020 (lower boundary) without throwing', async () => {
+      const order = buildOrder({ createdAt: new Date('2020-01-15T10:00:00Z') });
+      mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2020-000001.pdf');
+
+      await expect(service.processInvoice(order)).resolves.toBeDefined();
+    });
+
+    it('accepts year 2100 (upper boundary) without throwing', async () => {
+      const order = buildOrder({ createdAt: new Date('2100-06-15T10:00:00Z') });
+      mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2100-000001.pdf');
+
+      await expect(service.processInvoice(order)).resolves.toBeDefined();
+    });
+  });
+
   // ── VAT arithmetic invariants ──────────────────────────────────────────────
   // These verify the math: netCents = round(grossCents / (1 + rate))
   // We confirm the expected formula holds for the rates we support.

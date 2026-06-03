@@ -28,6 +28,13 @@ export class DhlClient {
   private readonly logger = new Logger(DhlClient.name);
   private readonly mockEnabled: boolean;
 
+  private readonly shipperName: string;
+  private readonly shipperStreet: string;
+  private readonly shipperCity: string;
+  private readonly shipperPostalCode: string;
+  private readonly shipperPhone: string;
+  private readonly shipperEmail: string;
+
   constructor(configService: ConfigService) {
     this.mockEnabled =
       configService.get<string>('DHL_MOCK_ENABLED') === 'true' ||
@@ -48,6 +55,13 @@ export class DhlClient {
       },
       headers: { 'Content-Type': 'application/json' },
     });
+
+    this.shipperName = configService.get<string>('DHL_SHIPPER_NAME', 'Fragrance Store');
+    this.shipperStreet = configService.get<string>('DHL_SHIPPER_STREET', 'ul. Sklep 1');
+    this.shipperCity = configService.get<string>('DHL_SHIPPER_CITY', 'Kraków');
+    this.shipperPostalCode = configService.get<string>('DHL_SHIPPER_POSTAL_CODE', '30-001');
+    this.shipperPhone = configService.get<string>('DHL_SHIPPER_PHONE', '+48000000000');
+    this.shipperEmail = configService.get<string>('DHL_SHIPPER_EMAIL', 'sklep@example.com');
 
     if (this.mockEnabled) {
       this.logger.warn('⚠️  MOCK DHL CLIENT ENABLED - No real shipments will be created.');
@@ -74,8 +88,8 @@ export class DhlClient {
       },
       customerDetails: {
         shipperDetails: {
-          postalAddress: { cityName: 'Kraków', countryCode: 'PL', postalCode: '30-001', addressLine1: 'ul. Sklep 1' },
-          contactInformation: { fullName: 'Fragrance Store', phone: '+48000000000', email: 'sklep@example.com' },
+          postalAddress: { cityName: this.shipperCity, countryCode: 'PL', postalCode: this.shipperPostalCode, addressLine1: this.shipperStreet },
+          contactInformation: { fullName: this.shipperName, phone: this.shipperPhone, email: this.shipperEmail },
         },
         receiverDetails: {
           postalAddress: {

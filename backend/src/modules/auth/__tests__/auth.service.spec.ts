@@ -29,7 +29,15 @@ describe('AuthService', () => {
   let prisma: any;
   let jwtService: jest.Mocked<JwtService>;
   let emailService: any;
-  let redis: { set: jest.Mock; get: jest.Mock };
+  let redis: {
+    set: jest.Mock;
+    get: jest.Mock;
+    exists: jest.Mock;
+    incr: jest.Mock;
+    expire: jest.Mock;
+    setex: jest.Mock;
+    del: jest.Mock;
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -101,6 +109,11 @@ describe('AuthService', () => {
           useValue: {
             set: jest.fn().mockResolvedValue('OK'),
             get: jest.fn(),
+            exists: jest.fn().mockResolvedValue(0),
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            setex: jest.fn().mockResolvedValue('OK'),
+            del: jest.fn().mockResolvedValue(1),
           },
         },
       ],
@@ -181,6 +194,95 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('accessToken', 'mock-access-token');
       expect(result).toHaveProperty('refreshToken');
       expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+
+    describe('per-email lockout', () => {
+      it('throws UnauthorizedException with lockout message when account is locked', async () => {
+        redis.exists.mockResolvedValue(1);
+
+        await expect(service.login('victim@example.com', 'anypass')).rejects.toThrow(
+          'Account temporarily locked',
+        );
+
+        expect(usersService.findByEmail).not.toHaveBeenCalled();
+      });
+
+      it('normalizes email to lowercase before checking the lock key', async () => {
+        redis.exists.mockResolvedValue(1);
+
+        await expect(service.login('VICTIM@Example.COM', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.exists).toHaveBeenCalledWith('auth:login-locked:victim@example.com');
+      });
+
+      it('increments failure counter and sets expire on first failed attempt (user not found)', async () => {
+        usersService.findByEmail.mockResolvedValue(null);
+        redis.incr.mockResolvedValue(1);
+
+        await expect(service.login('missing@example.com', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.incr).toHaveBeenCalledWith('auth:login-failures:missing@example.com');
+        expect(redis.expire).toHaveBeenCalledWith('auth:login-failures:missing@example.com', 900);
+      });
+
+      it('increments failure counter but skips expire on subsequent failures', async () => {
+        usersService.findByEmail.mockResolvedValue(null);
+        redis.incr.mockResolvedValue(5);
+
+        await expect(service.login('missing@example.com', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.incr).toHaveBeenCalledTimes(1);
+        expect(redis.expire).not.toHaveBeenCalled();
+      });
+
+      it('sets lock key with 900-second TTL after the 10th failure on wrong password', async () => {
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.incr.mockResolvedValue(10);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.setex).toHaveBeenCalledWith('auth:login-locked:test@example.com', 900, '1');
+      });
+
+      it('does not set lock key before the 10th failure', async () => {
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.incr.mockResolvedValue(9);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.setex).not.toHaveBeenCalled();
+      });
+
+      it('deletes failure counter on successful login', async () => {
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        await service.login('test@example.com', 'correctpass');
+
+        expect(redis.del).toHaveBeenCalledWith('auth:login-failures:test@example.com');
+      });
+
+      it('does not delete failure counter when login fails', async () => {
+        usersService.findByEmail.mockResolvedValue(null);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        expect(redis.del).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -808,6 +910,53 @@ describe('AuthService', () => {
         expect.objectContaining({ to: 'test@example.com' }),
       );
     });
+
+    it('returns silently without sending email when per-email dedupe key exists in Redis', async () => {
+      redis.exists.mockResolvedValue(1); // key present → cooldown active
+
+      await service.requestPasswordReset('test@example.com');
+
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+      expect(emailService.sendPasswordReset).not.toHaveBeenCalled();
+      expect(prisma.passwordResetToken.create).not.toHaveBeenCalled();
+    });
+
+    it('sets per-email dedupe key with 300s TTL after sending the reset email', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: 'hashed' } as any);
+
+      await service.requestPasswordReset('test@example.com');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        `pwd-reset-sent:test@example.com`,
+        '1',
+        'EX',
+        300,
+      );
+    });
+
+    it('does not set dedupe key when user has no password (email never sent)', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: null } as any);
+
+      await service.requestPasswordReset('test@example.com');
+
+      expect(redis.set).not.toHaveBeenCalledWith(
+        expect.stringContaining('pwd-reset-sent'),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('normalises email to lowercase before checking the dedupe key', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: 'hashed' } as any);
+
+      await service.requestPasswordReset('Test@Example.COM');
+
+      expect(redis.exists).toHaveBeenCalledWith('pwd-reset-sent:test@example.com');
+    });
   });
 
   describe('resetPassword', () => {
@@ -1105,6 +1254,39 @@ describe('AuthService', () => {
         expect.objectContaining({ firstName: 'Kliencie' }),
       );
     });
+
+    it('returns silently without sending magic link when per-email dedupe key exists in Redis', async () => {
+      redis.exists.mockResolvedValue(1); // cooldown active
+
+      await service.requestMagicLink('test@example.com');
+
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+      expect(emailService.sendMagicLink).not.toHaveBeenCalled();
+      expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+    });
+
+    it('sets per-email dedupe key with 300s TTL after sending the magic link', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+
+      await service.requestMagicLink('test@example.com');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'magic-link-sent:test@example.com',
+        '1',
+        'EX',
+        300,
+      );
+    });
+
+    it('normalises email to lowercase before checking the dedupe key', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+
+      await service.requestMagicLink('Test@Example.COM');
+
+      expect(redis.exists).toHaveBeenCalledWith('magic-link-sent:test@example.com');
+    });
   });
 
   describe('consumeMagicLink', () => {
@@ -1158,7 +1340,7 @@ describe('AuthService', () => {
       prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: jest.fn().mockResolvedValue({}) },
         }),
       );
@@ -1172,7 +1354,7 @@ describe('AuthService', () => {
       prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: jest.fn().mockResolvedValue({}) },
         }),
       );
@@ -1192,7 +1374,7 @@ describe('AuthService', () => {
       const txUserUpdate = jest.fn().mockResolvedValue({});
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: txUserUpdate },
         }),
       );
@@ -1212,7 +1394,7 @@ describe('AuthService', () => {
       const txUserUpdate = jest.fn().mockResolvedValue({});
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: txUserUpdate },
         }),
       );
@@ -1226,7 +1408,7 @@ describe('AuthService', () => {
       prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: jest.fn().mockResolvedValue({}) },
         }),
       );
@@ -1234,6 +1416,40 @@ describe('AuthService', () => {
       await service.consumeMagicLink('valid-token');
 
       expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws BadRequestException when concurrent request already consumed the token (count=0)', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
+      prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
+        cb({
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          user: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+
+      await expect(service.consumeMagicLink('raced-token')).rejects.toThrow(BadRequestException);
+
+      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+    });
+
+    it('passes usedAt: null in the updateMany WHERE clause to prevent double-consumption', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
+      const txUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
+        cb({
+          emailVerificationToken: { updateMany: txUpdateMany },
+          user: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+
+      await service.consumeMagicLink('valid-token');
+
+      expect(txUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: validStoredToken.id, usedAt: null }),
+          data: { usedAt: expect.any(Date) },
+        }),
+      );
     });
   });
 

@@ -76,12 +76,31 @@ export class AuthService {
   }
 
   async login(email: string, password: string) {
+    const normalizedEmail = email.toLowerCase();
+    const failKey = `auth:login-failures:${normalizedEmail}`;
+    const lockKey = `auth:login-locked:${normalizedEmail}`;
+
+    if (await this.redis.exists(lockKey)) {
+      throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
+    }
+
     const user = await this.usersService.findByEmail(email);
-    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    if (!user || !user.passwordHash) {
+      const failures = await this.redis.incr(failKey);
+      if (failures === 1) await this.redis.expire(failKey, 900);
+      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!valid) {
+      const failures = await this.redis.incr(failKey);
+      if (failures === 1) await this.redis.expire(failKey, 900);
+      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
+    await this.redis.del(failKey);
     return this.generateTokenPair(user);
   }
 
@@ -328,6 +347,9 @@ export class AuthService {
   }
 
   async requestPasswordReset(email: string): Promise<void> {
+    const dedupeKey = `pwd-reset-sent:${email.toLowerCase()}`;
+    if (await this.redis.exists(dedupeKey)) return;
+
     const user = await this.usersService.findByEmail(email);
     // Always resolve silently — never reveal whether an email is registered
     if (!user || !user.passwordHash) return;
@@ -353,6 +375,8 @@ export class AuthService {
       firstName: user.firstName ?? 'Kliencie',
       resetUrl,
     });
+
+    await this.redis.set(dedupeKey, '1', 'EX', 300);
   }
 
   async resetPassword(rawToken: string, newPassword: string): Promise<void> {
@@ -410,6 +434,9 @@ export class AuthService {
   }
 
   async requestMagicLink(email: string): Promise<void> {
+    const dedupeKey = `magic-link-sent:${email.toLowerCase()}`;
+    if (await this.redis.exists(dedupeKey)) return;
+
     const user = await this.usersService.findByEmail(email);
     // Always silent — prevents email enumeration
     if (!user) return;
@@ -435,6 +462,8 @@ export class AuthService {
       firstName: user.firstName ?? 'Kliencie',
       magicUrl,
     });
+
+    await this.redis.set(dedupeKey, '1', 'EX', 300);
   }
 
   async consumeMagicLink(rawToken: string) {
@@ -454,10 +483,16 @@ export class AuthService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.emailVerificationToken.update({
-        where: { id: stored.id },
+      // Atomic guard: only the first concurrent request wins; usedAt: null in
+      // WHERE ensures a second request with the same token sees count=0 even if
+      // both passed the outer check above before either transaction committed.
+      const result = await tx.emailVerificationToken.updateMany({
+        where: { id: stored.id, usedAt: null },
         data: { usedAt: new Date() },
       });
+      if (result.count === 0) {
+        throw new BadRequestException('Invalid or expired magic link');
+      }
       // Magic link click implicitly proves email ownership
       if (!stored.user.isEmailVerified) {
         await tx.user.update({

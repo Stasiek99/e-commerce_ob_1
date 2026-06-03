@@ -85,6 +85,25 @@ export class GlsClient {
     };
   }
 
+  /**
+   * Downloads the shipment label PDF from the GLS ADE API using the ParcelNumber
+   * returned by createShipment. Returns null in mock mode.
+   */
+  async fetchLabelPdf(parcelNumber: string): Promise<Buffer | null> {
+    if (this.mockEnabled) {
+      this.logger.log(`[MOCK] Skipping PDF download for GLS parcel ${parcelNumber}`);
+      return null;
+    }
+
+    const response = await this.client.post<ArrayBuffer>(
+      '?labels',
+      { Parcels: [parcelNumber] },
+      { responseType: 'arraybuffer', headers: { Accept: 'application/pdf' } },
+    );
+
+    return Buffer.from(response.data);
+  }
+
   getTrackingUrl(trackingNumber: string): string {
     return `https://gls-group.eu/PL/pl/sledzenie-paczek?match=${trackingNumber}`;
   }

@@ -94,6 +94,7 @@ describe('ShippingService', () => {
           provide: GlsClient,
           useValue: {
             createShipment: jest.fn(),
+            fetchLabelPdf: jest.fn(),
             getTrackingUrl: jest.fn().mockReturnValue('https://gls-group.eu/track/TRK'),
           },
         },
@@ -235,14 +236,62 @@ describe('ShippingService', () => {
 
       it('calls gls.createShipment with order reference', async () => {
         prisma.order.findUnique.mockResolvedValue(mockOrder);
-        gls.createShipment.mockResolvedValue({ trackingNumber: 'GLS001', parcelId: 'P001', labelUrl: 'https://gls.pdf' } as any);
-        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'https://gls.pdf', trackingNumber: 'GLS001' });
+        gls.createShipment.mockResolvedValue({ trackingNumber: 'GLS001', parcelId: 'P001', labelUrl: '' });
+        gls.fetchLabelPdf.mockResolvedValue(null);
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'mock-label-gls-P001.pdf', trackingNumber: 'GLS001' });
 
         await service.generateLabel('order-1');
 
         expect(gls.createShipment).toHaveBeenCalledWith(
           expect.objectContaining({ reference: 'ORD-2026-000001' }),
         );
+      });
+
+      it('stores mock label URL when fetchLabelPdf returns null (mock mode)', async () => {
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        gls.createShipment.mockResolvedValue({ trackingNumber: 'GLS001', parcelId: 'P001', labelUrl: '' });
+        gls.fetchLabelPdf.mockResolvedValue(null);
+
+        const upsertSpy = prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'mock-label-gls-P001.pdf',
+          trackingNumber: 'GLS001',
+        });
+
+        await service.generateLabel('order-1');
+
+        const createData = upsertSpy.mock.calls[0][0].create;
+        expect(createData.labelUrl).toBe('mock-label-gls-P001.pdf');
+        expect(storage.uploadShippingLabel).not.toHaveBeenCalled();
+      });
+
+      it('uploads real PDF to storage when fetchLabelPdf returns a Buffer', async () => {
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        gls.createShipment.mockResolvedValue({ trackingNumber: 'GLS002', parcelId: 'REAL_P002', labelUrl: '' });
+        const pdfBuffer = Buffer.from('%PDF-mock');
+        gls.fetchLabelPdf.mockResolvedValue(pdfBuffer);
+        storage.uploadShippingLabel.mockResolvedValue('https://storage.example.com/labels/gls-REAL_P002.pdf');
+        prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'https://storage.example.com/labels/gls-REAL_P002.pdf',
+          trackingNumber: 'GLS002',
+        });
+
+        await service.generateLabel('order-1');
+
+        expect(storage.uploadShippingLabel).toHaveBeenCalledWith(pdfBuffer, 'gls-REAL_P002.pdf');
+      });
+
+      it('preserves GLS trackingNumber in LABEL_ERROR upsert when Supabase upload fails', async () => {
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        gls.createShipment.mockResolvedValue({ trackingNumber: 'TRK-GLS-999', parcelId: 'GLS_P999', labelUrl: '' });
+        gls.fetchLabelPdf.mockResolvedValue(Buffer.from('%PDF-mock'));
+        storage.uploadShippingLabel.mockRejectedValue(new Error('Supabase upload timeout'));
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('Supabase upload timeout');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.trackingNumber).toBe('TRK-GLS-999');
+        expect(upsertCall.update.trackingNumber).toBe('TRK-GLS-999');
       });
     });
 

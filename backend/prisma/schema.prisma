@@ -104,10 +104,12 @@ model User {
   phone           String?
   googleId        String?  @unique
   nip             String?
-  isEmailVerified Boolean  @default(false)
-  pendingEmail    String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isEmailVerified   Boolean   @default(false)
+  pendingEmail      String?
+  marketingConsent  Boolean   @default(false)
+  marketingConsentAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   addresses               Address[]
   orders                  Order[]
@@ -324,6 +326,7 @@ model ProductImage {
   isPrimary   Boolean  @default(false)
   createdAt   DateTime @default(now())
 
+  @@index([productId])
   @@map("product_images")
 }
 
