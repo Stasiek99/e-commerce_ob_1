@@ -688,3 +688,113 @@ describe('ProductDetailComponent — 404 error handling (SSR)', () => {
     expect(mockSsrResponse.status).not.toHaveBeenCalled();
   });
 });
+
+// ─── Thumbnail alt text ───────────────────────────────────────────────────────
+// Regression guard: gallery and lightbox thumbnail <img> elements must have
+// descriptive alt text. Reverting to alt="" would fail these tests, breaking
+// SEO (Google Image Search) and screen reader accessibility.
+
+describe('ProductDetailComponent — thumbnail alt text', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  function loadWithTwoImages() {
+    const { component, fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({
+        images: [
+          { url: 'https://cdn.example.com/img1.jpg', altText: null },
+          { url: 'https://cdn.example.com/img2.jpg', altText: null },
+        ],
+      }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    return { component, fixture };
+  }
+
+  describe('gallery thumbnails (.detail__thumb)', () => {
+    it('renders two thumbnail images when product has two images', () => {
+      const { fixture } = loadWithTwoImages();
+
+      const thumbs = fixture.nativeElement.querySelectorAll('.detail__thumb');
+
+      expect(thumbs.length).toBe(2);
+    });
+
+    it('first gallery thumbnail alt contains "Zdjęcie 1"', () => {
+      const { fixture } = loadWithTwoImages();
+
+      const thumbs = fixture.nativeElement.querySelectorAll('.detail__thumb');
+
+      expect(thumbs[0].getAttribute('alt')).toContain('Zdjęcie 1');
+    });
+
+    it('second gallery thumbnail alt contains "Zdjęcie 2"', () => {
+      const { fixture } = loadWithTwoImages();
+
+      const thumbs = fixture.nativeElement.querySelectorAll('.detail__thumb');
+
+      expect(thumbs[1].getAttribute('alt')).toContain('Zdjęcie 2');
+    });
+
+    it('gallery thumbnail alt contains the product name', () => {
+      const { fixture } = loadWithTwoImages();
+
+      const thumbs = fixture.nativeElement.querySelectorAll('.detail__thumb');
+
+      expect(thumbs[0].getAttribute('alt')).toContain('Rose Oud');
+    });
+
+    it('no gallery thumbnail has an empty alt attribute', () => {
+      const { fixture } = loadWithTwoImages();
+
+      const thumbs: NodeListOf<HTMLImageElement> = fixture.nativeElement.querySelectorAll('.detail__thumb');
+
+      thumbs.forEach((thumb) => {
+        expect(thumb.getAttribute('alt')).not.toBe('');
+      });
+    });
+  });
+
+  describe('lightbox thumbnails (.lightbox__thumb)', () => {
+    it('first lightbox thumbnail alt contains "Zdjęcie 1" when lightbox is open', () => {
+      const { component, fixture } = loadWithTwoImages();
+
+      component.openLightbox(0);
+      fixture.detectChanges();
+
+      const thumbs = fixture.nativeElement.querySelectorAll('.lightbox__thumb');
+
+      expect(thumbs[0].getAttribute('alt')).toContain('Zdjęcie 1');
+    });
+
+    it('lightbox thumbnail alt contains the product name', () => {
+      const { component, fixture } = loadWithTwoImages();
+
+      component.openLightbox(0);
+      fixture.detectChanges();
+
+      const thumbs = fixture.nativeElement.querySelectorAll('.lightbox__thumb');
+
+      expect(thumbs[0].getAttribute('alt')).toContain('Rose Oud');
+    });
+
+    it('no lightbox thumbnail has an empty alt attribute', () => {
+      const { component, fixture } = loadWithTwoImages();
+
+      component.openLightbox(0);
+      fixture.detectChanges();
+
+      const thumbs: NodeListOf<HTMLImageElement> = fixture.nativeElement.querySelectorAll('.lightbox__thumb');
+
+      thumbs.forEach((thumb) => {
+        expect(thumb.getAttribute('alt')).not.toBe('');
+      });
+    });
+  });
+});

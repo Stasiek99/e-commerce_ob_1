@@ -121,7 +121,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                     [attr.aria-label]="'Zdjęcie ' + (i + 1)"
                     [attr.aria-pressed]="activeImage() === img.url"
                     (click)="activeImage.set(img.url)">
-                  <img [src]="img.url" [alt]="" class="detail__thumb"/>
+                  <img [src]="img.url" [alt]="'Zdjęcie ' + (i + 1) + ' – ' + product()!.name" class="detail__thumb"/>
                 </button>
               }
             </div>
@@ -567,7 +567,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                           [attr.aria-label]="'Zdjęcie ' + (i + 1)"
                           [attr.aria-pressed]="i === lightboxIndex()"
                           (click)="lightboxGoTo(i)">
-                    <img [src]="img.url" [alt]="" class="lightbox__thumb"/>
+                    <img [src]="img.url" [alt]="'Zdjęcie ' + (i + 1) + ' – ' + product()!.name" class="lightbox__thumb"/>
                   </button>
                 }
               </div>
