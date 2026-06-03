@@ -8,8 +8,12 @@
  *     preventing a second network round-trip on hydration.
  *  3. POST requests bypass the cache (includePostRequests: false) — mutations must not be
  *     silently served from stale cached data.
+ *  4. scrollPositionRestoration is set to 'enabled' so back-navigation restores the
+ *     catalog scroll position. 'top' would cause back-button abandonment on mobile.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { TestBed } from '@angular/core/testing';
 import {
   FetchBackend,
@@ -170,5 +174,36 @@ describe('appConfig — HTTP transfer cache', () => {
 
     const req = httpMock.expectOne({ method: 'DELETE' });
     req.flush(null, { status: 204, statusText: 'No Content' });
+  });
+});
+
+// ── Suite 3 — scroll position restoration ────────────────────────────────────
+//
+// Angular EnvironmentProviders are circular objects (InjectionToken → factory
+// → token) — JSON.stringify throws. Read the source file instead to assert the
+// declared configuration without coupling to Angular's internal shapes.
+// (Same approach used by pwa.spec.ts for service-worker config assertions.)
+
+describe('appConfig — scroll position restoration', () => {
+  const frontendRoot = path.resolve(__dirname, '../..');
+  let source: string;
+
+  beforeAll(() => {
+    source = fs.readFileSync(
+      path.join(frontendRoot, 'src/app/app.config.ts'),
+      'utf-8',
+    );
+  });
+
+  it("sets scrollPositionRestoration to 'enabled' so back-navigation restores catalog scroll position", () => {
+    expect(source).toContain("scrollPositionRestoration: 'enabled'");
+  });
+
+  it("does NOT use 'top' restoration (regression guard: 'top' causes back-button abandonment)", () => {
+    expect(source).not.toContain("scrollPositionRestoration: 'top'");
+  });
+
+  it('calls withInMemoryScrolling in the provideRouter configuration', () => {
+    expect(source).toContain('withInMemoryScrolling');
   });
 });
