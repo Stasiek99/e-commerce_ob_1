@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CarrierCode, DiscountType, OrderStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { OrdersService } from '../orders.service';
@@ -1848,6 +1848,27 @@ describe('OrdersService', () => {
       await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(
         'already been shipped',
       );
+    });
+
+    it('throws ConflictException when order is in FRAUD_REVIEW', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not issue refund or expire session when order is blocked at FRAUD_REVIEW', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
     it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -591,6 +592,12 @@ export class OrdersService implements OnModuleInit {
     if (order.status === OrderStatus.SHIPPED || order.status === OrderStatus.DELIVERED) {
       throw new BadRequestException(
         'Your order has already been shipped. Please contact us to arrange a return.',
+      );
+    }
+
+    if (order.status === OrderStatus.FRAUD_REVIEW) {
+      throw new ConflictException(
+        'Twoje zamówienie jest weryfikowane — skontaktuj się z obsługą.',
       );
     }
 
