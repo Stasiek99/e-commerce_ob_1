@@ -71,6 +71,15 @@ async function bootstrap() {
     .map((o) => o.trim())
     .filter(Boolean);
 
+  if (
+    process.env.NODE_ENV === 'production' &&
+    allowedOrigins.some((o) => o.includes('localhost'))
+  ) {
+    throw new Error(
+      'CORS misconfiguration: localhost origin detected in production — set FRONTEND_URL to the deployed frontend URL',
+    );
+  }
+
   app.enableCors({
     origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
     credentials: true,

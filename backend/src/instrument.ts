@@ -11,6 +11,8 @@ import { nodeProfilingIntegration } from '@sentry/profiling-node';
 
 const dsn = process.env.SENTRY_DSN;
 
+const SENSITIVE_KEYS = ['password', 'newPassword', 'nip', 'bankAccount', 'token'];
+
 if (dsn) {
   Sentry.init({
     dsn,
@@ -20,5 +22,23 @@ if (dsn) {
     tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0.1'),
     profilesSampleRate: Number(process.env.SENTRY_PROFILES_SAMPLE_RATE ?? '0.1'),
     sendDefaultPii: false,
+    beforeSend(event) {
+      if (event.request?.data) {
+        try {
+          const body =
+            typeof event.request.data === 'string'
+              ? (JSON.parse(event.request.data) as Record<string, unknown>)
+              : (event.request.data as Record<string, unknown>);
+          for (const key of SENSITIVE_KEYS) {
+            if (key in body) body[key] = '[REDACTED]';
+          }
+          event.request.data = JSON.stringify(body);
+        } catch {
+          // Non-JSON body — drop it entirely to avoid leaking raw form data
+          event.request.data = '[REDACTED]';
+        }
+      }
+      return event;
+    },
   });
 }

@@ -1,11 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
 import { ReturnsService } from '../returns.service';
+import { decryptIban } from '../iban-crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { PaymentsService } from '../../payments/payments.service';
 import { ReturnType as ReturnRequestType } from '../dto/create-return.dto';
+
+const TEST_IBAN_KEY = randomBytes(32).toString('hex');
 
 const ADMIN_EMAIL = 'admin@aromaterie.pl';
 const OWNER_ID = 'user-owner-1';
@@ -127,6 +131,37 @@ describe('ReturnsService', () => {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue(ADMIN_EMAIL) },
         },
+      ],
+    }).compile();
+
+    service = module.get<ReturnsService>(ReturnsService);
+  }
+
+  async function createModuleWithIbanKey(
+    ibanKey: string,
+    prismaMock = buildPrismaMock(),
+  ): Promise<void> {
+    prisma = prismaMock;
+    emailService = {
+      sendReturnConfirmation: jest.fn().mockResolvedValue(undefined),
+      sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
+      sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
+    };
+    paymentsService = { refundPayment: jest.fn().mockResolvedValue(undefined) };
+
+    const configGetMock = jest.fn().mockImplementation((key: string, fallback?: unknown) => {
+      if (key === 'IBAN_ENCRYPTION_KEY') return ibanKey;
+      if (key === 'ADMIN_DEFAULT_EMAIL') return ADMIN_EMAIL;
+      return fallback;
+    });
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ReturnsService,
+        { provide: PrismaService, useValue: prismaMock },
+        { provide: EmailQueueService, useValue: emailService },
+        { provide: PaymentsService, useValue: paymentsService },
+        { provide: ConfigService, useValue: { get: configGetMock } },
       ],
     }).compile();
 
@@ -973,6 +1008,84 @@ describe('ReturnsService', () => {
       await service.recordReturnTracking('return-id-001', 'INP-001');
 
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── IBAN encryption (GDPR Art. 32) ───────────────────────────────────────────
+
+  describe('IBAN at-rest encryption', () => {
+    const SAMPLE_IBAN = 'PL61109010140000071219812874';
+    const dtoWithIban = { ...WITHDRAWAL_DTO, bankAccount: SAMPLE_IBAN };
+
+    it('stores an encrypted value — not the plaintext IBAN — when key is set', async () => {
+      await createModuleWithIbanKey(TEST_IBAN_KEY);
+
+      await service.create(dtoWithIban as any, OWNER_ID);
+
+      const createCall = (prisma.returnRequest.create as jest.Mock).mock.calls[0][0];
+      const stored = createCall.data.bankAccount as string;
+      expect(stored).not.toBe(SAMPLE_IBAN);
+      expect(stored).toMatch(/^[0-9a-f]+\.[0-9a-f]+\.[0-9a-f]+$/);
+    });
+
+    it('encrypted value decrypts back to the original IBAN', async () => {
+      await createModuleWithIbanKey(TEST_IBAN_KEY);
+
+      await service.create(dtoWithIban as any, OWNER_ID);
+
+      const createCall = (prisma.returnRequest.create as jest.Mock).mock.calls[0][0];
+      const stored = createCall.data.bankAccount as string;
+      expect(decryptIban(stored, TEST_IBAN_KEY)).toBe(
+        SAMPLE_IBAN.trim().toUpperCase(),
+      );
+    });
+
+    it('sends plaintext IBAN to the admin notification email, not the ciphertext', async () => {
+      await createModuleWithIbanKey(TEST_IBAN_KEY);
+
+      await service.create(dtoWithIban as any, OWNER_ID);
+
+      const adminCall = (emailService.sendReturnAdminNotification as jest.Mock).mock.calls[0][0];
+      expect(adminCall.bankAccount).toBe(SAMPLE_IBAN.trim().toUpperCase());
+    });
+
+    it('produces a different ciphertext on each call (random IV)', async () => {
+      await createModuleWithIbanKey(TEST_IBAN_KEY);
+
+      await service.create(dtoWithIban as any, OWNER_ID);
+      await service.create(dtoWithIban as any, OWNER_ID);
+
+      const calls = (prisma.returnRequest.create as jest.Mock).mock.calls;
+      const firstStored = calls[0][0].data.bankAccount as string;
+      const secondStored = calls[1][0].data.bankAccount as string;
+      expect(firstStored).not.toBe(secondStored);
+    });
+
+    it('stores null when bankAccount is absent (no encryption attempt)', async () => {
+      await createModuleWithIbanKey(TEST_IBAN_KEY);
+
+      await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      const createCall = (prisma.returnRequest.create as jest.Mock).mock.calls[0][0];
+      expect(createCall.data.bankAccount).toBeNull();
+    });
+
+    it('falls back to plaintext storage when IBAN_ENCRYPTION_KEY is not set', async () => {
+      await createModuleWithIbanKey('');
+
+      await service.create(dtoWithIban as any, OWNER_ID);
+
+      const createCall = (prisma.returnRequest.create as jest.Mock).mock.calls[0][0];
+      expect(createCall.data.bankAccount).toBe(SAMPLE_IBAN.trim().toUpperCase());
+    });
+
+    it('falls back to plaintext when key is present but not 64 hex chars (misconfiguration)', async () => {
+      await createModuleWithIbanKey('tooshort');
+
+      await service.create(dtoWithIban as any, OWNER_ID);
+
+      const createCall = (prisma.returnRequest.create as jest.Mock).mock.calls[0][0];
+      expect(createCall.data.bankAccount).toBe(SAMPLE_IBAN.trim().toUpperCase());
     });
   });
 });

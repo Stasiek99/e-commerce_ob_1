@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailQueueService } from '../../email/email-queue.service';
+import { StorageService } from '../../storage/storage.service';
 
 const makeVariant = (overrides: Partial<Record<string, unknown>> = {}) => ({
   id: 'var-1',
@@ -93,6 +94,7 @@ const mockRedis = {
 
 const mockEmailService = { sendBackInStock: jest.fn() };
 const mockConfigService = { get: jest.fn() };
+const mockStorageService = { deleteFile: jest.fn().mockResolvedValue(undefined) };
 
 // ─── findRelated ──────────────────────────────────────────────────────────────
 
@@ -106,6 +108,7 @@ describe('ProductsService — findRelated', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -286,6 +289,7 @@ describe('ProductsService — createVariant', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -361,6 +365,7 @@ describe('ProductsService — updateVariant', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -419,6 +424,7 @@ describe('ProductsService — findAll price sorting', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -496,6 +502,7 @@ describe('ProductsService — cache version invalidation', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -568,6 +575,7 @@ describe('ProductsService — EU Omnibus compliance (lowestPrice30dInCents)', ()
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -692,6 +700,7 @@ describe('ProductsService — findBySlug isActive DB-level filter', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -774,6 +783,7 @@ describe('ProductsService — findAll orderBy id tiebreaker', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -848,6 +858,7 @@ describe('ProductsService — updateVariantStock stock audit log', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: mockEmailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
@@ -997,5 +1008,123 @@ describe('ProductsService — updateVariantStock stock audit log', () => {
 
       expect(mockEmailService.sendBackInStock).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ── removeImage — Supabase Storage cleanup ────────────────────────────────────
+
+describe('ProductsService — removeImage', () => {
+  let service: ProductsService;
+
+  const makeImage = (overrides: Partial<Record<string, unknown>> = {}) => ({
+    id: 'img-1',
+    productId: 'product-1',
+    url: 'https://cdn.example.com/product-images/rose.jpg',
+    storagePath: 'products/rose.jpg',
+    altText: null,
+    sortOrder: 0,
+    isPrimary: true,
+    createdAt: new Date(),
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+    mockStorageService.deleteFile.mockResolvedValue(undefined);
+  });
+
+  it('throws NotFoundException when image does not exist', async () => {
+    mockPrisma.productImage.findUnique.mockResolvedValue(null);
+
+    await expect(service.removeImage('nonexistent-id')).rejects.toThrow(NotFoundException);
+
+    expect(mockStorageService.deleteFile).not.toHaveBeenCalled();
+    expect(mockPrisma.productImage.delete).not.toHaveBeenCalled();
+  });
+
+  it('calls storageService.deleteFile with the product-images bucket and storagePath before deleting the DB row', async () => {
+    const image = makeImage();
+    mockPrisma.productImage.findUnique.mockResolvedValue(image);
+    mockPrisma.productImage.delete.mockResolvedValue(image);
+
+    await service.removeImage('img-1');
+
+    expect(mockStorageService.deleteFile).toHaveBeenCalledWith(
+      'product-images',
+      'products/rose.jpg',
+    );
+    expect(mockPrisma.productImage.delete).toHaveBeenCalledWith({ where: { id: 'img-1' } });
+  });
+
+  it('deletes the Supabase file before the DB row (ordering guarantee)', async () => {
+    const callOrder: string[] = [];
+    const image = makeImage();
+    mockPrisma.productImage.findUnique.mockResolvedValue(image);
+    mockStorageService.deleteFile.mockImplementation(async () => {
+      callOrder.push('storage');
+    });
+    mockPrisma.productImage.delete.mockImplementation(async () => {
+      callOrder.push('db');
+      return image;
+    });
+
+    await service.removeImage('img-1');
+
+    expect(callOrder).toEqual(['storage', 'db']);
+  });
+
+  it('returns the image record after deletion', async () => {
+    const image = makeImage();
+    mockPrisma.productImage.findUnique.mockResolvedValue(image);
+    mockPrisma.productImage.delete.mockResolvedValue(image);
+
+    const result = await service.removeImage('img-1');
+
+    expect(result).toMatchObject({ id: 'img-1', storagePath: 'products/rose.jpg' });
+  });
+
+  it('still deletes the DB row even when Supabase deleteFile rejects (warn-and-continue)', async () => {
+    const image = makeImage();
+    mockPrisma.productImage.findUnique.mockResolvedValue(image);
+    mockStorageService.deleteFile.mockRejectedValue(new Error('Supabase timeout'));
+    mockPrisma.productImage.delete.mockResolvedValue(image);
+
+    await expect(service.removeImage('img-1')).resolves.not.toThrow();
+
+    expect(mockPrisma.productImage.delete).toHaveBeenCalledWith({ where: { id: 'img-1' } });
+  });
+
+  it('skips storageService.deleteFile when storagePath is empty string', async () => {
+    const image = makeImage({ storagePath: '' });
+    mockPrisma.productImage.findUnique.mockResolvedValue(image);
+    mockPrisma.productImage.delete.mockResolvedValue(image);
+
+    await service.removeImage('img-1');
+
+    expect(mockStorageService.deleteFile).not.toHaveBeenCalled();
+    expect(mockPrisma.productImage.delete).toHaveBeenCalled();
+  });
+
+  it('skips storageService.deleteFile when storagePath is null', async () => {
+    const image = makeImage({ storagePath: null });
+    mockPrisma.productImage.findUnique.mockResolvedValue(image);
+    mockPrisma.productImage.delete.mockResolvedValue(image);
+
+    await service.removeImage('img-1');
+
+    expect(mockStorageService.deleteFile).not.toHaveBeenCalled();
+    expect(mockPrisma.productImage.delete).toHaveBeenCalled();
   });
 });

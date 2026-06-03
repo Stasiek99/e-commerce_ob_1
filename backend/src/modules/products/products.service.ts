@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
+import { StorageService } from '../storage/storage.service';
 import { Prisma } from '@prisma/client';
 
 // Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
@@ -65,6 +66,7 @@ export class ProductsService {
     private readonly prisma: PrismaService,
     private readonly emailService: EmailQueueService,
     private readonly configService: ConfigService,
+    private readonly storageService: StorageService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
@@ -563,6 +565,10 @@ export class ProductsService {
   async removeImage(imageId: string) {
     const image = await this.prisma.productImage.findUnique({ where: { id: imageId } });
     if (!image) throw new NotFoundException('Image not found');
+    if (image.storagePath) {
+      await this.storageService.deleteFile('product-images', image.storagePath)
+        .catch((err) => this.logger.warn(`Supabase delete failed: ${image.storagePath}`, err));
+    }
     await this.prisma.productImage.delete({ where: { id: imageId } });
     return image;
   }

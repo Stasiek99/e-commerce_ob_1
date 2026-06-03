@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
@@ -106,4 +107,8 @@ export class CreateOrderDto {
   @IsString()
   @MaxLength(32)
   couponCode?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  marketingConsent?: boolean;
 }

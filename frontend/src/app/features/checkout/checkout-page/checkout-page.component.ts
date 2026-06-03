@@ -426,6 +426,19 @@ interface AppliedCoupon {
                   i&nbsp;<a routerLink="/legal/privacy" target="_blank">politykę prywatności</a>. *
                 </span>
               </label>
+              @if (auth.currentUser()) {
+                <label class="consent-label consent-label--marketing">
+                  <input
+                    type="checkbox"
+                    [checked]="marketingConsent()"
+                    (change)="marketingConsent.set($any($event.target).checked)"
+                    class="consent-checkbox" />
+                  <span>
+                    Wyrażam zgodę na otrzymywanie wiadomości e-mail z prośbą o ocenę zakupionych produktów.
+                    Zgoda jest dobrowolna i możesz ją wycofać w ustawieniach konta.
+                  </span>
+                </label>
+              }
             </div>
           }
 
@@ -539,6 +552,7 @@ interface AppliedCoupon {
     .consent-checkbox { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary); }
     .consent-label span { font-size: 13px; line-height: 1.5; color: var(--color-primary); }
     .consent-label a { color: var(--color-primary); text-decoration: underline; }
+    .consent-label--marketing span { color: var(--color-secondary); }
 
     /* Save address */
     .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 0; cursor: pointer; }
@@ -619,6 +633,7 @@ export class CheckoutPageComponent implements OnInit {
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
+  readonly marketingConsent = signal(false);
   readonly saveAddress = signal(false);
   readonly savedAddresses = signal<any[]>([]);
   readonly selectedSavedId = signal<string | null>(null);
@@ -1016,6 +1031,7 @@ export class CheckoutPageComponent implements OnInit {
         termsVersion: TERMS_VERSION,
         termsAcceptedAt: new Date().toISOString(),
         couponCode: this.appliedCoupon()?.code ?? undefined,
+        marketingConsent: this.marketingConsent() || undefined,
       },
       { headers: new HttpHeaders(headers) },
     ).subscribe({
