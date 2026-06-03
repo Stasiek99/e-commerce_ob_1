@@ -688,6 +688,119 @@ describe('PaymentsService', () => {
       const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
       expect(callArg.cancelUrl).toMatch(/[?&]orderId=order-1/);
     });
+
+    // ── Fix: PENDING payment row reuse — avoids P2002 on second pay attempt ──────
+    // Invariant: initiatePayment must not call payment.create when a PENDING row
+    // already exists for the order (orderId is @unique — a second create throws P2002).
+    // If the existing Stripe session is still open, return its URL directly.
+    // If it's expired (or retrieval fails), reset the row and create a fresh session.
+
+    it('returns existing Stripe session URL without creating a new row when PENDING has an open session', async () => {
+      const openUrl = 'https://checkout.stripe.com/c/pay/cs_existing_abc';
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      prisma.payment.findUnique.mockResolvedValue({
+        id: 'payment-1',
+        status: PaymentStatus.PENDING,
+        stripeCheckoutSessionId: 'cs_existing_abc',
+        stripePaymentIntentId: null,
+        failureReason: null,
+      });
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        status: 'open',
+        url: openUrl,
+      } as any);
+
+      const result = await service.initiatePayment('order-1');
+
+      expect(result.paymentUrl).toBe(openUrl);
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+      expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('does not call payment.create when PENDING row exists — prevents P2002 unique constraint violation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      prisma.payment.findUnique.mockResolvedValue({
+        id: 'payment-1',
+        status: PaymentStatus.PENDING,
+        stripeCheckoutSessionId: 'cs_existing_abc',
+        stripePaymentIntentId: null,
+        failureReason: null,
+      });
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        status: 'open',
+        url: 'https://checkout.stripe.com/c/pay/cs_existing_abc',
+      } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+    });
+
+    it('resets PENDING row and creates a fresh Stripe session when existing session is expired', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      prisma.payment.findUnique.mockResolvedValue({
+        id: 'payment-1',
+        status: PaymentStatus.PENDING,
+        stripeCheckoutSessionId: 'cs_expired',
+        stripePaymentIntentId: null,
+        failureReason: null,
+      });
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        status: 'expired',
+        url: null,
+      } as any);
+      (stripeClient as any).expireCheckoutSession = jest.fn().mockResolvedValue(undefined);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      const result = await service.initiatePayment('order-1');
+
+      expect(result.paymentUrl).toBe(mockSession.url);
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+      const resetCall = (prisma.payment.update as jest.Mock).mock.calls.find(
+        (c: any[]) => c[0]?.data?.stripeCheckoutSessionId === null,
+      );
+      expect(resetCall).toBeDefined();
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls through to reset path and creates a new session when retrieveCheckoutSession throws', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      prisma.payment.findUnique.mockResolvedValue({
+        id: 'payment-1',
+        status: PaymentStatus.PENDING,
+        stripeCheckoutSessionId: 'cs_unreachable',
+        stripePaymentIntentId: null,
+        failureReason: null,
+      });
+      stripeClient.retrieveCheckoutSession.mockRejectedValue(new Error('Stripe API unavailable'));
+      (stripeClient as any).expireCheckoutSession = jest.fn().mockResolvedValue(undefined);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      const result = await service.initiatePayment('order-1');
+
+      expect(result.paymentUrl).toBe(mockSession.url);
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('resets PENDING row directly without calling expireCheckoutSession when session ID is absent', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      prisma.payment.findUnique.mockResolvedValue({
+        id: 'payment-1',
+        status: PaymentStatus.PENDING,
+        stripeCheckoutSessionId: null,
+        stripePaymentIntentId: null,
+        failureReason: null,
+      });
+      (stripeClient as any).expireCheckoutSession = jest.fn().mockResolvedValue(undefined);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+
+      const result = await service.initiatePayment('order-1');
+
+      expect(result.paymentUrl).toBe(mockSession.url);
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+      expect((stripeClient as any).expireCheckoutSession).not.toHaveBeenCalled();
+    });
   });
 
   describe('getPaymentStatus', () => {

@@ -52,14 +52,29 @@ export class PaymentsService {
       });
     }
 
-    // Upsert the Payment row: if a prior attempt left a FAILED row (e.g. Stripe
-    // API error without a webhook, order still PENDING_PAYMENT), reuse that row
-    // rather than creating a new one — Payment.orderId is @unique and a plain
-    // create would throw P2002 on every retry.
+    // Upsert the Payment row — Payment.orderId is @unique so a plain create throws
+    // P2002 on any retry. Three cases:
+    //   1. PENDING + open session: customer navigated away and came back — reuse URL.
+    //   2. PENDING + expired/missing session, or FAILED: reset the row, create new session.
+    //   3. No prior row: create fresh.
     const existingPayment = await this.prisma.payment.findUnique({ where: { orderId } });
     let payment: { id: string };
 
-    if (existingPayment?.status === PaymentStatus.FAILED) {
+    if (existingPayment?.status === PaymentStatus.PENDING && existingPayment.stripeCheckoutSessionId) {
+      try {
+        const existingSession = await this.stripeClient.retrieveCheckoutSession(
+          existingPayment.stripeCheckoutSessionId,
+        );
+        if (existingSession.status === 'open' && existingSession.url) {
+          return { paymentUrl: existingSession.url };
+        }
+      } catch {
+        // Session not retrievable — fall through to reset and create a fresh session
+      }
+    }
+
+    if (existingPayment?.status === PaymentStatus.FAILED ||
+        existingPayment?.status === PaymentStatus.PENDING) {
       if (existingPayment.stripeCheckoutSessionId) {
         await this.stripeClient
           .expireCheckoutSession(existingPayment.stripeCheckoutSessionId)
