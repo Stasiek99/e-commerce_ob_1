@@ -473,10 +473,16 @@ export class AuthService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.emailVerificationToken.update({
-        where: { id: stored.id },
+      // Atomic guard: only the first concurrent request wins; usedAt: null in
+      // WHERE ensures a second request with the same token sees count=0 even if
+      // both passed the outer check above before either transaction committed.
+      const result = await tx.emailVerificationToken.updateMany({
+        where: { id: stored.id, usedAt: null },
         data: { usedAt: new Date() },
       });
+      if (result.count === 0) {
+        throw new BadRequestException('Invalid or expired magic link');
+      }
       // Magic link click implicitly proves email ownership
       if (!stored.user.isEmailVerified) {
         await tx.user.update({

@@ -1260,7 +1260,7 @@ describe('AuthService', () => {
       prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: jest.fn().mockResolvedValue({}) },
         }),
       );
@@ -1274,7 +1274,7 @@ describe('AuthService', () => {
       prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: jest.fn().mockResolvedValue({}) },
         }),
       );
@@ -1294,7 +1294,7 @@ describe('AuthService', () => {
       const txUserUpdate = jest.fn().mockResolvedValue({});
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: txUserUpdate },
         }),
       );
@@ -1314,7 +1314,7 @@ describe('AuthService', () => {
       const txUserUpdate = jest.fn().mockResolvedValue({});
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: txUserUpdate },
         }),
       );
@@ -1328,7 +1328,7 @@ describe('AuthService', () => {
       prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
       prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
         cb({
-          emailVerificationToken: { update: jest.fn().mockResolvedValue({}) },
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           user: { update: jest.fn().mockResolvedValue({}) },
         }),
       );
@@ -1336,6 +1336,40 @@ describe('AuthService', () => {
       await service.consumeMagicLink('valid-token');
 
       expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws BadRequestException when concurrent request already consumed the token (count=0)', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
+      prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
+        cb({
+          emailVerificationToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          user: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+
+      await expect(service.consumeMagicLink('raced-token')).rejects.toThrow(BadRequestException);
+
+      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+    });
+
+    it('passes usedAt: null in the updateMany WHERE clause to prevent double-consumption', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue(validStoredToken);
+      const txUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<any>) =>
+        cb({
+          emailVerificationToken: { updateMany: txUpdateMany },
+          user: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+
+      await service.consumeMagicLink('valid-token');
+
+      expect(txUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: validStoredToken.id, usedAt: null }),
+          data: { usedAt: expect.any(Date) },
+        }),
+      );
     });
   });
 
