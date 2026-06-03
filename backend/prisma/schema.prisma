@@ -107,10 +107,12 @@ model User {
   nip             String?
   isEmailVerified   Boolean   @default(false)
   pendingEmail      String?
-  marketingConsent  Boolean   @default(false)
+  marketingConsent   Boolean   @default(false)
   marketingConsentAt DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  analyticsConsent   Boolean   @default(false)
+  analyticsConsentAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   addresses               Address[]
   orders                  Order[]
@@ -689,4 +691,13 @@ model ShippingRate {
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
   @@map("shipping_rates")
+}
+
+model ConsentLog {
+  id           String   @id @default(uuid())
+  sessionHash  String   @map("session_hash")
+  analytics    Boolean
+  consentedAt  DateTime @default(now()) @map("consented_at")
+
+  @@map("consent_logs")
 }

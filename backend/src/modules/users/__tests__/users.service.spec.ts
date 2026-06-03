@@ -49,6 +49,9 @@ describe('UsersService', () => {
               findMany: jest.fn(),
               updateMany: jest.fn(),
             },
+            consentLog: {
+              create: jest.fn(),
+            },
             $transaction: jest.fn(),
           },
         },
@@ -302,4 +305,55 @@ describe('UsersService', () => {
       expect(prisma.address.update).not.toHaveBeenCalled();
     });
   });
+
+  describe('recordConsent', () => {
+    it('updates analyticsConsent and analyticsConsentAt for the given user', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', analyticsConsent: true });
+
+      await service.recordConsent('user-1', true);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: {
+          analyticsConsent: true,
+          analyticsConsentAt: expect.any(Date),
+        },
+      });
+    });
+
+    it('stores analyticsConsent: false when user rejects non-essential cookies', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', analyticsConsent: false });
+
+      await service.recordConsent('user-1', false);
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ analyticsConsent: false }),
+        }),
+      );
+    });
+  });
+
+  describe('recordAnonymousConsent', () => {
+    it('creates a ConsentLog entry with the provided session hash and analytics value', async () => {
+      prisma.consentLog.create.mockResolvedValue({ id: 'log-1' });
+
+      await service.recordAnonymousConsent('abc123hash', true);
+
+      expect(prisma.consentLog.create).toHaveBeenCalledWith({
+        data: { sessionHash: 'abc123hash', analytics: true },
+      });
+    });
+
+    it('creates a ConsentLog entry with analytics: false when visitor rejects', async () => {
+      prisma.consentLog.create.mockResolvedValue({ id: 'log-2' });
+
+      await service.recordAnonymousConsent('xyz789hash', false);
+
+      expect(prisma.consentLog.create).toHaveBeenCalledWith({
+        data: { sessionHash: 'xyz789hash', analytics: false },
+      });
+    });
+  });
 });
+

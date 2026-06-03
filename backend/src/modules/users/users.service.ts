@@ -226,4 +226,17 @@ export class UsersService {
       this.prisma.user.delete({ where: { id: userId } }),
     ]);
   }
+
+  async recordConsent(userId: string, analytics: boolean): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { analyticsConsent: analytics, analyticsConsentAt: new Date() },
+    });
+  }
+
+  async recordAnonymousConsent(sessionHash: string, analytics: boolean): Promise<void> {
+    await this.prisma.consentLog.create({
+      data: { sessionHash, analytics },
+    });
+  }
 }

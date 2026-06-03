@@ -8,13 +8,17 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
+import { createHash } from 'crypto';
 import { UsersService } from './users.service';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
+import { Public } from '../auth/decorators/public.decorator';
 import { REFRESH_COOKIE } from '../auth/auth.constants';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '@prisma/client';
@@ -83,6 +87,24 @@ export class UsersController {
     const updated = await this.usersService.update(user.id, dto);
     const { passwordHash, ...result } = updated;
     return result;
+  }
+
+  @Post('consent')
+  @Public()
+  @UseGuards(OptionalJwtGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async recordConsent(
+    @Body() body: { analytics: boolean },
+    @CurrentUser() user: User | undefined,
+    @Req() req: Request,
+  ): Promise<void> {
+    if (user) {
+      await this.usersService.recordConsent(user.id, body.analytics);
+    } else {
+      const raw = `${req.ip}|${req.headers['user-agent'] ?? ''}`;
+      const sessionHash = createHash('sha256').update(raw).digest('hex');
+      await this.usersService.recordAnonymousConsent(sessionHash, body.analytics);
+    }
   }
 
   @Get('me/addresses')
