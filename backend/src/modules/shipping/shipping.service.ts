@@ -133,8 +133,18 @@ export class ShippingService {
             reference: order.orderNumber,
           });
           trackingNumber = result.trackingNumber;
-          labelUrl = result.labelUrl;
           rawResponse = result;
+
+          const pdfBuffer = await this.gls.fetchLabelPdf(result.parcelId);
+          if (pdfBuffer) {
+            labelUrl = await this.storage.uploadShippingLabel(
+              pdfBuffer,
+              `gls-${result.parcelId}.pdf`,
+            );
+            this.logger.log(`Label uploaded to Supabase for GLS parcel ${result.parcelId}`);
+          } else {
+            labelUrl = `mock-label-gls-${result.parcelId}.pdf`;
+          }
           break;
         }
         case CarrierCode.DPD:
