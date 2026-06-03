@@ -347,6 +347,9 @@ export class AuthService {
   }
 
   async requestPasswordReset(email: string): Promise<void> {
+    const dedupeKey = `pwd-reset-sent:${email.toLowerCase()}`;
+    if (await this.redis.exists(dedupeKey)) return;
+
     const user = await this.usersService.findByEmail(email);
     // Always resolve silently — never reveal whether an email is registered
     if (!user || !user.passwordHash) return;
@@ -372,6 +375,8 @@ export class AuthService {
       firstName: user.firstName ?? 'Kliencie',
       resetUrl,
     });
+
+    await this.redis.set(dedupeKey, '1', 'EX', 300);
   }
 
   async resetPassword(rawToken: string, newPassword: string): Promise<void> {
@@ -429,6 +434,9 @@ export class AuthService {
   }
 
   async requestMagicLink(email: string): Promise<void> {
+    const dedupeKey = `magic-link-sent:${email.toLowerCase()}`;
+    if (await this.redis.exists(dedupeKey)) return;
+
     const user = await this.usersService.findByEmail(email);
     // Always silent — prevents email enumeration
     if (!user) return;
@@ -454,6 +462,8 @@ export class AuthService {
       firstName: user.firstName ?? 'Kliencie',
       magicUrl,
     });
+
+    await this.redis.set(dedupeKey, '1', 'EX', 300);
   }
 
   async consumeMagicLink(rawToken: string) {

@@ -910,6 +910,53 @@ describe('AuthService', () => {
         expect.objectContaining({ to: 'test@example.com' }),
       );
     });
+
+    it('returns silently without sending email when per-email dedupe key exists in Redis', async () => {
+      redis.exists.mockResolvedValue(1); // key present → cooldown active
+
+      await service.requestPasswordReset('test@example.com');
+
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+      expect(emailService.sendPasswordReset).not.toHaveBeenCalled();
+      expect(prisma.passwordResetToken.create).not.toHaveBeenCalled();
+    });
+
+    it('sets per-email dedupe key with 300s TTL after sending the reset email', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: 'hashed' } as any);
+
+      await service.requestPasswordReset('test@example.com');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        `pwd-reset-sent:test@example.com`,
+        '1',
+        'EX',
+        300,
+      );
+    });
+
+    it('does not set dedupe key when user has no password (email never sent)', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: null } as any);
+
+      await service.requestPasswordReset('test@example.com');
+
+      expect(redis.set).not.toHaveBeenCalledWith(
+        expect.stringContaining('pwd-reset-sent'),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('normalises email to lowercase before checking the dedupe key', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: 'hashed' } as any);
+
+      await service.requestPasswordReset('Test@Example.COM');
+
+      expect(redis.exists).toHaveBeenCalledWith('pwd-reset-sent:test@example.com');
+    });
   });
 
   describe('resetPassword', () => {
@@ -1206,6 +1253,39 @@ describe('AuthService', () => {
       expect(emailService.sendMagicLink).toHaveBeenCalledWith(
         expect.objectContaining({ firstName: 'Kliencie' }),
       );
+    });
+
+    it('returns silently without sending magic link when per-email dedupe key exists in Redis', async () => {
+      redis.exists.mockResolvedValue(1); // cooldown active
+
+      await service.requestMagicLink('test@example.com');
+
+      expect(usersService.findByEmail).not.toHaveBeenCalled();
+      expect(emailService.sendMagicLink).not.toHaveBeenCalled();
+      expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+    });
+
+    it('sets per-email dedupe key with 300s TTL after sending the magic link', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+
+      await service.requestMagicLink('test@example.com');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'magic-link-sent:test@example.com',
+        '1',
+        'EX',
+        300,
+      );
+    });
+
+    it('normalises email to lowercase before checking the dedupe key', async () => {
+      redis.exists.mockResolvedValue(0);
+      usersService.findByEmail.mockResolvedValue(mockUser as any);
+
+      await service.requestMagicLink('Test@Example.COM');
+
+      expect(redis.exists).toHaveBeenCalledWith('magic-link-sent:test@example.com');
     });
   });
 
