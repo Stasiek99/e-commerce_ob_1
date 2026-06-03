@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import bootstrap from './main.server';
 import { LOCAL_STORAGE } from './app/core/tokens/storage.tokens';
 import { ssrCacheHeaders } from './ssr-cache-headers';
+import { ssrSecurityHeaders } from './ssr-security-headers';
 
 export interface AppOptions {
   browserDistFolder?: string;
@@ -38,6 +39,7 @@ export function app(opts: AppOptions = {}): express.Express {
   server.set('views', browserDistFolder);
 
   server.use(ssrCacheHeaders);
+  server.use(ssrSecurityHeaders);
 
   // Serve static files (local dev and Railway; Vercel CDN handles this in production)
   server.get(
