@@ -51,6 +51,7 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
+  [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.CANCELLED],
 };
 
 @Injectable()

@@ -13,6 +13,7 @@ export enum OrderStatus {
   CANCELLED = 'CANCELLED',
   REFUNDED = 'REFUNDED',
   PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED',
+  DISPUTE_HOLD = 'DISPUTE_HOLD',
 }
 
 export enum PaymentStatus {

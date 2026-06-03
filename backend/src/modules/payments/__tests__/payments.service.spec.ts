@@ -2219,6 +2219,504 @@ describe('PaymentsService', () => {
     });
   });
 
+  // ── Dispute webhook handlers ─────────────────────────────────────────────────
+  // Invariants enforced by the fix:
+  //   1. charge.dispute.created → order → DISPUTE_HOLD, admin email + Sentry alert
+  //   2. charge.dispute.closed (won) → order restored to pre-dispute status
+  //   3. charge.dispute.closed (lost) → CANCELLED; stock restored only if not shipped
+  //   4. Duplicate events (P2002) are swallowed; non-P2002 errors are re-thrown
+
+  describe('dispute webhook handlers', () => {
+    const buildDispute = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      id: 'dp_test_123',
+      payment_intent: 'pi_test_abc123',
+      reason: 'fraudulent',
+      status: 'needs_response',
+      amount: 14999,
+      currency: 'pln',
+      evidence_details: { due_by: 1_800_000_000 },
+      ...overrides,
+    });
+
+    const mockOrderPaid = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      status: OrderStatus.PAID,
+      snapshotEmail: 'test@example.com',
+      snapshotFirstName: 'Jan',
+      totalInCents: 14999,
+    };
+
+    const mockPaymentForDispute = {
+      id: 'payment-1',
+      orderId: 'order-1',
+      status: PaymentStatus.COMPLETED,
+      stripePaymentIntentId: 'pi_test_abc123',
+      amountInCents: 14999,
+      order: mockOrderPaid,
+    };
+
+    const mockPaymentForDisputeClosed = {
+      ...mockPaymentForDispute,
+      order: {
+        ...mockOrderPaid,
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 },
+        ],
+        shipment: null,
+      },
+    };
+
+    beforeEach(() => {
+      // Dynamically extend the mocks that the outer beforeEach doesn't include
+      prisma.orderEvent.findFirst = jest.fn();
+      (emailService as any).sendDisputeAlert = jest.fn().mockResolvedValue(undefined);
+    });
+
+    // ── charge.dispute.created routing ──────────────────────────────────────
+
+    it('routes charge.dispute.created to the dispute handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute()));
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_test_abc123' } }),
+      );
+    });
+
+    it('returns early when dispute has no payment_intent', async () => {
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.created', buildDispute({ payment_intent: null })),
+      );
+
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('extracts payment_intent.id when payment_intent is an object', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.created', buildDispute({ payment_intent: { id: 'pi_nested' } })),
+      );
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_nested' } }),
+      );
+    });
+
+    it('returns early when no payment is found for the PaymentIntent', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute()));
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips when order is already DISPUTE_HOLD (idempotency guard)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPaymentForDispute,
+        order: { ...mockOrderPaid, status: OrderStatus.DISPUTE_HOLD },
+      });
+
+      await service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute()));
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('transitions order to DISPUTE_HOLD when dispute is opened', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDispute);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute()));
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('records an OrderEvent with DISPUTE_HOLD toStatus and prior status as fromStatus', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDispute);
+
+      let capturedEvent: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedEvent = args.data;
+            }),
+          },
+        });
+      });
+
+      await service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute()));
+
+      expect(capturedEvent.fromStatus).toBe(OrderStatus.PAID);
+      expect(capturedEvent.toStatus).toBe(OrderStatus.DISPUTE_HOLD);
+      expect(capturedEvent.actor).toBe('SYSTEM:stripe-webhook');
+      expect(capturedEvent.note).toContain('dp_test_123');
+      expect(capturedEvent.note).toContain('fraudulent');
+    });
+
+    it('swallows P2002 from duplicate dispute.created event delivery', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDispute);
+      prisma.$transaction.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint', {
+          code: 'P2002',
+          clientVersion: '6.0.0',
+          meta: { target: ['event_id'] },
+        }),
+      );
+
+      await expect(
+        service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute())),
+      ).resolves.not.toThrow();
+    });
+
+    it('re-throws non-P2002 errors from the transaction', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDispute);
+      prisma.$transaction.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Connection failed', {
+          code: 'P1001',
+          clientVersion: '6.0.0',
+          meta: {},
+        }),
+      );
+
+      await expect(
+        service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute())),
+      ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
+    });
+
+    it('sends admin dispute alert email with dispute details when admin email is configured', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDispute);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.created', buildDispute({ reason: 'credit_not_processed' })),
+      );
+
+      await Promise.resolve();
+      expect((emailService as any).sendDisputeAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderNumber: 'ORD-2026-000001',
+          reason: 'credit_not_processed',
+          disputeId: 'dp_test_123',
+        }),
+      );
+    });
+
+    it('captures a Sentry error event when a dispute is opened', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDispute);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(buildEvent('charge.dispute.created', buildDispute()));
+
+      expect(Sentry.withScope).toHaveBeenCalled();
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('ORD-2026-000001'),
+        'error',
+      );
+    });
+
+    // ── charge.dispute.closed routing ───────────────────────────────────────
+
+    it('routes charge.dispute.closed to the dispute closed handler', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+      );
+
+      expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { stripePaymentIntentId: 'pi_test_abc123' } }),
+      );
+    });
+
+    it('skips charge.dispute.closed when no payment found', async () => {
+      prisma.payment.findUnique.mockResolvedValue(null);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips charge.dispute.closed when order is not in DISPUTE_HOLD', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPaymentForDisputeClosed,
+        order: { ...mockPaymentForDisputeClosed.order, status: OrderStatus.PAID },
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('does not touch the DB for non-terminal dispute.closed statuses (e.g. warning_closed)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'warning_closed' })),
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    // ── charge.dispute.closed — WON ─────────────────────────────────────────
+
+    it('restores order to prior status from the DISPUTE_HOLD OrderEvent when dispute is won', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+      (prisma.orderEvent.findFirst as jest.Mock).mockResolvedValue({
+        fromStatus: OrderStatus.SHIPPED,
+      });
+
+      let capturedOrderUpdate: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderUpdate = args;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+      );
+
+      expect(capturedOrderUpdate.data.status).toBe(OrderStatus.SHIPPED);
+    });
+
+    it('falls back to PAID when no DISPUTE_HOLD OrderEvent is found', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+      (prisma.orderEvent.findFirst as jest.Mock).mockResolvedValue(null);
+
+      let capturedOrderUpdate: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderUpdate = args;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+      );
+
+      expect(capturedOrderUpdate.data.status).toBe(OrderStatus.PAID);
+    });
+
+    it('creates an OrderEvent with DISPUTE_HOLD fromStatus and prior toStatus when won', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+      (prisma.orderEvent.findFirst as jest.Mock).mockResolvedValue({ fromStatus: OrderStatus.PROCESSING });
+
+      let capturedEvent: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedEvent = args.data;
+            }),
+          },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+      );
+
+      expect(capturedEvent.fromStatus).toBe(OrderStatus.DISPUTE_HOLD);
+      expect(capturedEvent.toStatus).toBe(OrderStatus.PROCESSING);
+      expect(capturedEvent.note).toContain('WON');
+    });
+
+    it('swallows P2002 on won dispute duplicate delivery', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+      (prisma.orderEvent.findFirst as jest.Mock).mockResolvedValue(null);
+      prisma.$transaction.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint', {
+          code: 'P2002',
+          clientVersion: '6.0.0',
+          meta: { target: ['event_id'] },
+        }),
+      );
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('charge.dispute.closed', buildDispute({ status: 'won' })),
+        ),
+      ).resolves.not.toThrow();
+    });
+
+    // ── charge.dispute.closed — LOST ────────────────────────────────────────
+
+    it('cancels the order when dispute is lost', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+
+      let capturedOrderStatus: OrderStatus | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedOrderStatus = args.data.status;
+            }),
+          },
+          productVariant: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
+      );
+
+      expect(capturedOrderStatus).toBe(OrderStatus.CANCELLED);
+    });
+
+    it('restores stock when dispute is lost and no shipment label was generated', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPaymentForDisputeClosed,
+        order: {
+          ...mockPaymentForDisputeClosed.order,
+          shipment: null,
+          items: [
+            { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 },
+            { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 },
+          ],
+        },
+      });
+
+      const stockRestored: Array<{ id: string; increment: number }> = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              stockRestored.push({ id: args.where.id, increment: args.data.stock.increment });
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
+      );
+
+      expect(stockRestored).toEqual(
+        expect.arrayContaining([
+          { id: 'pv-1', increment: 2 },
+          { id: 'pv-2', increment: 1 },
+        ]),
+      );
+    });
+
+    it('does NOT restore stock when dispute is lost and goods were already shipped (labelUrl set)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPaymentForDisputeClosed,
+        order: {
+          ...mockPaymentForDisputeClosed.order,
+          shipment: { labelUrl: 'https://example.com/label.pdf' },
+          items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+        },
+      });
+
+      const stockUpdates: any[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              stockUpdates.push(args);
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
+      );
+
+      expect(stockUpdates).toHaveLength(0);
+    });
+
+    it('captures a Sentry fatal event when dispute is lost', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          order: { update: jest.fn() },
+          productVariant: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
+      );
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('ORD-2026-000001'),
+        'fatal',
+      );
+    });
+
+    it('swallows P2002 on lost dispute duplicate delivery', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
+      prisma.$transaction.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint', {
+          code: 'P2002',
+          clientVersion: '6.0.0',
+          meta: { target: ['event_id'] },
+        }),
+      );
+
+      await expect(
+        service.handleWebhookEvent(
+          buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
+        ),
+      ).resolves.not.toThrow();
+    });
+  });
+
   // ─── Distributed lock guard ───────────────────────────────────────────────────
 
   describe('distributed lock guard', () => {

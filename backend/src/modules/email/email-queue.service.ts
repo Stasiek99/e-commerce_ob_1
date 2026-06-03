@@ -111,4 +111,8 @@ export class EmailQueueService {
   sendFraudReviewAlert(data: Payload<'fraud_review_alert'>) {
     return this.enqueue('fraud_review_alert', { type: 'fraud_review_alert', payload: data });
   }
+
+  sendDisputeAlert(data: Payload<'dispute_alert'>) {
+    return this.enqueue('dispute_alert', { type: 'dispute_alert', payload: data });
+  }
 }

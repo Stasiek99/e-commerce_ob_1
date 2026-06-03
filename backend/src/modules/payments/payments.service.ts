@@ -173,6 +173,14 @@ export class PaymentsService {
         await this.handleRefundUpdate(event.data.object as Stripe.Refund, event.id);
         break;
 
+      case 'charge.dispute.created':
+        await this.handleDisputeCreated(event.data.object as Stripe.Dispute, event.id);
+        break;
+
+      case 'charge.dispute.closed':
+        await this.handleDisputeClosed(event.data.object as Stripe.Dispute, event.id);
+        break;
+
       default:
         // Stripe sends ~100 event types. We only react to the ones we care
         // about; everything else is ACKed with 200 so Stripe doesn't retry.
@@ -913,6 +921,239 @@ export class PaymentsService {
     this.logger.log(
       `Partial refund of ${refundAmountInCents} gr issued for order ${payment.order.orderNumber}`,
     );
+  }
+
+  private async handleDisputeCreated(dispute: Stripe.Dispute, eventId?: string): Promise<void> {
+    const paymentIntentId =
+      typeof dispute.payment_intent === 'string'
+        ? dispute.payment_intent
+        : (dispute.payment_intent?.id ?? null);
+
+    if (!paymentIntentId) {
+      this.logger.warn(`Dispute ${dispute.id} has no payment_intent — cannot find order`);
+      return;
+    }
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+      include: { order: true },
+    });
+
+    if (!payment) {
+      this.logger.warn(`No payment found for PaymentIntent ${paymentIntentId} (dispute ${dispute.id})`);
+      return;
+    }
+
+    if (payment.order.status === OrderStatus.DISPUTE_HOLD) {
+      this.logger.log(`Order ${payment.order.orderNumber} already in DISPUTE_HOLD — skipping`);
+      return;
+    }
+
+    const priorStatus = payment.order.status;
+    const evidenceDeadline = dispute.evidence_details?.due_by
+      ? new Date(dispute.evidence_details.due_by * 1000).toISOString()
+      : 'unknown';
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (eventId) {
+          await tx.processedStripeEvent.create({ data: { eventId } });
+        }
+        await tx.order.update({
+          where: { id: payment.orderId },
+          data: { status: OrderStatus.DISPUTE_HOLD },
+        });
+        await tx.orderEvent.create({
+          data: {
+            orderId: payment.orderId,
+            fromStatus: priorStatus,
+            toStatus: OrderStatus.DISPUTE_HOLD,
+            actor: 'SYSTEM:stripe-webhook',
+            note: `Dispute ${dispute.id} opened — reason: ${dispute.reason}, evidence due: ${evidenceDeadline}`,
+          },
+        });
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.log(`Dispute event ${eventId} already processed — skipping`);
+        return;
+      }
+      throw err;
+    }
+
+    this.logger.warn(
+      `Dispute opened: order ${payment.order.orderNumber} → DISPUTE_HOLD. Reason: ${dispute.reason}. Evidence due: ${evidenceDeadline}`,
+    );
+
+    Sentry.withScope((scope) => {
+      scope.setLevel('error');
+      scope.setTag('payment.event', 'dispute_created');
+      scope.setContext('dispute', {
+        disputeId: dispute.id,
+        orderNumber: payment.order.orderNumber,
+        reason: dispute.reason,
+        amount: dispute.amount,
+        currency: dispute.currency,
+        evidenceDeadline,
+      });
+      Sentry.captureMessage(
+        `Stripe dispute opened: order ${payment.order.orderNumber} — reason: ${dispute.reason} — evidence due ${evidenceDeadline}`,
+        'error',
+      );
+    });
+
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+    if (adminEmail) {
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+      this.emailService
+        .sendDisputeAlert({
+          to: adminEmail,
+          orderNumber: payment.order.orderNumber,
+          customerEmail: payment.order.snapshotEmail,
+          amountInCents: dispute.amount,
+          reason: dispute.reason,
+          evidenceDeadline,
+          disputeId: dispute.id,
+          adminUrl: frontendUrl ? `${frontendUrl}/admin/orders/${payment.orderId}` : undefined,
+        })
+        .catch((err: Error) => {
+          this.logger.error(
+            `Dispute alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
+          );
+          Sentry.captureException(err);
+        });
+    }
+  }
+
+  private async handleDisputeClosed(dispute: Stripe.Dispute, eventId?: string): Promise<void> {
+    const paymentIntentId =
+      typeof dispute.payment_intent === 'string'
+        ? dispute.payment_intent
+        : (dispute.payment_intent?.id ?? null);
+
+    if (!paymentIntentId) {
+      this.logger.warn(`Dispute ${dispute.id} closed — no payment_intent, cannot find order`);
+      return;
+    }
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+      include: { order: { include: { items: true, shipment: true } } },
+    });
+
+    if (!payment) {
+      this.logger.warn(`No payment found for PaymentIntent ${paymentIntentId} (dispute ${dispute.id})`);
+      return;
+    }
+
+    if (payment.order.status !== OrderStatus.DISPUTE_HOLD) {
+      this.logger.log(
+        `Order ${payment.order.orderNumber} is ${payment.order.status}, not DISPUTE_HOLD — ignoring dispute closed event`,
+      );
+      return;
+    }
+
+    if (dispute.status === 'won') {
+      const disputeEvent = await this.prisma.orderEvent.findFirst({
+        where: { orderId: payment.orderId, toStatus: OrderStatus.DISPUTE_HOLD },
+        orderBy: { createdAt: 'desc' },
+      });
+      const restoreStatus = disputeEvent?.fromStatus ?? OrderStatus.PAID;
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          if (eventId) {
+            await tx.processedStripeEvent.create({ data: { eventId } });
+          }
+          await tx.order.update({
+            where: { id: payment.orderId },
+            data: { status: restoreStatus },
+          });
+          await tx.orderEvent.create({
+            data: {
+              orderId: payment.orderId,
+              fromStatus: OrderStatus.DISPUTE_HOLD,
+              toStatus: restoreStatus,
+              actor: 'SYSTEM:stripe-webhook',
+              note: `Dispute ${dispute.id} closed WON — order restored to ${restoreStatus}`,
+            },
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.log(`Dispute closed event ${eventId} already processed — skipping`);
+          return;
+        }
+        throw err;
+      }
+
+      this.logger.log(
+        `Dispute ${dispute.id} WON: order ${payment.order.orderNumber} restored to ${restoreStatus}`,
+      );
+    } else if (dispute.status === 'lost') {
+      // Funds already taken by Stripe. Restore stock only if label was never generated.
+      const goodsShipped = !!payment.order.shipment?.labelUrl;
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          if (eventId) {
+            await tx.processedStripeEvent.create({ data: { eventId } });
+          }
+          await tx.order.update({
+            where: { id: payment.orderId },
+            data: { status: OrderStatus.CANCELLED },
+          });
+          if (!goodsShipped) {
+            for (const item of payment.order.items) {
+              const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+              if (activeQty > 0) {
+                await tx.productVariant.update({
+                  where: { id: item.productVariantId },
+                  data: { stock: { increment: activeQty } },
+                });
+              }
+            }
+          }
+          await tx.orderEvent.create({
+            data: {
+              orderId: payment.orderId,
+              fromStatus: OrderStatus.DISPUTE_HOLD,
+              toStatus: OrderStatus.CANCELLED,
+              actor: 'SYSTEM:stripe-webhook',
+              note: `Dispute ${dispute.id} closed LOST${goodsShipped ? ' — goods shipped, stock not restored' : ' — stock restored'}`,
+            },
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.log(`Dispute closed event ${eventId} already processed — skipping`);
+          return;
+        }
+        throw err;
+      }
+
+      this.logger.error(
+        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled. Goods shipped: ${goodsShipped}`,
+      );
+      Sentry.withScope((scope) => {
+        scope.setLevel('fatal');
+        scope.setTag('payment.event', 'dispute_lost');
+        scope.setContext('dispute', {
+          disputeId: dispute.id,
+          orderNumber: payment.order.orderNumber,
+          amount: dispute.amount,
+          goodsShipped,
+        });
+        Sentry.captureMessage(
+          `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed`,
+          'fatal',
+        );
+      });
+    } else {
+      this.logger.debug(`Dispute ${dispute.id} closed with status "${dispute.status}" — no action taken`);
+    }
   }
 
   /**

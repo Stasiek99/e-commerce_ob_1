@@ -25,6 +25,7 @@ enum OrderStatus {
   CANCELLED
   REFUNDED
   PARTIALLY_REFUNDED
+  DISPUTE_HOLD
 }
 
 enum PaymentStatus {

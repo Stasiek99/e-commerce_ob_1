@@ -96,6 +96,11 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationShut
         await this.emailService.sendFraudReviewAlert(payload);
         break;
 
+      case 'dispute_alert':
+        // Admin-only alert — no customer-facing template needed; log and skip if unimplemented.
+        this.logger.warn(`dispute_alert job received for order ${(payload as any).orderNumber} — no email template wired yet`);
+        break;
+
       default: {
         const _exhaustive: never = job.data;
         throw new Error(`Unknown email job type: ${(_exhaustive as any).type}`);
