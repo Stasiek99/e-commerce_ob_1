@@ -324,6 +324,7 @@ model ProductImage {
   isPrimary   Boolean  @default(false)
   createdAt   DateTime @default(now())
 
+  @@index([productId])
   @@map("product_images")
 }
 
