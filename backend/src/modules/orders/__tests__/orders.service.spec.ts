@@ -81,7 +81,7 @@ describe('OrdersService', () => {
           provide: PrismaService,
           useValue: {
             address: { findFirst: jest.fn() },
-            user: { findUnique: jest.fn().mockResolvedValue(null) },
+            user: { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn().mockResolvedValue({}) },
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
             orderEvent: { create: jest.fn(), findMany: jest.fn() },
             cart: { findFirst: jest.fn() },
@@ -3048,6 +3048,204 @@ describe('OrdersService', () => {
       expect(loggerWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('shipping notification email'),
         emailError,
+      );
+    });
+  });
+
+  // ── GDPR: marketingConsent guard on dispatchReviewRequestEmail ───────────────
+
+  describe('dispatchReviewRequestEmail — GDPR marketingConsent guard', () => {
+    it('does not send review email when order is not found', async () => {
+      prisma.order.findUnique.mockResolvedValue(null);
+      const emailService = (service as any).emailService;
+
+      await (service as any).dispatchReviewRequestEmail('nonexistent-order');
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not send review email when order has no linked user (guest checkout)', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'guest@example.com',
+        snapshotFirstName: 'Guest',
+        user: null,
+        items: [],
+      });
+      const emailService = (service as any).emailService;
+
+      await (service as any).dispatchReviewRequestEmail('order-guest');
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not send review email when user has marketingConsent: false', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'buyer@example.com',
+        snapshotFirstName: 'Jan',
+        user: { marketingConsent: false },
+        items: [],
+      });
+      const emailService = (service as any).emailService;
+
+      await (service as any).dispatchReviewRequestEmail('order-no-consent');
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('sends review email when user has marketingConsent: true', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-042',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        user: { marketingConsent: true },
+        items: [
+          {
+            productVariant: {
+              product: {
+                name: 'Rose Oud',
+                slug: 'rose-oud',
+                images: [{ url: 'https://cdn.example.com/rose.jpg' }],
+              },
+            },
+          },
+        ],
+      });
+      const emailService = (service as any).emailService;
+
+      await (service as any).dispatchReviewRequestEmail('order-consent');
+
+      expect(emailService.sendReviewRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'jan@example.com',
+          firstName: 'Jan',
+          orderNumber: 'ORD-042',
+          products: [
+            expect.objectContaining({ name: 'Rose Oud', reviewUrl: expect.stringContaining('rose-oud') }),
+          ],
+        }),
+      );
+    });
+
+    it('deduplicates products when multiple order items share the same slug', async () => {
+      const sharedProduct = {
+        name: 'Rose Oud',
+        slug: 'rose-oud',
+        images: [{ url: 'https://cdn.example.com/rose.jpg' }],
+      };
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-043',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        user: { marketingConsent: true },
+        items: [
+          { productVariant: { product: sharedProduct } },
+          { productVariant: { product: sharedProduct } },
+        ],
+      });
+      const emailService = (service as any).emailService;
+
+      await (service as any).dispatchReviewRequestEmail('order-dupe');
+
+      expect(emailService.sendReviewRequest).toHaveBeenCalledTimes(1);
+      const call = emailService.sendReviewRequest.mock.calls[0][0];
+      expect(call.products).toHaveLength(1);
+    });
+  });
+
+  // ── GDPR: marketingConsent persistence in createFromCart ─────────────────────
+
+  describe('createFromCart — marketingConsent persistence', () => {
+    const mockAddress = {
+      firstName: 'Jan',
+      lastName: 'Kowalski',
+      street: 'ul. Marszałkowska 1',
+      city: 'Warszawa',
+      postalCode: '00-001',
+      phone: '+48123456789',
+    };
+
+    const buildTx = () => ({
+      $executeRawUnsafe: jest.fn(),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+      productVariant: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+      },
+      coupon: { findUnique: jest.fn().mockResolvedValue(null) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      cart: { findFirst: jest.fn().mockResolvedValue(null) },
+      cartItem: { deleteMany: jest.fn() },
+      orderEvent: { create: jest.fn() },
+    });
+
+    beforeEach(() => {
+      cartService.getOrCreate.mockResolvedValue({
+        id: 'cart-1',
+        totalInCents: 34900,
+        items: [{
+          productVariantId: 'pv-1',
+          quantity: 1,
+          productName: 'Perfume',
+          variantLabel: '50ml',
+          priceInCents: 34900,
+          vatRate: 2300,
+          sku: 'SKU-001',
+          stock: 10,
+          imageUrl: null,
+          slug: 'perfume',
+        }],
+      } as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(buildTx()));
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+    });
+
+    it('updates user marketingConsent when dto.marketingConsent is true and userId is provided', async () => {
+      await service.createFromCart('user-1', undefined, 'jan@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        marketingConsent: true,
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { marketingConsent: true, marketingConsentAt: expect.any(Date) },
+      });
+    });
+
+    it('does not update marketingConsent when dto.marketingConsent is false', async () => {
+      await service.createFromCart('user-1', undefined, 'jan@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        marketingConsent: false,
+      });
+
+      expect(prisma.user.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
+      );
+    });
+
+    it('does not update marketingConsent when dto.marketingConsent is undefined', async () => {
+      await service.createFromCart('user-1', undefined, 'jan@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(prisma.user.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
+      );
+    });
+
+    it('does not update marketingConsent for guest checkout even when dto.marketingConsent is true', async () => {
+      await service.createFromCart(undefined, 'sess-1', 'guest@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+        marketingConsent: true,
+      });
+
+      expect(prisma.user.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
       );
     });
   });
