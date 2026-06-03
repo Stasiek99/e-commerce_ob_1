@@ -253,6 +253,67 @@ describe('OrdersService', () => {
       ).rejects.toThrow('DPD pickup point code is required');
     });
 
+    it('throws BadRequestException when a cart variant is deactivated before checkout', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const findMany = jest.fn()
+          // First call: isActive pre-check returns only 1 active variant (pv-2 was deactivated)
+          .mockResolvedValueOnce([{ id: 'pv-1' }])
+          // Second call (fresh prices) would not be reached, but stub it anyway
+          .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]);
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn(), findMany },
+          order: { create: jest.fn() },
+          cart: { findFirst: jest.fn() },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow('no longer available');
+    });
+
+    it('does not decrement stock when a deactivated variant blocks checkout', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      const updateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany,
+            findMany: jest.fn().mockResolvedValueOnce([{ id: 'pv-1' }]),
+          },
+          order: { create: jest.fn() },
+          cart: { findFirst: jest.fn() },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(updateMany).not.toHaveBeenCalled();
+    });
+
     it('should NOT throw if DPD_COURIER selected without dpdPickupPointCode (home delivery)', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 
@@ -445,7 +506,12 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn()
+              .mockResolvedValueOnce([{ id: 'pv-1' }])             // isActive pre-check (1-item cart)
+              .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]), // fresh prices
+          },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
@@ -518,6 +584,7 @@ describe('OrdersService', () => {
           productVariant: {
             // count=0 means the WHERE stock >= qty condition was not met
             updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1' }, { id: 'pv-2' }]),
           },
           order: { create: jest.fn() },
           cart: { findFirst: jest.fn() },
@@ -3192,7 +3259,9 @@ describe('OrdersService', () => {
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+        findMany: jest.fn()
+          .mockResolvedValueOnce([{ id: 'pv-1' }])                       // isActive pre-check (1-item cart)
+          .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]),      // fresh prices
       },
       coupon: { findUnique: jest.fn().mockResolvedValue(null) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },

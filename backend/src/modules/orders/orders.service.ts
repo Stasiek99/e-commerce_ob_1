@@ -199,6 +199,16 @@ export class OrdersService implements OnModuleInit {
       // Generate order number using raw SQL to avoid race conditions
       const orderNumber = await this.generateOrderNumber(tx);
 
+      // Reject checkout if any variant was deactivated after the cart was populated.
+      const variantIds = cart.items.map((i: CartItem) => i.productVariantId);
+      const activeVariants = await tx.productVariant.findMany({
+        where: { id: { in: variantIds }, isActive: true },
+        select: { id: true },
+      });
+      if (activeVariants.length !== variantIds.length) {
+        throw new BadRequestException('One or more items in your cart are no longer available');
+      }
+
       // Atomically check and decrement stock in a single UPDATE statement.
       // A separate findUnique + update would be a TOCTOU race: two concurrent
       // transactions can both read stock=1, both pass the check, both decrement
