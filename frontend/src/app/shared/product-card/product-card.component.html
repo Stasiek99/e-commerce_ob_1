@@ -59,6 +59,9 @@
         } @else {
           <p class="product-card__price">od {{ firstVariant?.priceInCents | price }}</p>
         }
+        @if (unitPriceText) {
+          <p class="product-card__unit-price">{{ unitPriceText }}</p>
+        }
       </div>
     </div>
   </a>

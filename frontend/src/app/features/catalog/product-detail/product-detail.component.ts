@@ -213,6 +213,9 @@ const CATEGORY_LABELS: Record<string, string> = {
                 Najniższa cena z 30 dni: {{ (selectedVariant()!.lowestPrice30dInCents ?? selectedVariant()!.priceInCents) | price }}
               </p>
             }
+            @if (unitPriceText()) {
+              <p class="detail__unit-price">{{ unitPriceText() }}</p>
+            }
 
             <!-- Quantity + Add to cart + Wishlist -->
             <div class="detail__cta">
@@ -672,6 +675,7 @@ const CATEGORY_LABELS: Record<string, string> = {
       flex-shrink: 0;
     }
     .detail__omnibus { font-size: 12px; color: var(--color-secondary); margin: -12px 0 20px; font-variant-numeric: tabular-nums; }
+    .detail__unit-price { font-size: 12px; color: var(--color-secondary); margin: 0 0 16px; font-variant-numeric: tabular-nums; }
     .detail__stock { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
     .detail__stock tui-icon { font-size: 14px; }
     .detail__stock--ok { color: var(--color-success); }
@@ -1084,6 +1088,13 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   reviewBody = '';
 
   readonly wishlisted = computed(() => this.wishlist.isInWishlist(this.product()?.id ?? ''));
+
+  readonly unitPriceText = computed(() => {
+    const v = this.selectedVariant();
+    if (!v?.volume) return null;
+    const per100ml = (v.priceInCents / v.volume) * 100;
+    return (per100ml / 100).toFixed(2).replace('.', ',') + ' zł / 100ml';
+  });
 
   readonly stockLive = signal(false);
   private stockSub?: Subscription;
