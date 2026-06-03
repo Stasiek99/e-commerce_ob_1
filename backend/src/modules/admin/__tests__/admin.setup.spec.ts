@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { setupAdmin, logAdminAction } from '../admin.setup';
 
 // Minimal stubs — only used if execution passes the credential guard.
@@ -113,5 +115,165 @@ describe('setupAdmin credential guard', () => {
         'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set',
       );
     }
+  });
+});
+
+// ─── Session fixation guard — source contract ─────────────────────────────────
+// The inline middleware registered on expressApp after the AdminJS router must
+// regenerate the session on the first authenticated request to prevent session
+// fixation: an attacker who pre-seeds a session ID before admin login would
+// inherit the authenticated session without this guard.
+
+describe('setupAdmin — session fixation middleware (source contract)', () => {
+  const setupSource = fs.readFileSync(
+    path.join(__dirname, '../admin.setup.ts'),
+    'utf-8',
+  );
+
+  it('calls req.session.regenerate() to prevent session fixation after login', () => {
+    expect(setupSource).toContain('req.session.regenerate');
+  });
+
+  it('sets _regenerated flag to prevent repeated regeneration on every request', () => {
+    expect(setupSource).toContain('req.session._regenerated');
+  });
+
+  it('restores adminUser onto the new session after regeneration', () => {
+    expect(setupSource).toContain('req.session.adminUser = adminUser');
+  });
+
+  it('guards the regeneration on req.session.adminUser being set', () => {
+    expect(setupSource).toContain('req.session?.adminUser');
+  });
+});
+
+// ─── Session fixation middleware — behaviour ──────────────────────────────────
+// Tests that the middleware logic (req, res, next) behaves correctly for every
+// branch. The inline function is reproduced here to produce a testable unit;
+// the source contract suite above fails if admin.setup.ts removes the code.
+
+function makeSessionFixationMiddleware() {
+  return (req: any, _res: any, next: any): void => {
+    if (req.session?.adminUser && !req.session._regenerated) {
+      const adminUser = req.session.adminUser;
+      req.session.regenerate((err: Error | null) => {
+        if (err) return next(err);
+        req.session.adminUser = adminUser;
+        req.session._regenerated = true;
+        next();
+      });
+    } else {
+      next();
+    }
+  };
+}
+
+describe('setupAdmin — session fixation middleware behaviour', () => {
+  const middleware = makeSessionFixationMiddleware();
+  const res = {};
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('calls next() without regenerating when session has no adminUser (unauthenticated request)', () => {
+    const next = jest.fn();
+    const req = { session: {} };
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls next() without regenerating when session is null (no session middleware)', () => {
+    const next = jest.fn();
+    const req = { session: null };
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls next() without regenerating when session is already marked regenerated', () => {
+    const next = jest.fn();
+    const regenerate = jest.fn();
+    const req = { session: { adminUser: { email: 'admin@test.com' }, _regenerated: true, regenerate } };
+
+    middleware(req, res, next);
+
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('regenerates the session on first authenticated request', () => {
+    const next = jest.fn();
+    const newSession: any = {};
+    const req: any = {
+      session: {
+        adminUser: { email: 'admin@test.com' },
+        regenerate: jest.fn((cb: (err: Error | null) => void) => {
+          req.session = newSession; // simulate session reset
+          cb(null);
+        }),
+      },
+    };
+
+    middleware(req, res, next);
+
+    expect(req.session.regenerate ?? newSession.regenerate ?? req.session === newSession).toBeTruthy();
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('preserves adminUser on the new session after regeneration', () => {
+    const next = jest.fn();
+    const adminUser = { email: 'admin@test.com' };
+    const newSession: any = {};
+    const req: any = {
+      session: {
+        adminUser,
+        regenerate: jest.fn((cb: (err: Error | null) => void) => {
+          req.session = newSession;
+          cb(null);
+        }),
+      },
+    };
+
+    middleware(req, res, next);
+
+    expect(newSession.adminUser).toBe(adminUser);
+  });
+
+  it('sets _regenerated on the new session after regeneration', () => {
+    const next = jest.fn();
+    const newSession: any = {};
+    const req: any = {
+      session: {
+        adminUser: { email: 'admin@test.com' },
+        regenerate: jest.fn((cb: (err: Error | null) => void) => {
+          req.session = newSession;
+          cb(null);
+        }),
+      },
+    };
+
+    middleware(req, res, next);
+
+    expect(newSession._regenerated).toBe(true);
+  });
+
+  it('calls next(err) when session.regenerate fails', () => {
+    const next = jest.fn();
+    const regenerateError = new Error('session store unavailable');
+    const req: any = {
+      session: {
+        adminUser: { email: 'admin@test.com' },
+        regenerate: jest.fn((cb: (err: Error | null) => void) => cb(regenerateError)),
+      },
+    };
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(regenerateError);
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });

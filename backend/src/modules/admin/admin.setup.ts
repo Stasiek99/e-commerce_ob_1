@@ -875,5 +875,22 @@ export async function setupAdmin(
 
   app.use(admin.options.rootPath, router);
 
+  // Session fixation guard: regenerate the session ID on the first request after
+  // login. Without this, an attacker who plants a known session ID before login
+  // inherits the authenticated session after the admin logs in.
+  expressApp.use('/admin', (req: any, res: any, next: any) => {
+    if (req.session?.adminUser && !req.session._regenerated) {
+      const adminUser = req.session.adminUser;
+      req.session.regenerate((err: Error | null) => {
+        if (err) return next(err);
+        req.session.adminUser = adminUser;
+        req.session._regenerated = true;
+        next();
+      });
+    } else {
+      next();
+    }
+  });
+
   logger.log(`AdminJS panel available at ${admin.options.rootPath}`);
 }
