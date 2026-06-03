@@ -59,6 +59,9 @@ export class InvoiceService implements OnModuleInit {
   }
 
   private async ensureSequence(year: number): Promise<void> {
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+      throw new Error(`Invalid invoice year: ${year}`);
+    }
     await this.prisma.$executeRawUnsafe(
       `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
     );
