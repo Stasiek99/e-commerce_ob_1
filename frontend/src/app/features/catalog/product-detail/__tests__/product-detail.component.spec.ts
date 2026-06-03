@@ -5,7 +5,7 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { Location } from '@angular/common';
 import { EMPTY } from 'rxjs';
 import { PricePipe } from '../../../../shared/pipes/price.pipe';
@@ -18,6 +18,7 @@ import { SeoService } from '../../../../core/services/seo.service';
 import { WishlistService } from '../../../../core/services/wishlist.service';
 import { StockStreamService } from '../../../../core/services/stock-stream.service';
 import { ReviewsService } from '../../../../core/services/reviews.service';
+import { RESPONSE } from '../../../../core/tokens/ssr.tokens';
 
 const SLUG = 'rose-oud';
 
@@ -73,6 +74,7 @@ function setup() {
     submit: jest.fn(),
     markHelpful: jest.fn(),
   };
+  const mockRouter = { navigate: jest.fn() };
 
   TestBed.configureTestingModule({
     imports: [ProductDetailComponent],
@@ -82,6 +84,7 @@ function setup() {
       { provide: ActivatedRoute, useValue: mockRoute },
       { provide: Location, useValue: { back: jest.fn() } },
       { provide: PLATFORM_ID, useValue: 'browser' },
+      { provide: Router, useValue: mockRouter },
       { provide: AuthService, useValue: mockAuth },
       { provide: CartService, useValue: mockCart },
       { provide: ToastService, useValue: mockToast },
@@ -450,7 +453,7 @@ describe('ProductDetailComponent — catalog number in heading', () => {
 // a GET /products/{id}/reviews request — inflating Railway request counts and
 // adding 200–500ms to every SSR render.
 
-function setupWithPlatform(platform: 'browser' | 'server') {
+function setupWithPlatform(platform: 'browser' | 'server', extraProviders: unknown[] = []) {
   const mockRoute = {
     snapshot: {
       paramMap: { get: jest.fn().mockReturnValue(SLUG) },
@@ -470,6 +473,7 @@ function setupWithPlatform(platform: 'browser' | 'server') {
     submit: jest.fn(),
     markHelpful: jest.fn(),
   };
+  const mockRouter = { navigate: jest.fn() };
 
   TestBed.configureTestingModule({
     imports: [ProductDetailComponent],
@@ -479,6 +483,7 @@ function setupWithPlatform(platform: 'browser' | 'server') {
       { provide: ActivatedRoute, useValue: mockRoute },
       { provide: Location, useValue: { back: jest.fn() } },
       { provide: PLATFORM_ID, useValue: platform },
+      { provide: Router, useValue: mockRouter },
       { provide: AuthService, useValue: mockAuth },
       { provide: CartService, useValue: mockCart },
       { provide: ToastService, useValue: mockToast },
@@ -487,6 +492,7 @@ function setupWithPlatform(platform: 'browser' | 'server') {
       { provide: WishlistService, useValue: mockWishlist },
       { provide: StockStreamService, useValue: mockStockStream },
       { provide: ReviewsService, useValue: mockReviews },
+      ...(extraProviders as any[]),
     ],
     schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
   });
@@ -498,8 +504,9 @@ function setupWithPlatform(platform: 'browser' | 'server') {
   const fixture = TestBed.createComponent(ProductDetailComponent);
   const httpMock = TestBed.inject(HttpTestingController);
   const reviewsService = TestBed.inject(ReviewsService) as unknown as jest.Mocked<Pick<ReviewsService, 'getByProduct'>>;
+  const router = TestBed.inject(Router) as jest.Mocked<Router>;
 
-  return { fixture, httpMock, reviewsService };
+  return { fixture, httpMock, reviewsService, router };
 }
 
 describe('ProductDetailComponent — loadReviews SSR guard', () => {
@@ -539,5 +546,145 @@ describe('ProductDetailComponent — loadReviews SSR guard', () => {
     httpMock.verify();
 
     expect(reviewsService.getByProduct).toHaveBeenCalledWith('prod-xyz', expect.any(Number), expect.any(String));
+  });
+});
+
+// ─── 404 error handling ───────────────────────────────────────────────────────
+// Regression guard: backend 404 → router.navigate(['/not-found'], skipLocationChange)
+// Non-404 errors must not trigger navigation. SSR must also set response.status(404).
+
+describe('ProductDetailComponent — 404 error handling (browser)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('navigates to /not-found with skipLocationChange when the backend returns 404', () => {
+    const { fixture, httpMock, router } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Not Found' },
+      { status: 404, statusText: 'Not Found' },
+    );
+    httpMock.verify();
+
+    expect(router.navigate).toHaveBeenCalledWith(['/not-found'], { skipLocationChange: true });
+  });
+
+  it('sets loading to false after a 404 response', () => {
+    const { fixture, httpMock, router } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Not Found' },
+      { status: 404, statusText: 'Not Found' },
+    );
+    httpMock.verify();
+
+    const component = fixture.componentInstance;
+    expect(component.loading()).toBe(false);
+    // navigation is the important side-effect; call count sanity check
+    expect(router.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT navigate to /not-found for a non-404 server error', () => {
+    const { fixture, httpMock, router } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Internal Server Error' },
+      { status: 500, statusText: 'Internal Server Error' },
+    );
+    httpMock.verify();
+
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('does NOT navigate to /not-found for a 401 response', () => {
+    const { fixture, httpMock, router } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Unauthorized' },
+      { status: 401, statusText: 'Unauthorized' },
+    );
+    httpMock.verify();
+
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('still sets loading to false for non-404 errors', () => {
+    const { fixture, httpMock } = setupWithPlatform('browser');
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Internal Server Error' },
+      { status: 500, statusText: 'Internal Server Error' },
+    );
+    httpMock.verify();
+
+    expect(fixture.componentInstance.loading()).toBe(false);
+  });
+});
+
+describe('ProductDetailComponent — 404 error handling (SSR)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('calls ssrResponse.status(404) when platform is server and backend returns 404', () => {
+    const mockSsrResponse = { status: jest.fn().mockReturnThis() };
+
+    const { fixture, httpMock, router } = setupWithPlatform('server', [
+      { provide: RESPONSE, useValue: mockSsrResponse },
+    ]);
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Not Found' },
+      { status: 404, statusText: 'Not Found' },
+    );
+    httpMock.verify();
+
+    expect(mockSsrResponse.status).toHaveBeenCalledWith(404);
+    expect(router.navigate).toHaveBeenCalledWith(['/not-found'], { skipLocationChange: true });
+  });
+
+  it('does NOT call ssrResponse.status when platform is browser and backend returns 404', () => {
+    const mockSsrResponse = { status: jest.fn().mockReturnThis() };
+
+    const { fixture, httpMock } = setupWithPlatform('browser', [
+      { provide: RESPONSE, useValue: mockSsrResponse },
+    ]);
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Not Found' },
+      { status: 404, statusText: 'Not Found' },
+    );
+    httpMock.verify();
+
+    expect(mockSsrResponse.status).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call ssrResponse.status for non-404 errors in SSR context', () => {
+    const mockSsrResponse = { status: jest.fn().mockReturnThis() };
+
+    const { fixture, httpMock } = setupWithPlatform('server', [
+      { provide: RESPONSE, useValue: mockSsrResponse },
+    ]);
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      { message: 'Internal Server Error' },
+      { status: 500, statusText: 'Internal Server Error' },
+    );
+    httpMock.verify();
+
+    expect(mockSsrResponse.status).not.toHaveBeenCalled();
   });
 });
