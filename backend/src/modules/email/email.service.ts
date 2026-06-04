@@ -38,7 +38,8 @@ type EmailKind =
   | 'email_change'
   | 'magic_link_login'
   | 'fraud_review_alert'
-  | 'payout_failed_alert';
+  | 'payout_failed_alert'
+  | 'dispute_alert';
 
 @Injectable()
 export class EmailService {
@@ -253,6 +254,46 @@ export class EmailService {
       orderNumber: data.orderNumber,
       requestId: data.requestId,
       newStatus: data.newStatus,
+    });
+  }
+
+  async sendDisputeAlert(data: {
+    to: string;
+    orderNumber: string;
+    customerEmail: string;
+    amountInCents: number;
+    reason: string;
+    evidenceDeadline: string;
+    disputeId: string;
+    adminUrl?: string;
+  }) {
+    const amount = (data.amountInCents / 100).toFixed(2);
+    const subject = `[CHARGEBACK] Spór Stripe #${data.orderNumber} — dowody wymagane do ${data.evidenceDeadline}`;
+    const adminLink = data.adminUrl ? `<p><a href="${data.adminUrl}">Przejdź do zamówienia →</a></p>` : '';
+    const html = `
+      <h2>Stripe otworzył spór (chargeback)</h2>
+      <p>Klient złożył reklamację za pośrednictwem banku. Stripe wymaga przesłania dowodów w ciągu <strong>7 dni kalendarzowych</strong>.</p>
+      <table>
+        <tr><td><strong>Zamówienie:</strong></td><td>${data.orderNumber}</td></tr>
+        <tr><td><strong>Klient:</strong></td><td>${data.customerEmail}</td></tr>
+        <tr><td><strong>Kwota sporu:</strong></td><td>${amount} PLN</td></tr>
+        <tr><td><strong>Powód:</strong></td><td>${data.reason}</td></tr>
+        <tr><td><strong>Termin dowodów:</strong></td><td>${data.evidenceDeadline}</td></tr>
+        <tr><td><strong>ID sporu:</strong></td><td>${data.disputeId}</td></tr>
+      </table>
+      ${adminLink}
+      <h3>Działania</h3>
+      <ol>
+        <li>Zaloguj się do <a href="https://dashboard.stripe.com/disputes">Stripe Dashboard → Disputes</a>.</li>
+        <li>Wybierz spór <code>${data.disputeId}</code> i kliknij "Submit evidence".</li>
+        <li>Dołącz potwierdzenie zamówienia, dowód dostawy, korespondencję z klientem.</li>
+        <li>Prześlij dowody przed: <strong>${data.evidenceDeadline}</strong>.</li>
+      </ol>
+      <p><em>Zamówienie zostało automatycznie wstrzymane (DISPUTE_HOLD).</em></p>
+    `;
+    return this.send('dispute_alert', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      disputeId: data.disputeId,
     });
   }
 

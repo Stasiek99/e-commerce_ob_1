@@ -505,7 +505,11 @@ describe('EmailQueueProcessor', () => {
             sendReviewRequest: jest.fn().mockResolvedValue(undefined),
             sendReturnConfirmation: jest.fn().mockResolvedValue(undefined),
             sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
+            sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
             sendMagicLink: jest.fn().mockResolvedValue(undefined),
+            sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
+            sendDisputeAlert: jest.fn().mockResolvedValue(undefined),
+            sendPayoutFailedAlert: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],
@@ -693,6 +697,126 @@ describe('EmailQueueProcessor', () => {
     await processor.process(makeJob({ type: 'magic_link_login' as const, payload }));
 
     expect(emailService.sendMagicLink).toHaveBeenCalledWith(payload);
+  });
+
+  it('routes return_status_update to emailService.sendReturnStatusUpdate', async () => {
+    const payload = {
+      to: 'u@t.com',
+      firstName: 'Jan',
+      orderNumber: 'ORD-1',
+      requestId: 'ret-1',
+      type: 'WITHDRAWAL' as const,
+      newStatus: 'APPROVED' as const,
+    };
+
+    await processor.process(makeJob({ type: 'return_status_update' as const, payload }));
+
+    expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(payload);
+  });
+
+  it('routes fraud_review_alert to emailService.sendFraudReviewAlert', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      customerEmail: 'c@t.com',
+      totalInCents: 29900,
+      radarRiskLevel: 'elevated',
+    };
+
+    await processor.process(makeJob({ type: 'fraud_review_alert' as const, payload }));
+
+    expect(emailService.sendFraudReviewAlert).toHaveBeenCalledWith(payload);
+  });
+
+  // ── dispute_alert fix — previously logger.warn stub, now real email ──────────
+  // Invariant: a dispute_alert job MUST call emailService.sendDisputeAlert so
+  // the admin receives the chargeback notification. The previous stub silently
+  // discarded the job — a missed alert could result in an uncontested chargeback
+  // (Stripe's evidence deadline is 7 calendar days).
+
+  it('routes dispute_alert to emailService.sendDisputeAlert — regression guard for stub removal', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-2026-000001',
+      customerEmail: 'c@t.com',
+      amountInCents: 29900,
+      reason: 'fraudulent',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_test_123',
+    };
+
+    await processor.process(makeJob({ type: 'dispute_alert' as const, payload }));
+
+    expect(emailService.sendDisputeAlert).toHaveBeenCalledWith(payload);
+  });
+
+  it('passes the full payload to sendDisputeAlert including adminUrl when present', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-2026-000001',
+      customerEmail: 'c@t.com',
+      amountInCents: 29900,
+      reason: 'product_not_received',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_test_456',
+      adminUrl: 'https://store.pl/admin/orders/order-1',
+    };
+
+    await processor.process(makeJob({ type: 'dispute_alert' as const, payload }));
+
+    expect(emailService.sendDisputeAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ adminUrl: 'https://store.pl/admin/orders/order-1' }),
+    );
+  });
+
+  it('does not call sendDisputeAlert more than once per job (no double-send)', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      customerEmail: 'c@t.com',
+      amountInCents: 5000,
+      reason: 'duplicate',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_once_123',
+    };
+
+    await processor.process(makeJob({ type: 'dispute_alert' as const, payload }));
+
+    expect(emailService.sendDisputeAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates sendDisputeAlert rejection so BullMQ can retry the job', async () => {
+    (emailService.sendDisputeAlert as jest.Mock).mockRejectedValue(new Error('SMTP unavailable'));
+
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      customerEmail: 'c@t.com',
+      amountInCents: 5000,
+      reason: 'fraudulent',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_fail_1',
+    };
+
+    await expect(
+      processor.process(makeJob({ type: 'dispute_alert' as const, payload })),
+    ).rejects.toThrow('SMTP unavailable');
+  });
+
+  it('routes payout_failed_alert to emailService.sendPayoutFailedAlert', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      payoutId: 'po_test_123',
+      amountInCents: 150000,
+      currency: 'pln',
+      failureCode: 'account_closed',
+      failureMessage: 'The bank account has been closed.',
+      arrivalDate: '2026-06-04T00:00:00.000Z',
+    };
+
+    await processor.process(makeJob({ type: 'payout_failed_alert' as const, payload }));
+
+    expect(emailService.sendPayoutFailedAlert).toHaveBeenCalledWith(payload);
   });
 
   // ── PDF fetched at processing time (no base64 in Redis) ──────────────────────

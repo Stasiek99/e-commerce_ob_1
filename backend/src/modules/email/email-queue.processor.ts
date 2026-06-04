@@ -105,8 +105,7 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         break;
 
       case 'dispute_alert':
-        // Wired in Task 2 — stub retained to satisfy exhaustive type check
-        this.logger.warn(`dispute_alert job received for order ${(payload as any).orderNumber} — no email template wired yet`);
+        await this.emailService.sendDisputeAlert(payload);
         break;
 
       case 'payout_failed_alert':
