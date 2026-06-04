@@ -415,20 +415,6 @@ class CancelOrderDto {
 ```
 
 
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🔴 BLOCKER | Must fix before any real customer |
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
-
-Agent agreement is noted where 2+ agents independently identified the same issue.
----
-
----
-
 ## 🟢 LOW — DPD tracking URL absent from order detail page, tracking page, and email delivery-estimate map *(1/5 agents)*
 
 **Files:** `frontend/src/app/features/account/orders/order-detail.component.ts:52-56`, `backend/src/modules/email/templates/order-confirmation.template.ts:7-11`
@@ -470,6 +456,17 @@ const DELIVERY_ESTIMATES = {
 
 ---
 
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🔴 BLOCKER | Must fix before any real customer |
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
+
+Agent agreement is noted where 2+ agents independently identified the same issue.
+---
 ## Prioritised Fix Order
 
 ### Launch blockers
