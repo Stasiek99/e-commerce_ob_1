@@ -44,10 +44,15 @@ const COMPLAINT_DTO = {
   sealedOnReturn: undefined,
 };
 
-// orderRow: { id, userId, status } when order exists, null when order does not exist.
+// orderRow: { id, userId, status, shipment? } when order exists, null when order does not exist.
 function buildPrismaMock(
   overrides: Partial<{ id: string; type: string; requestedResolution: string }> = {},
-  orderRow: { id?: string; userId: string | null; status?: string } | null = {
+  orderRow: {
+    id?: string;
+    userId: string | null;
+    status?: string;
+    shipment?: { deliveredAt: Date | null } | null;
+  } | null = {
     id: 'order-uuid-1',
     userId: OWNER_ID,
     status: 'SHIPPED',
@@ -513,6 +518,90 @@ describe('ReturnsService', () => {
 
       await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
       dateSpy.mockRestore();
+    });
+  });
+
+  // ── deliveryDate anti-backdating guard ──────────────────────────────────────
+  // When shipment.deliveredAt is recorded in the DB, the server uses it as the
+  // authoritative delivery date instead of the client-supplied dto.deliveryDate.
+  // An attacker with an expired order cannot reopen the 14-day window by passing
+  // a recent deliveryDate, and cannot pass a date that predates actual delivery.
+
+  describe('deliveryDate anti-backdating guard', () => {
+    it('rejects WITHDRAWAL when dto.deliveryDate predates shipment.deliveredAt', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(5)) },
+      });
+      await createModule(mock);
+      // submitting a date 10 days before the actual delivery
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(10) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects WITHDRAWAL when attacker passes dto.deliveryDate=today but shipment.deliveredAt was 20 days ago', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(20)) },
+      });
+      await createModule(mock);
+      // attacker sends today's date hoping to extend the 14-day window
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(0) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('uses shipment.deliveredAt (not dto.deliveryDate) when computing the 14-day window', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(5)) },
+      });
+      await createModule(mock);
+      // dto.deliveryDate matches or is after actual delivery — passes backdating check
+      // window computed from deliveredAt (5 days ago) + 15 = 10 days remaining → OK
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(5) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('allows when dto.deliveryDate is after shipment.deliveredAt (e.g. customer reports later than carrier)', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(5)) },
+      });
+      await createModule(mock);
+      // dto.deliveryDate is 3 days ago — later than actual delivery, no backdating issue
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(3) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('falls back to dto.deliveryDate when no shipment.deliveredAt is recorded', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'SHIPPED',
+        shipment: null,
+      });
+      await createModule(mock);
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(5) };
+
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
     });
   });
 

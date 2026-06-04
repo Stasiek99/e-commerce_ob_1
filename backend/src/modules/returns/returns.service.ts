@@ -33,7 +33,12 @@ export class ReturnsService {
     const [order, user] = await Promise.all([
       this.prisma.order.findFirst({
         where: { orderNumber: normalizedNumber },
-        select: { id: true, userId: true, status: true },
+        select: {
+          id: true,
+          userId: true,
+          status: true,
+          shipment: { select: { deliveredAt: true } },
+        },
       }),
       this.prisma.user.findUnique({
         where: { id: userId },
@@ -76,10 +81,22 @@ export class ReturnsService {
           'Odstąpienie od umowy wymaga podania daty dostarczenia przesyłki.',
         );
       }
+      // Use the authoritative DB timestamp when the carrier confirmed delivery.
+      // If the client supplies a deliveryDate that predates the actual delivery, reject it —
+      // an attacker with a stale order cannot extend the 14-day window by providing today's date.
+      const authoritativeDate: Date = order.shipment?.deliveredAt ?? new Date(dto.deliveryDate);
+      if (order.shipment?.deliveredAt) {
+        const submitted = new Date(dto.deliveryDate);
+        if (submitted < order.shipment.deliveredAt) {
+          throw new BadRequestException(
+            'Podana data dostarczenia nie może być wcześniejsza niż faktyczna data dostarczenia przesyłki.',
+          );
+        }
+      }
       // Art. 27 UoK: 14-day period starts the day AFTER delivery.
       // +15 sets the window end to the end of the 14th day after delivery,
       // ensuring the full delivery-date + 14 days is always available.
-      const windowEnd = new Date(dto.deliveryDate);
+      const windowEnd = new Date(authoritativeDate);
       windowEnd.setDate(windowEnd.getDate() + 15);
       windowEnd.setHours(23, 59, 59, 999);
       if (Date.now() > windowEnd.getTime()) {
