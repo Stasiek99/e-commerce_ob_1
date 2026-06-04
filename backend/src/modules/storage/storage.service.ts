@@ -49,11 +49,14 @@ export class StorageService {
   async uploadShippingLabel(pdfBuffer: Buffer, filename: string): Promise<string> {
     const path = `labels/${filename}`;
 
-    const { error } = await this.supabase.storage
-      .from(SHIPPING_LABELS_BUCKET)
-      .upload(path, pdfBuffer, { contentType: 'application/pdf', upsert: true });
-
-    if (error) throw new Error(`Label upload failed: ${error.message}`);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error } = await this.supabase.storage
+        .from(SHIPPING_LABELS_BUCKET)
+        .upload(path, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+      if (!error) break;
+      if (attempt === 2) throw new Error(`Label upload failed: ${error.message}`);
+      await new Promise<void>((r) => setTimeout(r, 500 * 2 ** attempt));
+    }
 
     const { data } = this.supabase.storage
       .from(SHIPPING_LABELS_BUCKET)
