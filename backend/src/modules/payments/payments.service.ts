@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
@@ -11,7 +12,6 @@ import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
 import { InvoiceOrder } from '../invoice/invoice.service';
-import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
 
 @Injectable()
 export class PaymentsService {
@@ -111,8 +111,8 @@ export class PaymentsService {
       });
     }
 
-    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
-    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
+    const guestToken = randomBytes(32).toString('hex');
+    await this.redis.set(`order-token:${order.id}`, guestToken, 'EX', 3600);
 
     let session: Awaited<ReturnType<StripeClient['createCheckoutSession']>>;
     try {
@@ -122,7 +122,7 @@ export class PaymentsService {
         customerEmail: order.snapshotEmail,
         currency,
         lineItems,
-        successUrl: `${successUrl}?orderId=${order.id}&token=${cancelToken}`,
+        successUrl: `${successUrl}?orderId=${order.id}&token=${guestToken}`,
         cancelUrl: `${cancelUrl}?orderId=${order.id}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
@@ -697,15 +697,17 @@ export class PaymentsService {
   }
 
   async getPaymentStatusByToken(orderId: string, token: string) {
-    const payment = await this.prisma.payment.findUnique({
-      where: { orderId },
-      select: { status: true, paidAt: true, order: { select: { snapshotEmail: true, orderNumber: true } } },
-    });
+    const [payment, storedToken] = await Promise.all([
+      this.prisma.payment.findUnique({
+        where: { orderId },
+        select: { status: true, paidAt: true, order: { select: { orderNumber: true } } },
+      }),
+      this.redis.get(`order-token:${orderId}`),
+    ]);
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
 
-    const secret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
-    if (!verifyOrderToken(token, orderId, payment.order.snapshotEmail, secret)) {
+    if (!storedToken || storedToken !== token) {
       throw new UnauthorizedException('Invalid order token');
     }
 

@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
-import { generateOrderToken } from '../../../common/utils/order-token.util';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -154,7 +153,7 @@ describe('PaymentsService', () => {
         },
         {
           provide: 'REDIS_CLIENT',
-          useValue: { set: jest.fn().mockResolvedValue('OK') },
+          useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
         },
       ],
     }).compile();
@@ -933,6 +932,65 @@ describe('PaymentsService', () => {
         }),
       );
     });
+
+    // ── opaque Redis guest token ──────────────────────────────────────────────
+    // Invariant: the success URL token must be a short-lived opaque random value
+    // stored in Redis, NOT a deterministic HMAC/JWT derived from the master secret.
+    // An HMAC/JWT in the URL leaks via Referer headers to analytics providers and
+    // exposes the master JWT_ACCESS_SECRET if the token is ever decoded.
+
+    it('stores an opaque random token in Redis under the order-token key', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'order-token:order-1',
+        expect.stringMatching(/^[0-9a-f]{64}$/),
+        'EX',
+        3600,
+      );
+    });
+
+    it('embeds the stored Redis token in the success URL', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const storedToken: string = redis.set.mock.calls.find(
+        (c: any[]) => c[0] === 'order-token:order-1',
+      )[1];
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.successUrl).toContain(`token=${storedToken}`);
+    });
+
+    it('generates a unique token on each call (not deterministic)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+      const firstToken: string = redis.set.mock.calls.find(
+        (c: any[]) => c[0] === 'order-token:order-1',
+      )[1];
+
+      jest.clearAllMocks();
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+      const secondToken: string = redis.set.mock.calls.find(
+        (c: any[]) => c[0] === 'order-token:order-1',
+      )[1];
+
+      expect(firstToken).not.toBe(secondToken);
+    });
   });
 
   describe('getPaymentStatus', () => {
@@ -988,22 +1046,21 @@ describe('PaymentsService', () => {
   });
 
   describe('getPaymentStatusByToken', () => {
-    // The ConfigService mock returns 'pln' for all get() calls, so JWT_ACCESS_SECRET = 'pln'
-    const SECRET = 'pln';
     const ORDER_ID = 'order-1';
-    const EMAIL = 'test@example.com';
+    // 64-char hex string — same format as randomBytes(32).toString('hex')
+    const VALID_TOKEN = 'a1b2c3d4'.repeat(8);
 
-    it('returns status, paidAt, and orderNumber when token is valid', async () => {
+    it('returns status, paidAt, and orderNumber when Redis token matches', async () => {
       const now = new Date();
-      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
 
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001' },
       });
+      redis.get.mockResolvedValue(VALID_TOKEN);
 
-      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+      const result = await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
 
       expect(result).toEqual({
         status: PaymentStatus.COMPLETED,
@@ -1013,52 +1070,63 @@ describe('PaymentsService', () => {
     });
 
     it('includes the human-readable orderNumber so guests can use it in track-order form', async () => {
-      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
-
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000042' },
+        order: { orderNumber: 'ORD-2026-000042' },
       });
+      redis.get.mockResolvedValue(VALID_TOKEN);
 
-      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+      const result = await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
 
       expect(result.orderNumber).toBe('ORD-2026-000042');
     });
 
-    it('throws UnauthorizedException when token is invalid', async () => {
+    it('looks up the Redis key scoped to the orderId', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001' },
       });
+      redis.get.mockResolvedValue(VALID_TOKEN);
+
+      await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
+
+      expect(redis.get).toHaveBeenCalledWith(`order-token:${ORDER_ID}`);
+    });
+
+    it('throws UnauthorizedException when the token does not match the Redis value', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { orderNumber: 'ORD-2026-000001' },
+      });
+      redis.get.mockResolvedValue('different-stored-token');
 
       await expect(
-        service.getPaymentStatusByToken(ORDER_ID, 'invalid-token'),
+        service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('throws UnauthorizedException when token belongs to a different order (prevents enumeration)', async () => {
-      const tokenForOtherOrder = generateOrderToken('other-order-id', EMAIL, SECRET);
-
+    it('throws UnauthorizedException when Redis has no token (expired or never set)', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001' },
       });
+      redis.get.mockResolvedValue(null);
 
       await expect(
-        service.getPaymentStatusByToken(ORDER_ID, tokenForOtherOrder),
+        service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(UnauthorizedException);
     });
 
     it('throws NotFoundException when no payment exists for the order', async () => {
       prisma.payment.findUnique.mockResolvedValue(null);
-
-      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+      redis.get.mockResolvedValue(VALID_TOKEN);
 
       await expect(
-        service.getPaymentStatusByToken(ORDER_ID, validToken),
+        service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(NotFoundException);
     });
   });
