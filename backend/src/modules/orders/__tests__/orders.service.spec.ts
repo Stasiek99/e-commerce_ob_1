@@ -2596,6 +2596,113 @@ describe('OrdersService', () => {
         'CUSTOMER',
       );
     });
+
+    // ─── discount pro-ration (fix: partial refund must deduct coupon discount) ──
+
+    it('passes pro-rated priceInCents to partialRefund when a percentage coupon was applied', async () => {
+      // 20%-off coupon: discountFraction = 4000/20000 = 0.2 → discountedPrice = 16000
+      const discountedOrder = {
+        ...mockPaidOrder,
+        itemsTotalInCents: 20000,
+        discountInCents: 4000,
+        totalInCents: 16000,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 20000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(discountedOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('sends cancellation email with pro-rated amount when a coupon was applied', async () => {
+      // 20%-off: discountedPrice = 20000 * 0.8 = 16000; qty=2 → totalInCents = 32000
+      const discountedOrder = {
+        ...mockPaidOrder,
+        itemsTotalInCents: 20000,
+        discountInCents: 4000,
+        totalInCents: 16000,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 20000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(discountedOrder);
+      const emailService = (service as any).emailService;
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({ totalInCents: 32000 }),
+      );
+    });
+
+    it('does not adjust priceInCents when discountInCents is 0', async () => {
+      const noDiscountOrder = {
+        ...mockPaidOrder,
+        discountInCents: 0,
+        itemsTotalInCents: 34900 * 3,
+      };
+      prisma.order.findFirst.mockResolvedValue(noDiscountOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ priceInCents: 34900 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('does not adjust priceInCents when itemsTotalInCents is 0 — division-by-zero guard', async () => {
+      const zeroTotalOrder = {
+        ...mockPaidOrder,
+        discountInCents: 100,
+        itemsTotalInCents: 0,
+      };
+      prisma.order.findFirst.mockResolvedValue(zeroTotalOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ priceInCents: 34900 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
   });
 
   // Fix #27: order confirmation email moved to markSessionPaid() (Stripe webhook).

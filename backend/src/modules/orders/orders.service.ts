@@ -780,6 +780,13 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
+    if (order.discountInCents > 0 && order.itemsTotalInCents > 0) {
+      const discountFraction = order.discountInCents / order.itemsTotalInCents;
+      for (const item of resolvedItems) {
+        item.priceInCents = Math.round(item.priceInCents * (1 - discountFraction));
+      }
+    }
+
     await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
 
     const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
