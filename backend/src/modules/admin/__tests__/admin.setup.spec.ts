@@ -12,9 +12,10 @@ const mockShipping = {} as any;
 const mockOrders = {} as any;
 const mockPayments = {} as any;
 const mockReturns = {} as any;
+const mockAuth = {} as any;
 
 const callSetupAdmin = () =>
-  setupAdmin(mockApp, mockPrisma, mockInvoice, mockShipping, mockOrders, mockPayments, mockReturns);
+  setupAdmin(mockApp, mockPrisma, mockInvoice, mockShipping, mockOrders, mockPayments, mockReturns, mockAuth);
 
 const GUARD_ERROR =
   'ADMIN_DEFAULT_EMAIL and ADMIN_DEFAULT_PASSWORD must be set — refusing to boot with an unprotected admin panel';
@@ -301,5 +302,186 @@ describe('setupAdmin — PgSession pool cap (source contract)', () => {
     const closingBraceIndex = setupSource.indexOf('});', pgSessionCallIndex);
     const constructorBlock = setupSource.slice(pgSessionCallIndex, closingBraceIndex);
     expect(constructorBlock).toContain('pool: { max: 2 }');
+  });
+});
+
+// ─── authService parameter ────────────────────────────────────────────────────
+
+describe('setupAdmin — authService parameter (source contract)', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it('accepts authService as an explicit typed parameter', () => {
+    expect(setupSource).toContain('authService: AuthService');
+  });
+
+  it('imports AuthService from the auth module', () => {
+    expect(setupSource).toContain("from '../auth/auth.service'");
+  });
+});
+
+// ─── sendPasswordReset action — source contract ───────────────────────────────
+// Admins must be able to trigger a password reset for a locked-out customer
+// without direct DB access. The action calls AuthService.requestPasswordReset
+// so the existing rate-limit and email delivery logic is reused.
+
+describe('setupAdmin — sendPasswordReset action (source contract)', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it('defines a sendPasswordReset record action on the User resource', () => {
+    expect(setupSource).toContain('sendPasswordReset');
+  });
+
+  it('delegates to authService.requestPasswordReset with the user email', () => {
+    expect(setupSource).toContain('authService.requestPasswordReset(email)');
+  });
+
+  it('logs the action via logAdminAction after a successful reset', () => {
+    const actionIndex = setupSource.indexOf('sendPasswordReset');
+    const actionBlock = setupSource.slice(actionIndex, actionIndex + 800);
+    expect(actionBlock).toContain('logAdminAction');
+  });
+});
+
+// ─── sendPasswordReset handler — behaviour ────────────────────────────────────
+
+function makeSendPasswordResetHandler(
+  authService: { requestPasswordReset: (email: string) => Promise<void> },
+  prisma: { adminLog: { create: (args: any) => Promise<any> } },
+  adminEmail: string,
+) {
+  return async (_request: any, _response: any, context: any) => {
+    const { record } = context;
+    const email = record.params.email as string;
+    try {
+      await authService.requestPasswordReset(email);
+      await prisma.adminLog.create({
+        data: { action: 'sendPasswordReset', entityType: 'User', entityId: record.params.id as string, actor: context.currentAdmin?.email ?? adminEmail, metadata: { email } },
+      });
+      return {
+        record: record.toJSON(),
+        notice: { message: `Link do resetu hasła wysłany na ${email}.`, type: 'success' },
+      };
+    } catch (err) {
+      return {
+        record: record.toJSON(),
+        notice: { message: `Błąd wysyłki: ${(err as Error).message}`, type: 'error' },
+      };
+    }
+  };
+}
+
+describe('setupAdmin — sendPasswordReset handler behaviour', () => {
+  const adminEmail = 'admin@test.com';
+  const mockPrismaLog = { adminLog: { create: jest.fn().mockResolvedValue({}) } };
+
+  const makeRecord = (email: string, id: string) => ({
+    params: { id, email },
+    toJSON: () => ({ id, email }),
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('calls requestPasswordReset with the user email and returns a success notice', async () => {
+    const auth = { requestPasswordReset: jest.fn().mockResolvedValue(undefined) };
+    const handler = makeSendPasswordResetHandler(auth, mockPrismaLog, adminEmail);
+
+    const record = makeRecord('customer@example.com', 'user-123');
+    const result = await handler({}, {}, { record, currentAdmin: { email: adminEmail } });
+
+    expect(auth.requestPasswordReset).toHaveBeenCalledWith('customer@example.com');
+    expect(result.notice.type).toBe('success');
+    expect(result.notice.message).toContain('customer@example.com');
+  });
+
+  it('returns an error notice when requestPasswordReset rejects', async () => {
+    const auth = { requestPasswordReset: jest.fn().mockRejectedValue(new Error('email service down')) };
+    const handler = makeSendPasswordResetHandler(auth, mockPrismaLog, adminEmail);
+
+    const record = makeRecord('customer@example.com', 'user-456');
+    const result = await handler({}, {}, { record, currentAdmin: null });
+
+    expect(result.notice.type).toBe('error');
+    expect(result.notice.message).toContain('email service down');
+  });
+
+  it('falls back to the module-level adminEmail when currentAdmin is absent', async () => {
+    const auth = { requestPasswordReset: jest.fn().mockResolvedValue(undefined) };
+    const handler = makeSendPasswordResetHandler(auth, mockPrismaLog, adminEmail);
+
+    const record = makeRecord('customer@example.com', 'user-789');
+    await handler({}, {}, { record, currentAdmin: undefined });
+
+    expect(mockPrismaLog.adminLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ actor: adminEmail }) }),
+    );
+  });
+
+  it('does not call logAdminAction when requestPasswordReset rejects', async () => {
+    const auth = { requestPasswordReset: jest.fn().mockRejectedValue(new Error('smtp timeout')) };
+    const handler = makeSendPasswordResetHandler(auth, mockPrismaLog, adminEmail);
+
+    const record = makeRecord('customer@example.com', 'user-000');
+    await handler({}, {}, { record, currentAdmin: { email: adminEmail } });
+
+    expect(mockPrismaLog.adminLog.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Fulfillment gap — source contract ───────────────────────────────────────
+// Orders with status PAID or PROCESSING that have no associated Shipment record
+// are the primary fulfillment SLA metric; they must be surfaced in the admin panel.
+
+describe('setupAdmin — fulfillment gap (source contract)', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it('registers a /admin/fulfillment-gap Express route', () => {
+    expect(setupSource).toContain('/admin/fulfillment-gap');
+  });
+
+  it('defines a fulfillmentGap resource action on the Order resource', () => {
+    expect(setupSource).toContain('fulfillmentGap');
+  });
+
+  it('queries only PAID and PROCESSING orders', () => {
+    expect(setupSource).toMatch(/PAID.*PROCESSING|PROCESSING.*PAID/);
+  });
+
+  it('filters orders where no shipment exists', () => {
+    expect(setupSource).toContain('shipment: { is: null }');
+  });
+
+  it('redirects the resource action to /admin/fulfillment-gap', () => {
+    const actionIdx = setupSource.indexOf('fulfillmentGap');
+    const actionBlock = setupSource.slice(actionIdx, actionIdx + 500);
+    expect(actionBlock).toContain('/admin/fulfillment-gap');
+  });
+});
+
+// ─── Coupon burn rate — source contract ──────────────────────────────────────
+// Admins need to see which coupons are redeemed fastest (burn rate). The Coupon
+// resource must be present in AdminJS and the list hook must inject actual use
+// counts from the CouponUse table via groupBy, not just the denormalized counter.
+
+describe('setupAdmin — coupon burn rate (source contract)', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it("registers the Coupon model as an AdminJS resource", () => {
+    expect(setupSource).toContain("getModelByName('Coupon')");
+  });
+
+  it("registers the CouponUse model as an AdminJS resource for drill-down", () => {
+    expect(setupSource).toContain("getModelByName('CouponUse')");
+  });
+
+  it('uses prisma.couponUse.groupBy to count actual redemptions', () => {
+    expect(setupSource).toContain('couponUse.groupBy');
+  });
+
+  it('injects usesCount into each Coupon record in the list after hook', () => {
+    expect(setupSource).toContain('usesCount');
+  });
+
+  it('keys the countMap on couponId from the groupBy result', () => {
+    expect(setupSource).toContain('countMap');
   });
 });

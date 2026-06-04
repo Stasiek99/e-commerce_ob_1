@@ -9,6 +9,7 @@ import { ShippingService } from '../shipping/shipping.service';
 import { OrdersService } from '../orders/orders.service';
 import { PaymentsService } from '../payments/payments.service';
 import { ReturnsService } from '../returns/returns.service';
+import { AuthService } from '../auth/auth.service';
 
 const logger = new Logger('AdminJS');
 
@@ -123,6 +124,81 @@ async function generatePicklistHtml(prisma: PrismaService): Promise<string> {
 </html>`;
 }
 
+async function generateFulfillmentGapHtml(prisma: PrismaService): Promise<string> {
+  const esc = (s: unknown) =>
+    String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const orders = await prisma.order.findMany({
+    where: { status: { in: ['PAID', 'PROCESSING'] }, shipment: { is: null } },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const now = new Date();
+
+  const rows = orders
+    .map((order) => {
+      const hoursAgo = Math.floor((now.getTime() - order.createdAt.getTime()) / (1000 * 60 * 60));
+      const urgency = hoursAgo >= 48 ? 'background:#f8d7da' : hoursAgo >= 24 ? 'background:#fff3cd' : '';
+      return `
+        <tr style="${urgency}">
+          <td><a href="/admin/resources/Order/records/${esc(order.id)}/show"><strong>${esc(order.orderNumber)}</strong></a></td>
+          <td>${esc(order.snapshotFirstName)} ${esc(order.snapshotLastName)}</td>
+          <td><span class="status-badge">${esc(order.status)}</span></td>
+          <td>${esc(order.createdAt.toLocaleString('pl-PL'))}</td>
+          <td><strong>${hoursAgo}h</strong>${hoursAgo >= 48 ? ' &#x26A0;' : ''}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const generatedAt = now.toLocaleString('pl-PL');
+
+  return `<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Niezrealizowane zamówienia</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;font-size:11px;color:#000}
+    .header{padding:12px 16px;border-bottom:2px solid #000;margin-bottom:8px}
+    .header h1{font-size:16px}
+    .header p{font-size:11px;color:#555;margin-top:4px}
+    .actions{padding:8px 16px;margin-bottom:8px}
+    .btn{display:inline-block;padding:7px 14px;background:#333;color:#fff;border:none;cursor:pointer;font-size:12px;margin-right:8px;border-radius:3px;text-decoration:none}
+    table{width:100%;border-collapse:collapse}
+    th{background:#222;color:#fff;padding:6px 8px;text-align:left;font-size:11px}
+    td{border-bottom:1px solid #ddd;padding:5px 8px;vertical-align:middle}
+    .status-badge{display:inline-block;padding:2px 6px;border-radius:3px;font-weight:bold;font-size:10px;background:#e0e0e0}
+    .legend{padding:8px 16px;font-size:10px;color:#555}
+    .legend span{display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:4px;border-radius:2px}
+    .yellow{background:#fff3cd}
+    .red{background:#f8d7da}
+    @media print{.actions{display:none}}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Niezrealizowane zamówienia (brak przesyłki)</h1>
+    <p>Wygenerowano: ${generatedAt} &nbsp;|&nbsp; Zamówień: <strong>${orders.length}</strong></p>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="window.print()">Drukuj</button>
+    <a class="btn" href="/admin">&#8592; Panel admina</a>
+  </div>
+  <div class="legend">
+    <span class="yellow"></span> &gt;24h bez przesyłki &nbsp;
+    <span class="red"></span> &gt;48h bez przesyłki &#x26A0;
+  </div>
+  <table>
+    <thead>
+      <tr><th>Nr zamówienia</th><th>Klient</th><th>Status</th><th>Data złożenia</th><th>Czas oczekiwania</th></tr>
+    </thead>
+    <tbody>${rows || '<tr><td colspan="5" style="text-align:center;padding:20px;color:#888">Brak niezrealizowanych zamówień</td></tr>'}</tbody>
+  </table>
+</body>
+</html>`;
+}
+
 async function updateReviewStats(prisma: PrismaService, productId: string): Promise<void> {
   await prisma.$executeRaw`
     UPDATE products SET
@@ -146,6 +222,7 @@ export async function setupAdmin(
   ordersService: OrdersService,
   paymentsService: PaymentsService,
   returnsService: ReturnsService,
+  authService: AuthService,
 ): Promise<void> {
   const adminEmail = process.env.ADMIN_DEFAULT_EMAIL;
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD;
@@ -449,6 +526,15 @@ export async function setupAdmin(
                 return { redirectUrl: '/admin/picklist', records: [] };
               },
             },
+            fulfillmentGap: {
+              actionType: 'resource',
+              icon: 'AlertTriangle',
+              label: 'Niezrealizowane zamówienia',
+              isVisible: true,
+              handler: async (_request: any, _response: any, _context: any) => {
+                return { redirectUrl: '/admin/fulfillment-gap', records: [] };
+              },
+            },
             bulkCancel: {
               actionType: 'bulk',
               icon: 'XCircle',
@@ -527,6 +613,32 @@ export async function setupAdmin(
             new: { isAccessible: false },
             edit: { isAccessible: false },
             delete: { isAccessible: false },
+            sendPasswordReset: {
+              actionType: 'record',
+              icon: 'Key',
+              label: 'Wyślij reset hasła',
+              isVisible: true,
+              handler: async (_request: any, _response: any, context: any) => {
+                const { record } = context;
+                const email = record.params.email as string;
+                try {
+                  await authService.requestPasswordReset(email);
+                  await logAdminAction(
+                    prisma, 'sendPasswordReset', 'User', record.params.id as string,
+                    context.currentAdmin?.email ?? adminEmail, { email },
+                  );
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Link do resetu hasła wysłany na ${email}.`, type: 'success' },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd wysyłki: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
             show: {
               after: async (response: any, _request: any, context: any) => {
                 const userId: string | undefined = context.record?.params?.id;
@@ -561,6 +673,64 @@ export async function setupAdmin(
               },
             },
           },
+        },
+      },
+      // ── Coupons ──────────────────────────────────────────────────────
+      {
+        resource: { model: getModelByName('Coupon'), client: prisma },
+        options: {
+          navigation: { name: 'Rabaty' },
+          sort: { sortBy: 'createdAt', direction: 'desc' },
+          listProperties: ['code', 'discountType', 'value', 'currentUses', 'usesCount', 'maxUsesTotal', 'isActive', 'expiresAt'],
+          showProperties: ['id', 'code', 'discountType', 'value', 'couponType', 'usesCount', 'currentUses', 'maxUsesTotal', 'maxUsesPerUser', 'minSpendInCents', 'isActive', 'startsAt', 'expiresAt', 'createdAt'],
+          filterProperties: ['discountType', 'isActive', 'code'],
+          properties: {
+            usesCount: {
+              type: 'number',
+              isVisible: { list: true, show: true, edit: false, filter: false },
+              label: 'Użyć (faktyczne)',
+              description: 'Liczba zrealizowanych użyć z tabeli coupon_uses',
+            },
+            excludedProductIds: { isVisible: { list: false, show: true, edit: false, filter: false } },
+          },
+          actions: {
+            delete: { isAccessible: false },
+            list: {
+              after: async (response: any) => {
+                const couponIds: string[] = (response.records ?? []).map((r: any) => r.params.id as string);
+                if (couponIds.length === 0) return response;
+                const counts = await prisma.couponUse.groupBy({
+                  by: ['couponId'],
+                  _count: { couponId: true },
+                  where: { couponId: { in: couponIds } },
+                });
+                const countMap = new Map(counts.map((c) => [c.couponId, c._count.couponId]));
+                for (const record of response.records ?? []) {
+                  record.params.usesCount = countMap.get(record.params.id as string) ?? 0;
+                }
+                return response;
+              },
+            },
+            show: {
+              after: async (response: any, _request: any, context: any) => {
+                const couponId = context.record?.params?.id as string | undefined;
+                if (!couponId) return response;
+                const count = await prisma.couponUse.count({ where: { couponId } });
+                if (response.record) response.record.params.usesCount = count;
+                return response;
+              },
+            },
+          },
+        },
+      },
+      {
+        resource: { model: getModelByName('CouponUse'), client: prisma },
+        options: {
+          navigation: { name: 'Rabaty' },
+          sort: { sortBy: 'createdAt', direction: 'desc' },
+          listProperties: ['couponId', 'orderId', 'userId', 'discountAppliedInCents', 'createdAt'],
+          filterProperties: ['couponId', 'userId'],
+          ...readOnly,
         },
       },
       // ── Returns ──────────────────────────────────────────────────────
@@ -856,6 +1026,19 @@ export async function setupAdmin(
       res.send(html);
     } catch (err) {
       res.status(500).send(`<pre>Błąd generowania listy: ${(err as Error).message}</pre>`);
+    }
+  });
+
+  expressApp.get('/admin/fulfillment-gap', sessionMw, async (req: any, res: any) => {
+    if (!req.session?.passport?.user) {
+      return res.redirect('/admin/login');
+    }
+    try {
+      const html = await generateFulfillmentGapHtml(prisma);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
+    } catch (err) {
+      res.status(500).send(`<pre>Błąd generowania raportu: ${(err as Error).message}</pre>`);
     }
   });
 
