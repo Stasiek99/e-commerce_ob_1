@@ -23,6 +23,7 @@ import { RouterLink } from '@angular/router';
           <a routerLink="/legal/terms">Regulamin</a>
           <a routerLink="/legal/privacy">Polityka prywatności</a>
           <a routerLink="/legal/withdrawal">Prawo odstąpienia</a>
+          <a href="https://ec.europa.eu/consumers/odr" target="_blank" rel="noopener">Platforma ODR (rozwiązywanie sporów online)</a>
         </nav>
         <p class="footer__copy">&copy; {{ year }} Aromaterie. Wszelkie prawa zastrzeżone.</p>
       </div>
