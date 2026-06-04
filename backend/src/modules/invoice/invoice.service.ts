@@ -311,7 +311,20 @@ export class InvoiceService implements OnModuleInit {
     });
 
     // ── Totals ─────────────────────────────────────────────────────────────
-    const totalGrossCents = totalNetCents + totalVatCents;
+    // order.totalInCents is the single authoritative source of truth for the
+    // invoice total. Per-item VAT rounding can accumulate 1-3 gr on multi-item
+    // orders; absorbing the remainder into the last VAT bucket keeps the
+    // breakdown consistent with Art. 106e Ustawy o VAT.
+    const razem = order.totalInCents;
+    const authTotalVat = razem - totalNetCents;
+    const vatRemainder = authTotalVat - totalVatCents;
+    if (vatRemainder !== 0) {
+      const sortedForAdj = Array.from(vatByRate.entries()).sort(([a], [b]) => b - a);
+      const [lastRate, lastBucket] = sortedForAdj[sortedForAdj.length - 1];
+      lastBucket.vatCents += vatRemainder;
+      vatByRate.set(lastRate, lastBucket);
+    }
+
     const sumX = 340;
     const sumLabelW = 120;
     const sumValueW = 85;
@@ -330,11 +343,11 @@ export class InvoiceService implements OnModuleInit {
     y += 16;
     doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
     y += 6;
-    this.sumRow(doc, 'Razem brutto:', this.fmtMoney(totalGrossCents), sumX, y, sumLabelW, sumValueW, false);
+    this.sumRow(doc, 'Razem brutto:', this.fmtMoney(razem), sumX, y, sumLabelW, sumValueW, false);
     y += 20;
     doc.rect(sumX - 4, y - 4, sumLabelW + sumValueW + 8, 24).fill('#1a1a1a').stroke();
     doc.fillColor('#fff');
-    this.sumRow(doc, 'DO ZAPLATY:', this.fmtMoney(order.totalInCents), sumX, y + 4, sumLabelW, sumValueW, true);
+    this.sumRow(doc, 'DO ZAPLATY:', this.fmtMoney(razem), sumX, y + 4, sumLabelW, sumValueW, true);
 
     // ── Footer ─────────────────────────────────────────────────────────────
     doc.fillColor('#888').fontSize(7.5).font('Inter');

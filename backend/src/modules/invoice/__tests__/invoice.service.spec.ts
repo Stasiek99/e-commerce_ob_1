@@ -552,6 +552,166 @@ describe('InvoiceService', () => {
       expect(vatCents).toBe(0);
     });
   });
+
+  // ── VAT rounding fix — Razem brutto === order.totalInCents (Art. 106e) ────────
+  // Per-item Math.round accumulation can cause the naïve `totalNetCents +
+  // totalVatCents` to differ from `order.totalInCents` by 1-3 gr.
+  // The fix derives `razem` directly from `order.totalInCents` and absorbs
+  // any remainder into the last VAT bucket (sorted rate-descending).
+
+  describe('render — Razem brutto and DO ZAPŁATY derived from order.totalInCents', () => {
+    function makeMockDoc(): { doc: any; calls: string[] } {
+      const calls: string[] = [];
+      const doc: any = {
+        registerFont: jest.fn().mockReturnThis(),
+        font: jest.fn().mockReturnThis(),
+        fontSize: jest.fn().mockReturnThis(),
+        fillColor: jest.fn().mockReturnThis(),
+        text: jest.fn().mockImplementation((t: unknown) => { calls.push(String(t)); return doc; }),
+        moveDown: jest.fn().mockReturnThis(),
+        moveTo: jest.fn().mockReturnThis(),
+        lineTo: jest.fn().mockReturnThis(),
+        lineWidth: jest.fn().mockReturnThis(),
+        stroke: jest.fn().mockReturnThis(),
+        rect: jest.fn().mockReturnThis(),
+        fill: jest.fn().mockReturnThis(),
+        end: jest.fn(),
+        y: 300,
+      };
+      return { doc, calls };
+    }
+
+    it('Razem brutto uses order.totalInCents when it differs from the sum of item grosses', () => {
+      // Item grossCents = 9999 but totalInCents = 10000 (1 gr DB discrepancy)
+      const order = buildOrder({
+        totalInCents: 10000,
+        itemsTotalInCents: 9999,
+        shippingCostInCents: 0,
+        items: [{ snapshotName: 'Perfume', snapshotPrice: 9999, snapshotVatRate: 2300, quantity: 1 }],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(razemIdx).toBeGreaterThanOrEqual(0);
+      // totalInCents=10000 → "100.00 zl", not item sum 9999 → "99.99 zl"
+      expect(calls[razemIdx + 1]).toBe('100.00 zl');
+    });
+
+    it('DO ZAPLATY and Razem brutto show the same amount (both from order.totalInCents)', () => {
+      const order = buildOrder({ totalInCents: 15050 });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      const doZaplatyIdx = calls.indexOf('DO ZAPLATY:');
+      expect(razemIdx).toBeGreaterThanOrEqual(0);
+      expect(doZaplatyIdx).toBeGreaterThanOrEqual(0);
+      expect(calls[razemIdx + 1]).toBe(calls[doZaplatyIdx + 1]);
+    });
+
+    it('absorbs +1 gr VAT remainder into the last (lowest-rate) bucket', () => {
+      // Two items at 23%: each grossCents=100
+      // netCents each = round(100/1.23)=81, vatCents=19 → totalNet=162, totalVat=38
+      // totalInCents=201 → authTotalVat=39, remainder=+1 → 23% bucket gets +1
+      const order = buildOrder({
+        totalInCents: 201,
+        itemsTotalInCents: 200,
+        shippingCostInCents: 0,
+        items: [
+          { snapshotName: 'Item A', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'Item B', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+        ],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('2.01 zl');
+
+      // VAT 23%: authTotalVat = 201-162 = 39 → 0.39 zl
+      const vatIdx = calls.indexOf('VAT 23%:');
+      expect(calls[vatIdx + 1]).toBe('0.39 zl');
+
+      // Suma netto unchanged: 162 → 1.62 zl
+      const netIdx = calls.indexOf('Suma netto:');
+      expect(calls[netIdx + 1]).toBe('1.62 zl');
+    });
+
+    it('absorbs −1 gr remainder (totalInCents less than item sum) by reducing last VAT bucket', () => {
+      // Same setup but totalInCents=199 → authTotalVat=37, remainder=−1
+      const order = buildOrder({
+        totalInCents: 199,
+        itemsTotalInCents: 200,
+        shippingCostInCents: 0,
+        items: [
+          { snapshotName: 'Item A', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'Item B', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+        ],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('1.99 zl');
+
+      const vatIdx = calls.indexOf('VAT 23%:');
+      expect(calls[vatIdx + 1]).toBe('0.37 zl');
+    });
+
+    it('no adjustment when item sum exactly equals totalInCents', () => {
+      // grossCents=12300, net=round(12300/1.23)=10000, vat=2300, sum=12300=totalInCents → remainder=0
+      const order = buildOrder({
+        totalInCents: 12300,
+        itemsTotalInCents: 12300,
+        shippingCostInCents: 0,
+        items: [{ snapshotName: 'Perfume', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('123.00 zl');
+
+      const vatIdx = calls.indexOf('VAT 23%:');
+      expect(calls[vatIdx + 1]).toBe('23.00 zl');
+    });
+
+    it('multi-rate basket: remainder absorbed into lowest-rate bucket (sort descending → last = lowest)', () => {
+      // 23% item: grossCents=100, net=81, vat=19
+      // 5% item:  grossCents=100, net=95, vat=5
+      // totalNet=176, totalVat=24, sum=200
+      // totalInCents=202 → authTotalVat=26, remainder=+2 → 5% bucket gets +2 → vat=7
+      const order = buildOrder({
+        totalInCents: 202,
+        itemsTotalInCents: 200,
+        shippingCostInCents: 0,
+        items: [
+          { snapshotName: 'Item 23%', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'Item 5%',  snapshotPrice: 100, snapshotVatRate: 500,  quantity: 1 },
+        ],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('2.02 zl');
+
+      // 5% bucket receives +2 remainder → 5+2=7 → "0.07 zl"
+      const vat5Idx = calls.indexOf('VAT 5%:');
+      expect(calls[vat5Idx + 1]).toBe('0.07 zl');
+
+      // 23% bucket unchanged → "0.19 zl"
+      const vat23Idx = calls.indexOf('VAT 23%:');
+      expect(calls[vat23Idx + 1]).toBe('0.19 zl');
+    });
+  });
 });
 
 // ── helpers used only in proration algorithm tests ───────────────────────────
