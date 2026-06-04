@@ -17,6 +17,7 @@ export interface InvoiceOrder {
   snapshotStreet: string;
   snapshotCity: string;
   snapshotPostalCode: string;
+  snapshotCountry?: string | null;
   itemsTotalInCents: number;
   shippingCostInCents: number;
   discountInCents: number;
@@ -172,6 +173,12 @@ export class InvoiceService implements OnModuleInit {
     const issueDate = this.fmtDate(new Date());
     const saleDate = this.fmtDate(order.createdAt);
 
+    // Art. 42 ust. 1 Ustawy o VAT: intra-EU cross-border B2B dispatches are zero-rated
+    // with reverse-charge obligation on the buyer. Both conditions must be met:
+    // buyer has an EU VAT number (snapshotNip) AND shipment is outside Poland.
+    const isReverseCharge =
+      !!order.snapshotNip && !!order.snapshotCountry && order.snapshotCountry !== 'PL';
+
     // ── Title ──────────────────────────────────────────────────────────────
     doc.fontSize(22).font('Inter-Bold').text('FAKTURA VAT', { align: 'center' });
     doc.moveDown(0.3);
@@ -244,10 +251,11 @@ export class InvoiceService implements OnModuleInit {
         name: i.snapshotName,
         qty: i.quantity,
         grossCents: i.snapshotPrice * i.quantity,
-        vatRate: i.snapshotVatRate / 10000, // basis points → decimal (2300 → 0.23)
+        // Reverse-charge: zero-rate all items per Art. 42 ust. 1 Ustawy o VAT
+        vatRate: isReverseCharge ? 0 : i.snapshotVatRate / 10000,
       })),
       ...(order.shippingCostInCents > 0
-        ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
+        ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: isReverseCharge ? 0 : 0.23 }]
         : []),
       // Art. 106e pkt 7 Ustawy o VAT: discount must appear as a separate line
       // Art. 106e pkt 7 / Art. 29a ust. 10 — discount must be prorated across each VAT
@@ -255,6 +263,15 @@ export class InvoiceService implements OnModuleInit {
       // produces an incorrect VAT split for mixed-rate baskets (KAS audit finding).
       ...(order.discountInCents > 0
         ? (() => {
+            if (isReverseCharge) {
+              // All items are zero-rated — single discount line at 0%
+              return [{
+                name: `Rabat: ${order.couponCode ?? 'kupon'}`,
+                qty: 1,
+                grossCents: -order.discountInCents,
+                vatRate: 0,
+              }];
+            }
             const grossByRate = new Map<number, number>();
             for (const item of order.items) {
               const rate = item.snapshotVatRate / 10000;
@@ -355,6 +372,20 @@ export class InvoiceService implements OnModuleInit {
     doc.text('Platnosc zrealizowana elektronicznie (Stripe).', 50, footerY);
     doc.text('Faktura wystawiona elektronicznie — wazna bez podpisu i pieczatki.', 50, footerY + 12);
     doc.text(`Wygenerowano: ${this.fmtDate(new Date())}`, 50, footerY + 24);
+    if (isReverseCharge) {
+      doc.fillColor('#333').fontSize(7.5).font('Inter-Bold');
+      doc.text(
+        'Odwrotne obciazenie / Reverse charge — Art. 42 ust. 1 Ustawy o VAT z dnia 11.03.2004.',
+        50,
+        footerY + 40,
+      );
+      doc.font('Inter').fillColor('#888');
+      doc.text(
+        `Nabywca: NIP UE ${order.snapshotNip} — podatek rozlicza nabywca (Art. 196 Dyrektywy 2006/112/WE).`,
+        50,
+        footerY + 52,
+      );
+    }
   }
 
   private sumRow(

@@ -16,6 +16,7 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
     snapshotLastName: 'Kowalski',
     snapshotCompany: null,
     snapshotNip: null,
+    snapshotCountry: 'PL',
     snapshotStreet: 'ul. Marszałkowska 1',
     snapshotCity: 'Warszawa',
     snapshotPostalCode: '00-001',
@@ -550,6 +551,156 @@ describe('InvoiceService', () => {
 
       expect(netCents).toBe(5000);
       expect(vatCents).toBe(0);
+    });
+  });
+
+  // ── Reverse-charge (Art. 42 ust. 1 Ustawy o VAT) ────────────────────────────
+  // Cross-border intra-EU B2B buyers with a VAT number (snapshotNip) must receive
+  // a zero-rated invoice with the "odwrotne obciążenie" note — not a VAT-inclusive one.
+
+  describe('processInvoice — reverse-charge (Art. 42 ust. 1 Ustawy o VAT)', () => {
+    function makeMockDoc() {
+      const calls: string[] = [];
+      const doc: any = {
+        registerFont: jest.fn().mockReturnThis(),
+        font: jest.fn().mockReturnThis(),
+        fontSize: jest.fn().mockReturnThis(),
+        fillColor: jest.fn().mockReturnThis(),
+        text: jest.fn().mockImplementation((t: unknown) => { calls.push(String(t)); return doc; }),
+        moveDown: jest.fn().mockReturnThis(),
+        moveTo: jest.fn().mockReturnThis(),
+        lineTo: jest.fn().mockReturnThis(),
+        lineWidth: jest.fn().mockReturnThis(),
+        stroke: jest.fn().mockReturnThis(),
+        rect: jest.fn().mockReturnThis(),
+        fill: jest.fn().mockReturnThis(),
+        end: jest.fn(),
+        y: 300,
+      };
+      return { doc, calls };
+    }
+
+    it('generates a valid PDF for a cross-border EU B2B order', async () => {
+      const order = buildOrder({ snapshotNip: 'DE123456789', snapshotCountry: 'DE' });
+
+      const { pdf } = await service.processInvoice(order);
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('renders all line items at 0% VAT — not original snapshotVatRate — when reverse-charge applies', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: 'DE',
+        items: [{ snapshotName: 'Perfumy 23%', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).not.toContain('VAT 23%:');
+      expect(calls).toContain('VAT zw.:');
+    });
+
+    it('renders shipping at 0% VAT when reverse-charge applies — not hardcoded 23%', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: 'DE',
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 1999,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).not.toContain('VAT 23%:');
+      expect(calls).toContain('VAT zw.:');
+    });
+
+    it('includes the "Odwrotne obciazenie" legal note in the PDF footer', () => {
+      const order = buildOrder({ snapshotNip: 'DE123456789', snapshotCountry: 'DE' });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(true);
+    });
+
+    it('includes the buyer EU VAT number in the reverse-charge footer note', () => {
+      const order = buildOrder({ snapshotNip: 'DE123456789', snapshotCountry: 'DE' });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls.some((c) => c.includes('DE123456789'))).toBe(true);
+    });
+
+    it('uses a single 0% discount line when reverse-charge applies — no per-rate proration', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: 'DE',
+        items: [
+          { snapshotName: 'A 23%', snapshotPrice: 10000, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'B 5%',  snapshotPrice:  5000, snapshotVatRate:  500, quantity: 1 },
+        ],
+        discountInCents: 1000,
+        couponCode: 'EU10',
+        shippingCostInCents: 0,
+        totalInCents: 14000,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).not.toContain('VAT 23%:');
+      expect(calls).not.toContain('VAT 5%:');
+      expect(calls).toContain('VAT zw.:');
+    });
+
+    it('does NOT apply reverse-charge when country is PL — domestic B2B uses normal VAT', () => {
+      const order = buildOrder({
+        snapshotNip: '1234567890',
+        snapshotCountry: 'PL',
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).toContain('VAT 23%:');
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(false);
+    });
+
+    it('does NOT apply reverse-charge when NIP is absent — non-B2B cross-border order uses normal VAT', () => {
+      const order = buildOrder({
+        snapshotNip: null,
+        snapshotCountry: 'DE',
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).toContain('VAT 23%:');
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(false);
+    });
+
+    it('does NOT apply reverse-charge when snapshotCountry is null', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: null,
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).toContain('VAT 23%:');
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(false);
     });
   });
 
