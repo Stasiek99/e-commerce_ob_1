@@ -2663,8 +2663,9 @@ describe('OrdersService', () => {
       );
     });
 
-    it('sends cancellation email with pro-rated amount when a coupon was applied', async () => {
-      // 20%-off: discountedPrice = 20000 * 0.8 = 16000; qty=2 → totalInCents = 32000
+    it('sends cancellation email with pro-rated amount when a coupon was applied (partial)', async () => {
+      // 20%-off coupon: discountedPrice = 20000 * 0.8 = 16000; cancel qty=1 → email = 16000
+      // Cancels only 1 of 2 units so the partial-refund path (not full withdrawal) is exercised.
       const discountedOrder = {
         ...mockPaidOrder,
         itemsTotalInCents: 20000,
@@ -2686,12 +2687,12 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
 
       await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 2 }],
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
       });
       await Promise.resolve();
 
       expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
-        expect.objectContaining({ totalInCents: 32000 }),
+        expect.objectContaining({ totalInCents: 16000 }),
       );
     });
 
@@ -2733,6 +2734,87 @@ describe('OrdersService', () => {
         OrderStatus.PAID,
         'CUSTOMER',
       );
+    });
+
+    // ─── full-withdrawal shipping refund (fix: Art. 32 UoK compliance) ──────────
+    // When ALL remaining items are cancelled, refundPayment() must be called instead
+    // of partialRefund() so the shipping cost (shippingCostInCents) is included in
+    // the Stripe refund. partialRefund only sums item prices.
+
+    it('calls refundPayment instead of partialRefund when all remaining items are cancelled', async () => {
+      // item-1 remaining=3, item-2 remaining=1 — cancel both fully
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 3 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.partialRefund).not.toHaveBeenCalled();
+    });
+
+    it('sends email with order.totalInCents (includes shipping) when all items are cancelled', async () => {
+      // mockPaidOrder.totalInCents = 100000 — includes shipping; partialRefund path would
+      // use only item sum (e.g. 69800) and silently drop shippingCostInCents.
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+      const emailService = (service as any).emailService;
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 3 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+      await Promise.resolve();
+
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          totalInCents: 100000,
+          isRefund: true,
+        }),
+      );
+    });
+
+    it('still calls partialRefund (not refundPayment) when only some items are cancelled', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      // Cancel only 2 of 3 remaining in item-1 — allCancelled = false
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalled();
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('triggers refundPayment when item with prior partial cancellation is fully covered', async () => {
+      // item-2: quantity=2, cancelledQuantity=1 → remaining=1.
+      // Cancel item-1 fully (qty=3) and item-2 remaining (qty=1) → allCancelled=true.
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 3 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+    });
+
+    it('does not trigger refundPayment when only one of two items is fully cancelled', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      // Cancel item-1 fully (all 3) but leave item-2 untouched → allCancelled = false
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 3 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalled();
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
     });
   });
 

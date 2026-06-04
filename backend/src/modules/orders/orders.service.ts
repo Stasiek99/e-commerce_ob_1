@@ -793,6 +793,29 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
+    const allCancelled = order.items.every((item) => {
+      const remaining = item.quantity - item.cancelledQuantity;
+      if (remaining === 0) return true;
+      const cancelling = resolvedItems.find((r) => r.orderItemId === item.id);
+      return cancelling ? cancelling.quantity >= remaining : false;
+    });
+
+    if (allCancelled) {
+      // Full withdrawal — use refundPayment so the shipping cost is included
+      // (partialRefund only sums item prices and misses shippingCostInCents)
+      await this.paymentsService.refundPayment(orderId, 'CUSTOMER');
+      this.emailService
+        .sendOrderCancellation({
+          to: order.snapshotEmail,
+          orderNumber: order.orderNumber,
+          firstName: order.snapshotFirstName,
+          totalInCents: order.totalInCents,
+          isRefund: true,
+        })
+        .catch((err) => this.logger.warn('Full-cancellation email failed', err));
+      return;
+    }
+
     await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
 
     const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
