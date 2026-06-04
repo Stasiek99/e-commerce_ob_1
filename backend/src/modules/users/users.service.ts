@@ -1,10 +1,14 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { StripeClient } from '../payments/stripe.client';
 import { Prisma, User } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stripe: StripeClient,
+  ) {}
 
   async findById(id: string): Promise<User | null> {
     return this.prisma.user.findUnique({ where: { id } });
@@ -193,6 +197,25 @@ export class UsersService {
     // which have no FK to User (by design, so returns survive account deletion).
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
     if (!user) throw new NotFoundException('User not found');
+
+    // GDPR Art. 17(3)(b) exemption: erasure must not destroy evidence needed for
+    // an open chargeback. Check all Stripe payment intents on this user's orders.
+    const payments = await this.prisma.payment.findMany({
+      where: { order: { userId } },
+      select: { stripePaymentIntentId: true },
+    });
+    const intentIds = payments
+      .map((p) => p.stripePaymentIntentId)
+      .filter((id): id is string => id !== null);
+
+    for (const intentId of intentIds) {
+      const disputes = await this.stripe.listDisputesByPaymentIntent(intentId);
+      if (disputes.some((d) => d.status === 'needs_response')) {
+        throw new ConflictException(
+          'Account erasure is temporarily blocked due to an open payment dispute. Try again in 30 days.',
+        );
+      }
+    }
 
     await this.prisma.$transaction([
       // GDPR Art. 17 — scrub PII from order snapshots; the FK is nulled by the

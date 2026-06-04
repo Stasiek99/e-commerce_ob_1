@@ -150,6 +150,11 @@ export class StripeClient {
     );
   }
 
+  async listDisputesByPaymentIntent(paymentIntentId: string): Promise<Stripe.Dispute[]> {
+    const result = await this.stripe.disputes.list({ payment_intent: paymentIntentId });
+    return result.data;
+  }
+
   constructWebhookEvent(rawBody: Buffer, signatureHeader: string): Stripe.Event {
     if (!this.webhookSecret) {
       throw new Error(
