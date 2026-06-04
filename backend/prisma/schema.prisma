@@ -265,6 +265,10 @@ model Product {
   // REACH Regulation 2020/878 — SDS mandatory for hazardous products (diffusers)
   sdsUrl           String?   // Supabase public URL to Safety Data Sheet PDF
 
+  // EC Regulation 1223/2009 Art. 13 — CPNP notification mandatory before EU market placement
+  cpnpNotificationNumber String?  // CPNP portal notification number
+  responsiblePersonName  String?  // Responsible Person (RP) name / company
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
