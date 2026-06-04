@@ -32,29 +32,50 @@ export class HealthController {
   }
 
   private async checkDb(): Promise<'connected' | 'disconnected'> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await this.prisma.$queryRaw`SELECT 1`;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('db health timeout')), 5_000);
+      });
+      await Promise.race([this.prisma.$queryRaw`SELECT 1`, deadline]);
       return 'connected';
     } catch {
       return 'disconnected';
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   private async checkRedis(): Promise<'connected' | 'disconnected'> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await this.redis.ping();
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('redis health timeout')), 3_000);
+      });
+      await Promise.race([this.redis.ping(), deadline]);
       return 'connected';
     } catch {
       return 'disconnected';
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   private async checkEmailQueue(): Promise<{ waiting: number; failed: number }> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const counts = await this.emailQueue.getJobCounts('waiting', 'failed');
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('queue health timeout')), 3_000);
+      });
+      const counts = await Promise.race([
+        this.emailQueue.getJobCounts('waiting', 'failed'),
+        deadline,
+      ]);
       return { waiting: counts.waiting ?? 0, failed: counts.failed ?? 0 };
     } catch {
       return { waiting: -1, failed: -1 };
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
