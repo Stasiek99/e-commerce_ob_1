@@ -37,7 +37,9 @@ type EmailKind =
   | 'return_status_update'
   | 'email_change'
   | 'magic_link_login'
-  | 'fraud_review_alert';
+  | 'fraud_review_alert'
+  | 'payout_failed_alert'
+  | 'dispute_alert';
 
 @Injectable()
 export class EmailService {
@@ -87,7 +89,6 @@ export class EmailService {
     items: Array<{ name: string; quantity: number; price: number }>;
     shippingCostInCents: number;
     totalInCents: number;
-    invoiceUrl: string;
     invoicePdf: Buffer;
   }) {
     const { subject, html } = invoiceTemplate(data);
@@ -253,6 +254,80 @@ export class EmailService {
       requestId: data.requestId,
       newStatus: data.newStatus,
     });
+  }
+
+  async sendDisputeAlert(data: {
+    to: string;
+    orderNumber: string;
+    customerEmail: string;
+    amountInCents: number;
+    reason: string;
+    evidenceDeadline: string;
+    disputeId: string;
+    adminUrl?: string;
+  }) {
+    const amount = (data.amountInCents / 100).toFixed(2);
+    const subject = `[CHARGEBACK] Spór Stripe #${data.orderNumber} — dowody wymagane do ${data.evidenceDeadline}`;
+    const adminLink = data.adminUrl ? `<p><a href="${data.adminUrl}">Przejdź do zamówienia →</a></p>` : '';
+    const html = `
+      <h2>Stripe otworzył spór (chargeback)</h2>
+      <p>Klient złożył reklamację za pośrednictwem banku. Stripe wymaga przesłania dowodów w ciągu <strong>7 dni kalendarzowych</strong>.</p>
+      <table>
+        <tr><td><strong>Zamówienie:</strong></td><td>${data.orderNumber}</td></tr>
+        <tr><td><strong>Klient:</strong></td><td>${data.customerEmail}</td></tr>
+        <tr><td><strong>Kwota sporu:</strong></td><td>${amount} PLN</td></tr>
+        <tr><td><strong>Powód:</strong></td><td>${data.reason}</td></tr>
+        <tr><td><strong>Termin dowodów:</strong></td><td>${data.evidenceDeadline}</td></tr>
+        <tr><td><strong>ID sporu:</strong></td><td>${data.disputeId}</td></tr>
+      </table>
+      ${adminLink}
+      <h3>Działania</h3>
+      <ol>
+        <li>Zaloguj się do <a href="https://dashboard.stripe.com/disputes">Stripe Dashboard → Disputes</a>.</li>
+        <li>Wybierz spór <code>${data.disputeId}</code> i kliknij "Submit evidence".</li>
+        <li>Dołącz potwierdzenie zamówienia, dowód dostawy, korespondencję z klientem.</li>
+        <li>Prześlij dowody przed: <strong>${data.evidenceDeadline}</strong>.</li>
+      </ol>
+      <p><em>Zamówienie zostało automatycznie wstrzymane (DISPUTE_HOLD).</em></p>
+    `;
+    return this.send('dispute_alert', data.to, subject, html, {
+      orderNumber: data.orderNumber,
+      disputeId: data.disputeId,
+    });
+  }
+
+  async sendPayoutFailedAlert(data: {
+    to: string;
+    payoutId: string;
+    amountInCents: number;
+    currency: string;
+    failureCode: string | null;
+    failureMessage: string | null;
+    arrivalDate: string;
+  }) {
+    const amount = (data.amountInCents / 100).toFixed(2);
+    const subject = `[KRYTYCZNY] Stripe payout nie powiódł się — ${amount} ${data.currency.toUpperCase()}`;
+    const html = `
+      <h2>Stripe payout nie powiódł się</h2>
+      <p>Wypłata środków ze Stripe nie powiodła się. Wymagana natychmiastowa interwencja.</p>
+      <table>
+        <tr><td><strong>Payout ID:</strong></td><td>${data.payoutId}</td></tr>
+        <tr><td><strong>Kwota:</strong></td><td>${amount} ${data.currency.toUpperCase()}</td></tr>
+        <tr><td><strong>Kod błędu:</strong></td><td>${data.failureCode ?? '—'}</td></tr>
+        <tr><td><strong>Szczegóły:</strong></td><td>${data.failureMessage ?? '—'}</td></tr>
+        <tr><td><strong>Planowana data:</strong></td><td>${data.arrivalDate}</td></tr>
+      </table>
+      <h3>Działania naprawcze</h3>
+      <ol>
+        <li>Zaloguj się do <a href="https://dashboard.stripe.com/payouts">Stripe Dashboard → Payouts</a> i sprawdź powód nieudanej wypłaty.</li>
+        <li>Zweryfikuj dane konta bankowego: Stripe Dashboard → Settings → Bank accounts.</li>
+        <li>Jeśli dane są prawidłowe, skontaktuj się z supportem Stripe: <a href="https://support.stripe.com">support.stripe.com</a>.</li>
+        <li>W przypadku blokady konta sprawdź zamówienia w statusie DISPUTE_HOLD lub FRAUD_REVIEW i oceń konieczność ręcznych zwrotów.</li>
+        <li>Ręczny zwrot przez Stripe Dashboard: Payments → znajdź transakcję → Refund. Kwota do zwrotu dostępna jest w bazie w kolumnie <code>Order.totalInCents</code>.</li>
+      </ol>
+      <p><strong>Uwaga:</strong> Klienci mają prawo do zwrotu środków w ciągu 14 dni zgodnie z Art. 32 UoK, niezależnie od statusu wypłat Stripe.</p>
+    `;
+    return this.send('payout_failed_alert', data.to, subject, html, { payoutId: data.payoutId });
   }
 
   async sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {

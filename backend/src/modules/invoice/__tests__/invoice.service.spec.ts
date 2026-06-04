@@ -16,6 +16,7 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
     snapshotLastName: 'Kowalski',
     snapshotCompany: null,
     snapshotNip: null,
+    snapshotCountry: 'PL',
     snapshotStreet: 'ul. Marszałkowska 1',
     snapshotCity: 'Warszawa',
     snapshotPostalCode: '00-001',
@@ -35,17 +36,29 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
 describe('InvoiceService', () => {
   let service: InvoiceService;
   let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
-  let mockPrisma: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
+  let mockTx: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
+  let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock };
 
   beforeEach(async () => {
     mockStorage = {
       uploadInvoice: jest.fn().mockResolvedValue(MOCK_PATH),
       getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_URL),
     };
-    mockPrisma = {
+    // mockTx is the Prisma transaction client passed to the $transaction callback.
+    // $queryRawUnsafe is called twice per normal processInvoice run:
+    //   1st call — SELECT FOR UPDATE (idempotency check)
+    //   2nd call — SELECT nextval (sequence allocation)
+    mockTx = {
       $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
-      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: MOCK_SEQ }]),
+      $queryRawUnsafe: jest.fn()
+        .mockResolvedValueOnce([{ invoice_storage_path: null, invoice_number: null }])
+        .mockResolvedValueOnce([{ nextval: MOCK_SEQ }]),
       order: { update: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma = {
+      $transaction: jest.fn().mockImplementation(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),
+      // $executeRawUnsafe is still present on the outer client (called by onModuleInit via ensureSequence)
+      $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -107,12 +120,12 @@ describe('InvoiceService', () => {
     it('persists invoiceStoragePath (raw path) — never stores a signed URL in the DB', async () => {
       await service.processInvoice(buildOrder());
 
-      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+      expect(mockTx.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
         data: { invoiceStoragePath: MOCK_PATH, invoiceNumber: 'FV/2026/000001' },
       });
       // The DB update must NOT contain invoiceUrl — that would break on key rotation
-      const [call] = mockPrisma.order.update.mock.calls;
+      const [call] = mockTx.order.update.mock.calls;
       expect(call[0].data).not.toHaveProperty('invoiceUrl');
     });
 
@@ -131,7 +144,10 @@ describe('InvoiceService', () => {
 
     it('invoice number uses the year from order.createdAt, not system clock', async () => {
       const order2024 = buildOrder({ createdAt: new Date('2024-06-15T10:00:00Z') });
-      mockPrisma.$queryRawUnsafe.mockResolvedValue([{ nextval: 5n }]);
+      mockTx.$queryRawUnsafe
+        .mockReset()
+        .mockResolvedValueOnce([{ invoice_storage_path: null, invoice_number: null }])
+        .mockResolvedValueOnce([{ nextval: 5n }]);
       mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2024-000005.pdf');
 
       const result = await service.processInvoice(order2024);
@@ -148,13 +164,55 @@ describe('InvoiceService', () => {
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
 
-      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockTx.order.update).not.toHaveBeenCalled();
     });
 
     it('propagates storage errors without swallowing them', async () => {
       mockStorage.uploadInvoice.mockRejectedValue(new Error('Supabase bucket full'));
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('Supabase bucket full');
+    });
+  });
+
+  // ── idempotency guard (SELECT FOR UPDATE) ─────────────────────────────────
+  // Prevents concurrent webhook + reconciliation cron from burning sequential
+  // invoice numbers when both see invoiceStoragePath = null before either commits.
+
+  describe('processInvoice — idempotency guard', () => {
+    it('returns the existing path and signed URL when invoice is already generated', async () => {
+      const EXISTING_PATH = 'invoices/FV-2026-000099.pdf';
+      const EXISTING_NUM  = 'FV/2026/000099';
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValue([
+        { invoice_storage_path: EXISTING_PATH, invoice_number: EXISTING_NUM },
+      ]);
+
+      const result = await service.processInvoice(buildOrder());
+
+      expect(result.storagePath).toBe(EXISTING_PATH);
+      expect(result.invoiceNumber).toBe(EXISTING_NUM);
+      expect(result.url).toBe(MOCK_URL);
+    });
+
+    it('does not allocate a new sequence number when invoice already exists', async () => {
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValue([
+        { invoice_storage_path: 'invoices/FV-2026-000099.pdf', invoice_number: 'FV/2026/000099' },
+      ]);
+
+      await service.processInvoice(buildOrder());
+
+      // $executeRawUnsafe (CREATE SEQUENCE) must not be called
+      expect(mockTx.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it('does not re-upload or re-persist when invoice already exists', async () => {
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValue([
+        { invoice_storage_path: 'invoices/FV-2026-000099.pdf', invoice_number: 'FV/2026/000099' },
+      ]);
+
+      await service.processInvoice(buildOrder());
+
+      expect(mockStorage.uploadInvoice).not.toHaveBeenCalled();
+      expect(mockTx.order.update).not.toHaveBeenCalled();
     });
   });
 
@@ -437,12 +495,12 @@ describe('InvoiceService', () => {
       await expect(service.processInvoice(order)).rejects.toThrow('Invalid invoice year: 2101');
     });
 
-    it('does not call $executeRawUnsafe when year is out of range', async () => {
+    it('does not start a DB transaction when year is out of range', async () => {
       const order = buildOrder({ createdAt: new Date('2019-01-01T00:00:00Z') });
 
       await expect(service.processInvoice(order)).rejects.toThrow();
 
-      expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('accepts year 2020 (lower boundary) without throwing', async () => {
@@ -493,6 +551,316 @@ describe('InvoiceService', () => {
 
       expect(netCents).toBe(5000);
       expect(vatCents).toBe(0);
+    });
+  });
+
+  // ── Reverse-charge (Art. 42 ust. 1 Ustawy o VAT) ────────────────────────────
+  // Cross-border intra-EU B2B buyers with a VAT number (snapshotNip) must receive
+  // a zero-rated invoice with the "odwrotne obciążenie" note — not a VAT-inclusive one.
+
+  describe('processInvoice — reverse-charge (Art. 42 ust. 1 Ustawy o VAT)', () => {
+    function makeMockDoc() {
+      const calls: string[] = [];
+      const doc: any = {
+        registerFont: jest.fn().mockReturnThis(),
+        font: jest.fn().mockReturnThis(),
+        fontSize: jest.fn().mockReturnThis(),
+        fillColor: jest.fn().mockReturnThis(),
+        text: jest.fn().mockImplementation((t: unknown) => { calls.push(String(t)); return doc; }),
+        moveDown: jest.fn().mockReturnThis(),
+        moveTo: jest.fn().mockReturnThis(),
+        lineTo: jest.fn().mockReturnThis(),
+        lineWidth: jest.fn().mockReturnThis(),
+        stroke: jest.fn().mockReturnThis(),
+        rect: jest.fn().mockReturnThis(),
+        fill: jest.fn().mockReturnThis(),
+        end: jest.fn(),
+        y: 300,
+      };
+      return { doc, calls };
+    }
+
+    it('generates a valid PDF for a cross-border EU B2B order', async () => {
+      const order = buildOrder({ snapshotNip: 'DE123456789', snapshotCountry: 'DE' });
+
+      const { pdf } = await service.processInvoice(order);
+
+      expect(pdf.slice(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('renders all line items at 0% VAT — not original snapshotVatRate — when reverse-charge applies', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: 'DE',
+        items: [{ snapshotName: 'Perfumy 23%', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).not.toContain('VAT 23%:');
+      expect(calls).toContain('VAT zw.:');
+    });
+
+    it('renders shipping at 0% VAT when reverse-charge applies — not hardcoded 23%', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: 'DE',
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 1999,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).not.toContain('VAT 23%:');
+      expect(calls).toContain('VAT zw.:');
+    });
+
+    it('includes the "Odwrotne obciazenie" legal note in the PDF footer', () => {
+      const order = buildOrder({ snapshotNip: 'DE123456789', snapshotCountry: 'DE' });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(true);
+    });
+
+    it('includes the buyer EU VAT number in the reverse-charge footer note', () => {
+      const order = buildOrder({ snapshotNip: 'DE123456789', snapshotCountry: 'DE' });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls.some((c) => c.includes('DE123456789'))).toBe(true);
+    });
+
+    it('uses a single 0% discount line when reverse-charge applies — no per-rate proration', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: 'DE',
+        items: [
+          { snapshotName: 'A 23%', snapshotPrice: 10000, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'B 5%',  snapshotPrice:  5000, snapshotVatRate:  500, quantity: 1 },
+        ],
+        discountInCents: 1000,
+        couponCode: 'EU10',
+        shippingCostInCents: 0,
+        totalInCents: 14000,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).not.toContain('VAT 23%:');
+      expect(calls).not.toContain('VAT 5%:');
+      expect(calls).toContain('VAT zw.:');
+    });
+
+    it('does NOT apply reverse-charge when country is PL — domestic B2B uses normal VAT', () => {
+      const order = buildOrder({
+        snapshotNip: '1234567890',
+        snapshotCountry: 'PL',
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).toContain('VAT 23%:');
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(false);
+    });
+
+    it('does NOT apply reverse-charge when NIP is absent — non-B2B cross-border order uses normal VAT', () => {
+      const order = buildOrder({
+        snapshotNip: null,
+        snapshotCountry: 'DE',
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).toContain('VAT 23%:');
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(false);
+    });
+
+    it('does NOT apply reverse-charge when snapshotCountry is null', () => {
+      const order = buildOrder({
+        snapshotNip: 'DE123456789',
+        snapshotCountry: null,
+        items: [{ snapshotName: 'Perfumy', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+        shippingCostInCents: 0,
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      expect(calls).toContain('VAT 23%:');
+      expect(calls.some((c) => c.includes('Odwrotne obciazenie'))).toBe(false);
+    });
+  });
+
+  // ── VAT rounding fix — Razem brutto === order.totalInCents (Art. 106e) ────────
+  // Per-item Math.round accumulation can cause the naïve `totalNetCents +
+  // totalVatCents` to differ from `order.totalInCents` by 1-3 gr.
+  // The fix derives `razem` directly from `order.totalInCents` and absorbs
+  // any remainder into the last VAT bucket (sorted rate-descending).
+
+  describe('render — Razem brutto and DO ZAPŁATY derived from order.totalInCents', () => {
+    function makeMockDoc(): { doc: any; calls: string[] } {
+      const calls: string[] = [];
+      const doc: any = {
+        registerFont: jest.fn().mockReturnThis(),
+        font: jest.fn().mockReturnThis(),
+        fontSize: jest.fn().mockReturnThis(),
+        fillColor: jest.fn().mockReturnThis(),
+        text: jest.fn().mockImplementation((t: unknown) => { calls.push(String(t)); return doc; }),
+        moveDown: jest.fn().mockReturnThis(),
+        moveTo: jest.fn().mockReturnThis(),
+        lineTo: jest.fn().mockReturnThis(),
+        lineWidth: jest.fn().mockReturnThis(),
+        stroke: jest.fn().mockReturnThis(),
+        rect: jest.fn().mockReturnThis(),
+        fill: jest.fn().mockReturnThis(),
+        end: jest.fn(),
+        y: 300,
+      };
+      return { doc, calls };
+    }
+
+    it('Razem brutto uses order.totalInCents when it differs from the sum of item grosses', () => {
+      // Item grossCents = 9999 but totalInCents = 10000 (1 gr DB discrepancy)
+      const order = buildOrder({
+        totalInCents: 10000,
+        itemsTotalInCents: 9999,
+        shippingCostInCents: 0,
+        items: [{ snapshotName: 'Perfume', snapshotPrice: 9999, snapshotVatRate: 2300, quantity: 1 }],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(razemIdx).toBeGreaterThanOrEqual(0);
+      // totalInCents=10000 → "100.00 zl", not item sum 9999 → "99.99 zl"
+      expect(calls[razemIdx + 1]).toBe('100.00 zl');
+    });
+
+    it('DO ZAPLATY and Razem brutto show the same amount (both from order.totalInCents)', () => {
+      const order = buildOrder({ totalInCents: 15050 });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      const doZaplatyIdx = calls.indexOf('DO ZAPLATY:');
+      expect(razemIdx).toBeGreaterThanOrEqual(0);
+      expect(doZaplatyIdx).toBeGreaterThanOrEqual(0);
+      expect(calls[razemIdx + 1]).toBe(calls[doZaplatyIdx + 1]);
+    });
+
+    it('absorbs +1 gr VAT remainder into the last (lowest-rate) bucket', () => {
+      // Two items at 23%: each grossCents=100
+      // netCents each = round(100/1.23)=81, vatCents=19 → totalNet=162, totalVat=38
+      // totalInCents=201 → authTotalVat=39, remainder=+1 → 23% bucket gets +1
+      const order = buildOrder({
+        totalInCents: 201,
+        itemsTotalInCents: 200,
+        shippingCostInCents: 0,
+        items: [
+          { snapshotName: 'Item A', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'Item B', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+        ],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('2.01 zl');
+
+      // VAT 23%: authTotalVat = 201-162 = 39 → 0.39 zl
+      const vatIdx = calls.indexOf('VAT 23%:');
+      expect(calls[vatIdx + 1]).toBe('0.39 zl');
+
+      // Suma netto unchanged: 162 → 1.62 zl
+      const netIdx = calls.indexOf('Suma netto:');
+      expect(calls[netIdx + 1]).toBe('1.62 zl');
+    });
+
+    it('absorbs −1 gr remainder (totalInCents less than item sum) by reducing last VAT bucket', () => {
+      // Same setup but totalInCents=199 → authTotalVat=37, remainder=−1
+      const order = buildOrder({
+        totalInCents: 199,
+        itemsTotalInCents: 200,
+        shippingCostInCents: 0,
+        items: [
+          { snapshotName: 'Item A', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'Item B', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+        ],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('1.99 zl');
+
+      const vatIdx = calls.indexOf('VAT 23%:');
+      expect(calls[vatIdx + 1]).toBe('0.37 zl');
+    });
+
+    it('no adjustment when item sum exactly equals totalInCents', () => {
+      // grossCents=12300, net=round(12300/1.23)=10000, vat=2300, sum=12300=totalInCents → remainder=0
+      const order = buildOrder({
+        totalInCents: 12300,
+        itemsTotalInCents: 12300,
+        shippingCostInCents: 0,
+        items: [{ snapshotName: 'Perfume', snapshotPrice: 12300, snapshotVatRate: 2300, quantity: 1 }],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('123.00 zl');
+
+      const vatIdx = calls.indexOf('VAT 23%:');
+      expect(calls[vatIdx + 1]).toBe('23.00 zl');
+    });
+
+    it('multi-rate basket: remainder absorbed into lowest-rate bucket (sort descending → last = lowest)', () => {
+      // 23% item: grossCents=100, net=81, vat=19
+      // 5% item:  grossCents=100, net=95, vat=5
+      // totalNet=176, totalVat=24, sum=200
+      // totalInCents=202 → authTotalVat=26, remainder=+2 → 5% bucket gets +2 → vat=7
+      const order = buildOrder({
+        totalInCents: 202,
+        itemsTotalInCents: 200,
+        shippingCostInCents: 0,
+        items: [
+          { snapshotName: 'Item 23%', snapshotPrice: 100, snapshotVatRate: 2300, quantity: 1 },
+          { snapshotName: 'Item 5%',  snapshotPrice: 100, snapshotVatRate: 500,  quantity: 1 },
+        ],
+      });
+
+      const { doc, calls } = makeMockDoc();
+      (service as any).render(doc, order, 'FV/2026/000001');
+
+      const razemIdx = calls.indexOf('Razem brutto:');
+      expect(calls[razemIdx + 1]).toBe('2.02 zl');
+
+      // 5% bucket receives +2 remainder → 5+2=7 → "0.07 zl"
+      const vat5Idx = calls.indexOf('VAT 5%:');
+      expect(calls[vat5Idx + 1]).toBe('0.07 zl');
+
+      // 23% bucket unchanged → "0.19 zl"
+      const vat23Idx = calls.indexOf('VAT 23%:');
+      expect(calls[vat23Idx + 1]).toBe('0.19 zl');
     });
   });
 });

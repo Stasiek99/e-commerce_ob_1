@@ -17,6 +17,7 @@ export interface InvoiceOrder {
   snapshotStreet: string;
   snapshotCity: string;
   snapshotPostalCode: string;
+  snapshotCountry?: string | null;
   itemsTotalInCents: number;
   shippingCostInCents: number;
   discountInCents: number;
@@ -67,14 +68,6 @@ export class InvoiceService implements OnModuleInit {
     );
   }
 
-  private async nextInvoiceNumber(year: number): Promise<number> {
-    await this.ensureSequence(year);
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
-      `SELECT nextval('invoice_number_seq_${year}')`,
-    );
-    return Number(rows[0].nextval);
-  }
-
   /**
    * Generates the invoice PDF, uploads it to Supabase, persists the raw storage
    * path and invoice number on the order, then returns all four values.
@@ -82,26 +75,69 @@ export class InvoiceService implements OnModuleInit {
    * migrations never invalidate historical invoice access — callers re-sign on
    * demand via getSignedUrl(). The returned url is a 7-day signed URL suitable
    * for embedding in transactional emails at send time.
+   *
+   * A SELECT FOR UPDATE lock on the order row ensures idempotency: if the Stripe
+   * webhook and the reconciliation cron race on the same order, only one wins the
+   * lock and generates an invoice; the second sees invoiceStoragePath already set
+   * and returns early, preventing orphaned sequence numbers (gap in the legally-
+   * required sequential series per Art. 106e pkt 2 Ustawy o VAT).
    */
   async processInvoice(order: InvoiceOrder): Promise<{ url: string; storagePath: string; pdf: Buffer; invoiceNumber: string }> {
     const year = order.createdAt.getFullYear();
-    const seq = await this.nextInvoiceNumber(year);
-    const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+      throw new Error(`Invalid invoice year: ${year}`);
+    }
 
-    const pdf = await this.generatePdf(order, invoiceNumber);
-    const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
-    const storagePath = await this.storage.uploadInvoice(pdf, filename);
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const rows = await tx.$queryRawUnsafe<
+          Array<{ invoice_storage_path: string | null; invoice_number: string | null }>
+        >(
+          `SELECT invoice_storage_path, invoice_number FROM orders WHERE id = $1 FOR UPDATE`,
+          order.id,
+        );
 
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: { invoiceStoragePath: storagePath, invoiceNumber },
-    });
+        if (rows[0]?.invoice_storage_path && rows[0]?.invoice_number) {
+          return {
+            storagePath: rows[0].invoice_storage_path,
+            invoiceNumber: rows[0].invoice_number,
+            pdf: null as Buffer | null,
+          };
+        }
+
+        await tx.$executeRawUnsafe(
+          `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
+        );
+        const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+          `SELECT nextval('invoice_number_seq_${year}')`,
+        );
+        const seq = Number(seqRows[0].nextval);
+        const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+
+        const pdf = await this.generatePdf(order, invoiceNumber);
+        const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
+        const storagePath = await this.storage.uploadInvoice(pdf, filename);
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: { invoiceStoragePath: storagePath, invoiceNumber },
+        });
+
+        this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
+        return { storagePath, invoiceNumber, pdf };
+      },
+      { timeout: 30_000 },
+    );
 
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
-    const url = await this.storage.getInvoiceSignedUrl(storagePath, SEVEN_DAYS_SECONDS);
+    const url = await this.storage.getInvoiceSignedUrl(result.storagePath, SEVEN_DAYS_SECONDS);
 
-    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
-    return { url, storagePath, pdf, invoiceNumber };
+    return {
+      url,
+      storagePath: result.storagePath,
+      pdf: result.pdf ?? Buffer.alloc(0),
+      invoiceNumber: result.invoiceNumber,
+    };
   }
 
   async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
@@ -136,6 +172,12 @@ export class InvoiceService implements OnModuleInit {
     const W = 495; // usable width (595 - 2*50)
     const issueDate = this.fmtDate(new Date());
     const saleDate = this.fmtDate(order.createdAt);
+
+    // Art. 42 ust. 1 Ustawy o VAT: intra-EU cross-border B2B dispatches are zero-rated
+    // with reverse-charge obligation on the buyer. Both conditions must be met:
+    // buyer has an EU VAT number (snapshotNip) AND shipment is outside Poland.
+    const isReverseCharge =
+      !!order.snapshotNip && !!order.snapshotCountry && order.snapshotCountry !== 'PL';
 
     // ── Title ──────────────────────────────────────────────────────────────
     doc.fontSize(22).font('Inter-Bold').text('FAKTURA VAT', { align: 'center' });
@@ -209,10 +251,11 @@ export class InvoiceService implements OnModuleInit {
         name: i.snapshotName,
         qty: i.quantity,
         grossCents: i.snapshotPrice * i.quantity,
-        vatRate: i.snapshotVatRate / 10000, // basis points → decimal (2300 → 0.23)
+        // Reverse-charge: zero-rate all items per Art. 42 ust. 1 Ustawy o VAT
+        vatRate: isReverseCharge ? 0 : i.snapshotVatRate / 10000,
       })),
       ...(order.shippingCostInCents > 0
-        ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: 0.23 }]
+        ? [{ name: 'Dostawa', qty: 1, grossCents: order.shippingCostInCents, vatRate: isReverseCharge ? 0 : 0.23 }]
         : []),
       // Art. 106e pkt 7 Ustawy o VAT: discount must appear as a separate line
       // Art. 106e pkt 7 / Art. 29a ust. 10 — discount must be prorated across each VAT
@@ -220,6 +263,15 @@ export class InvoiceService implements OnModuleInit {
       // produces an incorrect VAT split for mixed-rate baskets (KAS audit finding).
       ...(order.discountInCents > 0
         ? (() => {
+            if (isReverseCharge) {
+              // All items are zero-rated — single discount line at 0%
+              return [{
+                name: `Rabat: ${order.couponCode ?? 'kupon'}`,
+                qty: 1,
+                grossCents: -order.discountInCents,
+                vatRate: 0,
+              }];
+            }
             const grossByRate = new Map<number, number>();
             for (const item of order.items) {
               const rate = item.snapshotVatRate / 10000;
@@ -276,7 +328,20 @@ export class InvoiceService implements OnModuleInit {
     });
 
     // ── Totals ─────────────────────────────────────────────────────────────
-    const totalGrossCents = totalNetCents + totalVatCents;
+    // order.totalInCents is the single authoritative source of truth for the
+    // invoice total. Per-item VAT rounding can accumulate 1-3 gr on multi-item
+    // orders; absorbing the remainder into the last VAT bucket keeps the
+    // breakdown consistent with Art. 106e Ustawy o VAT.
+    const razem = order.totalInCents;
+    const authTotalVat = razem - totalNetCents;
+    const vatRemainder = authTotalVat - totalVatCents;
+    if (vatRemainder !== 0) {
+      const sortedForAdj = Array.from(vatByRate.entries()).sort(([a], [b]) => b - a);
+      const [lastRate, lastBucket] = sortedForAdj[sortedForAdj.length - 1];
+      lastBucket.vatCents += vatRemainder;
+      vatByRate.set(lastRate, lastBucket);
+    }
+
     const sumX = 340;
     const sumLabelW = 120;
     const sumValueW = 85;
@@ -295,11 +360,11 @@ export class InvoiceService implements OnModuleInit {
     y += 16;
     doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
     y += 6;
-    this.sumRow(doc, 'Razem brutto:', this.fmtMoney(totalGrossCents), sumX, y, sumLabelW, sumValueW, false);
+    this.sumRow(doc, 'Razem brutto:', this.fmtMoney(razem), sumX, y, sumLabelW, sumValueW, false);
     y += 20;
     doc.rect(sumX - 4, y - 4, sumLabelW + sumValueW + 8, 24).fill('#1a1a1a').stroke();
     doc.fillColor('#fff');
-    this.sumRow(doc, 'DO ZAPLATY:', this.fmtMoney(order.totalInCents), sumX, y + 4, sumLabelW, sumValueW, true);
+    this.sumRow(doc, 'DO ZAPLATY:', this.fmtMoney(razem), sumX, y + 4, sumLabelW, sumValueW, true);
 
     // ── Footer ─────────────────────────────────────────────────────────────
     doc.fillColor('#888').fontSize(7.5).font('Inter');
@@ -307,6 +372,20 @@ export class InvoiceService implements OnModuleInit {
     doc.text('Platnosc zrealizowana elektronicznie (Stripe).', 50, footerY);
     doc.text('Faktura wystawiona elektronicznie — wazna bez podpisu i pieczatki.', 50, footerY + 12);
     doc.text(`Wygenerowano: ${this.fmtDate(new Date())}`, 50, footerY + 24);
+    if (isReverseCharge) {
+      doc.fillColor('#333').fontSize(7.5).font('Inter-Bold');
+      doc.text(
+        'Odwrotne obciazenie / Reverse charge — Art. 42 ust. 1 Ustawy o VAT z dnia 11.03.2004.',
+        50,
+        footerY + 40,
+      );
+      doc.font('Inter').fillColor('#888');
+      doc.text(
+        `Nabywca: NIP UE ${order.snapshotNip} — podatek rozlicza nabywca (Art. 196 Dyrektywy 2006/112/WE).`,
+        50,
+        footerY + 52,
+      );
+    }
   }
 
   private sumRow(

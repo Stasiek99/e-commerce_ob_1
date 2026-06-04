@@ -273,6 +273,33 @@ export async function setupAdmin(
             notes: { isVisible: { list: false, show: true, edit: true, filter: false } },
             description: { type: 'textarea' },
             shortDescription: { type: 'textarea' },
+            cpnpNotificationNumber: {
+              description: 'Numer powiadomienia CPNP (wymagany przez art. 13 rozp. 1223/2009 przed wprowadzeniem do obrotu UE)',
+              isVisible: { list: false, show: true, edit: true, filter: false },
+            },
+            responsiblePersonName: {
+              description: 'Nazwa/firma Osoby Odpowiedzialnej (RP) zgodnie z rozp. 1223/2009',
+              isVisible: { list: false, show: true, edit: true, filter: false },
+            },
+          },
+          actions: {
+            list: {
+              after: async (response: any) => {
+                const result = await prisma.$queryRaw<[{ count: number }]>`
+                  SELECT COUNT(*)::int AS count FROM products
+                  WHERE "isActive" = true
+                    AND ("cpnpNotificationNumber" IS NULL OR "responsiblePersonName" IS NULL)
+                `;
+                const count = Number(result[0]?.count ?? 0);
+                if (count > 0) {
+                  response.notice = {
+                    message: `CPNP: ${count} aktywn${count === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru powiadomienia CPNP lub nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009)`,
+                    type: 'error',
+                  };
+                }
+                return response;
+              },
+            },
           },
         },
       },
@@ -603,9 +630,9 @@ export async function setupAdmin(
         options: {
           navigation: { name: 'Użytkownicy' },
           sort: { sortBy: 'createdAt', direction: 'desc' },
-          listProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'createdAt'],
-          showProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'isEmailVerified', 'nip', 'createdAt'],
-          filterProperties: ['email', 'role', 'isEmailVerified'],
+          listProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'emailBounced', 'createdAt'],
+          showProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'isEmailVerified', 'nip', 'emailBounced', 'emailBouncedAt', 'createdAt'],
+          filterProperties: ['email', 'role', 'isEmailVerified', 'emailBounced'],
           properties: {
             passwordHash: { isVisible: false },
           },

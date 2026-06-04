@@ -48,7 +48,10 @@ function makeReq(body: object) {
 }
 
 async function buildController(secret: string) {
-  const prisma = { emailLog: { create: jest.fn().mockResolvedValue({}) } };
+  const prisma = {
+    emailLog: { create: jest.fn().mockResolvedValue({}) },
+    user: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+  };
   const config = {
     get: jest.fn((key: string, def = '') => (key === 'RESEND_WEBHOOK_SECRET' ? secret : def)),
   };
@@ -68,7 +71,7 @@ async function buildController(secret: string) {
 
 describe('EmailWebhookController', () => {
   let controller: EmailWebhookController;
-  let prisma: { emailLog: { create: jest.Mock } };
+  let prisma: { emailLog: { create: jest.Mock }; user: { updateMany: jest.Mock } };
   let mockVerify: jest.Mock;
 
   afterEach(() => jest.clearAllMocks());
@@ -237,6 +240,61 @@ describe('EmailWebhookController', () => {
         await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
 
         expect(Sentry.withScope).not.toHaveBeenCalled();
+      });
+
+      // ── bounce suppression flag (DB update) ───────────────────────────────────
+      // Invariant: a verified email.bounced event must set emailBounced=true on
+      // the matching user row. Without this, EmailQueueService cannot suppress
+      // future sends to the same address — the domain bounce rate will keep
+      // rising until ISPs throttle or blacklist the sender domain.
+
+      describe('email.bounced — user emailBounced flag update', () => {
+        it('calls user.updateMany with emailBounced=true for the bounced address', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-bounce-1', ['bounced@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(prisma.user.updateMany).toHaveBeenCalledWith({
+            where: { email: 'bounced@customer.com' },
+            data: expect.objectContaining({ emailBounced: true }),
+          });
+        });
+
+        it('sets emailBouncedAt to a Date on the user record', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-bounce-2', ['bounced@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          const [callArg] = prisma.user.updateMany.mock.calls[0];
+          expect(callArg.data.emailBouncedAt).toBeInstanceOf(Date);
+        });
+
+        it('does not call user.updateMany for email.delivered events', async () => {
+          const req = makeReq(makeEvent('email.delivered'));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(prisma.user.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('does not call user.updateMany for email.complained events', async () => {
+          const req = makeReq(makeEvent('email.complained'));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(prisma.user.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('still calls user.updateMany even when the bounced address has no user row (updateMany is safe for 0 matches)', async () => {
+          prisma.user.updateMany.mockResolvedValue({ count: 0 });
+          const req = makeReq(makeEvent('email.bounced', 'em-guest', ['guest@nonexistent.com']));
+
+          await expect(
+            controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature),
+          ).resolves.not.toThrow();
+
+          expect(prisma.user.updateMany).toHaveBeenCalledTimes(1);
+        });
       });
     });
   });

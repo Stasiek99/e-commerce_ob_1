@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 
@@ -57,6 +57,12 @@ export class CategoriesService {
 
   async remove(id: string) {
     await this.findById(id);
+    const [productCount, childCount] = await Promise.all([
+      this.prisma.product.count({ where: { categoryId: id } }),
+      this.prisma.category.count({ where: { parentId: id } }),
+    ]);
+    if (productCount > 0) throw new ConflictException(`Category has ${productCount} product(s) assigned.`);
+    if (childCount > 0) throw new ConflictException(`Category has ${childCount} child category(ies).`);
     return this.prisma.category.delete({ where: { id } });
   }
 

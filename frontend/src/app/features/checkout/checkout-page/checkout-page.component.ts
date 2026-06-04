@@ -420,6 +420,13 @@ interface AppliedCoupon {
                 (art.&nbsp;34 ust.&nbsp;2 ustawy o prawach konsumenta).
               </p>
 
+              <p class="odr-notice">
+                Spory konsumenckie możesz rozwiązać za pomocą
+                <a href="https://ec.europa.eu/consumers/odr" target="_blank" rel="noopener">
+                  Platformy ODR (rozwiązywanie sporów online)
+                </a>.
+              </p>
+
               <label class="consent-label">
                 <input
                   type="checkbox"
@@ -554,6 +561,9 @@ interface AppliedCoupon {
 
     /* Return cost notice (Art. 34 ust. 2 UoK) */
     .return-cost-notice { font-size: 13px; color: var(--color-secondary); margin: 0 0 12px; line-height: 1.5; }
+    /* ODR notice (EU Reg. 524/2013 Art. 14 + UoK Art. 37a) */
+    .odr-notice { font-size: 13px; color: var(--color-secondary); margin: 0 0 16px; line-height: 1.5; }
+    .odr-notice a { color: var(--color-primary); text-decoration: underline; }
 
     /* Consent */
     .consent-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }

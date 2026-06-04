@@ -5,9 +5,11 @@ interface Item {
 }
 
 const DELIVERY_ESTIMATES: Record<string, string> = {
-  INPOST: 'następny dzień roboczy',
-  DHL: '1–2 dni robocze',
-  GLS: '2–3 dni robocze',
+  INPOST:      'następny dzień roboczy',
+  DHL:         '1–2 dni robocze',
+  GLS:         '2–3 dni robocze',
+  DPD:         '1–2 dni robocze',
+  DPD_COURIER: '1–2 dni robocze',
 };
 
 interface Data {

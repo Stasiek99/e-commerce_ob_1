@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
-import { CarrierCode, ShipmentStatus } from '@prisma/client';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
 import { ShippingService } from '../shipping.service';
 import { ShippingRatesService } from '../shipping-rates.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -32,6 +32,7 @@ describe('ShippingService', () => {
   const mockOrderBase = {
     id: 'order-1',
     orderNumber: 'ORD-2026-000001',
+    status: OrderStatus.PAID,
     snapshotFirstName: 'Jan',
     snapshotLastName: 'Kowalski',
     snapshotPhone: '+48123456789',
@@ -123,6 +124,9 @@ describe('ShippingService', () => {
     dpd = module.get(DpdClient);
     storage = module.get(StorageService);
     emailService = module.get(EmailQueueService);
+
+    // Default: no existing shipment — tests that need a different value override this
+    prisma.shipment.findUnique.mockResolvedValue(null);
   });
 
   describe('getShippingRates', () => {
@@ -151,6 +155,82 @@ describe('ShippingService', () => {
       prisma.order.findUnique.mockResolvedValue(null);
 
       await expect(service.generateLabel('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    describe('order status guard', () => {
+      it('throws BadRequestException for a CANCELLED order', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL, status: OrderStatus.CANCELLED });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it('throws BadRequestException for a PENDING_PAYMENT order', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL, status: OrderStatus.PENDING_PAYMENT });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it('throws BadRequestException for a REFUNDED order', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL, status: OrderStatus.REFUNDED });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it('throws BadRequestException for a SHIPPED order', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL, status: OrderStatus.SHIPPED });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(BadRequestException);
+      });
+
+      it('proceeds for a PAID order', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL, status: OrderStatus.PAID });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'T', labelUrl: 'U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'U', trackingNumber: 'T' });
+
+        await expect(service.generateLabel('order-1')).resolves.toBeDefined();
+      });
+
+      it('proceeds for a PROCESSING order', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL, status: OrderStatus.PROCESSING });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'T', labelUrl: 'U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'U', trackingNumber: 'T' });
+
+        await expect(service.generateLabel('order-1')).resolves.toBeDefined();
+      });
+    });
+
+    describe('duplicate shipment guard', () => {
+      it('throws ConflictException when a LABEL_GENERATED shipment already exists', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue({ status: ShipmentStatus.LABEL_GENERATED });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(ConflictException);
+      });
+
+      it('throws ConflictException when an IN_TRANSIT shipment already exists', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue({ status: ShipmentStatus.IN_TRANSIT });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(ConflictException);
+      });
+
+      it('allows re-generation when the existing shipment is in LABEL_ERROR state', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue({ status: ShipmentStatus.LABEL_ERROR });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'RETRY_T', labelUrl: 'RETRY_U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'RETRY_U', trackingNumber: 'RETRY_T' });
+
+        await expect(service.generateLabel('order-1')).resolves.toBeDefined();
+      });
+
+      it('allows generation when no shipment record exists yet', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue(null);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'NEW_T', labelUrl: 'NEW_U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'NEW_U', trackingNumber: 'NEW_T' });
+
+        await expect(service.generateLabel('order-1')).resolves.toBeDefined();
+      });
     });
 
     describe('InPost carrier', () => {

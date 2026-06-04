@@ -16,8 +16,27 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleInit() {
-    await this.$connect();
-    await this.$queryRaw`SELECT 1`;
+    const maxAttempts = 6;
+    const baseDelayMs = 3_000;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.$connect();
+        await this.$queryRaw`SELECT 1`;
+        this.logger.log('Database connected');
+        return;
+      } catch (err) {
+        if (attempt === maxAttempts) {
+          this.logger.error('Database unreachable after all retries — giving up');
+          throw err;
+        }
+        const delay = baseDelayMs * 2 ** (attempt - 1); // 3s, 6s, 12s, 24s, 48s
+        this.logger.warn(
+          `Database unreachable (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms…`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   async onModuleDestroy() {

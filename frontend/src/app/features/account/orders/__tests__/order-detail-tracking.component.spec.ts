@@ -78,6 +78,18 @@ describe('OrderDetailComponent — trackingUrl()', () => {
     expect(url).toBe('https://gls-group.com/track/?match=987654321');
   });
 
+  it('builds the DPD tracking URL', () => {
+    const { component } = setup();
+    const url = component.trackingUrl({ trackingNumber: '00123456789012345678', carrierCode: 'DPD' });
+    expect(url).toBe('https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=00123456789012345678');
+  });
+
+  it('builds the DPD_COURIER tracking URL', () => {
+    const { component } = setup();
+    const url = component.trackingUrl({ trackingNumber: '00123456789012345678', carrierCode: 'DPD_COURIER' });
+    expect(url).toBe('https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=00123456789012345678');
+  });
+
   it('URL-encodes special characters in tracking numbers', () => {
     const { component } = setup();
     const url = component.trackingUrl({ trackingNumber: '123 / 456', carrierCode: 'INPOST' });

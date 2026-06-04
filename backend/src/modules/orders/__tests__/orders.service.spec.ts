@@ -158,61 +158,45 @@ describe('OrdersService', () => {
   });
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
-
-  // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
-  // Fix #56 — DDL wrapped in pg_advisory_xact_lock to serialise concurrent
-  // pod startup. Without the lock two Railway replicas hold competing
-  // AccessExclusive locks and add cold-start latency under load.
+  // DDL runs directly on the top-level client (no $transaction wrapper).
+  // pg_advisory_xact_lock was removed because DATABASE_URL goes through
+  // pgbouncer in transaction mode, which may route statements within the
+  // same $transaction to different physical connections — defeating the lock.
+  // CREATE SEQUENCE IF NOT EXISTS is idempotent, so the race is harmless.
 
   describe('onModuleInit', () => {
-    let txExecuteRaw: jest.Mock;
-    let txExecuteRawUnsafe: jest.Mock;
-
     beforeEach(() => {
-      txExecuteRaw = jest.fn().mockResolvedValue(undefined);
-      txExecuteRawUnsafe = jest.fn().mockResolvedValue(undefined);
-
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ $executeRaw: txExecuteRaw, $executeRawUnsafe: txExecuteRawUnsafe }),
-      );
+      prisma.$executeRawUnsafe.mockResolvedValue(undefined);
     });
 
-    it('runs DDL inside a transaction (not bare on the top-level client)', async () => {
-      await service.onModuleInit();
-
-      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    });
-
-    it('acquires pg_advisory_xact_lock before creating sequences', async () => {
-      await service.onModuleInit();
-
-      expect(txExecuteRaw).toHaveBeenCalledTimes(1);
-      const [query] = txExecuteRaw.mock.calls[0];
-      expect(String(query)).toContain('pg_advisory_xact_lock');
-    });
-
-    it('creates order_number_seq for the current year inside the transaction', async () => {
+    it('creates order_number_seq for the current year directly on the client', async () => {
       await service.onModuleInit();
 
       const year = new Date().getFullYear();
-      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
       );
     });
 
-    it('creates order_number_seq for next year inside the transaction', async () => {
+    it('creates order_number_seq for next year directly on the client', async () => {
       await service.onModuleInit();
 
       const year = new Date().getFullYear();
-      expect(txExecuteRawUnsafe).toHaveBeenCalledWith(
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
         `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
       );
     });
 
-    it('does NOT call the top-level $executeRawUnsafe — all DDL goes through the tx', async () => {
+    it('calls $executeRawUnsafe exactly twice — one per sequence', async () => {
       await service.onModuleInit();
 
-      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT open a $transaction — advisory lock removed for pgbouncer compatibility', async () => {
+      await service.onModuleInit();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
@@ -1225,6 +1209,48 @@ describe('OrdersService', () => {
       await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
     });
 
+    it('throws BadRequestException when order status is FRAUD_REVIEW', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is DISPUTE_HOLD', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not call InvoiceService when order is in FRAUD_REVIEW', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(invoiceService.processInvoice).not.toHaveBeenCalled();
+      expect(invoiceService.getSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('does not call InvoiceService when order is in DISPUTE_HOLD', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(invoiceService.processInvoice).not.toHaveBeenCalled();
+      expect(invoiceService.getSignedUrl).not.toHaveBeenCalled();
+    });
+
     it('returns a fresh 1h signed URL for a PAID order without an existing invoice', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({
@@ -1938,6 +1964,37 @@ describe('OrdersService', () => {
       expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
+    it('throws ConflictException for a PARTIALLY_REFUNDED order — prevents double-refund', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not call refundPayment when order is PARTIALLY_REFUNDED', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('issues full refund when order is PROCESSING (PARTIALLY_REFUNDED guard does not affect PROCESSING)', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PROCESSING,
+      });
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+    });
+
     it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {
       prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
       const stockRestored: string[] = [];
@@ -2632,8 +2689,9 @@ describe('OrdersService', () => {
       );
     });
 
-    it('sends cancellation email with pro-rated amount when a coupon was applied', async () => {
-      // 20%-off: discountedPrice = 20000 * 0.8 = 16000; qty=2 → totalInCents = 32000
+    it('sends cancellation email with pro-rated amount when a coupon was applied (partial)', async () => {
+      // 20%-off coupon: discountedPrice = 20000 * 0.8 = 16000; cancel qty=1 → email = 16000
+      // Cancels only 1 of 2 units so the partial-refund path (not full withdrawal) is exercised.
       const discountedOrder = {
         ...mockPaidOrder,
         itemsTotalInCents: 20000,
@@ -2655,12 +2713,12 @@ describe('OrdersService', () => {
       const emailService = (service as any).emailService;
 
       await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 2 }],
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
       });
       await Promise.resolve();
 
       expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
-        expect.objectContaining({ totalInCents: 32000 }),
+        expect.objectContaining({ totalInCents: 16000 }),
       );
     });
 
@@ -2702,6 +2760,87 @@ describe('OrdersService', () => {
         OrderStatus.PAID,
         'CUSTOMER',
       );
+    });
+
+    // ─── full-withdrawal shipping refund (fix: Art. 32 UoK compliance) ──────────
+    // When ALL remaining items are cancelled, refundPayment() must be called instead
+    // of partialRefund() so the shipping cost (shippingCostInCents) is included in
+    // the Stripe refund. partialRefund only sums item prices.
+
+    it('calls refundPayment instead of partialRefund when all remaining items are cancelled', async () => {
+      // item-1 remaining=3, item-2 remaining=1 — cancel both fully
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 3 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.partialRefund).not.toHaveBeenCalled();
+    });
+
+    it('sends email with order.totalInCents (includes shipping) when all items are cancelled', async () => {
+      // mockPaidOrder.totalInCents = 100000 — includes shipping; partialRefund path would
+      // use only item sum (e.g. 69800) and silently drop shippingCostInCents.
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+      const emailService = (service as any).emailService;
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 3 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+      await Promise.resolve();
+
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          totalInCents: 100000,
+          isRefund: true,
+        }),
+      );
+    });
+
+    it('still calls partialRefund (not refundPayment) when only some items are cancelled', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      // Cancel only 2 of 3 remaining in item-1 — allCancelled = false
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalled();
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('triggers refundPayment when item with prior partial cancellation is fully covered', async () => {
+      // item-2: quantity=2, cancelledQuantity=1 → remaining=1.
+      // Cancel item-1 fully (qty=3) and item-2 remaining (qty=1) → allCancelled=true.
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 3 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+    });
+
+    it('does not trigger refundPayment when only one of two items is fully cancelled', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      // Cancel item-1 fully (all 3) but leave item-2 untouched → allCancelled = false
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 3 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalled();
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
     });
   });
 
