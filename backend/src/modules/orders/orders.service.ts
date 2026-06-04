@@ -611,7 +611,13 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
-    const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.PARTIALLY_REFUNDED] as OrderStatus[]).includes(order.status);
+    if (order.status === OrderStatus.PARTIALLY_REFUNDED) {
+      throw new ConflictException(
+        'This order has already been partially refunded. Use the returns flow for remaining items.',
+      );
+    }
+
+    const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {
       // No payment made — expire the Stripe session (best-effort) and cancel

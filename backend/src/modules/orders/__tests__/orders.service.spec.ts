@@ -1938,6 +1938,37 @@ describe('OrdersService', () => {
       expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
+    it('throws ConflictException for a PARTIALLY_REFUNDED order — prevents double-refund', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not call refundPayment when order is PARTIALLY_REFUNDED', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('issues full refund when order is PROCESSING (PARTIALLY_REFUNDED guard does not affect PROCESSING)', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.PROCESSING,
+      });
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+    });
+
     it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {
       prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
       const stockRestored: string[] = [];
