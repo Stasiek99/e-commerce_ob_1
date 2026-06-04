@@ -170,4 +170,16 @@ export type EmailJobData =
         disputeId: string;
         adminUrl?: string;
       };
+    }
+  | {
+      type: 'payout_failed_alert';
+      payload: {
+        to: string;
+        payoutId: string;
+        amountInCents: number;
+        currency: string;
+        failureCode: string | null;
+        failureMessage: string | null;
+        arrivalDate: string;
+      };
     };

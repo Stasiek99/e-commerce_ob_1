@@ -105,8 +105,12 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         break;
 
       case 'dispute_alert':
-        // Admin-only alert — no customer-facing template needed; log and skip if unimplemented.
+        // Wired in Task 2 — stub retained to satisfy exhaustive type check
         this.logger.warn(`dispute_alert job received for order ${(payload as any).orderNumber} — no email template wired yet`);
+        break;
+
+      case 'payout_failed_alert':
+        await this.emailService.sendPayoutFailedAlert(payload);
         break;
 
       default: {

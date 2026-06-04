@@ -206,6 +206,10 @@ export class PaymentsService {
         await this.handleDisputeClosed(event.data.object as Stripe.Dispute, event.id);
         break;
 
+      case 'payout.failed':
+        await this.handlePayoutFailed(event.data.object as Stripe.Payout);
+        break;
+
       default:
         // Stripe sends ~100 event types. We only react to the ones we care
         // about; everything else is ACKed with 200 so Stripe doesn't retry.
@@ -1190,6 +1194,55 @@ export class PaymentsService {
       });
     } else {
       this.logger.debug(`Dispute ${dispute.id} closed with status "${dispute.status}" — no action taken`);
+    }
+  }
+
+  private async handlePayoutFailed(payout: Stripe.Payout): Promise<void> {
+    const amountFormatted = (payout.amount / 100).toFixed(2);
+    const currency = payout.currency.toUpperCase();
+    const arrivalDate = new Date(payout.arrival_date * 1000).toISOString();
+
+    this.logger.error(
+      `[CRITICAL] Stripe payout ${payout.id} FAILED — ${amountFormatted} ${currency}. ` +
+        `Code: ${payout.failure_code ?? 'unknown'}. Message: ${payout.failure_message ?? 'unknown'}`,
+    );
+
+    Sentry.withScope((scope) => {
+      scope.setLevel('fatal');
+      scope.setTag('payment.event', 'payout_failed');
+      scope.setContext('payout', {
+        payoutId: payout.id,
+        amount: payout.amount,
+        currency: payout.currency,
+        failureCode: payout.failure_code,
+        failureMessage: payout.failure_message,
+        automatic: payout.automatic,
+        arrivalDate,
+      });
+      Sentry.captureMessage(
+        `[CRITICAL] Stripe payout failed: ${payout.id} — ${amountFormatted} ${currency} — ${payout.failure_code ?? 'unknown error'}`,
+        'fatal',
+      );
+    });
+
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+    if (adminEmail) {
+      this.emailService
+        .sendPayoutFailedAlert({
+          to: adminEmail,
+          payoutId: payout.id,
+          amountInCents: payout.amount,
+          currency: payout.currency,
+          failureCode: payout.failure_code ?? null,
+          failureMessage: payout.failure_message ?? null,
+          arrivalDate,
+        })
+        .catch((err: Error) => {
+          this.logger.error(`Payout failed alert email failed: ${err.message}`);
+          Sentry.captureException(err);
+        });
     }
   }
 

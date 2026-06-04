@@ -3181,4 +3181,224 @@ describe('PaymentsService', () => {
       });
     });
   });
+
+  // ── payout.failed webhook handler ───────────────────────────────────────
+  // Guards the fix: payout.failed must fire a Sentry fatal alert and an admin
+  // email. Previously the event fell through to the default ignore branch —
+  // a silent payout failure meant no alert while customer refund obligations
+  // (Art. 32 UoK, 14-day window) remained unaddressed.
+
+  describe('payout.failed webhook handler', () => {
+    let payoutService: PaymentsService;
+    let payoutPrisma: any;
+    let payoutEmail: any;
+    let payoutConfigGet: jest.Mock;
+
+    const buildPayout = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      id: 'po_test_123',
+      object: 'payout',
+      amount: 150000,
+      currency: 'pln',
+      failure_code: 'account_closed',
+      failure_message: 'The bank account has been closed.',
+      arrival_date: 1748995200,
+      automatic: true,
+      ...overrides,
+    });
+
+    beforeEach(async () => {
+      payoutConfigGet = jest.fn().mockReturnValue(undefined);
+      jest.clearAllMocks();
+
+      const mod = await Test.createTestingModule({
+        providers: [
+          PaymentsService,
+          {
+            provide: PrismaService,
+            useValue: {
+              payment: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
+              order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+              orderEvent: { create: jest.fn() },
+              orderItem: { update: jest.fn(), findMany: jest.fn() },
+              productVariant: { update: jest.fn() },
+              processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+              $transaction: jest.fn(),
+            },
+          },
+          {
+            provide: StripeClient,
+            useValue: {
+              createCheckoutSession: jest.fn(),
+              retrieveCheckoutSession: jest.fn(),
+              retrievePaymentIntentWithCharge: jest.fn().mockResolvedValue({
+                latest_charge: { outcome: { risk_level: 'normal' } },
+              }),
+              createRefund: jest.fn(),
+              createPartialRefund: jest.fn(),
+              deleteCoupon: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: EmailQueueService,
+            useValue: {
+              sendPayoutFailedAlert: jest.fn().mockResolvedValue(undefined),
+              sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
+              sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+              sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+              sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: InvoiceService,
+            useValue: {
+              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+            },
+          },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: payoutConfigGet,
+              getOrThrow: jest.fn().mockReturnValue('http://example.com'),
+            },
+          },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
+          },
+        ],
+      }).compile();
+
+      payoutService = mod.get(PaymentsService);
+      payoutPrisma = mod.get(PrismaService);
+      payoutEmail = mod.get(EmailQueueService);
+    });
+
+    it('handles payout.failed without touching any payment, order, or stock DB tables', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+
+      expect(payoutPrisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(payoutPrisma.$transaction).not.toHaveBeenCalled();
+      expect(payoutPrisma.order.update).not.toHaveBeenCalled();
+      expect(payoutPrisma.productVariant.update).not.toHaveBeenCalled();
+    });
+
+    it('calls Sentry.withScope at fatal level with payout_failed tag', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+
+      expect(Sentry.withScope).toHaveBeenCalled();
+      const scopeCallback = (Sentry.withScope as jest.Mock).mock.calls.at(-1)[0];
+      const mockScope = { setLevel: jest.fn(), setTag: jest.fn(), setContext: jest.fn() };
+      scopeCallback(mockScope);
+      expect(mockScope.setLevel).toHaveBeenCalledWith('fatal');
+      expect(mockScope.setTag).toHaveBeenCalledWith('payment.event', 'payout_failed');
+    });
+
+    it('calls Sentry.captureMessage with the payout id at fatal level', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout({ id: 'po_critical_99' })),
+      );
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('po_critical_99'),
+        'fatal',
+      );
+    });
+
+    it('sends payout_failed_alert to ADMIN_ALERT_EMAIL when configured', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'admin@store.com', payoutId: 'po_test_123' }),
+      );
+    });
+
+    it('falls back to EMAIL_FROM when ADMIN_ALERT_EMAIL is absent', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'EMAIL_FROM') return 'noreply@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'noreply@store.com' }),
+      );
+    });
+
+    it('sends no admin email when both ADMIN_ALERT_EMAIL and EMAIL_FROM are absent', async () => {
+      // payoutConfigGet returns undefined for all keys by default
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).not.toHaveBeenCalled();
+    });
+
+    it('passes failure_code and failure_message to the alert email', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout({
+          failure_code: 'insufficient_funds',
+          failure_message: 'Your bank account has insufficient funds.',
+        })),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failureCode: 'insufficient_funds',
+          failureMessage: 'Your bank account has insufficient funds.',
+        }),
+      );
+    });
+
+    it('handles null failure_code and failure_message gracefully', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout({ failure_code: null, failure_message: null })),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ failureCode: null, failureMessage: null }),
+      );
+    });
+
+    it('does not propagate an email enqueue failure to the webhook caller', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      payoutEmail.sendPayoutFailedAlert.mockRejectedValue(new Error('Redis down'));
+
+      await expect(
+        payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
+      ).resolves.not.toThrow();
+    });
+  });
 });

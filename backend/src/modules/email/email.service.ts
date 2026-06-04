@@ -37,7 +37,8 @@ type EmailKind =
   | 'return_status_update'
   | 'email_change'
   | 'magic_link_login'
-  | 'fraud_review_alert';
+  | 'fraud_review_alert'
+  | 'payout_failed_alert';
 
 @Injectable()
 export class EmailService {
@@ -253,6 +254,40 @@ export class EmailService {
       requestId: data.requestId,
       newStatus: data.newStatus,
     });
+  }
+
+  async sendPayoutFailedAlert(data: {
+    to: string;
+    payoutId: string;
+    amountInCents: number;
+    currency: string;
+    failureCode: string | null;
+    failureMessage: string | null;
+    arrivalDate: string;
+  }) {
+    const amount = (data.amountInCents / 100).toFixed(2);
+    const subject = `[KRYTYCZNY] Stripe payout nie powiódł się — ${amount} ${data.currency.toUpperCase()}`;
+    const html = `
+      <h2>Stripe payout nie powiódł się</h2>
+      <p>Wypłata środków ze Stripe nie powiodła się. Wymagana natychmiastowa interwencja.</p>
+      <table>
+        <tr><td><strong>Payout ID:</strong></td><td>${data.payoutId}</td></tr>
+        <tr><td><strong>Kwota:</strong></td><td>${amount} ${data.currency.toUpperCase()}</td></tr>
+        <tr><td><strong>Kod błędu:</strong></td><td>${data.failureCode ?? '—'}</td></tr>
+        <tr><td><strong>Szczegóły:</strong></td><td>${data.failureMessage ?? '—'}</td></tr>
+        <tr><td><strong>Planowana data:</strong></td><td>${data.arrivalDate}</td></tr>
+      </table>
+      <h3>Działania naprawcze</h3>
+      <ol>
+        <li>Zaloguj się do <a href="https://dashboard.stripe.com/payouts">Stripe Dashboard → Payouts</a> i sprawdź powód nieudanej wypłaty.</li>
+        <li>Zweryfikuj dane konta bankowego: Stripe Dashboard → Settings → Bank accounts.</li>
+        <li>Jeśli dane są prawidłowe, skontaktuj się z supportem Stripe: <a href="https://support.stripe.com">support.stripe.com</a>.</li>
+        <li>W przypadku blokady konta sprawdź zamówienia w statusie DISPUTE_HOLD lub FRAUD_REVIEW i oceń konieczność ręcznych zwrotów.</li>
+        <li>Ręczny zwrot przez Stripe Dashboard: Payments → znajdź transakcję → Refund. Kwota do zwrotu dostępna jest w bazie w kolumnie <code>Order.totalInCents</code>.</li>
+      </ol>
+      <p><strong>Uwaga:</strong> Klienci mają prawo do zwrotu środków w ciągu 14 dni zgodnie z Art. 32 UoK, niezależnie od statusu wypłat Stripe.</p>
+    `;
+    return this.send('payout_failed_alert', data.to, subject, html, { payoutId: data.payoutId });
   }
 
   async sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {

@@ -115,4 +115,8 @@ export class EmailQueueService {
   sendDisputeAlert(data: Payload<'dispute_alert'>) {
     return this.enqueue('dispute_alert', { type: 'dispute_alert', payload: data });
   }
+
+  sendPayoutFailedAlert(data: Payload<'payout_failed_alert'>) {
+    return this.enqueue('payout_failed_alert', { type: 'payout_failed_alert', payload: data });
+  }
 }
