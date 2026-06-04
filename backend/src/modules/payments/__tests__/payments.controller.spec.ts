@@ -312,5 +312,27 @@ describe('PaymentsController', () => {
         ctrl.triggerReconciliation(`Bearer ${RECONCILE_SECRET}`),
       ).rejects.toThrow(UnauthorizedException);
     });
+
+    it('throws UnauthorizedException for a same-length wrong secret (timing-safe guard)', async () => {
+      // A secret with identical length to RECONCILE_SECRET but different content.
+      // Naive string !== short-circuits early on the first mismatched byte, but
+      // timingSafeEqual always runs the full comparison — both should reject.
+      const sameLength = 'X'.repeat(RECONCILE_SECRET.length);
+      await expect(
+        controller.triggerReconciliation(`Bearer ${sameLength}`),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException for a prefix of the correct secret', async () => {
+      await expect(
+        controller.triggerReconciliation(`Bearer ${RECONCILE_SECRET.slice(0, -1)}`),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException for the correct secret with extra trailing character', async () => {
+      await expect(
+        controller.triggerReconciliation(`Bearer ${RECONCILE_SECRET}x`),
+      ).rejects.toThrow(UnauthorizedException);
+    });
   });
 });

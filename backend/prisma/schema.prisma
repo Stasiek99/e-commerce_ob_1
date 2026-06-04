@@ -25,6 +25,7 @@ enum OrderStatus {
   CANCELLED
   REFUNDED
   PARTIALLY_REFUNDED
+  DISPUTE_HOLD
 }
 
 enum PaymentStatus {
@@ -106,10 +107,12 @@ model User {
   nip             String?
   isEmailVerified   Boolean   @default(false)
   pendingEmail      String?
-  marketingConsent  Boolean   @default(false)
+  marketingConsent   Boolean   @default(false)
   marketingConsentAt DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  analyticsConsent   Boolean   @default(false)
+  analyticsConsentAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   addresses               Address[]
   orders                  Order[]
@@ -266,7 +269,7 @@ model Product {
   updatedAt        DateTime @updatedAt
 
   reviewCount  Int     @default(0)
-  avgRating    Float?
+  avgRating    Decimal? @db.Decimal(3, 2)
 
   variants      ProductVariant[]
   images        ProductImage[]
@@ -352,7 +355,7 @@ model CartItem {
   cartId           String
   cart             Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
   productVariantId String
-  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id])
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
   quantity         Int
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
@@ -427,7 +430,7 @@ model OrderItem {
   orderId          String
   order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productVariantId String
-  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id])
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
 
   snapshotName      String
   snapshotSku       String
@@ -688,4 +691,13 @@ model ShippingRate {
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
   @@map("shipping_rates")
+}
+
+model ConsentLog {
+  id           String   @id @default(uuid())
+  sessionHash  String   @map("session_hash")
+  analytics    Boolean
+  consentedAt  DateTime @default(now()) @map("consented_at")
+
+  @@map("consent_logs")
 }

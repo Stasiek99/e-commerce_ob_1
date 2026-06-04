@@ -752,6 +752,110 @@ describe('ReviewsService', () => {
     });
   });
 
+  // ─── resubmit ────────────────────────────────────────────────────────────
+  // Invariant: a user may update a REJECTED review (reset to PENDING) using
+  // the existing row; other statuses and non-owners are blocked.
+
+  describe('resubmit', () => {
+    const dto = { rating: 4, title: 'Better now', body: 'Revised thoughts' };
+
+    it('throws NotFoundException when the review does not exist', async () => {
+      prisma.review.findUnique.mockResolvedValue(null);
+
+      await expect(service.resubmit('review-1', 'user-1', dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException when the review belongs to a different user', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'other-user', status: 'REJECTED' }));
+
+      await expect(service.resubmit('review-1', 'user-1', dto)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws BadRequestException when the review status is PENDING', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'PENDING' }));
+
+      await expect(service.resubmit('review-1', 'user-1', dto)).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when the review status is APPROVED', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'APPROVED' }));
+
+      await expect(service.resubmit('review-1', 'user-1', dto)).rejects.toThrow(BadRequestException);
+
+      expect(prisma.review.update).not.toHaveBeenCalled();
+    });
+
+    it('resets status to PENDING when the owner resubmits a REJECTED review', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'REJECTED' }));
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING' }));
+
+      await service.resubmit('review-1', 'user-1', dto);
+
+      expect(prisma.review.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'PENDING' }),
+        }),
+      );
+    });
+
+    it('writes the new rating, title, and body provided in the DTO', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'REJECTED' }));
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING' }));
+
+      await service.resubmit('review-1', 'user-1', { rating: 3, title: 'Updated', body: 'New body' });
+
+      expect(prisma.review.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ rating: 3, title: 'Updated', body: 'New body' }),
+        }),
+      );
+    });
+
+    it('trims whitespace from title and body', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'REJECTED' }));
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING' }));
+
+      await service.resubmit('review-1', 'user-1', { rating: 4, title: '  Hello  ', body: '  World  ' });
+
+      expect(prisma.review.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ title: 'Hello', body: 'World' }),
+        }),
+      );
+    });
+
+    it('stores null for title and body when they are not provided', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'REJECTED' }));
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING' }));
+
+      await service.resubmit('review-1', 'user-1', { rating: 4 });
+
+      expect(prisma.review.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ title: null, body: null }),
+        }),
+      );
+    });
+
+    it('returns the updated review from the database', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'REJECTED' }));
+      const updated = makeReview({ status: 'PENDING', rating: 4, title: 'Better now' });
+      prisma.review.update.mockResolvedValue(updated);
+
+      const result = await service.resubmit('review-1', 'user-1', dto);
+
+      expect(result).toEqual(updated);
+    });
+
+    it('does not call review.update when the review is not found', async () => {
+      prisma.review.findUnique.mockResolvedValue(null);
+
+      await service.resubmit('review-1', 'user-1', dto).catch(() => {});
+
+      expect(prisma.review.update).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── adminDelete (additional edge cases) ─────────────────────────────────
 
   describe('adminDelete — additional edge cases', () => {

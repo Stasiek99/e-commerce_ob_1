@@ -207,6 +207,13 @@
   font-variant-numeric: tabular-nums;
 }
 
+.product-card__unit-price {
+  font-size: 0.7rem;
+  color: var(--color-secondary);
+  margin: 3px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
 // ── Footer (CTA) ──────────────────────────────────────────────────────────
 
 .product-card__footer {

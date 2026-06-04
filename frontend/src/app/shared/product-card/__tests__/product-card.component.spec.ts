@@ -16,6 +16,12 @@ const PRODUCT: ProductCardData = {
   variants: [{ id: 'v-1', label: '50ml', priceInCents: 9900, stock: 5 }],
 };
 
+const PRODUCT_WITH_VOLUME: ProductCardData = {
+  ...PRODUCT,
+  // 99.00 zł for 50ml → 198,00 zł / 100ml
+  variants: [{ id: 'v-1', label: '50ml', priceInCents: 9900, stock: 5, volume: 50 }],
+};
+
 const OUT_OF_STOCK_PRODUCT: ProductCardData = {
   ...PRODUCT,
   variants: [{ id: 'v-1', label: '50ml', priceInCents: 9900, stock: 0 }],
@@ -106,5 +112,49 @@ describe('ProductCardComponent — onAddToCart error handling', () => {
     component.onAddToCart(new MouseEvent('click'));
 
     expect(mockCart.addItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductCardComponent — unitPriceText (EU Price Indication Directive)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('returns null when variant has no volume', () => {
+    const { component } = setup(PRODUCT);
+
+    expect(component.unitPriceText).toBeNull();
+  });
+
+  it('returns null when product has no variants', () => {
+    const { component } = setup({ ...PRODUCT, variants: [] });
+
+    expect(component.unitPriceText).toBeNull();
+  });
+
+  it('computes correct unit price for 50ml variant at 99,00 zł', () => {
+    const { component } = setup(PRODUCT_WITH_VOLUME);
+
+    expect(component.unitPriceText).toBe('198,00 zł / 100ml');
+  });
+
+  it('computes correct unit price for 100ml variant (price per 100ml equals full price)', () => {
+    const product: ProductCardData = {
+      ...PRODUCT,
+      variants: [{ id: 'v-2', label: '100ml', priceInCents: 14900, stock: 3, volume: 100 }],
+    };
+    const { component } = setup(product);
+
+    expect(component.unitPriceText).toBe('149,00 zł / 100ml');
+  });
+
+  it('uses comma as decimal separator (Polish locale format)', () => {
+    const product: ProductCardData = {
+      ...PRODUCT,
+      variants: [{ id: 'v-3', label: '30ml', priceInCents: 5000, stock: 2, volume: 30 }],
+    };
+    const { component } = setup(product);
+
+    // 50.00 zł / 30ml = 166.666... → 166,67 zł / 100ml
+    expect(component.unitPriceText).not.toContain('.');
+    expect(component.unitPriceText).toContain(',');
   });
 });

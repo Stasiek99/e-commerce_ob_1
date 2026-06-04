@@ -1,4 +1,4 @@
-import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -32,6 +32,16 @@ export class PaymentsService {
       include: { items: true },
     });
 
+    // Pre-checkout velocity guard: BLIK/P24 settles before Stripe Radar can block,
+    // so we check for suspicious order bursts from the same city before issuing a session.
+    const windowStart = new Date(Date.now() - 30 * 60 * 1000);
+    const recentOrderCount = await this.prisma.order.count({
+      where: { snapshotCity: order.snapshotCity, createdAt: { gte: windowStart } },
+    });
+    if (recentOrderCount > 3) {
+      throw new HttpException('Order velocity limit reached', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     const currency = this.configService.get<string>('STRIPE_CURRENCY', 'pln');
     const successUrl = this.configService.getOrThrow<string>('STRIPE_SUCCESS_URL');
     const cancelUrl = this.configService.getOrThrow<string>('STRIPE_CANCEL_URL');
@@ -52,14 +62,29 @@ export class PaymentsService {
       });
     }
 
-    // Upsert the Payment row: if a prior attempt left a FAILED row (e.g. Stripe
-    // API error without a webhook, order still PENDING_PAYMENT), reuse that row
-    // rather than creating a new one — Payment.orderId is @unique and a plain
-    // create would throw P2002 on every retry.
+    // Upsert the Payment row — Payment.orderId is @unique so a plain create throws
+    // P2002 on any retry. Three cases:
+    //   1. PENDING + open session: customer navigated away and came back — reuse URL.
+    //   2. PENDING + expired/missing session, or FAILED: reset the row, create new session.
+    //   3. No prior row: create fresh.
     const existingPayment = await this.prisma.payment.findUnique({ where: { orderId } });
     let payment: { id: string };
 
-    if (existingPayment?.status === PaymentStatus.FAILED) {
+    if (existingPayment?.status === PaymentStatus.PENDING && existingPayment.stripeCheckoutSessionId) {
+      try {
+        const existingSession = await this.stripeClient.retrieveCheckoutSession(
+          existingPayment.stripeCheckoutSessionId,
+        );
+        if (existingSession.status === 'open' && existingSession.url) {
+          return { paymentUrl: existingSession.url };
+        }
+      } catch {
+        // Session not retrievable — fall through to reset and create a fresh session
+      }
+    }
+
+    if (existingPayment?.status === PaymentStatus.FAILED ||
+        existingPayment?.status === PaymentStatus.PENDING) {
       if (existingPayment.stripeCheckoutSessionId) {
         await this.stripeClient
           .expireCheckoutSession(existingPayment.stripeCheckoutSessionId)
@@ -173,6 +198,14 @@ export class PaymentsService {
         await this.handleRefundUpdate(event.data.object as Stripe.Refund, event.id);
         break;
 
+      case 'charge.dispute.created':
+        await this.handleDisputeCreated(event.data.object as Stripe.Dispute, event.id);
+        break;
+
+      case 'charge.dispute.closed':
+        await this.handleDisputeClosed(event.data.object as Stripe.Dispute, event.id);
+        break;
+
       default:
         // Stripe sends ~100 event types. We only react to the ones we care
         // about; everything else is ACKed with 200 so Stripe doesn't retry.
@@ -245,7 +278,7 @@ export class PaymentsService {
         this.prisma.orderEvent.create({
           data: {
             orderId: payment.orderId,
-            fromStatus: OrderStatus.PENDING_PAYMENT,
+            fromStatus: payment.order.status as OrderStatus,
             toStatus: newOrderStatus,
             actor: 'SYSTEM:stripe-webhook',
             note: isFraudFlagged
@@ -263,6 +296,13 @@ export class PaymentsService {
       }
       throw err;
     }
+
+    // Delete the single-use Stripe coupon created for this checkout session.
+    // Each discounted order produces a max_redemptions=1 coupon that Stripe never
+    // auto-deletes; leaving them orphaned makes the Stripe Dashboard unnavigable
+    // and risks hitting object limits at scale.
+    const paidSessionCouponId = this.extractSessionCouponId(session);
+    if (paidSessionCouponId) await this.stripeClient.deleteCoupon(paidSessionCouponId);
 
     if (isFraudFlagged) {
       this.logger.warn(
@@ -465,6 +505,9 @@ export class PaymentsService {
       `Stripe event: ${reasonType}`,
       eventId,
     );
+
+    const failedSessionCouponId = this.extractSessionCouponId(session);
+    if (failedSessionCouponId) await this.stripeClient.deleteCoupon(failedSessionCouponId);
   }
 
   /**
@@ -915,10 +958,250 @@ export class PaymentsService {
     );
   }
 
+  private async handleDisputeCreated(dispute: Stripe.Dispute, eventId?: string): Promise<void> {
+    const paymentIntentId =
+      typeof dispute.payment_intent === 'string'
+        ? dispute.payment_intent
+        : (dispute.payment_intent?.id ?? null);
+
+    if (!paymentIntentId) {
+      this.logger.warn(`Dispute ${dispute.id} has no payment_intent — cannot find order`);
+      return;
+    }
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+      include: { order: true },
+    });
+
+    if (!payment) {
+      this.logger.warn(`No payment found for PaymentIntent ${paymentIntentId} (dispute ${dispute.id})`);
+      return;
+    }
+
+    if (payment.order.status === OrderStatus.DISPUTE_HOLD) {
+      this.logger.log(`Order ${payment.order.orderNumber} already in DISPUTE_HOLD — skipping`);
+      return;
+    }
+
+    const priorStatus = payment.order.status;
+    const evidenceDeadline = dispute.evidence_details?.due_by
+      ? new Date(dispute.evidence_details.due_by * 1000).toISOString()
+      : 'unknown';
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (eventId) {
+          await tx.processedStripeEvent.create({ data: { eventId } });
+        }
+        await tx.order.update({
+          where: { id: payment.orderId },
+          data: { status: OrderStatus.DISPUTE_HOLD },
+        });
+        await tx.orderEvent.create({
+          data: {
+            orderId: payment.orderId,
+            fromStatus: priorStatus,
+            toStatus: OrderStatus.DISPUTE_HOLD,
+            actor: 'SYSTEM:stripe-webhook',
+            note: `Dispute ${dispute.id} opened — reason: ${dispute.reason}, evidence due: ${evidenceDeadline}`,
+          },
+        });
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.log(`Dispute event ${eventId} already processed — skipping`);
+        return;
+      }
+      throw err;
+    }
+
+    this.logger.warn(
+      `Dispute opened: order ${payment.order.orderNumber} → DISPUTE_HOLD. Reason: ${dispute.reason}. Evidence due: ${evidenceDeadline}`,
+    );
+
+    Sentry.withScope((scope) => {
+      scope.setLevel('error');
+      scope.setTag('payment.event', 'dispute_created');
+      scope.setContext('dispute', {
+        disputeId: dispute.id,
+        orderNumber: payment.order.orderNumber,
+        reason: dispute.reason,
+        amount: dispute.amount,
+        currency: dispute.currency,
+        evidenceDeadline,
+      });
+      Sentry.captureMessage(
+        `Stripe dispute opened: order ${payment.order.orderNumber} — reason: ${dispute.reason} — evidence due ${evidenceDeadline}`,
+        'error',
+      );
+    });
+
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+      this.configService.get<string>('EMAIL_FROM');
+    if (adminEmail) {
+      const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+      this.emailService
+        .sendDisputeAlert({
+          to: adminEmail,
+          orderNumber: payment.order.orderNumber,
+          customerEmail: payment.order.snapshotEmail,
+          amountInCents: dispute.amount,
+          reason: dispute.reason,
+          evidenceDeadline,
+          disputeId: dispute.id,
+          adminUrl: frontendUrl ? `${frontendUrl}/admin/orders/${payment.orderId}` : undefined,
+        })
+        .catch((err: Error) => {
+          this.logger.error(
+            `Dispute alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
+          );
+          Sentry.captureException(err);
+        });
+    }
+  }
+
+  private async handleDisputeClosed(dispute: Stripe.Dispute, eventId?: string): Promise<void> {
+    const paymentIntentId =
+      typeof dispute.payment_intent === 'string'
+        ? dispute.payment_intent
+        : (dispute.payment_intent?.id ?? null);
+
+    if (!paymentIntentId) {
+      this.logger.warn(`Dispute ${dispute.id} closed — no payment_intent, cannot find order`);
+      return;
+    }
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+      include: { order: { include: { items: true, shipment: true } } },
+    });
+
+    if (!payment) {
+      this.logger.warn(`No payment found for PaymentIntent ${paymentIntentId} (dispute ${dispute.id})`);
+      return;
+    }
+
+    if (payment.order.status !== OrderStatus.DISPUTE_HOLD) {
+      this.logger.log(
+        `Order ${payment.order.orderNumber} is ${payment.order.status}, not DISPUTE_HOLD — ignoring dispute closed event`,
+      );
+      return;
+    }
+
+    if (dispute.status === 'won') {
+      const disputeEvent = await this.prisma.orderEvent.findFirst({
+        where: { orderId: payment.orderId, toStatus: OrderStatus.DISPUTE_HOLD },
+        orderBy: { createdAt: 'desc' },
+      });
+      const restoreStatus = disputeEvent?.fromStatus ?? OrderStatus.PAID;
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          if (eventId) {
+            await tx.processedStripeEvent.create({ data: { eventId } });
+          }
+          await tx.order.update({
+            where: { id: payment.orderId },
+            data: { status: restoreStatus },
+          });
+          await tx.orderEvent.create({
+            data: {
+              orderId: payment.orderId,
+              fromStatus: OrderStatus.DISPUTE_HOLD,
+              toStatus: restoreStatus,
+              actor: 'SYSTEM:stripe-webhook',
+              note: `Dispute ${dispute.id} closed WON — order restored to ${restoreStatus}`,
+            },
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.log(`Dispute closed event ${eventId} already processed — skipping`);
+          return;
+        }
+        throw err;
+      }
+
+      this.logger.log(
+        `Dispute ${dispute.id} WON: order ${payment.order.orderNumber} restored to ${restoreStatus}`,
+      );
+    } else if (dispute.status === 'lost') {
+      // Funds already taken by Stripe. Restore stock only if label was never generated.
+      const goodsShipped = !!payment.order.shipment?.labelUrl;
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          if (eventId) {
+            await tx.processedStripeEvent.create({ data: { eventId } });
+          }
+          await tx.order.update({
+            where: { id: payment.orderId },
+            data: { status: OrderStatus.CANCELLED },
+          });
+          if (!goodsShipped) {
+            for (const item of payment.order.items) {
+              const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+              if (activeQty > 0) {
+                await tx.productVariant.update({
+                  where: { id: item.productVariantId },
+                  data: { stock: { increment: activeQty } },
+                });
+              }
+            }
+          }
+          await tx.orderEvent.create({
+            data: {
+              orderId: payment.orderId,
+              fromStatus: OrderStatus.DISPUTE_HOLD,
+              toStatus: OrderStatus.CANCELLED,
+              actor: 'SYSTEM:stripe-webhook',
+              note: `Dispute ${dispute.id} closed LOST${goodsShipped ? ' — goods shipped, stock not restored' : ' — stock restored'}`,
+            },
+          });
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.log(`Dispute closed event ${eventId} already processed — skipping`);
+          return;
+        }
+        throw err;
+      }
+
+      this.logger.error(
+        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled. Goods shipped: ${goodsShipped}`,
+      );
+      Sentry.withScope((scope) => {
+        scope.setLevel('fatal');
+        scope.setTag('payment.event', 'dispute_lost');
+        scope.setContext('dispute', {
+          disputeId: dispute.id,
+          orderNumber: payment.order.orderNumber,
+          amount: dispute.amount,
+          goodsShipped,
+        });
+        Sentry.captureMessage(
+          `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed`,
+          'fatal',
+        );
+      });
+    } else {
+      this.logger.debug(`Dispute ${dispute.id} closed with status "${dispute.status}" — no action taken`);
+    }
+  }
+
   /**
    * Handles payment failure: marks payment as FAILED, cancels order,
    * and restores stock for all order items.
    */
+  private extractSessionCouponId(session: Stripe.Checkout.Session): string | null {
+    const discounts = (session as any).discounts as Array<{ coupon: string | { id: string } }> | undefined;
+    const coupon = discounts?.[0]?.coupon;
+    if (!coupon) return null;
+    return typeof coupon === 'string' ? coupon : (coupon?.id ?? null);
+  }
+
   private async handlePaymentFailure(
     paymentId: string,
     orderId: string,

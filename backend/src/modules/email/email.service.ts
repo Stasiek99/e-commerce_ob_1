@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
@@ -302,9 +303,11 @@ export class EmailService {
         `Failed to send ${kind} email to ${to}: ${(error as Error).message}`,
         (error as Error).stack,
       );
+      const toHash = createHash('sha256').update(to).digest('hex').slice(0, 12);
       Sentry.withScope((scope) => {
         scope.setTag('email.kind', kind);
-        scope.setContext('email', { to, subject, ...context });
+        scope.setTag('email.to_hash', toHash);
+        scope.setContext('email', { subject, ...context });
         Sentry.captureException(error);
       });
       throw error;
@@ -331,9 +334,11 @@ export class EmailService {
         `Failed to send ${kind} email to ${to}: ${(error as Error).message}`,
         (error as Error).stack,
       );
+      const toHash = createHash('sha256').update(to).digest('hex').slice(0, 12);
       Sentry.withScope((scope) => {
         scope.setTag('email.kind', kind);
-        scope.setContext('email', { to, subject, ...context });
+        scope.setTag('email.to_hash', toHash);
+        scope.setContext('email', { subject, ...context });
         Sentry.captureException(error);
       });
       throw error;

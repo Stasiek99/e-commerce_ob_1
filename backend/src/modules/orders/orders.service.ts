@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -51,6 +52,7 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
+  [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.CANCELLED],
 };
 
 @Injectable()
@@ -196,6 +198,16 @@ export class OrdersService implements OnModuleInit {
     const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number using raw SQL to avoid race conditions
       const orderNumber = await this.generateOrderNumber(tx);
+
+      // Reject checkout if any variant was deactivated after the cart was populated.
+      const variantIds = cart.items.map((i: CartItem) => i.productVariantId);
+      const activeVariants = await tx.productVariant.findMany({
+        where: { id: { in: variantIds }, isActive: true },
+        select: { id: true },
+      });
+      if (activeVariants.length !== variantIds.length) {
+        throw new BadRequestException('One or more items in your cart are no longer available');
+      }
 
       // Atomically check and decrement stock in a single UPDATE statement.
       // A separate findUnique + update would be a TOCTOU race: two concurrent
@@ -593,6 +605,12 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    if (order.status === OrderStatus.FRAUD_REVIEW) {
+      throw new ConflictException(
+        'Twoje zamówienie jest weryfikowane — skontaktuj się z obsługą.',
+      );
+    }
+
     const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.PARTIALLY_REFUNDED] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {
@@ -760,6 +778,13 @@ export class OrdersService implements OnModuleInit {
         quantity: line.quantity,
         priceInCents: item.snapshotPrice,
       });
+    }
+
+    if (order.discountInCents > 0 && order.itemsTotalInCents > 0) {
+      const discountFraction = order.discountInCents / order.itemsTotalInCents;
+      for (const item of resolvedItems) {
+        item.priceInCents = Math.round(item.priceInCents * (1 - discountFraction));
+      }
     }
 
     await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');

@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { UsersService } from '../users.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StripeClient } from '../../payments/stripe.client';
 
 const mockUser = {
   id: 'user-1',
@@ -13,8 +14,11 @@ const mockUser = {
 describe('UsersService', () => {
   let service: UsersService;
   let prisma: any;
+  let mockStripe: { listDisputesByPaymentIntent: jest.Mock };
 
   beforeEach(async () => {
+    mockStripe = { listDisputesByPaymentIntent: jest.fn().mockResolvedValue([]) };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
@@ -39,6 +43,9 @@ describe('UsersService', () => {
               updateMany: jest.fn(),
               findMany: jest.fn(),
             },
+            payment: {
+              findMany: jest.fn().mockResolvedValue([]),
+            },
             review: {
               findMany: jest.fn(),
             },
@@ -49,9 +56,13 @@ describe('UsersService', () => {
               findMany: jest.fn(),
               updateMany: jest.fn(),
             },
+            consentLog: {
+              create: jest.fn(),
+            },
             $transaction: jest.fn(),
           },
         },
+        { provide: StripeClient, useValue: mockStripe },
       ],
     }).compile();
 
@@ -239,6 +250,70 @@ describe('UsersService', () => {
 
       expect(result).toBeUndefined();
     });
+
+    // ── GDPR Art. 17(3)(b) — open-dispute guard ─────────────────────────────
+    // Erasure must be blocked while a chargeback is open because the anonymised
+    // PII (name, address, delivery evidence) cannot be submitted to Stripe.
+
+    describe('dispute guard', () => {
+      it('throws ConflictException when a payment has a needs_response dispute', async () => {
+        prisma.payment.findMany.mockResolvedValue([{ stripePaymentIntentId: 'pi_1' }]);
+        mockStripe.listDisputesByPaymentIntent.mockResolvedValue([{ status: 'needs_response' }]);
+
+        await expect(service.deleteAccount('user-1')).rejects.toThrow(ConflictException);
+      });
+
+      it('does not run the anonymisation transaction when a dispute blocks erasure', async () => {
+        prisma.payment.findMany.mockResolvedValue([{ stripePaymentIntentId: 'pi_1' }]);
+        mockStripe.listDisputesByPaymentIntent.mockResolvedValue([{ status: 'needs_response' }]);
+
+        await expect(service.deleteAccount('user-1')).rejects.toThrow(ConflictException);
+
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('proceeds when a dispute exists but its status is not needs_response', async () => {
+        prisma.payment.findMany.mockResolvedValue([{ stripePaymentIntentId: 'pi_1' }]);
+        mockStripe.listDisputesByPaymentIntent.mockResolvedValue([{ status: 'under_review' }]);
+
+        await expect(service.deleteAccount('user-1')).resolves.toBeUndefined();
+      });
+
+      it('proceeds without calling Stripe when the user has no payments', async () => {
+        prisma.payment.findMany.mockResolvedValue([]);
+
+        await expect(service.deleteAccount('user-1')).resolves.toBeUndefined();
+
+        expect(mockStripe.listDisputesByPaymentIntent).not.toHaveBeenCalled();
+      });
+
+      it('proceeds when disputes list is empty for the payment intent', async () => {
+        prisma.payment.findMany.mockResolvedValue([{ stripePaymentIntentId: 'pi_1' }]);
+        mockStripe.listDisputesByPaymentIntent.mockResolvedValue([]);
+
+        await expect(service.deleteAccount('user-1')).resolves.toBeUndefined();
+      });
+
+      it('skips payments where stripePaymentIntentId is null without calling Stripe', async () => {
+        prisma.payment.findMany.mockResolvedValue([{ stripePaymentIntentId: null }]);
+
+        await expect(service.deleteAccount('user-1')).resolves.toBeUndefined();
+
+        expect(mockStripe.listDisputesByPaymentIntent).not.toHaveBeenCalled();
+      });
+
+      it('throws ConflictException when a later payment in the list has an open dispute', async () => {
+        prisma.payment.findMany.mockResolvedValue([
+          { stripePaymentIntentId: 'pi_1' },
+          { stripePaymentIntentId: 'pi_2' },
+        ]);
+        mockStripe.listDisputesByPaymentIntent
+          .mockResolvedValueOnce([])                             // pi_1: no disputes
+          .mockResolvedValueOnce([{ status: 'needs_response' }]); // pi_2: open dispute
+
+        await expect(service.deleteAccount('user-1')).rejects.toThrow(ConflictException);
+      });
+    });
   });
 
   // ─── deleteAddress — ownership guard + default promotion ────────────────
@@ -302,4 +377,55 @@ describe('UsersService', () => {
       expect(prisma.address.update).not.toHaveBeenCalled();
     });
   });
+
+  describe('recordConsent', () => {
+    it('updates analyticsConsent and analyticsConsentAt for the given user', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', analyticsConsent: true });
+
+      await service.recordConsent('user-1', true);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: {
+          analyticsConsent: true,
+          analyticsConsentAt: expect.any(Date),
+        },
+      });
+    });
+
+    it('stores analyticsConsent: false when user rejects non-essential cookies', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', analyticsConsent: false });
+
+      await service.recordConsent('user-1', false);
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ analyticsConsent: false }),
+        }),
+      );
+    });
+  });
+
+  describe('recordAnonymousConsent', () => {
+    it('creates a ConsentLog entry with the provided session hash and analytics value', async () => {
+      prisma.consentLog.create.mockResolvedValue({ id: 'log-1' });
+
+      await service.recordAnonymousConsent('abc123hash', true);
+
+      expect(prisma.consentLog.create).toHaveBeenCalledWith({
+        data: { sessionHash: 'abc123hash', analytics: true },
+      });
+    });
+
+    it('creates a ConsentLog entry with analytics: false when visitor rejects', async () => {
+      prisma.consentLog.create.mockResolvedValue({ id: 'log-2' });
+
+      await service.recordAnonymousConsent('xyz789hash', false);
+
+      expect(prisma.consentLog.create).toHaveBeenCalledWith({
+        data: { sessionHash: 'xyz789hash', analytics: false },
+      });
+    });
+  });
 });
+

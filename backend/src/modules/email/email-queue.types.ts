@@ -157,4 +157,17 @@ export type EmailJobData =
         radarRiskLevel: string;
         adminUrl?: string;
       };
+    }
+  | {
+      type: 'dispute_alert';
+      payload: {
+        to: string;
+        orderNumber: string;
+        customerEmail: string;
+        amountInCents: number;
+        reason: string;
+        evidenceDeadline: string;
+        disputeId: string;
+        adminUrl?: string;
+      };
     };

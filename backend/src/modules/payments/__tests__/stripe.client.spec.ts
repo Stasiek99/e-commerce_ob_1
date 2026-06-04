@@ -6,6 +6,7 @@ import { StripeClient, CreateCheckoutSessionInput } from '../stripe.client';
 // StripeClient uses `require('stripe')` internally, so jest.mock intercepts it.
 const mockSessionsCreate = jest.fn();
 const mockCouponsCreate = jest.fn();
+const mockCouponsDel = jest.fn();
 jest.mock('stripe', () => {
   return function MockStripe() {
     return {
@@ -18,6 +19,7 @@ jest.mock('stripe', () => {
       },
       coupons: {
         create: mockCouponsCreate,
+        del: mockCouponsDel,
       },
       refunds: { create: jest.fn() },
       webhooks: { constructEvent: jest.fn() },
@@ -65,6 +67,7 @@ describe('StripeClient.createCheckoutSession', () => {
     jest.clearAllMocks();
     mockSessionsCreate.mockResolvedValue(MOCK_SESSION);
     mockCouponsCreate.mockResolvedValue({ id: 'co_test_discount' });
+    mockCouponsDel.mockResolvedValue({});
   });
 
   // ── expires_at ──────────────────────────────────────────────────────
@@ -267,5 +270,45 @@ describe('StripeClient.createCheckoutSession', () => {
       const params = mockSessionsCreate.mock.calls[0][0];
       expect(params.discounts).toEqual([{ coupon: 'co_abc123' }]);
     });
+  });
+});
+
+// ─── StripeClient.deleteCoupon ────────────────────────────────────────────────
+// Guards the fix: one-time checkout coupons must be deleted after the session
+// completes or expires to prevent accumulation in the Stripe Dashboard.
+
+describe('StripeClient.deleteCoupon', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCouponsDel.mockResolvedValue({});
+  });
+
+  it('calls stripe.coupons.del with the given coupon ID', async () => {
+    const client = await buildClient();
+
+    await client.deleteCoupon('co_test_abc');
+
+    expect(mockCouponsDel).toHaveBeenCalledWith('co_test_abc');
+  });
+
+  it('resolves to undefined when stripe.coupons.del succeeds', async () => {
+    const client = await buildClient();
+
+    await expect(client.deleteCoupon('co_test_abc')).resolves.toBeUndefined();
+  });
+
+  it('resolves without throwing when stripe.coupons.del rejects (already deleted or not found)', async () => {
+    mockCouponsDel.mockRejectedValue(new Error('No such coupon: co_already_gone'));
+    const client = await buildClient();
+
+    await expect(client.deleteCoupon('co_already_gone')).resolves.toBeUndefined();
+  });
+
+  it('calls stripe.coupons.del exactly once per invocation', async () => {
+    const client = await buildClient();
+
+    await client.deleteCoupon('co_one_shot');
+
+    expect(mockCouponsDel).toHaveBeenCalledTimes(1);
   });
 });

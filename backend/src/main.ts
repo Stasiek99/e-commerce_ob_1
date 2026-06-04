@@ -17,6 +17,7 @@ import { ShippingService } from './modules/shipping/shipping.service';
 import { OrdersService } from './modules/orders/orders.service';
 import { PaymentsService } from './modules/payments/payments.service';
 import { ReturnsService } from './modules/returns/returns.service';
+import { AuthService } from './modules/auth/auth.service';
 import { TimeoutInterceptor } from './common/interceptors/timeout.interceptor';
 import { PrismaPoolExceptionFilter } from './common/filters/prisma-pool-exception.filter';
 
@@ -91,7 +92,8 @@ async function bootstrap() {
   const ordersService = app.get(OrdersService);
   const paymentsService = app.get(PaymentsService);
   const returnsService = app.get(ReturnsService);
-  await setupAdmin(app, prisma, invoiceService, shippingService, ordersService, paymentsService, returnsService);
+  const authService = app.get(AuthService);
+  await setupAdmin(app, prisma, invoiceService, shippingService, ordersService, paymentsService, returnsService, authService);
 
   app.useLogger(app.get(Logger));
 

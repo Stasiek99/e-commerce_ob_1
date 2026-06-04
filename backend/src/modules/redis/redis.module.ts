@@ -12,7 +12,7 @@ import IORedis from 'ioredis';
         const isProd = config.get<string>('NODE_ENV') === 'production';
         const redis = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
           maxRetriesPerRequest: null,
-          retryStrategy: isProd ? (times) => Math.min(times * 500, 5_000) : () => null,
+          retryStrategy: isProd ? (times) => Math.min(times * 500, 5_000) : () => 3000,
         });
         redis.on('error', (err: Error) => console.warn(`[Redis] ${err.message}`));
         return redis;
