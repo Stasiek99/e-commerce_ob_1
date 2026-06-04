@@ -1,4 +1,4 @@
-import { ForbiddenException, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -31,6 +31,16 @@ export class PaymentsService {
       where: { id: orderId },
       include: { items: true },
     });
+
+    // Pre-checkout velocity guard: BLIK/P24 settles before Stripe Radar can block,
+    // so we check for suspicious order bursts from the same city before issuing a session.
+    const windowStart = new Date(Date.now() - 30 * 60 * 1000);
+    const recentOrderCount = await this.prisma.order.count({
+      where: { snapshotCity: order.snapshotCity, createdAt: { gte: windowStart } },
+    });
+    if (recentOrderCount > 3) {
+      throw new HttpException('Order velocity limit reached', HttpStatus.TOO_MANY_REQUESTS);
+    }
 
     const currency = this.configService.get<string>('STRIPE_CURRENCY', 'pln');
     const successUrl = this.configService.getOrThrow<string>('STRIPE_SUCCESS_URL');
