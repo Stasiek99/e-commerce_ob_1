@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, Query, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, HttpException, HttpStatus, Inject, Query, UnauthorizedException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
@@ -27,8 +27,19 @@ export class HealthController {
       this.checkEmailQueue(),
     ]);
 
-    const status = db === 'connected' && redis === 'connected' ? 'ok' : 'error';
-    return { status, db, redis, queue, timestamp: new Date().toISOString() };
+    const healthy = db === 'connected' && redis === 'connected';
+    const body = {
+      status: healthy ? 'ok' : 'degraded',
+      db,
+      redis,
+      queue,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (!healthy) {
+      throw new HttpException(body, HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    return body;
   }
 
   private async checkDb(): Promise<'connected' | 'disconnected'> {
