@@ -10,7 +10,6 @@ interface Data {
   items: Item[];
   shippingCostInCents: number;
   totalInCents: number;
-  invoiceUrl: string;
 }
 
 function formatPrice(cents: number): string {
@@ -71,18 +70,6 @@ export function invoiceTemplate(data: Data): { subject: string; html: string } {
                 W załączniku znajdziesz fakturę VAT w formacie PDF.
               </p>
 
-              <!-- Download button -->
-              <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 32px">
-                <tr>
-                  <td style="background:#1a1a1a;border-radius:4px">
-                    <a href="${data.invoiceUrl}" target="_blank"
-                       style="display:inline-block;padding:13px 28px;font-size:14px;font-weight:600;color:#fff;text-decoration:none;letter-spacing:0.5px">
-                      Pobierz fakturę PDF ↓
-                    </a>
-                  </td>
-                </tr>
-              </table>
-
               <!-- Divider -->
               <hr style="border:none;border-top:1px solid #eee;margin:0 0 28px">
 
@@ -117,7 +104,7 @@ export function invoiceTemplate(data: Data): { subject: string; html: string } {
           <tr>
             <td style="padding:24px 40px">
               <p style="margin:0;font-size:13px;color:#888;line-height:1.6">
-                Faktura VAT jest dołączona do tej wiadomości jako załącznik PDF oraz dostępna pod powyższym linkiem.
+                Faktura VAT jest dołączona do tej wiadomości jako załącznik PDF.
                 Płatność została zrealizowana elektronicznie (Stripe). Faktura wystawiona elektronicznie —
                 ważna bez podpisu i pieczątki.
               </p>

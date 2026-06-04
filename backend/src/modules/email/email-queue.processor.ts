@@ -44,13 +44,13 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
 
       case 'payment_confirmed_with_invoice': {
         const { invoiceStoragePath, ...rest } = payload;
-        const invoiceUrl = await this.storageService.getInvoiceSignedUrl(invoiceStoragePath, 3600);
-        const pdfRes = await fetch(invoiceUrl);
+        const signedUrl = await this.storageService.getInvoiceSignedUrl(invoiceStoragePath, 3600);
+        const pdfRes = await fetch(signedUrl);
         if (!pdfRes.ok) {
-          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${invoiceUrl}`);
+          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${signedUrl}`);
         }
         const invoicePdf = Buffer.from(await pdfRes.arrayBuffer());
-        await this.emailService.sendPaymentConfirmedWithInvoice({ ...rest, invoiceUrl, invoicePdf });
+        await this.emailService.sendPaymentConfirmedWithInvoice({ ...rest, invoicePdf });
         break;
       }
 

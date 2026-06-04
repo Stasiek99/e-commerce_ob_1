@@ -983,7 +983,7 @@ describe('EmailQueueProcessor', () => {
       ).rejects.toThrow('Invoice PDF download failed');
     });
 
-    it('passes invoiceUrl (fresh signed URL) and other fields to emailService — no invoiceStoragePath in email call', async () => {
+    it('passes scalar fields to emailService without invoiceUrl or invoiceStoragePath', async () => {
       await processor.process(
         makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
@@ -992,13 +992,13 @@ describe('EmailQueueProcessor', () => {
         expect.objectContaining({
           to: basePayload.to,
           orderNumber: basePayload.orderNumber,
-          invoiceUrl: 'https://storage/signed-inv.pdf',
           totalInCents: basePayload.totalInCents,
         }),
       );
-      // invoiceStoragePath must NOT leak into the EmailService call — it's only used to re-sign
+      // Neither the storage path nor the signed URL must leak into the EmailService call
       const callArg = (emailService.sendPaymentConfirmedWithInvoice as jest.Mock).mock.calls[0][0];
       expect(callArg).not.toHaveProperty('invoiceStoragePath');
+      expect(callArg).not.toHaveProperty('invoiceUrl');
     });
   });
 

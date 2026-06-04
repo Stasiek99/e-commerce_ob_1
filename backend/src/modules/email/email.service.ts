@@ -89,7 +89,6 @@ export class EmailService {
     items: Array<{ name: string; quantity: number; price: number }>;
     shippingCostInCents: number;
     totalInCents: number;
-    invoiceUrl: string;
     invoicePdf: Buffer;
   }) {
     const { subject, html } = invoiceTemplate(data);
