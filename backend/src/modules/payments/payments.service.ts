@@ -268,7 +268,7 @@ export class PaymentsService {
         this.prisma.orderEvent.create({
           data: {
             orderId: payment.orderId,
-            fromStatus: OrderStatus.PENDING_PAYMENT,
+            fromStatus: payment.order.status as OrderStatus,
             toStatus: newOrderStatus,
             actor: 'SYSTEM:stripe-webhook',
             note: isFraudFlagged

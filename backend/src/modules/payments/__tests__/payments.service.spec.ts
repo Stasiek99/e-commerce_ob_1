@@ -502,6 +502,88 @@ describe('PaymentsService', () => {
     });
   });
 
+  // ── fromStatus audit trail fix ───────────────────────────────────────────────
+  // markSessionPaid previously hardcoded fromStatus: PENDING_PAYMENT in the
+  // OrderEvent. reconcilePendingPayments can call markSessionPaid on orders that
+  // were already routed to FRAUD_REVIEW, producing a corrupt PENDING_PAYMENT→PAID
+  // audit event. The fix reads payment.order.status at transaction time.
+
+  describe('markSessionPaid — fromStatus reflects actual order status', () => {
+    it('writes fromStatus=PENDING_PAYMENT when order was in PENDING_PAYMENT state', async () => {
+      const paymentInPending = {
+        ...mockPayment,
+        order: { ...mockPayment.order, status: OrderStatus.PENDING_PAYMENT },
+      };
+      prisma.payment.findUnique.mockResolvedValue(paymentInPending);
+      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ fromStatus: OrderStatus.PENDING_PAYMENT }),
+        }),
+      );
+    });
+
+    it('writes fromStatus=FRAUD_REVIEW when reconcile calls markSessionPaid on a fraud-held order', async () => {
+      const paymentInFraudReview = {
+        ...mockPayment,
+        order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
+      };
+      prisma.payment.findUnique.mockResolvedValue(paymentInFraudReview);
+      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ fromStatus: OrderStatus.FRAUD_REVIEW }),
+        }),
+      );
+    });
+
+    it('does NOT write fromStatus=PENDING_PAYMENT when order was in FRAUD_REVIEW — regression guard', async () => {
+      const paymentInFraudReview = {
+        ...mockPayment,
+        order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
+      };
+      prisma.payment.findUnique.mockResolvedValue(paymentInFraudReview);
+      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      const createCall = prisma.orderEvent.create.mock.calls[0][0];
+      expect(createCall.data.fromStatus).not.toBe(OrderStatus.PENDING_PAYMENT);
+    });
+
+    it('fromStatus matches order.status regardless of whether newOrderStatus is PAID or FRAUD_REVIEW', async () => {
+      const paymentInFraudReview = {
+        ...mockPayment,
+        order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
+      };
+      prisma.payment.findUnique.mockResolvedValue(paymentInFraudReview);
+      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
+      stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+        latest_charge: { outcome: { risk_level: 'normal' } },
+      } as any);
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.completed', mockSession),
+      );
+
+      const createCall = prisma.orderEvent.create.mock.calls[0][0];
+      expect(createCall.data.fromStatus).toBe(OrderStatus.FRAUD_REVIEW);
+      expect(createCall.data.toStatus).toBe(OrderStatus.PAID);
+    });
+  });
+
   describe('initiatePayment', () => {
     const mockOrderWithItems = {
       id: 'order-1',
