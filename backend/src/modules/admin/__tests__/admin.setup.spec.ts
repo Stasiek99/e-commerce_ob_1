@@ -277,3 +277,29 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── PgSession pool cap — source contract ─────────────────────────────────────
+// connect-pg-simple opens its own pg driver pool (default: 10 connections) on
+// top of Prisma's capped pool (connection_limit=10). Combined they can exhaust
+// Supabase's free-tier limit (~60 total). The store must be initialised with
+// pool: { max: 2 } since admin sessions have low concurrency requirements.
+
+describe('setupAdmin — PgSession pool cap (source contract)', () => {
+  const setupSource = fs.readFileSync(
+    path.join(__dirname, '../admin.setup.ts'),
+    'utf-8',
+  );
+
+  it('initialises PgSession store with pool: { max: 2 } to cap admin session connections', () => {
+    expect(setupSource).toContain('pool: { max: 2 }');
+  });
+
+  it('passes pool config inside the PgSession constructor call (not outside it)', () => {
+    const pgSessionCallIndex = setupSource.indexOf('new PgSession(');
+    expect(pgSessionCallIndex).toBeGreaterThan(-1);
+
+    const closingBraceIndex = setupSource.indexOf('});', pgSessionCallIndex);
+    const constructorBlock = setupSource.slice(pgSessionCallIndex, closingBraceIndex);
+    expect(constructorBlock).toContain('pool: { max: 2 }');
+  });
+});

@@ -831,6 +831,7 @@ export async function setupAdmin(
     conString: process.env.DIRECT_URL,
     tableName: 'admin_sessions',
     createTableIfMissing: true,
+    pool: { max: 2 } as any,
   });
 
   const sessionOpts = {
