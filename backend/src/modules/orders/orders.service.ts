@@ -72,20 +72,17 @@ export class OrdersService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const year = new Date().getFullYear();
-    // pg_advisory_xact_lock serializes concurrent DDL across replicas.
-    // Without it, two pods starting simultaneously both hold competing
-    // AccessExclusive locks and add latency to cold-start under load.
-    // The lock is automatically released when the transaction commits.
-    const LOCK_KEY = 4283901234; // stable, unique key for order-number DDL
-    await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_KEY})`;
-      await tx.$executeRawUnsafe(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-      );
-      await tx.$executeRawUnsafe(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
-      );
-    });
+    // CREATE SEQUENCE IF NOT EXISTS is idempotent — concurrent pod startups
+    // are safe without an advisory lock. pg_advisory_xact_lock is ineffective
+    // here because DATABASE_URL goes through pgbouncer in transaction mode,
+    // which may route statements within the same $transaction to different
+    // physical connections, defeating the lock entirely.
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+    );
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+    );
   }
 
   async createFromCart(
