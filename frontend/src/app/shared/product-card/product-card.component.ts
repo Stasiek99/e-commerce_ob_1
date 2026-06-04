@@ -22,6 +22,7 @@ export interface ProductCardData {
     compareAtPriceInCents?: number | null;
     lowestPrice30dInCents?: number | null;
     stock: number;
+    volume?: number | null;
   }>;
 }
 
@@ -63,6 +64,13 @@ export class ProductCardComponent {
     const variants = this.product.variants;
     if (!variants?.length) return true;
     return variants.every((v) => v.stock === 0);
+  }
+
+  get unitPriceText(): string | null {
+    const v = this.firstVariant;
+    if (!v?.volume) return null;
+    const per100ml = (v.priceInCents / v.volume) * 100;
+    return (per100ml / 100).toFixed(2).replace('.', ',') + ' zł / 100ml';
   }
 
   onAddToCart(event: Event): void {

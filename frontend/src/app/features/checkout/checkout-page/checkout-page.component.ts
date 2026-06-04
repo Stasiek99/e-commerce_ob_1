@@ -415,6 +415,11 @@ interface AppliedCoupon {
                 </div>
               </div>
 
+              <p class="return-cost-notice">
+                Będziesz musiał/a ponieść bezpośrednie koszty zwrotu towarów
+                (art.&nbsp;34 ust.&nbsp;2 ustawy o prawach konsumenta).
+              </p>
+
               <label class="consent-label">
                 <input
                   type="checkbox"
@@ -546,6 +551,9 @@ interface AppliedCoupon {
     .summary-total { padding-top: 8px; margin-bottom: 24px; }
     .total-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
     .total-row--final { font-size: 18px; font-weight: 700; margin-top: 12px; padding-top: 12px; border-top: 2px solid var(--color-primary); }
+
+    /* Return cost notice (Art. 34 ust. 2 UoK) */
+    .return-cost-notice { font-size: 13px; color: var(--color-secondary); margin: 0 0 12px; line-height: 1.5; }
 
     /* Consent */
     .consent-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }

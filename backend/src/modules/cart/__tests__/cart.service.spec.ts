@@ -31,6 +31,7 @@ const makeTx = (overrides: Record<string, any> = {}) => ({
   $queryRaw: jest.fn(),
   cart: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
   cartItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+  productVariant: { findUnique: jest.fn() },
   ...overrides,
 });
 
@@ -261,6 +262,7 @@ describe('CartService', () => {
       tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
       tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null); // variant not yet in user cart
       tx.cartItem.create.mockResolvedValue({});
       tx.cart.delete.mockResolvedValue({});
@@ -274,21 +276,23 @@ describe('CartService', () => {
       expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
     });
 
-    it('accumulates quantity when item already exists in user cart', async () => {
+    it('accumulates quantity when item already exists in user cart (within cap)', async () => {
       const tx = makeTx();
       tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
-      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 3 }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]); // guest qty 1
       tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
-      tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
+      tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 1 }); // user qty 1
       tx.cartItem.update.mockResolvedValue({});
       tx.cart.delete.mockResolvedValue({});
       setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
+      // 1 + 1 = 2 which equals MAX_CART_QTY_PER_VARIANT — update should fire
       expect(tx.cartItem.update).toHaveBeenCalledWith({
         where: { id: 'ci-1' },
-        data: { quantity: 5 },
+        data: { quantity: 2 },
       });
       expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
     });
@@ -298,6 +302,7 @@ describe('CartService', () => {
       tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
       tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cartItem.create.mockResolvedValue({});
       tx.cart.delete.mockResolvedValue({});
@@ -315,6 +320,7 @@ describe('CartService', () => {
       tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
       tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cartItem.create.mockResolvedValue({});
       tx.cart.delete.mockResolvedValue({});
@@ -323,6 +329,146 @@ describe('CartService', () => {
       await service.mergeGuestCart('user-1', 'sess-1');
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    // ── Fix: MAX_CART_QTY_PER_VARIANT and stock guard in mergeGuestCart ────────
+    // Invariant: merged quantity must never exceed MAX (2) or variant.stock.
+    // An attacker could bypass addItem's per-unit guard by adding 2 as guest
+    // then logging in to an account that already has 2 — producing qty=4 and
+    // negative stock at checkout time.
+
+    it('caps merged quantity at MAX_CART_QTY_PER_VARIANT when sum would exceed cap', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      // Guest has 2 units; user cart also has 2 → uncapped sum = 4, capped = 2
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
+      tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
+      tx.cartItem.update.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      // newQty = min(4, 2, 10) = 2 === existing.quantity → no update should be issued
+      expect(tx.cartItem.update).not.toHaveBeenCalled();
+    });
+
+    it('caps merged quantity at MAX_CART_QTY_PER_VARIANT when creating a new user cart item', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      // Guest has qty 2 but stock is also 2 — cap at min(2, 2, 2) = 2, which is the cap
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      // qty is 2 (at the cap) — valid, create should fire
+      expect(tx.cartItem.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ quantity: 2 }) }),
+      );
+    });
+
+    it('caps merged quantity at available stock when stock is less than MAX', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      // Only 1 unit left in stock
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 1 });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      // newQty = min(2, 2, 1) = 1 — create with stock-capped quantity
+      expect(tx.cartItem.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ quantity: 1 }) }),
+      );
+    });
+
+    it('skips item entirely when variant has zero stock', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 0 });
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      // newQty = min(1, 2, 0) = 0 → continue, no create
+      expect(tx.cartItem.create).not.toHaveBeenCalled();
+    });
+
+    it('skips item when variant lookup returns null (variant deleted between add and merge)', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-deleted', quantity: 2 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue(null); // variant no longer exists
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      // availableStock = 0, newQty = 0 → skip
+      expect(tx.cartItem.create).not.toHaveBeenCalled();
+    });
+
+    it('does not call update when newQty equals existing quantity after capping', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      // Guest has 1 qty, user already has 2 → min(3, 2, 10) = 2 === existing.quantity
+      tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
+      tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      expect(tx.cartItem.update).not.toHaveBeenCalled();
+    });
+
+    it('handles multiple guest items: caps each independently', async () => {
+      const tx = makeTx();
+      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cartItem.findMany.mockResolvedValue([
+        { productVariantId: 'pv-1', quantity: 2 }, // would exceed cap when merged with existing 2
+        { productVariantId: 'pv-2', quantity: 1 }, // within cap — no existing user item
+      ]);
+      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
+      tx.productVariant.findUnique
+        .mockResolvedValueOnce({ stock: 10 }) // pv-1
+        .mockResolvedValueOnce({ stock: 10 }); // pv-2
+      tx.cartItem.findUnique
+        .mockResolvedValueOnce({ id: 'ci-1', quantity: 2 }) // pv-1 already at cap
+        .mockResolvedValueOnce(null);                         // pv-2 not yet in user cart
+      tx.cartItem.create.mockResolvedValue({});
+      tx.cart.delete.mockResolvedValue({});
+      setupMergeTx(tx);
+
+      await service.mergeGuestCart('user-1', 'sess-1');
+
+      // pv-1: min(4, 2, 10)=2 === existing.quantity=2 → no update
+      expect(tx.cartItem.update).not.toHaveBeenCalled();
+      // pv-2: min(1, 2, 10)=1 → create with qty 1
+      expect(tx.cartItem.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ productVariantId: 'pv-2', quantity: 1 }) }),
+      );
     });
   });
 

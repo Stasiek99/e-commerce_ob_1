@@ -9,7 +9,7 @@ import {
 import * as Sentry from '@sentry/nestjs';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateReviewDto, UpdateReviewStatusDto } from './dto/create-review.dto';
+import { CreateReviewDto, ResubmitReviewDto, UpdateReviewStatusDto } from './dto/create-review.dto';
 
 const SUSPICIOUS_ACTIVITY_WINDOW_HOURS = 24;
 
@@ -203,6 +203,25 @@ export class ReviewsService {
     return this.prisma.review.findUnique({
       where: { id: reviewId },
       select: { id: true, helpfulCount: true },
+    });
+  }
+
+  async resubmit(id: string, userId: string, dto: ResubmitReviewDto) {
+    const review = await this.prisma.review.findUnique({ where: { id } });
+    if (!review) throw new NotFoundException('Review not found');
+    if (review.userId !== userId) throw new ForbiddenException('Not your review');
+    if (review.status !== 'REJECTED') {
+      throw new BadRequestException('Only rejected reviews can be resubmitted');
+    }
+
+    return this.prisma.review.update({
+      where: { id },
+      data: {
+        rating: dto.rating,
+        title: dto.title?.trim() ?? null,
+        body: dto.body?.trim() ?? null,
+        status: 'PENDING',
+      },
     });
   }
 

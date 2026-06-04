@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CarrierCode, DiscountType, OrderStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { OrdersService } from '../orders.service';
@@ -253,6 +253,67 @@ describe('OrdersService', () => {
       ).rejects.toThrow('DPD pickup point code is required');
     });
 
+    it('throws BadRequestException when a cart variant is deactivated before checkout', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const findMany = jest.fn()
+          // First call: isActive pre-check returns only 1 active variant (pv-2 was deactivated)
+          .mockResolvedValueOnce([{ id: 'pv-1' }])
+          // Second call (fresh prices) would not be reached, but stub it anyway
+          .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]);
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: { updateMany: jest.fn(), findMany },
+          order: { create: jest.fn() },
+          cart: { findFirst: jest.fn() },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow('no longer available');
+    });
+
+    it('does not decrement stock when a deactivated variant blocks checkout', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      const updateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany,
+            findMany: jest.fn().mockResolvedValueOnce([{ id: 'pv-1' }]),
+          },
+          order: { create: jest.fn() },
+          cart: { findFirst: jest.fn() },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(updateMany).not.toHaveBeenCalled();
+    });
+
     it('should NOT throw if DPD_COURIER selected without dpdPickupPointCode (home delivery)', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 
@@ -445,7 +506,12 @@ describe('OrdersService', () => {
         const tx = {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
-          productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn()
+              .mockResolvedValueOnce([{ id: 'pv-1' }])             // isActive pre-check (1-item cart)
+              .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]), // fresh prices
+          },
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
@@ -518,6 +584,7 @@ describe('OrdersService', () => {
           productVariant: {
             // count=0 means the WHERE stock >= qty condition was not met
             updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1' }, { id: 'pv-2' }]),
           },
           order: { create: jest.fn() },
           cart: { findFirst: jest.fn() },
@@ -1850,6 +1917,27 @@ describe('OrdersService', () => {
       );
     });
 
+    it('throws ConflictException when order is in FRAUD_REVIEW', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not issue refund or expire session when order is blocked at FRAUD_REVIEW', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
+    });
+
     it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {
       prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
       const stockRestored: string[] = [];
@@ -2504,6 +2592,113 @@ describe('OrdersService', () => {
           expect.objectContaining({ orderItemId: 'item-1', quantity: 2 }),
           expect.objectContaining({ orderItemId: 'item-2', quantity: 1 }),
         ]),
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    // ─── discount pro-ration (fix: partial refund must deduct coupon discount) ──
+
+    it('passes pro-rated priceInCents to partialRefund when a percentage coupon was applied', async () => {
+      // 20%-off coupon: discountFraction = 4000/20000 = 0.2 → discountedPrice = 16000
+      const discountedOrder = {
+        ...mockPaidOrder,
+        itemsTotalInCents: 20000,
+        discountInCents: 4000,
+        totalInCents: 16000,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 20000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(discountedOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('sends cancellation email with pro-rated amount when a coupon was applied', async () => {
+      // 20%-off: discountedPrice = 20000 * 0.8 = 16000; qty=2 → totalInCents = 32000
+      const discountedOrder = {
+        ...mockPaidOrder,
+        itemsTotalInCents: 20000,
+        discountInCents: 4000,
+        totalInCents: 16000,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 20000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(discountedOrder);
+      const emailService = (service as any).emailService;
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({ totalInCents: 32000 }),
+      );
+    });
+
+    it('does not adjust priceInCents when discountInCents is 0', async () => {
+      const noDiscountOrder = {
+        ...mockPaidOrder,
+        discountInCents: 0,
+        itemsTotalInCents: 34900 * 3,
+      };
+      prisma.order.findFirst.mockResolvedValue(noDiscountOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ priceInCents: 34900 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('does not adjust priceInCents when itemsTotalInCents is 0 — division-by-zero guard', async () => {
+      const zeroTotalOrder = {
+        ...mockPaidOrder,
+        discountInCents: 100,
+        itemsTotalInCents: 0,
+      };
+      prisma.order.findFirst.mockResolvedValue(zeroTotalOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ priceInCents: 34900 })],
         OrderStatus.PAID,
         'CUSTOMER',
       );
@@ -3171,7 +3366,9 @@ describe('OrdersService', () => {
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+        findMany: jest.fn()
+          .mockResolvedValueOnce([{ id: 'pv-1' }])                       // isActive pre-check (1-item cart)
+          .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]),      // fresh prices
       },
       coupon: { findUnique: jest.fn().mockResolvedValue(null) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },

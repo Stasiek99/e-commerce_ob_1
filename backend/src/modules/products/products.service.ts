@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { Inject, Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import type IORedis from 'ioredis';
@@ -485,6 +485,18 @@ export class ProductsService {
     return variant;
   }
 
+  async deleteVariant(variantId: string): Promise<void> {
+    const orderItemCount = await this.prisma.orderItem.count({
+      where: { productVariantId: variantId },
+    });
+    if (orderItemCount > 0) {
+      throw new ConflictException(
+        `Variant ${variantId} is referenced by ${orderItemCount} order item(s) and cannot be deleted`,
+      );
+    }
+    await this.prisma.productVariant.delete({ where: { id: variantId } });
+  }
+
   async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }, actorId?: string) {
     const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('Variant not found');
@@ -712,6 +724,7 @@ export class ProductsService {
   // Returns the same product objects enriched with `lowestPrice30dInCents` on
   // every variant. Falls back to the current price when no history exists yet.
   private async attachOmnibusData<T extends {
+    avgRating?: Prisma.Decimal | number | null;
     variants: Array<{ id: string; priceInCents: number; compareAtPriceInCents?: number | null }>;
   }>(products: T[]): Promise<T[]> {
     const promoVariantIds = products.flatMap(p =>
@@ -733,11 +746,12 @@ export class ProductsService {
 
     return products.map(p => ({
       ...p,
+      avgRating: p.avgRating != null ? Number(p.avgRating) : null,
       variants: p.variants.map(v => ({
         ...v,
         lowestPrice30dInCents: minMap.get(v.id) ?? v.priceInCents,
       })),
-    }));
+    })) as unknown as T[];
   }
 
   private invalidateProductCaches(): void {

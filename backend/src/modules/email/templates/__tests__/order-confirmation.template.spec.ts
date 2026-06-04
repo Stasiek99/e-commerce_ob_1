@@ -80,6 +80,28 @@ describe('orderConfirmationTemplate()', () => {
     });
   });
 
+  // ── Return cost disclosure (Art. 34 ust. 2 UoK) ──────────────────────────
+
+  describe('return cost disclosure', () => {
+    it('contains the mandatory return cost notice', () => {
+      const { html } = orderConfirmationTemplate(BASE);
+      expect(html).toContain('bezpośrednie koszty zwrotu towarów');
+    });
+
+    it('references art. 34 ust. 2 ustawy o prawach konsumenta', () => {
+      const { html } = orderConfirmationTemplate(BASE);
+      expect(html).toContain('34');
+      expect(html).toContain('ustawy o prawach konsumenta');
+    });
+
+    it('includes the notice regardless of carrier', () => {
+      for (const code of ['INPOST', 'DHL', 'GLS', undefined]) {
+        const { html } = orderConfirmationTemplate({ ...BASE, carrierCode: code });
+        expect(html).toContain('bezpośrednie koszty zwrotu towarów');
+      }
+    });
+  });
+
   // ── HTML — structure ─────────────────────────────────────────────────────
 
   describe('HTML — structure', () => {

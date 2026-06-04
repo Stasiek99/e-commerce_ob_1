@@ -84,8 +84,14 @@ import { environment } from '../../../../environments/environment';
       </section>
 
       <section>
-        <h2>7. Kontakt</h2>
-        <p>W sprawach związanych z ochroną danych osobowych prosimy kontaktować się pod adresem: <strong>{{ s.rodoEmail }}</strong></p>
+        <h2>7. Kontakt i zgłaszanie naruszeń bezpieczeństwa</h2>
+        <p>W sprawach związanych z ochroną danych osobowych (RODO) prosimy kontaktować się pod adresem: <strong>{{ s.rodoEmail }}</strong></p>
+        <p>Jeśli odkryłeś lukę w zabezpieczeniach lub podejrzewasz naruszenie ochrony danych, skontaktuj się z nami poprzez:</p>
+        <ul>
+          <li>E-mail: <strong>security&#64;aromaterie.pl</strong></li>
+          <li>Plik: <a href="/.well-known/security.txt" target="_blank" rel="noopener noreferrer">/.well-known/security.txt</a></li>
+        </ul>
+        <p>Zgłoszenia bezpieczeństwa odpowiadamy w ciągu 72 godzin.</p>
       </section>
     </div>
   `,

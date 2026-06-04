@@ -1,3 +1,4 @@
+import { HttpClient } from '@angular/common/http';
 import { Injectable, PLATFORM_ID, computed, inject, signal } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 
@@ -11,6 +12,7 @@ const STORAGE_KEY = 'cookie_consent_v1';
 @Injectable({ providedIn: 'root' })
 export class ConsentService {
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly http = inject(HttpClient);
   private readonly isBrowser = isPlatformBrowser(this.platformId);
 
   // Initialized synchronously from localStorage so the banner doesn't flash on returning visitors.
@@ -23,16 +25,21 @@ export class ConsentService {
   readonly bannerVisible = computed(() => this.isBrowser && this._state() === null);
 
   acceptAll(): void {
-    this.persist({ analytics: true, v: 1 });
+    this.persistAndRecord({ analytics: true, v: 1 });
   }
 
   rejectNonEssential(): void {
-    this.persist({ analytics: false, v: 1 });
+    this.persistAndRecord({ analytics: false, v: 1 });
   }
 
-  private persist(state: ConsentState): void {
+  private persistAndRecord(state: ConsentState): void {
     if (this.isBrowser) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     this._state.set(state);
+    // Fire-and-forget: GDPR audit trail. Works for both authenticated users
+    // (backend updates User.analyticsConsent) and anonymous visitors (creates ConsentLog).
+    this.http.post('/api/users/consent', { analytics: state.analytics }).subscribe({
+      error: () => { /* non-blocking — localStorage is the local fallback */ },
+    });
   }
 
   private readStorage(): ConsentState | null {

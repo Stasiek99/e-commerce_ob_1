@@ -41,3 +41,20 @@ export class UpdateReviewStatusDto {
   @MaxLength(1000)
   adminReply?: string;
 }
+
+export class ResubmitReviewDto {
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  body?: string;
+}

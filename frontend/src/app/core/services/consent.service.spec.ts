@@ -1,5 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { PLATFORM_ID } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ConsentService } from './consent.service';
 
 const STORAGE_KEY = 'cookie_consent_v1';
@@ -13,6 +15,8 @@ describe('ConsentService', () => {
       providers: [
         ConsentService,
         { provide: PLATFORM_ID, useValue: platform },
+        provideHttpClient(),
+        provideHttpClientTesting(),
       ],
     });
     return TestBed.inject(ConsentService);

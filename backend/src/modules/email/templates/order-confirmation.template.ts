@@ -64,6 +64,7 @@ export function orderConfirmationTemplate(data: Data): { subject: string; html: 
       </tr>
     </tfoot>
   </table>
+  <p style="color:#888;font-size:12px;margin-top:24px">Informujemy, że będziesz musiał/a ponieść bezpośrednie koszty zwrotu towarów (art.&nbsp;34 ust.&nbsp;2 ustawy o prawach konsumenta).</p>
   <p style="color:#666;font-size:14px">W razie pytań skontaktuj się z nami odpowiadając na tę wiadomość.</p>
 </body>
 </html>`,

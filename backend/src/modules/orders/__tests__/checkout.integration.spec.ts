@@ -135,7 +135,7 @@ describe('Checkout Integration Flow', () => {
             cartItem: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), deleteMany: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null) },
             productVariant: { findUnique: jest.fn() },
-            order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
+            order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
             orderEvent: { create: jest.fn() },
             payment: { findUnique: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'payment-1' }), update: jest.fn().mockResolvedValue({}) },
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },

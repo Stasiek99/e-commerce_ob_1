@@ -1,0 +1,4 @@
+Contact: mailto:security@aromaterie.pl
+Expires: 2027-06-04T00:00:00.000Z
+Preferred-Languages: pl, en
+Policy: https://aromaterie.pl/privacy

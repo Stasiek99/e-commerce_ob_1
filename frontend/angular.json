@@ -33,6 +33,11 @@
               "src/sitemap.xml",
               "src/manifest.webmanifest",
               {
+                "glob": "security.txt",
+                "input": "src/.well-known",
+                "output": ".well-known"
+              },
+              {
                 "glob": "**/*.svg",
                 "input": "node_modules/@taiga-ui/icons/src",
                 "output": "assets/taiga-ui/icons"

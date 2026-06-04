@@ -1,9 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
+import * as Sentry from '@sentry/nestjs';
 import { EmailQueueService } from '../email-queue.service';
 import { EmailQueueProcessor } from '../email-queue.processor';
 import { EmailService } from '../email.service';
+
+jest.mock('@sentry/nestjs', () => ({
+  captureException: jest.fn(),
+}));
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -814,6 +819,78 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendEmailVerification).not.toHaveBeenCalled();
     expect(emailService.sendPasswordReset).not.toHaveBeenCalled();
     expect(emailService.sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  // ── onApplicationBootstrap — failed-job alert ────────────────────────────────
+  // Invariant: when a BullMQ job exhausts all retries and moves to the failed
+  // set, Sentry.captureException must fire and the error must be logged.
+  // Without this hook the failure is permanently silent — no Sentry event,
+  // no log line, and removeOnFail deletes the evidence after 7 days.
+
+  describe('onApplicationBootstrap — worker failed-job alert', () => {
+    type FailedCallback = (job: Job | undefined, err: Error) => void;
+
+    function stubWorkerWithEmitter(processor: EmailQueueProcessor) {
+      let failedCallback: FailedCallback | null = null;
+
+      const mockWorker = {
+        on: jest.fn().mockImplementation((event: string, cb: FailedCallback) => {
+          if (event === 'failed') failedCallback = cb;
+        }),
+        close: jest.fn().mockResolvedValue(undefined),
+      };
+
+      Object.defineProperty(processor, 'worker', {
+        get: () => mockWorker,
+        configurable: true,
+      });
+
+      const triggerFailed = (job: Partial<Job> | undefined, err: Error) =>
+        failedCallback!(job as Job, err);
+
+      return { mockWorker, triggerFailed };
+    }
+
+    it('registers a "failed" event listener on the worker during bootstrap', () => {
+      const { mockWorker } = stubWorkerWithEmitter(processor);
+
+      processor.onApplicationBootstrap();
+
+      expect(mockWorker.on).toHaveBeenCalledWith('failed', expect.any(Function));
+    });
+
+    it('calls Sentry.captureException when a job fails', () => {
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      const err = new Error('Resend API down');
+      triggerFailed({ id: 'job-42', name: 'order_confirmation' } as Partial<Job>, err);
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(
+        err,
+        expect.objectContaining({ extra: expect.objectContaining({ jobId: 'job-42' }) }),
+      );
+    });
+
+    it('passes the job name to Sentry extra context', () => {
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      const err = new Error('timeout');
+      triggerFailed({ id: 'job-7', name: 'password_reset' } as Partial<Job>, err);
+
+      expect(Sentry.captureException).toHaveBeenCalledWith(
+        err,
+        expect.objectContaining({ extra: expect.objectContaining({ jobName: 'password_reset' }) }),
+      );
+    });
+
+    it('does not throw when job is undefined (BullMQ passes undefined for stalled jobs)', () => {
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      expect(() => triggerFailed(undefined, new Error('stalled'))).not.toThrow();
+    });
   });
 
   // ── graceful shutdown (SIGTERM drain) ─────────────────────────────────────────

@@ -7,17 +7,6 @@
 
 ---
 
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
-
-Agent agreement noted where 2+ agents independently identified the same issue.
-
----
 
 ## 🟠 HIGH — `charge.dispute.created` not handled — chargeback opens silently, order fulfills, deadline missed *(2/5 agents)*
 
@@ -70,6 +59,7 @@ if (['FAILED', 'PENDING'].includes(existingPayment?.status)) {
 Also check Stripe session expiry before reusing the `stripeSessionId`.
 
 ---
+
 
 ## 🟠 HIGH — `cancelByUser` lets a customer self-refund a `FRAUD_REVIEW` order before admin review completes *(1/5 agents)*
 
@@ -136,7 +126,6 @@ unitPrice = computed(() =>
 ```
 Display as "149,00 zł / 100ml" below the main price on both card and detail views.
 
----
 
 ## 🟠 HIGH — Return shipping cost not disclosed at checkout — Art. 34 ust. 2 UoK violation *(1/5 agents)*
 
@@ -167,7 +156,6 @@ if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
   throw new UnauthorizedException();
 }
 ```
-
 ---
 
 ## 🟠 HIGH — No BullMQ worker crash alert — failed email queue is permanently silent *(1/5 agents)*
@@ -183,19 +171,15 @@ worker.on('failed', (job, err) => {
   this.logger.error(`BullMQ job failed: ${job?.name}`, err.stack);
 });
 ```
-
 ---
 
+
 ## 🟠 HIGH — `cancelItemsByUser` partial refund computed from pre-discount gross — customer overpaid *(1/5 agents)*
-
 **File:** `backend/src/modules/orders/orders.service.ts:767-776`
-
 ```typescript
 refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
 ```
-
 `i.priceInCents` is the snapshot price (pre-discount). The Stripe `partialRefund` call uses this same gross amount — the pro-rated coupon discount is never deducted. For a 20%-off coupon on a 200 PLN item, the customer paid 160 PLN but receives a 200 PLN refund. Financial loss on every partial item cancellation where a percentage coupon was applied.
-
 **Fix:** Load `order.discountInCents`, `order.totalInCents`, and `order.itemsTotalInCents` to compute the pro-rated discount fraction per item:
 ```typescript
 const discountFraction = order.discountInCents / order.itemsTotalInCents;
@@ -204,25 +188,17 @@ const refund = resolvedItems.reduce((s, i) =>
 ```
 
 ---
-
 ## 🟠 HIGH — `CartItem` / `OrderItem` → `ProductVariant` FK has no `onDelete` rule — silent 500 on variant delete *(2/5 agents)*
-
 **File:** `backend/prisma/schema.prisma:355, 431`
-
 Both `CartItem.productVariant` and `OrderItem.productVariant` relations have no `onDelete` directive. Prisma defaults to `RESTRICT`. If a variant is ever hard-deleted (via a future admin action, a direct DB operation, or a Prisma `delete()` call in any future code path), PostgreSQL rejects the delete with a foreign key violation that bubbles up as an unhandled 500 — giving the admin no meaningful error.
-
 More critically, `OrderItem` joining back to a deleted variant breaks invoice generation, refund amount calculations, and any future analytical queries.
-
 **Fix:** For `CartItem`, use `onDelete: Cascade` (deleting a variant should remove it from carts). For `OrderItem`, use `onDelete: Restrict` but add an explicit pre-check in the service that surfaces a 409 before attempting the delete.
-
 ---
 
+
 ## 🟡 MEDIUM — `returns.service.ts` allows unlimited return requests per order — no uniqueness guard *(2/5 agents)*
-
 **Files:** `backend/src/modules/returns/returns.service.ts:94`, `backend/prisma/schema.prisma:603-629`
-
 `prisma.returnRequest.create(...)` has no pre-check and the schema has no `@@unique([orderId, type])` or `@@unique([orderId])` constraint. A customer can submit 3 simultaneous `WITHDRAWAL` return requests for the same order. All 3 are created. The Stripe refund idempotency guard means only the first refund fires, but the DB ends up with 3 `COMPLETED` return records and an encrypted IBAN stored 3× — a GDPR data minimisation violation (Art. 5(1)(c)) and a support nightmare.
-
 **Fix:** Add `@@unique([orderId, status])` or at minimum an application-level guard:
 ```typescript
 const existing = await this.prisma.returnRequest.findFirst({
@@ -230,51 +206,34 @@ const existing = await this.prisma.returnRequest.findFirst({
 });
 if (existing) throw new ConflictException('A return request for this order is already in progress');
 ```
-
 ---
 
 ## 🟡 MEDIUM — `connect-pg-simple` session pool bypasses Prisma's capped pool — Supabase connection exhaustion *(1/5 agents)*
-
 **File:** `backend/src/modules/admin/admin.setup.ts:830`
-
 `connect-pg-simple` is initialized with `conString: process.env.DIRECT_URL`, opening its own `pg` driver pool (default: 10 connections) against Supabase's direct port (5432). This pool is entirely separate from Prisma's capped pool (`connection_limit=10` in the DATABASE_URL). Combined:
-
 - Prisma pool: 10 connections
 - `connect-pg-simple` pool: 10 connections (uncapped default)
 - Supabase free tier: ~60 connections total
-
-Under concurrent admin page-loads, both pools can be fully active simultaneously, consuming 20+ connections for admin sessions alone — leaving only 40 for all other Prisma queries.
-
-**Fix:** Add `pool: { max: 2 }` to the `PgSession` constructor. Admin sessions have low concurrency requirements.
-
+  Under concurrent admin page-loads, both pools can be fully active simultaneously, consuming 20+ connections for admin sessions alone — leaving only 40 for all other Prisma queries.
+  **Fix:** Add `pool: { max: 2 }` to the `PgSession` constructor. Admin sessions have low concurrency requirements.
 ---
 
 ## 🟡 MEDIUM — `markSessionPaid` hardcodes `fromStatus: PENDING_PAYMENT` in OrderEvent — corrupts fraud-review audit trail *(1/5 agents)*
-
 **File:** `backend/src/modules/payments/payments.service.ts:246`
-
 `markSessionPaid` always writes `fromStatus: OrderStatus.PENDING_PAYMENT` to the `OrderEvent` audit log. But `reconcilePendingPayments` can call `markSessionPaid` on orders that were already routed to `FRAUD_REVIEW`. The resulting audit event shows `PENDING_PAYMENT → PAID` even when the real transition was `FRAUD_REVIEW → PAID` — corrupting the audit trail used for dispute evidence submission.
-
 **Fix:** Read `fromStatus` from `payment.order.status` at transaction time rather than hardcoding it.
-
 ---
 
+
 ## 🟡 MEDIUM — `CouponUse` has no cascade on `Coupon` deletion — `reconcileCurrentUses` FK error *(1/5 agents)*
-
 **File:** `backend/prisma/schema.prisma:551`
-
 `CouponUse.coupon` has no `onDelete` rule (defaults to `RESTRICT`). Meanwhile, `Order.coupon` uses `onDelete: SetNull` — so an `Order` can lose its coupon FK while the corresponding `CouponUse` rows still reference the now-deleted `Coupon`. The hourly `reconcileCurrentUses` cron's `COUNT(*)` subquery joining `CouponUse → Coupon` will throw an FK error when orphaned rows exist.
-
 **Fix:** Add `onDelete: Cascade` to `CouponUse.coupon` — if a coupon is deleted, its use records should be removed too (they're no longer meaningful without the coupon context).
-
 ---
 
 ## 🟡 MEDIUM — `MERCHANT_SLACK_WEBHOOK_URL` not validated as Slack-only — persistent SSRF risk *(1/5 agents)*
-
 **File:** `backend/src/config.validation.ts:166`, `backend/src/modules/payments/payments.service.ts:382-388`
-
 `MERCHANT_SLACK_WEBHOOK_URL` is validated only as `Joi.string().uri()`. The value is passed verbatim to `axios.post(webhookUrl, ...)`. If misconfigured or compromised, every paid order triggers an outbound POST with the customer email and order amount to an attacker-controlled endpoint.
-
 **Fix:** Validate the URL prefix at startup:
 ```typescript
 Joi.string().uri().custom((val, helpers) => {
@@ -284,27 +243,18 @@ Joi.string().uri().custom((val, helpers) => {
   return val;
 })
 ```
-
 ---
 
 ## 🟡 MEDIUM — Redis `retryStrategy: null` in dev silently kills BullMQ on connection loss *(1/5 agents)*
-
 **File:** `backend/src/modules/redis/redis.module.ts` (IORedis client config)
-
 In development (`isProd = false`), `retryStrategy: () => null` causes IORedis to stop retrying and emit an unhandled `error` event on the first Redis connection failure. BullMQ's `Queue` and `Worker` share this connection — if Redis goes down during development (or tests), email jobs are silently dropped. `EmailQueueService.enqueue` catches the error and only logs a warning; the app returns 200 for order creation while the email queue is permanently broken for the process lifetime.
-
 **Fix:** Use `retryStrategy: () => 3000` (retry every 3s) in both environments. A broken queue should be observable, not silent.
-
 ---
 
 ## 🟡 MEDIUM — `BLIK`/P24 fraud: Stripe Radar fires post-payment — instant-transfer fraud window *(1/5 agents)*
-
 **File:** `backend/src/modules/payments/payments.service.ts:207-222`
-
 For BLIK and P24 payments, Stripe Radar's risk assessment runs after `checkout.session.completed` — **after the money has already moved**. Unlike card payments where Radar can decline at authorization, BLIK/P24 settles in seconds. The `radarRiskLevel` check in `handleWebhookEvent` can only trigger a `FRAUD_REVIEW` hold after funds arrive. There is no pre-checkout velocity check (same shipping address across accounts, new account + high-value order, multiple orders in 10 minutes).
-
 BLIKjacking (attacker tricks victim into approving a BLIK code) specifically exploits this window.
-
 **Fix:** Add a pre-`createCheckoutSession` velocity check in `OrdersService`:
 ```typescript
 const recentOrders = await this.prisma.order.count({
@@ -313,39 +263,29 @@ const recentOrders = await this.prisma.order.count({
 });
 if (recentOrders > 3) throw new BadRequestException('Order velocity limit reached');
 ```
-
+**Implementation note:** The check lives in `PaymentsService.initiatePayment` (not `OrdersService`) against `snapshotCity` (the correct field name). Uses `HttpException(…, HttpStatus.TOO_MANY_REQUESTS)` since `TooManyRequestsException` is not exported by `@nestjs/common`. `checkout.integration.spec.ts`'s `prisma.order` mock also needed `count: jest.fn().mockResolvedValue(0)` — `initiatePayment` is called transitively via `OrdersService.createFromCart` in that suite.
 ---
 
+
 ## 🟡 MEDIUM — Sentry captures raw email addresses in `withScope` tags — GDPR/DPA violation *(1/5 agents)*
-
 **Files:** `backend/src/modules/email/email-webhook.controller.ts:89-101`, `backend/src/modules/email/email.service.ts:305-337`
-
 `email.service.ts` calls `captureException(error)` inside a Sentry scope that has `scope.setTag('to', recipientEmail)` set — the raw email address. Sentry's default PII scrubbing does not reliably catch email addresses in tag values. Under GDPR Art. 25 (privacy by design) and Sentry's DPA, sending raw email addresses to a US-hosted third-party error tracker without explicit user consent requires an explicit legal basis or anonymization.
-
 **Fix:** Hash the email before tagging:
 ```typescript
 const emailHash = createHash('sha256').update(recipientEmail).digest('hex').slice(0, 12);
 scope.setTag('to_hash', emailHash);
 ```
-
 ---
 
 ## 🟡 MEDIUM — `FREE_SHIPPING` coupon shows PLN 0 discount in frontend validation — erodes trust *(1/5 agents)*
-
 **File:** `backend/src/modules/coupons/coupon.service.ts:97-98`
-
 `validate()` returns `discountAmountInCents = 0` for `FREE_SHIPPING` coupons (since the shipping amount is unknown at validation time). The frontend displays "Zniżka: 0,00 zł" next to a successfully applied coupon code, which looks broken to the customer. The actual shipping deduction happens correctly at order creation — but the UI signals failure.
-
 **Fix:** Return a `discountType: 'FREE_SHIPPING'` flag from the validate endpoint and render it as "Darmowa wysyłka" rather than a monetary amount.
-
 ---
 
 ## 🟡 MEDIUM — Supabase storage upload has no retry — single transient failure permanently sets `LABEL_ERROR` *(1/5 agents)*
-
 **File:** `backend/src/modules/storage/storage.service.ts:27-33`
-
 `this.supabase.storage.from(...).upload(...)` is a single shot with no retry wrapper. A transient Supabase storage blip during shipping label upload permanently sets `ShipmentStatus.LABEL_ERROR`, requiring manual admin re-trigger. The shipping service catches and persists the error correctly — but the upstream I/O should retry on transient failures before surfacing as permanent.
-
 **Fix:** Wrap with a simple exponential backoff (2-3 attempts):
 ```typescript
 for (let attempt = 0; attempt < 3; attempt++) {
@@ -355,15 +295,11 @@ for (let attempt = 0; attempt < 3; attempt++) {
   await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
 }
 ```
-
 ---
 
 ## 🟡 MEDIUM — `GDPR Art. 17(3)(b)` conflict: no open-dispute check before account erasure *(1/5 agents)*
-
 **File:** `backend/src/modules/users/users.service.ts:191-228`
-
 `deleteAccount` anonymizes order snapshots and hard-deletes the user with no check for open Stripe disputes on their orders. If a chargeback is open at the time of erasure, the anonymized data (name, address, delivery confirmation) prevents submitting legally required dispute evidence to Stripe. The GDPR Art. 17(3)(b) "legal claim" exemption applies — but only if there's a guard enforcing it.
-
 **Fix:** Before anonymization, check for open disputes:
 ```typescript
 const openDisputes = await this.stripe.disputes.list({ charge: relatedChargeIds });
@@ -371,65 +307,53 @@ if (openDisputes.data.some(d => d.status === 'needs_response')) {
   throw new ConflictException('Account erasure is temporarily blocked due to an open payment dispute. Try again in 30 days.');
 }
 ```
-
 ---
 
 ## 🟡 MEDIUM — No admin view: paid-but-not-shipped orders, coupon burn rate, or customer password reset *(1/5 agents)*
-
 **File:** `backend/src/modules/admin/admin.setup.ts`
-
 Three missing admin capabilities that will be day-1 operational requirements:
-
 1. **Fulfillment gap:** No query surface for "orders with status `PAID`/`PROCESSING` older than N hours without a `Shipment` record." Primary fulfillment SLA metric with no dashboard.
 2. **Coupon burn rate:** `coupon.service.ts:findAll` returns raw `Coupon` rows with no `_count: { uses: true }`. Admins cannot see which coupons are being redeemed fastest.
 3. **Customer unlock:** `admin.setup.ts:526` — User resource has `edit: isAccessible: false`. There is no "Send password reset" admin action. Admins cannot help a locked-out customer without direct DB access.
-
 ---
 
 ## 🟢 LOW — 14-day withdrawal window off-by-one — `setDate(+14)` on delivery date itself *(1/5 agents)*
-
 **File:** `backend/src/modules/returns/returns.service.ts:78-86`
-
 Art. 27 UoK counts 14 **calendar days** starting the day **after** physical possession. Current code adds 14 days to the `deliveryDate` itself, making `deliveryDate` day 0 — so the window closes on day 14 of ownership instead of day 15 (delivery day + 14). A consumer reporting delivery on June 1 should have until June 15 — but the current code closes the window at June 15 23:59:59, which is correct for the expiry time but the start-of-day boundary on June 15 is ambiguous. Safe fix: use `deliveryDate + 15 days` for the window close, or clarify the policy to match the code exactly.
-
 ---
 
 ## 🟢 LOW — Stripe one-time coupon objects accumulate forever — Stripe Dashboard becomes unnavigable *(1/5 agents)*
-
 **File:** `backend/src/modules/payments/stripe.client.ts:66-73`
-
 Every discounted order creates a new Stripe coupon object (`stripe.coupons.create` with `max_redemptions: 1`) that is never deleted after the session completes or expires. Over time the Stripe account accumulates thousands of orphaned single-use coupon objects. The Stripe Dashboard becomes unnavigable for coupon management, and hitting Stripe's object limits (rare but real at scale) would silently break all discounted checkouts.
-
 **Fix:** After `checkout.session.completed` or `checkout.session.expired`, delete the one-time coupon: `await this.stripe.coupons.del(session.discounts[0]?.coupon)`.
-
 ---
 
 ## 🟢 LOW — `Product.avgRating Float?` — IEEE 754 precision on a user-visible field *(1/5 agents)*
-
 **File:** `backend/prisma/schema.prisma:269`
-
 `avgRating Float?` is serialised as IEEE 754 double by Prisma. `4.65` can round-trip as `4.6499999...` in JSON. Not a critical bug today, but if `avgRating` is ever used in filter logic (e.g. `gte: 4.5`), floating-point comparisons will produce unpredictable results.
-
 **Fix:** Change to `Decimal @db.Decimal(3,2)`. The raw SQL in `updateProductStats` already rounds to 2 decimal places correctly.
-
 ---
 
 ## 🟢 LOW — `Review.@@unique([userId, productId])` permanently blocks re-submission after admin rejection *(1/5 agents)*
-
 **File:** `backend/prisma/schema.prisma:584`
-
 If a user submits a review, the admin rejects it, and the user tries to resubmit with corrections — the `@@unique([userId, productId])` constraint prevents creating a new row. There is no user-facing "edit rejected review" flow and no `adminDelete`-then-resubmit path surfaced to the customer. This is guaranteed support friction at scale.
-
 **Fix:** Change to `@@unique([userId, productId, status])` or expose a user-facing "edit" endpoint that updates the existing rejected row and resets status to `PENDING`.
-
 ---
 
 ## 🟢 LOW — No `security.txt` and no documented GDPR Art. 33 breach-notification process *(1/5 agents)*
-
 No `/.well-known/security.txt`, no DPO contact on the privacy page, no internal runbook for the 72-hour UODO notification window. For a store processing payment data and health-adjacent (fragrance sensitivity/preference) data, this is a gap that regulators specifically look for in audits.
-
 **Fix:** Add `/.well-known/security.txt` (auto-served by Vercel from `public/`), publish a `iod@<domain>.pl` contact on the privacy policy page, and document the breach-notification runbook in an internal wiki.
+---
 
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
+
+Agent agreement noted where 2+ agents independently identified the same issue.
 ---
 
 ## Prioritised Fix Order

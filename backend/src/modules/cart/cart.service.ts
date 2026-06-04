@@ -167,6 +167,12 @@ export class CartService {
       }
 
       for (const item of guestItems) {
+        const variant = await tx.productVariant.findUnique({
+          where: { id: item.productVariantId },
+          select: { stock: true },
+        });
+        const availableStock = variant?.stock ?? 0;
+
         const existing = await tx.cartItem.findUnique({
           where: {
             cartId_productVariantId: {
@@ -175,17 +181,28 @@ export class CartService {
             },
           },
         });
+
+        const newQty = Math.min(
+          (existing?.quantity ?? 0) + item.quantity,
+          MAX_CART_QTY_PER_VARIANT,
+          availableStock,
+        );
+
+        if (newQty <= 0) continue;
+
         if (existing) {
-          await tx.cartItem.update({
-            where: { id: existing.id },
-            data: { quantity: existing.quantity + item.quantity },
-          });
+          if (newQty !== existing.quantity) {
+            await tx.cartItem.update({
+              where: { id: existing.id },
+              data: { quantity: newQty },
+            });
+          }
         } else {
           await tx.cartItem.create({
             data: {
               cartId: userCart.id,
               productVariantId: item.productVariantId,
-              quantity: item.quantity,
+              quantity: newQty,
             },
           });
         }
