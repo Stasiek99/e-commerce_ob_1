@@ -1,5 +1,6 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { environment } from '../../../../environments/environment';
 
 @Component({
   selector: 'app-footer',
@@ -25,6 +26,14 @@ import { RouterLink } from '@angular/router';
           <a routerLink="/legal/withdrawal">Prawo odstąpienia</a>
           <a href="https://ec.europa.eu/consumers/odr" target="_blank" rel="noopener">Platforma ODR (rozwiązywanie sporów online)</a>
         </nav>
+        <address class="footer__seller" aria-label="Dane sprzedawcy">
+          <span class="footer__seller-title">Dane sprzedawcy</span>
+          <span>{{ seller.legalName }}</span>
+          <span>{{ seller.street }}, {{ seller.postalCode }} {{ seller.city }}</span>
+          <span>NIP: {{ seller.nip }} &nbsp;·&nbsp; REGON: {{ seller.regon }}</span>
+          <span>KRS/CEIDG: {{ seller.krs }}</span>
+          <a [href]="'mailto:' + seller.email">{{ seller.email }}</a>
+        </address>
         <p class="footer__copy">&copy; {{ year }} Aromaterie. Wszelkie prawa zastrzeżone.</p>
       </div>
     </footer>
@@ -52,9 +61,26 @@ import { RouterLink } from '@angular/router';
     .footer__legal { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; margin-bottom: 16px; }
     .footer__legal a { font-size: 12px; color: rgba(255,255,255,0.75); transition: color 0.15s; }
     .footer__legal a:hover { color: white; }
+    .footer__seller {
+      font-style: normal;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.55);
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding-top: 16px;
+      margin-top: 8px;
+      width: 100%;
+    }
+    .footer__seller-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: 4px; }
+    .footer__seller a { color: rgba(255,255,255,0.55); transition: color 0.15s; }
+    .footer__seller a:hover { color: white; }
     .footer__copy { font-size: 12px; margin-top: 16px; }
   `],
 })
 export class FooterComponent {
   readonly year = new Date().getFullYear();
+  readonly seller = environment.seller;
 }
