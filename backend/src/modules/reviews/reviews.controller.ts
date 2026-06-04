@@ -18,7 +18,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ReviewsService } from './reviews.service';
-import { CreateReviewDto, UpdateReviewStatusDto } from './dto/create-review.dto';
+import { CreateReviewDto, ResubmitReviewDto, UpdateReviewStatusDto } from './dto/create-review.dto';
 
 @Controller('reviews')
 export class ReviewsController {
@@ -53,6 +53,17 @@ export class ReviewsController {
   @UseGuards(JwtAuthGuard)
   getMine(@CurrentUser() user: User) {
     return this.reviews.getMine(user.id);
+  }
+
+  @Patch(':id/resubmit')
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  resubmit(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Body() dto: ResubmitReviewDto,
+  ) {
+    return this.reviews.resubmit(id, user.id, dto);
   }
 
   @Patch('admin/:id/status')
