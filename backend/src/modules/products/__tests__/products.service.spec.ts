@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -68,6 +68,10 @@ const mockPrisma = {
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    delete: jest.fn(),
+  },
+  orderItem: {
+    count: jest.fn(),
   },
   productVariantPriceHistory: {
     create: jest.fn(),
@@ -1126,5 +1130,81 @@ describe('ProductsService — removeImage', () => {
 
     expect(mockStorageService.deleteFile).not.toHaveBeenCalled();
     expect(mockPrisma.productImage.delete).toHaveBeenCalled();
+  });
+});
+
+// ─── deleteVariant ─────────────────────────────────────────────────────────────
+
+describe('ProductsService — deleteVariant', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.scanStream.mockReturnValue({ on: jest.fn() });
+    mockRedis.pipeline.mockReturnValue({ del: jest.fn(), exec: jest.fn().mockResolvedValue(null) });
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('throws ConflictException when variant is referenced by existing order items', async () => {
+    mockPrisma.orderItem.count.mockResolvedValue(3);
+
+    await expect(service.deleteVariant('var-1')).rejects.toThrow(ConflictException);
+  });
+
+  it('includes the variant ID and order-item count in the ConflictException message', async () => {
+    mockPrisma.orderItem.count.mockResolvedValue(5);
+
+    await expect(service.deleteVariant('var-1')).rejects.toThrow(
+      'var-1 is referenced by 5 order item(s)',
+    );
+  });
+
+  it('does not call productVariant.delete when order items exist', async () => {
+    mockPrisma.orderItem.count.mockResolvedValue(1);
+
+    await expect(service.deleteVariant('var-1')).rejects.toThrow(ConflictException);
+
+    expect(mockPrisma.productVariant.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes the variant when no order items reference it', async () => {
+    mockPrisma.orderItem.count.mockResolvedValue(0);
+    mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-1' });
+
+    await service.deleteVariant('var-1');
+
+    expect(mockPrisma.productVariant.delete).toHaveBeenCalledWith({ where: { id: 'var-1' } });
+  });
+
+  it('resolves void on successful deletion', async () => {
+    mockPrisma.orderItem.count.mockResolvedValue(0);
+    mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-1' });
+
+    await expect(service.deleteVariant('var-1')).resolves.toBeUndefined();
+  });
+
+  it('queries orderItem count scoped to the given variantId', async () => {
+    mockPrisma.orderItem.count.mockResolvedValue(0);
+    mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-1' });
+
+    await service.deleteVariant('var-1');
+
+    expect(mockPrisma.orderItem.count).toHaveBeenCalledWith({
+      where: { productVariantId: 'var-1' },
+    });
   });
 });

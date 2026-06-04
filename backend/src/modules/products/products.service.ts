@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { Inject, Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import type IORedis from 'ioredis';
@@ -483,6 +483,18 @@ export class ProductsService {
       });
     }
     return variant;
+  }
+
+  async deleteVariant(variantId: string): Promise<void> {
+    const orderItemCount = await this.prisma.orderItem.count({
+      where: { productVariantId: variantId },
+    });
+    if (orderItemCount > 0) {
+      throw new ConflictException(
+        `Variant ${variantId} is referenced by ${orderItemCount} order item(s) and cannot be deleted`,
+      );
+    }
+    await this.prisma.productVariant.delete({ where: { id: variantId } });
   }
 
   async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }, actorId?: string) {
