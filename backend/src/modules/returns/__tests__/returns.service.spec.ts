@@ -434,11 +434,20 @@ describe('ReturnsService', () => {
       await expect(service.create(dto, OWNER_ID)).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException for WITHDRAWAL when deliveryDate is 15 days ago', async () => {
+    it('throws BadRequestException for WITHDRAWAL when deliveryDate is 16 days ago (window expired)', async () => {
+      await createModule();
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(16) };
+
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('allows WITHDRAWAL when deliveryDate is exactly 15 days ago (boundary: day 15 still valid, Art. 27 off-by-one fix)', async () => {
       await createModule();
       const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(15) };
 
-      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
     });
 
     it('blocks a WITHDRAWAL with a backdated deliveryDate of 20 days ago', async () => {
@@ -493,11 +502,11 @@ describe('ReturnsService', () => {
       dateSpy.mockRestore();
     });
 
-    it('rejects WITHDRAWAL submitted well past the end of the 14th calendar day (day 16 UTC)', async () => {
+    it('rejects WITHDRAWAL submitted well past the end of the 15th calendar day after delivery (Art. 27 +15 fix)', async () => {
       await createModule();
       const deliveryDate = '2026-01-01';
-      // 2026-01-16T13:00:00Z is after day-15 end in all timezones from UTC-12 to UTC+14
-      const dayAfterDeadline = new Date('2026-01-16T13:00:00.000Z').getTime();
+      // 2026-01-17T12:00:00Z is safely after end of Jan 16 in UTC through UTC+2 (Poland)
+      const dayAfterDeadline = new Date('2026-01-17T12:00:00.000Z').getTime();
       const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(dayAfterDeadline);
 
       const dto = { ...WITHDRAWAL_DTO, deliveryDate };

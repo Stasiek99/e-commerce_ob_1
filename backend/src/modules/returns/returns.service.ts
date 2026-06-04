@@ -76,8 +76,11 @@ export class ReturnsService {
           'Odstąpienie od umowy wymaga podania daty dostarczenia przesyłki.',
         );
       }
+      // Art. 27 UoK: 14-day period starts the day AFTER delivery.
+      // +15 sets the window end to the end of the 14th day after delivery,
+      // ensuring the full delivery-date + 14 days is always available.
       const windowEnd = new Date(dto.deliveryDate);
-      windowEnd.setDate(windowEnd.getDate() + 14);
+      windowEnd.setDate(windowEnd.getDate() + 15);
       windowEnd.setHours(23, 59, 59, 999);
       if (Date.now() > windowEnd.getTime()) {
         throw new BadRequestException(
