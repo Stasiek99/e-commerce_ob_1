@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   BadRequestException,
   Controller,
@@ -86,19 +87,23 @@ export class EmailWebhookController {
 
     if (type === 'email.bounced') {
       this.logger.warn(`Email bounced for ${to}: ${data.bounce?.message ?? 'unknown reason'}`);
+      const toHash = createHash('sha256').update(to).digest('hex').slice(0, 12);
       Sentry.withScope((scope) => {
         scope.setTag('email.event', 'bounced');
-        scope.setContext('email', { to, emailId: data.email_id, subject: data.subject, bounce: data.bounce });
-        Sentry.captureMessage(`Email bounced: ${to}`, 'warning');
+        scope.setTag('email.to_hash', toHash);
+        scope.setContext('email', { emailId: data.email_id, subject: data.subject, bounce: data.bounce });
+        Sentry.captureMessage(`Email bounced (to_hash=${toHash})`, 'warning');
       });
     }
 
     if (type === 'email.complained') {
       this.logger.warn(`Spam complaint from ${to} (email_id: ${data.email_id})`);
+      const toHash = createHash('sha256').update(to).digest('hex').slice(0, 12);
       Sentry.withScope((scope) => {
         scope.setTag('email.event', 'complained');
-        scope.setContext('email', { to, emailId: data.email_id, subject: data.subject });
-        Sentry.captureMessage(`Spam complaint: ${to}`, 'warning');
+        scope.setTag('email.to_hash', toHash);
+        scope.setContext('email', { emailId: data.email_id, subject: data.subject });
+        Sentry.captureMessage(`Spam complaint (to_hash=${toHash})`, 'warning');
       });
     }
   }
