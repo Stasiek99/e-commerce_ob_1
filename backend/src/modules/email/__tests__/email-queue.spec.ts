@@ -5,6 +5,7 @@ import * as Sentry from '@sentry/nestjs';
 import { EmailQueueService } from '../email-queue.service';
 import { EmailQueueProcessor } from '../email-queue.processor';
 import { EmailService } from '../email.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -21,9 +22,12 @@ function makeJob<T>(data: T): Job<T> {
 describe('EmailQueueService', () => {
   let service: EmailQueueService;
   let queueAdd: jest.Mock;
+  let mockPrisma: { user: { findFirst: jest.Mock } };
 
   beforeEach(async () => {
     queueAdd = jest.fn().mockResolvedValue({ id: 'job-1' });
+    // Default: user not found → no suppression → all existing tests unaffected
+    mockPrisma = { user: { findFirst: jest.fn().mockResolvedValue(null) } };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -32,6 +36,7 @@ describe('EmailQueueService', () => {
           provide: getQueueToken('email'),
           useValue: { add: queueAdd },
         },
+        { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();
 
@@ -474,6 +479,90 @@ describe('EmailQueueService', () => {
       const secondJobId = queueAdd.mock.calls[1][2].jobId;
       expect(firstJobId).toBe(secondJobId);
       expect(firstJobId).toBe('order_cancellation-ORD-SAME');
+    });
+  });
+
+  // ── bounce suppression gate ───────────────────────────────────────────────────
+  // Invariant: enqueue() must not add a job to the BullMQ queue when the
+  // recipient has a hard bounce on record (emailBounced=true). Sending to a
+  // bounced address again generates another bounce event that counts against the
+  // sender domain's ISP reputation. Above ~2-5% bounce rate, ISPs throttle or
+  // blacklist the domain, silently killing all transactional email delivery.
+
+  describe('bounce suppression gate', () => {
+    it('suppresses enqueue and does not call queue.add when recipient has emailBounced=true', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true });
+
+      await service.sendOrderConfirmation({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('enqueues normally when recipient has emailBounced=false', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: false });
+
+      await service.sendOrderConfirmation({
+        to: 'ok@example.com',
+        orderNumber: 'ORD-2',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('enqueues normally when recipient is not a registered user (user not found in DB)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      await service.sendOrderConfirmation({
+        to: 'guest@example.com',
+        orderNumber: 'ORD-3',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('suppression applies to all job types — verified with sendPaymentConfirmed', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true });
+
+      await service.sendPaymentConfirmed({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-4',
+        firstName: 'Jan',
+        totalInCents: 5000,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('queries the DB with the exact recipient email address', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      const to = 'specific@example.com';
+
+      await service.sendEmailVerification({ to, firstName: 'Jan', verifyUrl: 'https://x' });
+
+      expect(mockPrisma.user.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { email: to } }),
+      );
+    });
+
+    it('selects only emailBounced field — avoids pulling full user row', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
+
+      const [callArg] = mockPrisma.user.findFirst.mock.calls[0];
+      expect(callArg.select).toEqual({ emailBounced: true });
     });
   });
 });

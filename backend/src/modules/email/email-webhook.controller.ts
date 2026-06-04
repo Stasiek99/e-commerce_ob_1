@@ -94,6 +94,12 @@ export class EmailWebhookController {
         scope.setContext('email', { emailId: data.email_id, subject: data.subject, bounce: data.bounce });
         Sentry.captureMessage(`Email bounced (to_hash=${toHash})`, 'warning');
       });
+      if (to) {
+        await this.prisma.user.updateMany({
+          where: { email: to },
+          data: { emailBounced: true, emailBouncedAt: new Date() },
+        });
+      }
     }
 
     if (type === 'email.complained') {
