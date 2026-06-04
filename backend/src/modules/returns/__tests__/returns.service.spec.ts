@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { ReturnsService } from '../returns.service';
@@ -75,6 +75,7 @@ function buildPrismaMock(
     },
     returnRequest: {
       create: jest.fn().mockResolvedValue(record),
+      findFirst: jest.fn().mockResolvedValue(null),
       findUnique: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue(record),
     },
@@ -529,6 +530,82 @@ describe('ReturnsService', () => {
       const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
 
       expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
+  // ── duplicate return guard (GDPR Art. 5(1)(c) data minimisation) ────────
+  describe('duplicate return guard', () => {
+    it('throws ConflictException when an active (PENDING) return request already exists for the order', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findFirst.mockResolvedValue({ id: 'existing-return' });
+      await createModule(mock);
+
+      await expect(service.create(WITHDRAWAL_DTO as any, OWNER_ID)).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException when an IN_REVIEW return request already exists', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findFirst.mockResolvedValue({ id: 'existing-in-review' });
+      await createModule(mock);
+
+      await expect(service.create(COMPLAINT_DTO as any, OWNER_ID)).rejects.toThrow(ConflictException);
+    });
+
+    it('does not call returnRequest.create when ConflictException is thrown', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findFirst.mockResolvedValue({ id: 'existing-return' });
+      await createModule(mock);
+
+      await service.create(WITHDRAWAL_DTO as any, OWNER_ID).catch(() => undefined);
+
+      expect(mock.returnRequest.create).not.toHaveBeenCalled();
+    });
+
+    it('proceeds when no active return request exists (findFirst returns null)', async () => {
+      await createModule();
+
+      const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('proceeds when only a REJECTED return exists for the order (terminal status)', async () => {
+      const mock = buildPrismaMock();
+      // findFirst with notIn REJECTED/COMPLETED returns null — rejected is excluded from the guard
+      mock.returnRequest.findFirst.mockResolvedValue(null);
+      await createModule(mock);
+
+      const result = await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('queries findFirst with notIn REJECTED and COMPLETED to skip terminal statuses', async () => {
+      const mock = buildPrismaMock();
+      await createModule(mock);
+
+      await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      expect(mock.returnRequest.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: { notIn: ['REJECTED', 'COMPLETED'] },
+          }),
+        }),
+      );
+    });
+
+    it('queries findFirst scoped to the resolved orderId — not a cross-order check', async () => {
+      const mock = buildPrismaMock();
+      await createModule(mock);
+
+      await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+
+      expect(mock.returnRequest.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ orderId: 'order-uuid-1' }),
+        }),
+      );
     });
   });
 

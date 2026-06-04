@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -84,6 +85,14 @@ export class ReturnsService {
           '(art. 27 Ustawy o prawach konsumenta).',
         );
       }
+    }
+
+    const existing = await this.prisma.returnRequest.findFirst({
+      where: { orderId: order.id, status: { notIn: ['REJECTED', 'COMPLETED'] } },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('A return request for this order is already in progress');
     }
 
     const ibanKey = this.config.get<string>('IBAN_ENCRYPTION_KEY', '');
