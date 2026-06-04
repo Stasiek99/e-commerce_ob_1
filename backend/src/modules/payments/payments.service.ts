@@ -297,6 +297,13 @@ export class PaymentsService {
       throw err;
     }
 
+    // Delete the single-use Stripe coupon created for this checkout session.
+    // Each discounted order produces a max_redemptions=1 coupon that Stripe never
+    // auto-deletes; leaving them orphaned makes the Stripe Dashboard unnavigable
+    // and risks hitting object limits at scale.
+    const paidSessionCouponId = this.extractSessionCouponId(session);
+    if (paidSessionCouponId) await this.stripeClient.deleteCoupon(paidSessionCouponId);
+
     if (isFraudFlagged) {
       this.logger.warn(
         `Order ${payment.order.orderNumber} held for FRAUD_REVIEW — Radar risk level: ${radarRiskLevel}`,
@@ -498,6 +505,9 @@ export class PaymentsService {
       `Stripe event: ${reasonType}`,
       eventId,
     );
+
+    const failedSessionCouponId = this.extractSessionCouponId(session);
+    if (failedSessionCouponId) await this.stripeClient.deleteCoupon(failedSessionCouponId);
   }
 
   /**
@@ -1185,6 +1195,13 @@ export class PaymentsService {
    * Handles payment failure: marks payment as FAILED, cancels order,
    * and restores stock for all order items.
    */
+  private extractSessionCouponId(session: Stripe.Checkout.Session): string | null {
+    const discounts = (session as any).discounts as Array<{ coupon: string | { id: string } }> | undefined;
+    const coupon = discounts?.[0]?.coupon;
+    if (!coupon) return null;
+    return typeof coupon === 'string' ? coupon : (coupon?.id ?? null);
+  }
+
   private async handlePaymentFailure(
     paymentId: string,
     orderId: string,

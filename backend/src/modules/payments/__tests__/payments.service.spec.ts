@@ -124,6 +124,7 @@ describe('PaymentsService', () => {
             }),
             createRefund: jest.fn(),
             createPartialRefund: jest.fn(),
+            deleteCoupon: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -2998,6 +2999,102 @@ describe('PaymentsService', () => {
       });
     });
 
+    // ── Stripe coupon cleanup after session close ─────────────────────────────
+    // Guards the fix: each discounted checkout creates a max_redemptions=1 Stripe
+    // coupon that is never auto-deleted. deleteCoupon must be called after both
+    // completed and expired/failed sessions so orphaned objects don't accumulate.
+
+    describe('coupon cleanup after session close', () => {
+      const sessionWithDiscount = {
+        ...mockSession,
+        discounts: [{ coupon: 'co_test_cleanup' }],
+      };
+
+      const setupExpiredTx = () => {
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          if (typeof fn === 'function') {
+            await fn({
+              processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+              payment: { update: jest.fn() },
+              order: { update: jest.fn() },
+              orderEvent: { create: jest.fn() },
+              productVariant: { update: jest.fn() },
+            });
+          }
+        });
+      };
+
+      it('calls deleteCoupon with the session coupon ID after checkout.session.completed', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPayment);
+        prisma.$transaction.mockResolvedValue([{}, {}]);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', sessionWithDiscount),
+        );
+
+        expect(stripeClient.deleteCoupon).toHaveBeenCalledWith('co_test_cleanup');
+      });
+
+      it('does NOT call deleteCoupon on checkout.session.completed when session has no discounts', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPayment);
+        prisma.$transaction.mockResolvedValue([{}, {}]);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', mockSession),
+        );
+
+        expect(stripeClient.deleteCoupon).not.toHaveBeenCalled();
+      });
+
+      it('calls deleteCoupon with the session coupon ID after checkout.session.expired', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPayment);
+        setupExpiredTx();
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.expired', sessionWithDiscount),
+        );
+
+        expect(stripeClient.deleteCoupon).toHaveBeenCalledWith('co_test_cleanup');
+      });
+
+      it('does NOT call deleteCoupon on checkout.session.expired when session has no discounts', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPayment);
+        setupExpiredTx();
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.expired', mockSession),
+        );
+
+        expect(stripeClient.deleteCoupon).not.toHaveBeenCalled();
+      });
+
+      it('calls deleteCoupon after checkout.session.async_payment_failed', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPayment);
+        setupExpiredTx();
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.async_payment_failed', sessionWithDiscount),
+        );
+
+        expect(stripeClient.deleteCoupon).toHaveBeenCalledWith('co_test_cleanup');
+      });
+
+      it('extracts the coupon ID from an expanded coupon object (not just a string)', async () => {
+        const sessionWithExpandedCoupon = {
+          ...mockSession,
+          discounts: [{ coupon: { id: 'co_expanded_obj', object: 'coupon' } }],
+        };
+        prisma.payment.findUnique.mockResolvedValue(mockPayment);
+        prisma.$transaction.mockResolvedValue([{}, {}]);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', sessionWithExpandedCoupon),
+        );
+
+        expect(stripeClient.deleteCoupon).toHaveBeenCalledWith('co_expanded_obj');
+      });
+    });
+
     describe('pruneProcessedStripeEvents', () => {
       it('skips pruning when another replica already holds the lock', async () => {
         redis.set.mockResolvedValue(null);
@@ -3010,7 +3107,6 @@ describe('PaymentsService', () => {
       it('executes the prune when the lock is acquired', async () => {
         redis.set.mockResolvedValue('OK');
         prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 3 });
-
         await service.pruneProcessedStripeEvents();
 
         expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledTimes(1);

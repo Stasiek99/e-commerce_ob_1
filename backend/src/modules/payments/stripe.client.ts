@@ -155,6 +155,16 @@ export class StripeClient {
     return result.data;
   }
 
+  async deleteCoupon(couponId: string): Promise<void> {
+    try {
+      await this.stripe.coupons.del(couponId);
+      this.logger.debug(`One-time Stripe coupon ${couponId} deleted`);
+    } catch (err) {
+      // Already deleted or never existed — log and continue, do not block the webhook flow.
+      this.logger.warn(`Stripe coupon cleanup failed for ${couponId}: ${(err as Error).message}`);
+    }
+  }
+
   constructWebhookEvent(rawBody: Buffer, signatureHeader: string): Stripe.Event {
     if (!this.webhookSecret) {
       throw new Error(
