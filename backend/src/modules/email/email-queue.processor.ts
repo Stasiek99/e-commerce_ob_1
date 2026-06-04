@@ -1,15 +1,23 @@
-import { Logger, OnApplicationShutdown } from '@nestjs/common';
+import { Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
+import * as Sentry from '@sentry/nestjs';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
 
 @Processor('email')
-export class EmailQueueProcessor extends WorkerHost implements OnApplicationShutdown {
+export class EmailQueueProcessor extends WorkerHost implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(EmailQueueProcessor.name);
 
   constructor(private readonly emailService: EmailService) {
     super();
+  }
+
+  onApplicationBootstrap(): void {
+    this.worker.on('failed', (job, err) => {
+      Sentry.captureException(err, { extra: { jobName: job?.name, jobId: job?.id } });
+      this.logger.error(`BullMQ job failed: ${job?.name}`, err.stack);
+    });
   }
 
   async onApplicationShutdown(): Promise<void> {
