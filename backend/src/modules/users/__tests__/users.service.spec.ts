@@ -195,18 +195,40 @@ describe('UsersService', () => {
     it('anonymises order snapshot PII with GDPR-compliant placeholder values', async () => {
       await service.deleteAccount('user-1');
 
-      expect(prisma.order.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { userId: 'user-1' },
-          data: expect.objectContaining({
-            snapshotFirstName: '[usunięto]',
-            snapshotLastName: '[usunięto]',
-            snapshotEmail: 'deleted@deleted',
-            snapshotPhone: '',
-            snapshotNip: null,
-          }),
+      const [[call]] = prisma.order.updateMany.mock.calls;
+      expect(call).toMatchObject({
+        where: { userId: 'user-1' },
+        data: expect.objectContaining({
+          snapshotFirstName: '[usunięto]',
+          snapshotLastName: '[usunięto]',
+          snapshotPhone: '',
+          snapshotNip: null,
         }),
-      );
+      });
+      // snapshotEmail must be an unguessable UUID-suffixed value, never the static sentinel
+      expect(call.data.snapshotEmail).toMatch(/^deleted\+[0-9a-f-]{36}@deleted\.invalid$/);
+      expect(call.data.snapshotEmail).not.toBe('deleted@deleted');
+    });
+
+    it('generates a unique snapshotEmail sentinel on each deleteAccount call — prevents order enumeration', async () => {
+      const sentinels: string[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        jest.clearAllMocks();
+        prisma.user.findUnique.mockResolvedValue({ email: `user${i}@example.com` });
+        prisma.payment.findMany.mockResolvedValue([]);
+        prisma.$transaction.mockResolvedValue(undefined);
+        prisma.order.updateMany.mockReturnValue({});
+        prisma.returnRequest.updateMany.mockReturnValue({});
+        prisma.user.delete.mockReturnValue({});
+
+        await service.deleteAccount(`user-id-${i}`);
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        sentinels.push(call.data.snapshotEmail);
+      }
+
+      expect(new Set(sentinels).size).toBe(3);
     });
 
     // ── GDPR Art. 17 — ReturnRequest PII scrubbing ───────────────────────────
