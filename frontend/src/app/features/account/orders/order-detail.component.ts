@@ -50,9 +50,11 @@ interface PartialCancelLine {
 }
 
 const TRACKING_URL: Record<string, string> = {
-  INPOST: 'https://inpost.pl/sledzenie-przesylek?number=',
-  DHL:    'https://www.dhl.com/pl-pl/home/tracking.html?tracking-id=',
-  GLS:    'https://gls-group.com/track/?match=',
+  INPOST:      'https://inpost.pl/sledzenie-przesylek?number=',
+  DHL:         'https://www.dhl.com/pl-pl/home/tracking.html?tracking-id=',
+  GLS:         'https://gls-group.com/track/?match=',
+  DPD:         'https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=',
+  DPD_COURIER: 'https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=',
 };
 
 const STATUS_LABELS: Record<string, string> = {
