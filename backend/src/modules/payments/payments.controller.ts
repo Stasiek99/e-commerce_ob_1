@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto';
 import {
   BadRequestException,
   Controller,
@@ -119,7 +120,9 @@ export class PaymentsController {
     @Headers('authorization') authorization: string,
   ) {
     const secret = this.configService.get<string>('PAYMENTS_RECONCILE_SECRET', '');
-    if (!secret || authorization !== `Bearer ${secret}`) {
+    const expected = Buffer.from(`Bearer ${secret}`);
+    const actual = Buffer.from(authorization ?? '');
+    if (!secret || expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
       throw new UnauthorizedException('Invalid reconcile secret');
     }
 
