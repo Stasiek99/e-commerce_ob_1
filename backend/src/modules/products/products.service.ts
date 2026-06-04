@@ -33,6 +33,7 @@ const PRODUCT_SELECT = {
   reviewCount: true,
   avgRating: true,
   sdsUrl: true,
+  allergens: true,
   ingredients: true,
   warnings: true,
   paoMonths: true,

@@ -1,5 +1,5 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CarrierCode, ShipmentStatus } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
@@ -54,6 +54,18 @@ export class ShippingService {
       include: { items: { include: { productVariant: true } } },
     });
     if (!order) throw new NotFoundException('Order not found');
+
+    const allowedStatuses: OrderStatus[] = [OrderStatus.PAID, OrderStatus.PROCESSING];
+    if (!allowedStatuses.includes(order.status as OrderStatus)) {
+      throw new BadRequestException(
+        `Cannot generate label for order in status ${order.status}`,
+      );
+    }
+
+    const existing = await this.prisma.shipment.findUnique({ where: { orderId } });
+    if (existing && existing.status !== ShipmentStatus.LABEL_ERROR) {
+      throw new ConflictException('Label already exists for this order');
+    }
 
     const totalWeightKg = order.items.reduce((sum, item) => {
       const weight = item.productVariant.weight ?? 200;

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { EmailJobData } from './email-queue.types';
+import { PrismaService } from '../prisma/prisma.service';
 
 const JOB_OPTIONS = {
   attempts: 3,
@@ -16,7 +17,10 @@ type Payload<T extends EmailJobData['type']> = Extract<EmailJobData, { type: T }
 export class EmailQueueService {
   private readonly logger = new Logger(EmailQueueService.name);
 
-  constructor(@InjectQueue('email') private readonly queue: Queue<EmailJobData>) {}
+  constructor(
+    @InjectQueue('email') private readonly queue: Queue<EmailJobData>,
+    private readonly prisma: PrismaService,
+  ) {}
 
   private deriveJobId(name: string, data: EmailJobData): string | undefined {
     const p = data.payload as Record<string, unknown>;
@@ -32,6 +36,17 @@ export class EmailQueueService {
   }
 
   private async enqueue(name: string, data: EmailJobData): Promise<void> {
+    const to = (data.payload as Record<string, unknown>).to as string | undefined;
+    if (to) {
+      const user = await this.prisma.user.findFirst({
+        where: { email: to },
+        select: { emailBounced: true },
+      });
+      if (user?.emailBounced) {
+        this.logger.warn(`Email job "${name}" suppressed — ${to} has a hard bounce on record`);
+        return;
+      }
+    }
     try {
       const jobId = this.deriveJobId(name, data);
       await this.queue.add(name, data, { ...JOB_OPTIONS, ...(jobId && { jobId }) });
@@ -114,5 +129,9 @@ export class EmailQueueService {
 
   sendDisputeAlert(data: Payload<'dispute_alert'>) {
     return this.enqueue('dispute_alert', { type: 'dispute_alert', payload: data });
+  }
+
+  sendPayoutFailedAlert(data: Payload<'payout_failed_alert'>) {
+    return this.enqueue('payout_failed_alert', { type: 'payout_failed_alert', payload: data });
   }
 }

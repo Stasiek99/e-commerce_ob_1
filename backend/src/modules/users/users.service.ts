@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { StripeClient } from '../payments/stripe.client';
 import { Prisma, User } from '@prisma/client';
@@ -225,7 +226,7 @@ export class UsersService {
         data: {
           snapshotFirstName: '[usunięto]',
           snapshotLastName:  '[usunięto]',
-          snapshotEmail:     'deleted@deleted',
+          snapshotEmail:     `deleted+${randomUUID()}@deleted.invalid`,
           snapshotPhone:     '',
           snapshotNip:       null,
         },

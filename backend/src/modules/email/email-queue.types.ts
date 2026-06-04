@@ -28,7 +28,7 @@ export type EmailJobData =
         items: Array<{ name: string; quantity: number; price: number }>;
         shippingCostInCents: number;
         totalInCents: number;
-        invoiceUrl: string;
+        invoiceStoragePath: string;
       };
     }
   | {
@@ -169,5 +169,17 @@ export type EmailJobData =
         evidenceDeadline: string;
         disputeId: string;
         adminUrl?: string;
+      };
+    }
+  | {
+      type: 'payout_failed_alert';
+      payload: {
+        to: string;
+        payoutId: string;
+        amountInCents: number;
+        currency: string;
+        failureCode: string | null;
+        failureMessage: string | null;
+        arrivalDate: string;
       };
     };

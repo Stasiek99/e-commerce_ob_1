@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
-import { generateOrderToken } from '../../../common/utils/order-token.util';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -154,7 +153,7 @@ describe('PaymentsService', () => {
         },
         {
           provide: 'REDIS_CLIENT',
-          useValue: { set: jest.fn().mockResolvedValue('OK') },
+          useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
         },
       ],
     }).compile();
@@ -933,6 +932,65 @@ describe('PaymentsService', () => {
         }),
       );
     });
+
+    // ── opaque Redis guest token ──────────────────────────────────────────────
+    // Invariant: the success URL token must be a short-lived opaque random value
+    // stored in Redis, NOT a deterministic HMAC/JWT derived from the master secret.
+    // An HMAC/JWT in the URL leaks via Referer headers to analytics providers and
+    // exposes the master JWT_ACCESS_SECRET if the token is ever decoded.
+
+    it('stores an opaque random token in Redis under the order-token key', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'order-token:order-1',
+        expect.stringMatching(/^[0-9a-f]{64}$/),
+        'EX',
+        3600,
+      );
+    });
+
+    it('embeds the stored Redis token in the success URL', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const storedToken: string = redis.set.mock.calls.find(
+        (c: any[]) => c[0] === 'order-token:order-1',
+      )[1];
+      const callArg = stripeClient.createCheckoutSession.mock.calls[0][0];
+      expect(callArg.successUrl).toContain(`token=${storedToken}`);
+    });
+
+    it('generates a unique token on each call (not deterministic)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+      const firstToken: string = redis.set.mock.calls.find(
+        (c: any[]) => c[0] === 'order-token:order-1',
+      )[1];
+
+      jest.clearAllMocks();
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+      const secondToken: string = redis.set.mock.calls.find(
+        (c: any[]) => c[0] === 'order-token:order-1',
+      )[1];
+
+      expect(firstToken).not.toBe(secondToken);
+    });
   });
 
   describe('getPaymentStatus', () => {
@@ -988,22 +1046,21 @@ describe('PaymentsService', () => {
   });
 
   describe('getPaymentStatusByToken', () => {
-    // The ConfigService mock returns 'pln' for all get() calls, so JWT_ACCESS_SECRET = 'pln'
-    const SECRET = 'pln';
     const ORDER_ID = 'order-1';
-    const EMAIL = 'test@example.com';
+    // 64-char hex string — same format as randomBytes(32).toString('hex')
+    const VALID_TOKEN = 'a1b2c3d4'.repeat(8);
 
-    it('returns status, paidAt, and orderNumber when token is valid', async () => {
+    it('returns status, paidAt, and orderNumber when Redis token matches', async () => {
       const now = new Date();
-      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
 
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001' },
       });
+      redis.get.mockResolvedValue(VALID_TOKEN);
 
-      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+      const result = await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
 
       expect(result).toEqual({
         status: PaymentStatus.COMPLETED,
@@ -1013,52 +1070,63 @@ describe('PaymentsService', () => {
     });
 
     it('includes the human-readable orderNumber so guests can use it in track-order form', async () => {
-      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
-
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000042' },
+        order: { orderNumber: 'ORD-2026-000042' },
       });
+      redis.get.mockResolvedValue(VALID_TOKEN);
 
-      const result = await service.getPaymentStatusByToken(ORDER_ID, validToken);
+      const result = await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
 
       expect(result.orderNumber).toBe('ORD-2026-000042');
     });
 
-    it('throws UnauthorizedException when token is invalid', async () => {
+    it('looks up the Redis key scoped to the orderId', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001' },
       });
+      redis.get.mockResolvedValue(VALID_TOKEN);
+
+      await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
+
+      expect(redis.get).toHaveBeenCalledWith(`order-token:${ORDER_ID}`);
+    });
+
+    it('throws UnauthorizedException when the token does not match the Redis value', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: { orderNumber: 'ORD-2026-000001' },
+      });
+      redis.get.mockResolvedValue('different-stored-token');
 
       await expect(
-        service.getPaymentStatusByToken(ORDER_ID, 'invalid-token'),
+        service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('throws UnauthorizedException when token belongs to a different order (prevents enumeration)', async () => {
-      const tokenForOtherOrder = generateOrderToken('other-order-id', EMAIL, SECRET);
-
+    it('throws UnauthorizedException when Redis has no token (expired or never set)', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { snapshotEmail: EMAIL, orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001' },
       });
+      redis.get.mockResolvedValue(null);
 
       await expect(
-        service.getPaymentStatusByToken(ORDER_ID, tokenForOtherOrder),
+        service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(UnauthorizedException);
     });
 
     it('throws NotFoundException when no payment exists for the order', async () => {
       prisma.payment.findUnique.mockResolvedValue(null);
-
-      const validToken = generateOrderToken(ORDER_ID, EMAIL, SECRET);
+      redis.get.mockResolvedValue(VALID_TOKEN);
 
       await expect(
-        service.getPaymentStatusByToken(ORDER_ID, validToken),
+        service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(NotFoundException);
     });
   });
@@ -1134,6 +1202,39 @@ describe('PaymentsService', () => {
       stripeClient.retrieveCheckoutSession.mockRejectedValue(new Error('Stripe API down'));
 
       await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+    });
+
+    // ── Index coverage — query shape for @@index([status, createdAt]) and @@index([stripeCheckoutSessionId]) ──
+
+    it('queries payment.findMany with status=PENDING, 30-min cutoff, and non-null stripeCheckoutSessionId', async () => {
+      // Arrange: lock acquired, no stale rows (we only care about the WHERE shape)
+      prisma.payment.findMany.mockResolvedValue([]);
+      const before = Date.now();
+
+      // Act
+      await service.reconcilePendingPayments();
+
+      // Assert
+      expect(prisma.payment.findMany).toHaveBeenCalledTimes(1);
+      const [callArg] = prisma.payment.findMany.mock.calls[0];
+      expect(callArg.where.status).toBe(PaymentStatus.PENDING);
+      expect(callArg.where.stripeCheckoutSessionId).toEqual({ not: null });
+      // cutoff is Date.now() - 30 min; verify it's a Date within the expected range
+      const cutoff: Date = callArg.where.createdAt.lt;
+      expect(cutoff).toBeInstanceOf(Date);
+      const THIRTY_MIN_MS = 30 * 60 * 1000;
+      const after = Date.now();
+      expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - THIRTY_MIN_MS - 1000);
+      expect(cutoff.getTime()).toBeLessThanOrEqual(after - THIRTY_MIN_MS + 1000);
+    });
+
+    it('skips findMany entirely when Redis lock is already held by another process', async () => {
+      // Redis NX returns null when key already exists (lock held)
+      redis.set.mockResolvedValueOnce(null);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.payment.findMany).not.toHaveBeenCalled();
     });
   });
 
@@ -3111,6 +3212,226 @@ describe('PaymentsService', () => {
 
         expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledTimes(1);
       });
+    });
+  });
+
+  // ── payout.failed webhook handler ───────────────────────────────────────
+  // Guards the fix: payout.failed must fire a Sentry fatal alert and an admin
+  // email. Previously the event fell through to the default ignore branch —
+  // a silent payout failure meant no alert while customer refund obligations
+  // (Art. 32 UoK, 14-day window) remained unaddressed.
+
+  describe('payout.failed webhook handler', () => {
+    let payoutService: PaymentsService;
+    let payoutPrisma: any;
+    let payoutEmail: any;
+    let payoutConfigGet: jest.Mock;
+
+    const buildPayout = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      id: 'po_test_123',
+      object: 'payout',
+      amount: 150000,
+      currency: 'pln',
+      failure_code: 'account_closed',
+      failure_message: 'The bank account has been closed.',
+      arrival_date: 1748995200,
+      automatic: true,
+      ...overrides,
+    });
+
+    beforeEach(async () => {
+      payoutConfigGet = jest.fn().mockReturnValue(undefined);
+      jest.clearAllMocks();
+
+      const mod = await Test.createTestingModule({
+        providers: [
+          PaymentsService,
+          {
+            provide: PrismaService,
+            useValue: {
+              payment: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
+              order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+              orderEvent: { create: jest.fn() },
+              orderItem: { update: jest.fn(), findMany: jest.fn() },
+              productVariant: { update: jest.fn() },
+              processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+              $transaction: jest.fn(),
+            },
+          },
+          {
+            provide: StripeClient,
+            useValue: {
+              createCheckoutSession: jest.fn(),
+              retrieveCheckoutSession: jest.fn(),
+              retrievePaymentIntentWithCharge: jest.fn().mockResolvedValue({
+                latest_charge: { outcome: { risk_level: 'normal' } },
+              }),
+              createRefund: jest.fn(),
+              createPartialRefund: jest.fn(),
+              deleteCoupon: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: EmailQueueService,
+            useValue: {
+              sendPayoutFailedAlert: jest.fn().mockResolvedValue(undefined),
+              sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
+              sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
+              sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+              sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
+            },
+          },
+          {
+            provide: InvoiceService,
+            useValue: {
+              processInvoice: jest.fn().mockResolvedValue({ url: 'https://invoice.pdf', pdf: Buffer.from(''), invoiceNumber: 'FV/2026/000001' }),
+            },
+          },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: payoutConfigGet,
+              getOrThrow: jest.fn().mockReturnValue('http://example.com'),
+            },
+          },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
+          },
+        ],
+      }).compile();
+
+      payoutService = mod.get(PaymentsService);
+      payoutPrisma = mod.get(PrismaService);
+      payoutEmail = mod.get(EmailQueueService);
+    });
+
+    it('handles payout.failed without touching any payment, order, or stock DB tables', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+
+      expect(payoutPrisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(payoutPrisma.$transaction).not.toHaveBeenCalled();
+      expect(payoutPrisma.order.update).not.toHaveBeenCalled();
+      expect(payoutPrisma.productVariant.update).not.toHaveBeenCalled();
+    });
+
+    it('calls Sentry.withScope at fatal level with payout_failed tag', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+
+      expect(Sentry.withScope).toHaveBeenCalled();
+      const scopeCallback = (Sentry.withScope as jest.Mock).mock.calls.at(-1)[0];
+      const mockScope = { setLevel: jest.fn(), setTag: jest.fn(), setContext: jest.fn() };
+      scopeCallback(mockScope);
+      expect(mockScope.setLevel).toHaveBeenCalledWith('fatal');
+      expect(mockScope.setTag).toHaveBeenCalledWith('payment.event', 'payout_failed');
+    });
+
+    it('calls Sentry.captureMessage with the payout id at fatal level', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout({ id: 'po_critical_99' })),
+      );
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('po_critical_99'),
+        'fatal',
+      );
+    });
+
+    it('sends payout_failed_alert to ADMIN_ALERT_EMAIL when configured', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'admin@store.com', payoutId: 'po_test_123' }),
+      );
+    });
+
+    it('falls back to EMAIL_FROM when ADMIN_ALERT_EMAIL is absent', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'EMAIL_FROM') return 'noreply@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'noreply@store.com' }),
+      );
+    });
+
+    it('sends no admin email when both ADMIN_ALERT_EMAIL and EMAIL_FROM are absent', async () => {
+      // payoutConfigGet returns undefined for all keys by default
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).not.toHaveBeenCalled();
+    });
+
+    it('passes failure_code and failure_message to the alert email', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout({
+          failure_code: 'insufficient_funds',
+          failure_message: 'Your bank account has insufficient funds.',
+        })),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failureCode: 'insufficient_funds',
+          failureMessage: 'Your bank account has insufficient funds.',
+        }),
+      );
+    });
+
+    it('handles null failure_code and failure_message gracefully', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout({ failure_code: null, failure_message: null })),
+      );
+      await Promise.resolve();
+
+      expect(payoutEmail.sendPayoutFailedAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ failureCode: null, failureMessage: null }),
+      );
+    });
+
+    it('does not propagate an email enqueue failure to the webhook caller', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      payoutEmail.sendPayoutFailedAlert.mockRejectedValue(new Error('Redis down'));
+
+      await expect(
+        payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
+      ).resolves.not.toThrow();
     });
   });
 });

@@ -72,20 +72,17 @@ export class OrdersService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const year = new Date().getFullYear();
-    // pg_advisory_xact_lock serializes concurrent DDL across replicas.
-    // Without it, two pods starting simultaneously both hold competing
-    // AccessExclusive locks and add latency to cold-start under load.
-    // The lock is automatically released when the transaction commits.
-    const LOCK_KEY = 4283901234; // stable, unique key for order-number DDL
-    await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_KEY})`;
-      await tx.$executeRawUnsafe(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-      );
-      await tx.$executeRawUnsafe(
-        `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
-      );
-    });
+    // CREATE SEQUENCE IF NOT EXISTS is idempotent — concurrent pod startups
+    // are safe without an advisory lock. pg_advisory_xact_lock is ineffective
+    // here because DATABASE_URL goes through pgbouncer in transaction mode,
+    // which may route statements within the same $transaction to different
+    // physical connections, defeating the lock entirely.
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+    );
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+    );
   }
 
   async createFromCart(
@@ -500,7 +497,12 @@ export class OrdersService implements OnModuleInit {
 
     if (!order) throw new NotFoundException('Order not found');
 
-    const nonInvoiceable: OrderStatus[] = [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED];
+    const nonInvoiceable: OrderStatus[] = [
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.CANCELLED,
+      OrderStatus.FRAUD_REVIEW,
+      OrderStatus.DISPUTE_HOLD,
+    ];
     if (nonInvoiceable.includes(order.status)) {
       throw new BadRequestException(
         `Cannot generate invoice for an order with status ${order.status}`,
@@ -611,7 +613,13 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
-    const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.PARTIALLY_REFUNDED] as OrderStatus[]).includes(order.status);
+    if (order.status === OrderStatus.PARTIALLY_REFUNDED) {
+      throw new ConflictException(
+        'This order has already been partially refunded. Use the returns flow for remaining items.',
+      );
+    }
+
+    const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {
       // No payment made — expire the Stripe session (best-effort) and cancel
@@ -785,6 +793,29 @@ export class OrdersService implements OnModuleInit {
       for (const item of resolvedItems) {
         item.priceInCents = Math.round(item.priceInCents * (1 - discountFraction));
       }
+    }
+
+    const allCancelled = order.items.every((item) => {
+      const remaining = item.quantity - item.cancelledQuantity;
+      if (remaining === 0) return true;
+      const cancelling = resolvedItems.find((r) => r.orderItemId === item.id);
+      return cancelling ? cancelling.quantity >= remaining : false;
+    });
+
+    if (allCancelled) {
+      // Full withdrawal — use refundPayment so the shipping cost is included
+      // (partialRefund only sums item prices and misses shippingCostInCents)
+      await this.paymentsService.refundPayment(orderId, 'CUSTOMER');
+      this.emailService
+        .sendOrderCancellation({
+          to: order.snapshotEmail,
+          orderNumber: order.orderNumber,
+          firstName: order.snapshotFirstName,
+          totalInCents: order.totalInCents,
+          isRefund: true,
+        })
+        .catch((err) => this.logger.warn('Full-cancellation email failed', err));
+      return;
     }
 
     await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');

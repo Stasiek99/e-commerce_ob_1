@@ -4,12 +4,16 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
+import { StorageService } from '../storage/storage.service';
 
 @Processor('email')
 export class EmailQueueProcessor extends WorkerHost implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(EmailQueueProcessor.name);
 
-  constructor(private readonly emailService: EmailService) {
+  constructor(
+    private readonly emailService: EmailService,
+    private readonly storageService: StorageService,
+  ) {
     super();
   }
 
@@ -39,12 +43,14 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         break;
 
       case 'payment_confirmed_with_invoice': {
-        const pdfRes = await fetch(payload.invoiceUrl);
+        const { invoiceStoragePath, ...rest } = payload;
+        const signedUrl = await this.storageService.getInvoiceSignedUrl(invoiceStoragePath, 3600);
+        const pdfRes = await fetch(signedUrl);
         if (!pdfRes.ok) {
-          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${payload.invoiceUrl}`);
+          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${signedUrl}`);
         }
         const invoicePdf = Buffer.from(await pdfRes.arrayBuffer());
-        await this.emailService.sendPaymentConfirmedWithInvoice({ ...payload, invoicePdf });
+        await this.emailService.sendPaymentConfirmedWithInvoice({ ...rest, invoicePdf });
         break;
       }
 
@@ -105,8 +111,11 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         break;
 
       case 'dispute_alert':
-        // Admin-only alert — no customer-facing template needed; log and skip if unimplemented.
-        this.logger.warn(`dispute_alert job received for order ${(payload as any).orderNumber} — no email template wired yet`);
+        await this.emailService.sendDisputeAlert(payload);
+        break;
+
+      case 'payout_failed_alert':
+        await this.emailService.sendPayoutFailedAlert(payload);
         break;
 
       default: {

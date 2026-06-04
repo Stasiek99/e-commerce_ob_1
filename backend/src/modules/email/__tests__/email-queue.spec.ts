@@ -5,6 +5,8 @@ import * as Sentry from '@sentry/nestjs';
 import { EmailQueueService } from '../email-queue.service';
 import { EmailQueueProcessor } from '../email-queue.processor';
 import { EmailService } from '../email.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../../storage/storage.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -21,9 +23,12 @@ function makeJob<T>(data: T): Job<T> {
 describe('EmailQueueService', () => {
   let service: EmailQueueService;
   let queueAdd: jest.Mock;
+  let mockPrisma: { user: { findFirst: jest.Mock } };
 
   beforeEach(async () => {
     queueAdd = jest.fn().mockResolvedValue({ id: 'job-1' });
+    // Default: user not found → no suppression → all existing tests unaffected
+    mockPrisma = { user: { findFirst: jest.fn().mockResolvedValue(null) } };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -32,6 +37,7 @@ describe('EmailQueueService', () => {
           provide: getQueueToken('email'),
           useValue: { add: queueAdd },
         },
+        { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();
 
@@ -211,7 +217,7 @@ describe('EmailQueueService', () => {
   });
 
   describe('sendPaymentConfirmedWithInvoice', () => {
-    it('enqueues job with only invoiceUrl — no base64 blob in Redis payload', async () => {
+    it('enqueues job with only invoiceStoragePath — no base64 blob in Redis payload', async () => {
       const data = {
         to: 'user@test.com',
         orderNumber: 'ORD-2026-000001',
@@ -219,17 +225,18 @@ describe('EmailQueueService', () => {
         items: [{ name: 'Rose Perfume', quantity: 1, price: 14999 }],
         shippingCostInCents: 1500,
         totalInCents: 16499,
-        invoiceUrl: 'https://storage/inv.pdf',
+        invoiceStoragePath: 'invoices/FV-2026-000001.pdf',
       };
 
       await service.sendPaymentConfirmedWithInvoice(data);
 
       const [jobName, jobData] = queueAdd.mock.calls[0];
       expect(jobName).toBe('payment_confirmed_with_invoice');
-      expect(jobData.payload.invoiceUrl).toBe(data.invoiceUrl);
-      // PDF is fetched at processing time — no binary in Redis
+      expect(jobData.payload.invoiceStoragePath).toBe(data.invoiceStoragePath);
+      // PDF is fetched at processing time — no binary or pre-signed URL in Redis
       expect(jobData.payload).not.toHaveProperty('invoicePdfBase64');
       expect(jobData.payload).not.toHaveProperty('invoicePdf');
+      expect(jobData.payload).not.toHaveProperty('invoiceUrl');
     });
 
     it('preserves all scalar fields in the enqueued payload', async () => {
@@ -240,7 +247,7 @@ describe('EmailQueueService', () => {
         items: [{ name: 'Item', quantity: 2, price: 5000 }],
         shippingCostInCents: 900,
         totalInCents: 10900,
-        invoiceUrl: 'https://storage/inv.pdf',
+        invoiceStoragePath: 'invoices/FV-2026-000001.pdf',
       };
 
       await service.sendPaymentConfirmedWithInvoice(data);
@@ -248,7 +255,7 @@ describe('EmailQueueService', () => {
       const payload = queueAdd.mock.calls[0][1].payload;
       expect(payload.to).toBe('user@test.com');
       expect(payload.orderNumber).toBe('ORD-2026-000001');
-      expect(payload.invoiceUrl).toBe('https://storage/inv.pdf');
+      expect(payload.invoiceStoragePath).toBe('invoices/FV-2026-000001.pdf');
       expect(payload.totalInCents).toBe(10900);
     });
   });
@@ -360,7 +367,7 @@ describe('EmailQueueService', () => {
         items: [],
         shippingCostInCents: 900,
         totalInCents: 10000,
-        invoiceUrl: 'https://storage/inv.pdf',
+        invoiceStoragePath: 'invoices/FV-2026-000042.pdf',
       });
 
       const [, , opts] = queueAdd.mock.calls[0];
@@ -476,6 +483,90 @@ describe('EmailQueueService', () => {
       expect(firstJobId).toBe('order_cancellation-ORD-SAME');
     });
   });
+
+  // ── bounce suppression gate ───────────────────────────────────────────────────
+  // Invariant: enqueue() must not add a job to the BullMQ queue when the
+  // recipient has a hard bounce on record (emailBounced=true). Sending to a
+  // bounced address again generates another bounce event that counts against the
+  // sender domain's ISP reputation. Above ~2-5% bounce rate, ISPs throttle or
+  // blacklist the domain, silently killing all transactional email delivery.
+
+  describe('bounce suppression gate', () => {
+    it('suppresses enqueue and does not call queue.add when recipient has emailBounced=true', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true });
+
+      await service.sendOrderConfirmation({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('enqueues normally when recipient has emailBounced=false', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: false });
+
+      await service.sendOrderConfirmation({
+        to: 'ok@example.com',
+        orderNumber: 'ORD-2',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('enqueues normally when recipient is not a registered user (user not found in DB)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      await service.sendOrderConfirmation({
+        to: 'guest@example.com',
+        orderNumber: 'ORD-3',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('suppression applies to all job types — verified with sendPaymentConfirmed', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true });
+
+      await service.sendPaymentConfirmed({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-4',
+        firstName: 'Jan',
+        totalInCents: 5000,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('queries the DB with the exact recipient email address', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      const to = 'specific@example.com';
+
+      await service.sendEmailVerification({ to, firstName: 'Jan', verifyUrl: 'https://x' });
+
+      expect(mockPrisma.user.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { email: to } }),
+      );
+    });
+
+    it('selects only emailBounced field — avoids pulling full user row', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+
+      await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
+
+      const [callArg] = mockPrisma.user.findFirst.mock.calls[0];
+      expect(callArg.select).toEqual({ emailBounced: true });
+    });
+  });
 });
 
 // ─── EmailQueueProcessor ──────────────────────────────────────────────────────
@@ -483,6 +574,7 @@ describe('EmailQueueService', () => {
 describe('EmailQueueProcessor', () => {
   let processor: EmailQueueProcessor;
   let emailService: jest.Mocked<EmailService>;
+  let storageService: jest.Mocked<StorageService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -505,7 +597,17 @@ describe('EmailQueueProcessor', () => {
             sendReviewRequest: jest.fn().mockResolvedValue(undefined),
             sendReturnConfirmation: jest.fn().mockResolvedValue(undefined),
             sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
+            sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
             sendMagicLink: jest.fn().mockResolvedValue(undefined),
+            sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
+            sendDisputeAlert: jest.fn().mockResolvedValue(undefined),
+            sendPayoutFailedAlert: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: StorageService,
+          useValue: {
+            getInvoiceSignedUrl: jest.fn().mockResolvedValue('https://storage/signed-inv.pdf'),
           },
         },
       ],
@@ -513,6 +615,7 @@ describe('EmailQueueProcessor', () => {
 
     processor = module.get(EmailQueueProcessor);
     emailService = module.get(EmailService);
+    storageService = module.get(StorageService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -695,9 +798,129 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendMagicLink).toHaveBeenCalledWith(payload);
   });
 
-  // ── PDF fetched at processing time (no base64 in Redis) ──────────────────────
+  it('routes return_status_update to emailService.sendReturnStatusUpdate', async () => {
+    const payload = {
+      to: 'u@t.com',
+      firstName: 'Jan',
+      orderNumber: 'ORD-1',
+      requestId: 'ret-1',
+      type: 'WITHDRAWAL' as const,
+      newStatus: 'APPROVED' as const,
+    };
 
-  describe('payment_confirmed_with_invoice — PDF fetched from invoiceUrl at processing time', () => {
+    await processor.process(makeJob({ type: 'return_status_update' as const, payload }));
+
+    expect(emailService.sendReturnStatusUpdate).toHaveBeenCalledWith(payload);
+  });
+
+  it('routes fraud_review_alert to emailService.sendFraudReviewAlert', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      customerEmail: 'c@t.com',
+      totalInCents: 29900,
+      radarRiskLevel: 'elevated',
+    };
+
+    await processor.process(makeJob({ type: 'fraud_review_alert' as const, payload }));
+
+    expect(emailService.sendFraudReviewAlert).toHaveBeenCalledWith(payload);
+  });
+
+  // ── dispute_alert fix — previously logger.warn stub, now real email ──────────
+  // Invariant: a dispute_alert job MUST call emailService.sendDisputeAlert so
+  // the admin receives the chargeback notification. The previous stub silently
+  // discarded the job — a missed alert could result in an uncontested chargeback
+  // (Stripe's evidence deadline is 7 calendar days).
+
+  it('routes dispute_alert to emailService.sendDisputeAlert — regression guard for stub removal', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-2026-000001',
+      customerEmail: 'c@t.com',
+      amountInCents: 29900,
+      reason: 'fraudulent',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_test_123',
+    };
+
+    await processor.process(makeJob({ type: 'dispute_alert' as const, payload }));
+
+    expect(emailService.sendDisputeAlert).toHaveBeenCalledWith(payload);
+  });
+
+  it('passes the full payload to sendDisputeAlert including adminUrl when present', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-2026-000001',
+      customerEmail: 'c@t.com',
+      amountInCents: 29900,
+      reason: 'product_not_received',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_test_456',
+      adminUrl: 'https://store.pl/admin/orders/order-1',
+    };
+
+    await processor.process(makeJob({ type: 'dispute_alert' as const, payload }));
+
+    expect(emailService.sendDisputeAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ adminUrl: 'https://store.pl/admin/orders/order-1' }),
+    );
+  });
+
+  it('does not call sendDisputeAlert more than once per job (no double-send)', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      customerEmail: 'c@t.com',
+      amountInCents: 5000,
+      reason: 'duplicate',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_once_123',
+    };
+
+    await processor.process(makeJob({ type: 'dispute_alert' as const, payload }));
+
+    expect(emailService.sendDisputeAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates sendDisputeAlert rejection so BullMQ can retry the job', async () => {
+    (emailService.sendDisputeAlert as jest.Mock).mockRejectedValue(new Error('SMTP unavailable'));
+
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      customerEmail: 'c@t.com',
+      amountInCents: 5000,
+      reason: 'fraudulent',
+      evidenceDeadline: '2026-06-11T00:00:00.000Z',
+      disputeId: 'dp_fail_1',
+    };
+
+    await expect(
+      processor.process(makeJob({ type: 'dispute_alert' as const, payload })),
+    ).rejects.toThrow('SMTP unavailable');
+  });
+
+  it('routes payout_failed_alert to emailService.sendPayoutFailedAlert', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      payoutId: 'po_test_123',
+      amountInCents: 150000,
+      currency: 'pln',
+      failureCode: 'account_closed',
+      failureMessage: 'The bank account has been closed.',
+      arrivalDate: '2026-06-04T00:00:00.000Z',
+    };
+
+    await processor.process(makeJob({ type: 'payout_failed_alert' as const, payload }));
+
+    expect(emailService.sendPayoutFailedAlert).toHaveBeenCalledWith(payload);
+  });
+
+  // ── PDF fetched at processing time (no pre-signed URL in Redis) ─────────────
+
+  describe('payment_confirmed_with_invoice — fresh signed URL generated at processing time', () => {
     const basePayload = {
       to: 'u@t.com',
       orderNumber: 'ORD-1',
@@ -705,7 +928,7 @@ describe('EmailQueueProcessor', () => {
       items: [{ name: 'Item', quantity: 1, price: 9999 }],
       shippingCostInCents: 900,
       totalInCents: 10899,
-      invoiceUrl: 'https://storage/inv.pdf',
+      invoiceStoragePath: 'invoices/FV-2026-000001.pdf',
     };
 
     let fetchSpy: jest.SpyInstance;
@@ -724,12 +947,20 @@ describe('EmailQueueProcessor', () => {
 
     afterEach(() => fetchSpy.mockRestore());
 
-    it('fetches the invoice PDF from invoiceUrl at processing time', async () => {
+    it('generates a fresh 1-hour signed URL from invoiceStoragePath at processing time', async () => {
       await processor.process(
         makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
 
-      expect(fetchSpy).toHaveBeenCalledWith(basePayload.invoiceUrl);
+      expect(storageService.getInvoiceSignedUrl).toHaveBeenCalledWith(basePayload.invoiceStoragePath, 3600);
+    });
+
+    it('fetches the invoice PDF from the freshly generated signed URL', async () => {
+      await processor.process(
+        makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
+      );
+
+      expect(fetchSpy).toHaveBeenCalledWith('https://storage/signed-inv.pdf');
     });
 
     it('passes the downloaded content as a Buffer to emailService', async () => {
@@ -752,7 +983,7 @@ describe('EmailQueueProcessor', () => {
       ).rejects.toThrow('Invoice PDF download failed');
     });
 
-    it('preserves all non-binary fields when calling emailService', async () => {
+    it('passes scalar fields to emailService without invoiceUrl or invoiceStoragePath', async () => {
       await processor.process(
         makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
@@ -761,10 +992,13 @@ describe('EmailQueueProcessor', () => {
         expect.objectContaining({
           to: basePayload.to,
           orderNumber: basePayload.orderNumber,
-          invoiceUrl: basePayload.invoiceUrl,
           totalInCents: basePayload.totalInCents,
         }),
       );
+      // Neither the storage path nor the signed URL must leak into the EmailService call
+      const callArg = (emailService.sendPaymentConfirmedWithInvoice as jest.Mock).mock.calls[0][0];
+      expect(callArg).not.toHaveProperty('invoiceStoragePath');
+      expect(callArg).not.toHaveProperty('invoiceUrl');
     });
   });
 

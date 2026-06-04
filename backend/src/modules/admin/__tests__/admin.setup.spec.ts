@@ -457,6 +457,110 @@ describe('setupAdmin — fulfillment gap (source contract)', () => {
   });
 });
 
+// ─── CPNP notification fields — source contract ──────────────────────────────
+// EC Regulation 1223/2009 Art. 13 requires every cosmetic product to be notified
+// in the CPNP portal before it is placed on the EU market. The Product resource
+// must capture the notification number and Responsible Person, and the list view
+// must warn the admin when any active product is missing these fields.
+
+describe('setupAdmin — CPNP fields (source contract)', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it('exposes cpnpNotificationNumber as an editable Product property', () => {
+    expect(setupSource).toContain('cpnpNotificationNumber');
+  });
+
+  it('exposes responsiblePersonName as an editable Product property', () => {
+    expect(setupSource).toContain('responsiblePersonName');
+  });
+
+  it('queries products where isActive = true and CPNP fields are null in the list after hook', () => {
+    expect(setupSource).toContain('"isActive" = true');
+    expect(setupSource).toContain('"cpnpNotificationNumber" IS NULL');
+    expect(setupSource).toContain('"responsiblePersonName" IS NULL');
+  });
+
+  it('sets notice.type to "error" when unnotified active products exist', () => {
+    const sqlAnchor = setupSource.indexOf('"cpnpNotificationNumber" IS NULL');
+    expect(sqlAnchor).toBeGreaterThan(-1);
+    const hookBlock = setupSource.slice(sqlAnchor, sqlAnchor + 500);
+    expect(hookBlock).toContain("type: 'error'");
+  });
+});
+
+// ─── CPNP list hook — behaviour ──────────────────────────────────────────────
+
+function makeCpnpListAfterHook(prisma: { $queryRaw: jest.Mock }) {
+  return async (response: any): Promise<any> => {
+    const result: Array<{ count: number }> = await prisma.$queryRaw({} as any);
+    const count = Number(result[0]?.count ?? 0);
+    if (count > 0) {
+      response.notice = {
+        message: `CPNP: ${count} aktywn${count === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru powiadomienia CPNP lub nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009)`,
+        type: 'error',
+      };
+    }
+    return response;
+  };
+}
+
+describe('setupAdmin — CPNP list after hook behaviour', () => {
+  const mockPrismaQ = { $queryRaw: jest.fn() };
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('sets an error notice when one active product is missing CPNP data', async () => {
+    mockPrismaQ.$queryRaw.mockResolvedValue([{ count: 1 }]);
+    const hook = makeCpnpListAfterHook(mockPrismaQ);
+
+    const response = await hook({});
+
+    expect(response.notice).toBeDefined();
+    expect(response.notice.type).toBe('error');
+    expect(response.notice.message).toContain('CPNP');
+    expect(response.notice.message).toContain('1');
+    expect(response.notice.message).toContain('wymaga');
+  });
+
+  it('uses plural form when multiple products are missing CPNP data', async () => {
+    mockPrismaQ.$queryRaw.mockResolvedValue([{ count: 3 }]);
+    const hook = makeCpnpListAfterHook(mockPrismaQ);
+
+    const response = await hook({});
+
+    expect(response.notice.message).toContain('3');
+    expect(response.notice.message).toContain('wymagają');
+  });
+
+  it('does not set a notice when all active products have CPNP data', async () => {
+    mockPrismaQ.$queryRaw.mockResolvedValue([{ count: 0 }]);
+    const hook = makeCpnpListAfterHook(mockPrismaQ);
+
+    const response = await hook({});
+
+    expect(response.notice).toBeUndefined();
+  });
+
+  it('does not set a notice when the query returns no rows', async () => {
+    mockPrismaQ.$queryRaw.mockResolvedValue([]);
+    const hook = makeCpnpListAfterHook(mockPrismaQ);
+
+    const response = await hook({});
+
+    expect(response.notice).toBeUndefined();
+  });
+
+  it('preserves existing response properties when adding the notice', async () => {
+    mockPrismaQ.$queryRaw.mockResolvedValue([{ count: 2 }]);
+    const hook = makeCpnpListAfterHook(mockPrismaQ);
+
+    const response = await hook({ records: [{ id: 'p-1' }] });
+
+    expect(response.records).toEqual([{ id: 'p-1' }]);
+    expect(response.notice.type).toBe('error');
+  });
+});
+
 // ─── Coupon burn rate — source contract ──────────────────────────────────────
 // Admins need to see which coupons are redeemed fastest (burn rate). The Coupon
 // resource must be present in AdminJS and the list hook must inject actual use

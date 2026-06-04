@@ -6,6 +6,14 @@ import { TuiButton, TuiLabel, TuiTextfield } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 
+const TRACKING_URLS: Record<string, string> = {
+  INPOST:      'https://inpost.pl/sledzenie-przesylek?number=',
+  DHL:         'https://www.dhl.com/pl-pl/home/tracking.html?tracking-id=',
+  GLS:         'https://gls-group.com/track/?match=',
+  DPD:         'https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=',
+  DPD_COURIER: 'https://tracktrace.dpd.com.pl/parcelDetails?typ=1&p1=',
+};
+
 const STATUS_LABELS: Record<string, string> = {
   PENDING_PAYMENT: 'Oczekuje na płatność',
   FRAUD_REVIEW:    'Weryfikacja',
@@ -90,7 +98,13 @@ interface TrackResult {
           @if (result()!.trackingNumber) {
             <div class="tracking">
               <p class="tracking-label">Numer śledzenia przesyłki</p>
-              <p class="tracking-number">{{ result()!.trackingNumber }}</p>
+              @if (trackingUrl(result()!.carrier, result()!.trackingNumber)) {
+                <a class="tracking-number" [href]="trackingUrl(result()!.carrier, result()!.trackingNumber)!" target="_blank" rel="noopener noreferrer">
+                  {{ result()!.trackingNumber }}
+                </a>
+              } @else {
+                <p class="tracking-number">{{ result()!.trackingNumber }}</p>
+              }
               @if (result()!.carrier) {
                 <p class="tracking-carrier">{{ result()!.carrier }}</p>
               }
@@ -173,6 +187,12 @@ export class TrackOrderComponent {
 
   statusLabel(status: string): string {
     return STATUS_LABELS[status] ?? status;
+  }
+
+  trackingUrl(carrier: string | null, number: string | null): string | null {
+    if (!carrier || !number) return null;
+    const base = TRACKING_URLS[carrier];
+    return base ? base + encodeURIComponent(number) : null;
   }
 
   track(): void {

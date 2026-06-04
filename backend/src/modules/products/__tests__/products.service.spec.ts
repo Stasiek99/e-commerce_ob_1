@@ -1283,3 +1283,79 @@ describe('ProductsService — avgRating Decimal normalization', () => {
     expect(cached[0].avgRating).toBe(4.2);
   });
 });
+
+// ─── allergen disclosure (EC 1223/2009 Art. 19(1)(f)) ─────────────────────────
+// Regression guard: PRODUCT_SELECT must include allergens so that every
+// findBySlug response carries the regulated allergen list. Omitting allergens
+// from the select would silently return undefined, violating EU cosmetics law.
+
+describe('ProductsService — allergen disclosure in PRODUCT_SELECT', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('returns allergens array when the product has regulated allergens', async () => {
+    const allergens = ['Linalool', 'Limonene', 'Citronellol'];
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ allergens }));
+
+    const result = await service.findBySlug('test-perfume') as any;
+
+    expect(result.allergens).toEqual(['Linalool', 'Limonene', 'Citronellol']);
+  });
+
+  it('returns an empty allergens array for products with no regulated allergens', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ allergens: [] }));
+
+    const result = await service.findBySlug('test-perfume') as any;
+
+    expect(result.allergens).toEqual([]);
+  });
+
+  it('includes allergens in the select object passed to Prisma so the field is never silently absent', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ allergens: ['Linalool'] }));
+
+    await service.findBySlug('test-perfume');
+
+    expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ allergens: true }),
+      }),
+    );
+  });
+
+  it('returns allergens alongside ingredients and paoMonths in a single response', async () => {
+    const product = makeProduct({
+      allergens: ['Eugenol'],
+      ingredients: 'Alcohol Denat., Aqua, Eugenol',
+      paoMonths: 36,
+    });
+    mockPrisma.product.findFirst.mockResolvedValue(product);
+
+    const result = await service.findBySlug('test-perfume') as any;
+
+    expect(result.allergens).toEqual(['Eugenol']);
+    expect(result.ingredients).toBe('Alcohol Denat., Aqua, Eugenol');
+    expect(result.paoMonths).toBe(36);
+  });
+});

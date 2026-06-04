@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import { HttpException, HttpStatus, UnauthorizedException } from '@nestjs/common';
 import { getQueueToken } from '@nestjs/bullmq';
 import { HealthController } from '../health.controller';
 import { PrismaService } from '../modules/prisma/prisma.service';
@@ -75,56 +75,75 @@ describe('HealthController', () => {
     });
 
     describe('when Redis is unreachable', () => {
-      it('returns status error and marks redis disconnected', async () => {
+      it('throws 503 HttpException with degraded status and redis disconnected', async () => {
         mockPrisma.$queryRaw.mockResolvedValue([{}]);
         mockRedis.ping.mockRejectedValue(new Error('Redis ECONNREFUSED'));
         mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 0, failed: 0 });
 
-        const result = await controller.check();
+        const thrown = await controller.check().catch((e) => e);
 
-        expect(result.status).toBe('error');
-        expect(result.redis).toBe('disconnected');
-        expect(result.db).toBe('connected');
+        expect(thrown).toBeInstanceOf(HttpException);
+        expect(thrown.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+        expect(thrown.getResponse()).toMatchObject({
+          status: 'degraded',
+          redis: 'disconnected',
+          db: 'connected',
+        });
       });
 
-      it('returns sentinel -1 queue depths when the queue is also unreachable', async () => {
+      it('throws 503 with sentinel -1 queue depths when the queue is also unreachable', async () => {
         mockPrisma.$queryRaw.mockResolvedValue([{}]);
         mockRedis.ping.mockRejectedValue(new Error('Redis ECONNREFUSED'));
         mockEmailQueue.getJobCounts.mockRejectedValue(new Error('Redis ECONNREFUSED'));
 
-        const result = await controller.check();
+        const thrown = await controller.check().catch((e) => e);
 
-        expect(result.status).toBe('error');
-        expect(result.queue).toEqual({ waiting: -1, failed: -1 });
+        expect(thrown).toBeInstanceOf(HttpException);
+        expect(thrown.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+        expect((thrown.getResponse() as Record<string, unknown>).queue).toEqual({
+          waiting: -1,
+          failed: -1,
+        });
       });
     });
 
     describe('when the database is unreachable', () => {
-      it('returns status error and marks db disconnected', async () => {
+      it('throws 503 HttpException with degraded status and db disconnected', async () => {
         mockPrisma.$queryRaw.mockRejectedValue(new Error('ECONNREFUSED 5432'));
         mockRedis.ping.mockResolvedValue('PONG');
         mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 0, failed: 0 });
 
-        const result = await controller.check();
+        const thrown = await controller.check().catch((e) => e);
 
-        expect(result.status).toBe('error');
-        expect(result.db).toBe('disconnected');
-        expect(result.redis).toBe('connected');
+        expect(thrown).toBeInstanceOf(HttpException);
+        expect(thrown.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+        expect(thrown.getResponse()).toMatchObject({
+          status: 'degraded',
+          db: 'disconnected',
+          redis: 'connected',
+        });
       });
     });
 
     describe('when both DB and Redis are unreachable', () => {
-      it('returns status error with both checks showing disconnected', async () => {
+      it('throws 503 HttpException with degraded status and both checks disconnected', async () => {
         mockPrisma.$queryRaw.mockRejectedValue(new Error('DB down'));
         mockRedis.ping.mockRejectedValue(new Error('Redis down'));
         mockEmailQueue.getJobCounts.mockRejectedValue(new Error('Redis down'));
 
-        const result = await controller.check();
+        const thrown = await controller.check().catch((e) => e);
 
-        expect(result.status).toBe('error');
-        expect(result.db).toBe('disconnected');
-        expect(result.redis).toBe('disconnected');
-        expect(result.queue).toEqual({ waiting: -1, failed: -1 });
+        expect(thrown).toBeInstanceOf(HttpException);
+        expect(thrown.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+        expect(thrown.getResponse()).toMatchObject({
+          status: 'degraded',
+          db: 'disconnected',
+          redis: 'disconnected',
+        });
+        expect((thrown.getResponse() as Record<string, unknown>).queue).toEqual({
+          waiting: -1,
+          failed: -1,
+        });
       });
     });
   });

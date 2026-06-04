@@ -5,10 +5,12 @@ import { EmailQueueService } from './email-queue.service';
 import { EmailQueueProcessor } from './email-queue.processor';
 import { EmailWebhookController } from './email-webhook.controller';
 import { PrismaModule } from '../prisma/prisma.module';
+import { StorageModule } from '../storage/storage.module';
 
 @Module({
   imports: [
     PrismaModule,
+    StorageModule,
     BullModule.registerQueue({ name: 'email' }),
   ],
   controllers: [EmailWebhookController],

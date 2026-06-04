@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { CarrierCode, Role } from '@prisma/client';
 import { OrdersController } from '../orders.controller';
 import { OrdersService } from '../orders.service';
@@ -25,7 +25,7 @@ const baseDto: Partial<CreateOrderDto> = {
 
 describe('OrdersController', () => {
   let controller: OrdersController;
-  let ordersService: jest.Mocked<Pick<OrdersService, 'createFromCart' | 'trackByEmailAndNumber'>>;
+  let ordersService: jest.Mocked<Pick<OrdersService, 'createFromCart' | 'trackByEmailAndNumber' | 'cancelByUser' | 'cancelByToken'>>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -41,6 +41,7 @@ describe('OrdersController', () => {
             generateInvoiceForUser: jest.fn(),
             findOneForUser: jest.fn(),
             cancelByUser: jest.fn(),
+            cancelByToken: jest.fn(),
             cancelItemsByUser: jest.fn(),
             getUnreadCount: jest.fn(),
             findAllAdmin: jest.fn(),
@@ -154,6 +155,51 @@ describe('OrdersController', () => {
         await expect(
           controller.trackOrder('nobody@example.com', 'ORD-2026-999999'),
         ).rejects.toThrow(NotFoundException);
+      });
+    });
+
+    // ── cancelOrder — CancelOrderDto delegation ──────────────────────────────
+    // Guards the fix: POST /:id/cancel must accept a typed CancelOrderDto body
+    // and route cancel reason to the correct service method.
+
+    describe('cancelOrder', () => {
+      it('delegates to cancelByUser with reason when user is authenticated', async () => {
+        (ordersService.cancelByUser as jest.Mock).mockResolvedValue(undefined);
+
+        await controller.cancelOrder(mockUser as any, 'order-1', undefined, { reason: 'Changed my mind' });
+
+        expect(ordersService.cancelByUser).toHaveBeenCalledWith('order-1', 'user-1', 'Changed my mind');
+      });
+
+      it('delegates to cancelByUser with undefined reason when reason is omitted', async () => {
+        (ordersService.cancelByUser as jest.Mock).mockResolvedValue(undefined);
+
+        await controller.cancelOrder(mockUser as any, 'order-1', undefined, {});
+
+        expect(ordersService.cancelByUser).toHaveBeenCalledWith('order-1', 'user-1', undefined);
+      });
+
+      it('delegates to cancelByToken when no user but token is provided', async () => {
+        (ordersService.cancelByToken as jest.Mock).mockResolvedValue(undefined);
+
+        await controller.cancelOrder(undefined, 'order-1', 'tkn-abc', { reason: 'Wrong size' });
+
+        expect(ordersService.cancelByToken).toHaveBeenCalledWith('order-1', 'tkn-abc', 'Wrong size');
+      });
+
+      it('throws UnauthorizedException when neither user nor token is present', () => {
+        expect(() =>
+          controller.cancelOrder(undefined, 'order-1', undefined, {}),
+        ).toThrow(UnauthorizedException);
+      });
+
+      it('prefers cancelByUser over cancelByToken when both user and token are present', async () => {
+        (ordersService.cancelByUser as jest.Mock).mockResolvedValue(undefined);
+
+        await controller.cancelOrder(mockUser as any, 'order-1', 'tkn-abc', { reason: 'Test' });
+
+        expect(ordersService.cancelByUser).toHaveBeenCalled();
+        expect(ordersService.cancelByToken).not.toHaveBeenCalled();
       });
     });
 
