@@ -1225,6 +1225,48 @@ describe('OrdersService', () => {
       await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
     });
 
+    it('throws BadRequestException when order status is FRAUD_REVIEW', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when order status is DISPUTE_HOLD', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not call InvoiceService when order is in FRAUD_REVIEW', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.FRAUD_REVIEW,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(invoiceService.processInvoice).not.toHaveBeenCalled();
+      expect(invoiceService.getSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('does not call InvoiceService when order is in DISPUTE_HOLD', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderRow,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.generateInvoice('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(invoiceService.processInvoice).not.toHaveBeenCalled();
+      expect(invoiceService.getSignedUrl).not.toHaveBeenCalled();
+    });
+
     it('returns a fresh 1h signed URL for a PAID order without an existing invoice', async () => {
       prisma.order.findUnique.mockResolvedValue(mockOrderRow);
       invoiceService.processInvoice.mockResolvedValue({

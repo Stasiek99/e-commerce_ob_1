@@ -500,7 +500,12 @@ export class OrdersService implements OnModuleInit {
 
     if (!order) throw new NotFoundException('Order not found');
 
-    const nonInvoiceable: OrderStatus[] = [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED];
+    const nonInvoiceable: OrderStatus[] = [
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.CANCELLED,
+      OrderStatus.FRAUD_REVIEW,
+      OrderStatus.DISPUTE_HOLD,
+    ];
     if (nonInvoiceable.includes(order.status)) {
       throw new BadRequestException(
         `Cannot generate invoice for an order with status ${order.status}`,
