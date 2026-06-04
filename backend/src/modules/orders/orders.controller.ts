@@ -25,6 +25,7 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { UserOrdersQueryDto } from './dto/user-orders-query.dto';
 import { CancelItemsDto } from './dto/cancel-items.dto';
+import { CancelOrderDto } from './dto/cancel-order.dto';
 import { SessionId } from '../../common/decorators/session-id.decorator';
 import { TurnstileGuard } from '../../common/guards/turnstile.guard';
 
@@ -93,7 +94,7 @@ export class OrdersController {
     @CurrentUser() user: User | undefined,
     @Param('id') id: string,
     @Query('token') token: string | undefined,
-    @Body() body: { reason?: string },
+    @Body() body: CancelOrderDto,
   ) {
     if (user) return this.ordersService.cancelByUser(id, user.id, body.reason);
     if (token) return this.ordersService.cancelByToken(id, token, body.reason);
