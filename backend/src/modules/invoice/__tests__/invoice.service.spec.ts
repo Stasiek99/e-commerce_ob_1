@@ -35,17 +35,29 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
 describe('InvoiceService', () => {
   let service: InvoiceService;
   let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
-  let mockPrisma: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
+  let mockTx: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
+  let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock };
 
   beforeEach(async () => {
     mockStorage = {
       uploadInvoice: jest.fn().mockResolvedValue(MOCK_PATH),
       getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_URL),
     };
-    mockPrisma = {
+    // mockTx is the Prisma transaction client passed to the $transaction callback.
+    // $queryRawUnsafe is called twice per normal processInvoice run:
+    //   1st call — SELECT FOR UPDATE (idempotency check)
+    //   2nd call — SELECT nextval (sequence allocation)
+    mockTx = {
       $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
-      $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: MOCK_SEQ }]),
+      $queryRawUnsafe: jest.fn()
+        .mockResolvedValueOnce([{ invoice_storage_path: null, invoice_number: null }])
+        .mockResolvedValueOnce([{ nextval: MOCK_SEQ }]),
       order: { update: jest.fn().mockResolvedValue({}) },
+    };
+    mockPrisma = {
+      $transaction: jest.fn().mockImplementation(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),
+      // $executeRawUnsafe is still present on the outer client (called by onModuleInit via ensureSequence)
+      $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -107,12 +119,12 @@ describe('InvoiceService', () => {
     it('persists invoiceStoragePath (raw path) — never stores a signed URL in the DB', async () => {
       await service.processInvoice(buildOrder());
 
-      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+      expect(mockTx.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
         data: { invoiceStoragePath: MOCK_PATH, invoiceNumber: 'FV/2026/000001' },
       });
       // The DB update must NOT contain invoiceUrl — that would break on key rotation
-      const [call] = mockPrisma.order.update.mock.calls;
+      const [call] = mockTx.order.update.mock.calls;
       expect(call[0].data).not.toHaveProperty('invoiceUrl');
     });
 
@@ -131,7 +143,10 @@ describe('InvoiceService', () => {
 
     it('invoice number uses the year from order.createdAt, not system clock', async () => {
       const order2024 = buildOrder({ createdAt: new Date('2024-06-15T10:00:00Z') });
-      mockPrisma.$queryRawUnsafe.mockResolvedValue([{ nextval: 5n }]);
+      mockTx.$queryRawUnsafe
+        .mockReset()
+        .mockResolvedValueOnce([{ invoice_storage_path: null, invoice_number: null }])
+        .mockResolvedValueOnce([{ nextval: 5n }]);
       mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2024-000005.pdf');
 
       const result = await service.processInvoice(order2024);
@@ -148,13 +163,55 @@ describe('InvoiceService', () => {
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
 
-      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockTx.order.update).not.toHaveBeenCalled();
     });
 
     it('propagates storage errors without swallowing them', async () => {
       mockStorage.uploadInvoice.mockRejectedValue(new Error('Supabase bucket full'));
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('Supabase bucket full');
+    });
+  });
+
+  // ── idempotency guard (SELECT FOR UPDATE) ─────────────────────────────────
+  // Prevents concurrent webhook + reconciliation cron from burning sequential
+  // invoice numbers when both see invoiceStoragePath = null before either commits.
+
+  describe('processInvoice — idempotency guard', () => {
+    it('returns the existing path and signed URL when invoice is already generated', async () => {
+      const EXISTING_PATH = 'invoices/FV-2026-000099.pdf';
+      const EXISTING_NUM  = 'FV/2026/000099';
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValue([
+        { invoice_storage_path: EXISTING_PATH, invoice_number: EXISTING_NUM },
+      ]);
+
+      const result = await service.processInvoice(buildOrder());
+
+      expect(result.storagePath).toBe(EXISTING_PATH);
+      expect(result.invoiceNumber).toBe(EXISTING_NUM);
+      expect(result.url).toBe(MOCK_URL);
+    });
+
+    it('does not allocate a new sequence number when invoice already exists', async () => {
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValue([
+        { invoice_storage_path: 'invoices/FV-2026-000099.pdf', invoice_number: 'FV/2026/000099' },
+      ]);
+
+      await service.processInvoice(buildOrder());
+
+      // $executeRawUnsafe (CREATE SEQUENCE) must not be called
+      expect(mockTx.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it('does not re-upload or re-persist when invoice already exists', async () => {
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValue([
+        { invoice_storage_path: 'invoices/FV-2026-000099.pdf', invoice_number: 'FV/2026/000099' },
+      ]);
+
+      await service.processInvoice(buildOrder());
+
+      expect(mockStorage.uploadInvoice).not.toHaveBeenCalled();
+      expect(mockTx.order.update).not.toHaveBeenCalled();
     });
   });
 
@@ -437,12 +494,12 @@ describe('InvoiceService', () => {
       await expect(service.processInvoice(order)).rejects.toThrow('Invalid invoice year: 2101');
     });
 
-    it('does not call $executeRawUnsafe when year is out of range', async () => {
+    it('does not start a DB transaction when year is out of range', async () => {
       const order = buildOrder({ createdAt: new Date('2019-01-01T00:00:00Z') });
 
       await expect(service.processInvoice(order)).rejects.toThrow();
 
-      expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('accepts year 2020 (lower boundary) without throwing', async () => {

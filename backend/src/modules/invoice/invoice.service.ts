@@ -67,14 +67,6 @@ export class InvoiceService implements OnModuleInit {
     );
   }
 
-  private async nextInvoiceNumber(year: number): Promise<number> {
-    await this.ensureSequence(year);
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
-      `SELECT nextval('invoice_number_seq_${year}')`,
-    );
-    return Number(rows[0].nextval);
-  }
-
   /**
    * Generates the invoice PDF, uploads it to Supabase, persists the raw storage
    * path and invoice number on the order, then returns all four values.
@@ -82,26 +74,69 @@ export class InvoiceService implements OnModuleInit {
    * migrations never invalidate historical invoice access — callers re-sign on
    * demand via getSignedUrl(). The returned url is a 7-day signed URL suitable
    * for embedding in transactional emails at send time.
+   *
+   * A SELECT FOR UPDATE lock on the order row ensures idempotency: if the Stripe
+   * webhook and the reconciliation cron race on the same order, only one wins the
+   * lock and generates an invoice; the second sees invoiceStoragePath already set
+   * and returns early, preventing orphaned sequence numbers (gap in the legally-
+   * required sequential series per Art. 106e pkt 2 Ustawy o VAT).
    */
   async processInvoice(order: InvoiceOrder): Promise<{ url: string; storagePath: string; pdf: Buffer; invoiceNumber: string }> {
     const year = order.createdAt.getFullYear();
-    const seq = await this.nextInvoiceNumber(year);
-    const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+      throw new Error(`Invalid invoice year: ${year}`);
+    }
 
-    const pdf = await this.generatePdf(order, invoiceNumber);
-    const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
-    const storagePath = await this.storage.uploadInvoice(pdf, filename);
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const rows = await tx.$queryRawUnsafe<
+          Array<{ invoice_storage_path: string | null; invoice_number: string | null }>
+        >(
+          `SELECT invoice_storage_path, invoice_number FROM orders WHERE id = $1 FOR UPDATE`,
+          order.id,
+        );
 
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: { invoiceStoragePath: storagePath, invoiceNumber },
-    });
+        if (rows[0]?.invoice_storage_path && rows[0]?.invoice_number) {
+          return {
+            storagePath: rows[0].invoice_storage_path,
+            invoiceNumber: rows[0].invoice_number,
+            pdf: null as Buffer | null,
+          };
+        }
+
+        await tx.$executeRawUnsafe(
+          `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
+        );
+        const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+          `SELECT nextval('invoice_number_seq_${year}')`,
+        );
+        const seq = Number(seqRows[0].nextval);
+        const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+
+        const pdf = await this.generatePdf(order, invoiceNumber);
+        const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
+        const storagePath = await this.storage.uploadInvoice(pdf, filename);
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: { invoiceStoragePath: storagePath, invoiceNumber },
+        });
+
+        this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
+        return { storagePath, invoiceNumber, pdf };
+      },
+      { timeout: 30_000 },
+    );
 
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
-    const url = await this.storage.getInvoiceSignedUrl(storagePath, SEVEN_DAYS_SECONDS);
+    const url = await this.storage.getInvoiceSignedUrl(result.storagePath, SEVEN_DAYS_SECONDS);
 
-    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
-    return { url, storagePath, pdf, invoiceNumber };
+    return {
+      url,
+      storagePath: result.storagePath,
+      pdf: result.pdf ?? Buffer.alloc(0),
+      invoiceNumber: result.invoiceNumber,
+    };
   }
 
   async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
