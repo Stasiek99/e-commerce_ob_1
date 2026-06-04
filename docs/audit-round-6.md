@@ -195,19 +195,6 @@ More critically, `OrderItem` joining back to a deleted variant breaks invoice ge
 **Fix:** For `CartItem`, use `onDelete: Cascade` (deleting a variant should remove it from carts). For `OrderItem`, use `onDelete: Restrict` but add an explicit pre-check in the service that surfaces a 409 before attempting the delete.
 ---
 
----
-
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
-
-Agent agreement noted where 2+ agents independently identified the same issue.
-
----
 
 ## 🟡 MEDIUM — `returns.service.ts` allows unlimited return requests per order — no uniqueness guard *(2/5 agents)*
 **Files:** `backend/src/modules/returns/returns.service.ts:94`, `backend/prisma/schema.prisma:603-629`
@@ -227,14 +214,28 @@ if (existing) throw new ConflictException('A return request for this order is al
 - Prisma pool: 10 connections
 - `connect-pg-simple` pool: 10 connections (uncapped default)
 - Supabase free tier: ~60 connections total
-Under concurrent admin page-loads, both pools can be fully active simultaneously, consuming 20+ connections for admin sessions alone — leaving only 40 for all other Prisma queries.
-**Fix:** Add `pool: { max: 2 }` to the `PgSession` constructor. Admin sessions have low concurrency requirements.
+  Under concurrent admin page-loads, both pools can be fully active simultaneously, consuming 20+ connections for admin sessions alone — leaving only 40 for all other Prisma queries.
+  **Fix:** Add `pool: { max: 2 }` to the `PgSession` constructor. Admin sessions have low concurrency requirements.
 ---
 
 ## 🟡 MEDIUM — `markSessionPaid` hardcodes `fromStatus: PENDING_PAYMENT` in OrderEvent — corrupts fraud-review audit trail *(1/5 agents)*
 **File:** `backend/src/modules/payments/payments.service.ts:246`
 `markSessionPaid` always writes `fromStatus: OrderStatus.PENDING_PAYMENT` to the `OrderEvent` audit log. But `reconcilePendingPayments` can call `markSessionPaid` on orders that were already routed to `FRAUD_REVIEW`. The resulting audit event shows `PENDING_PAYMENT → PAID` even when the real transition was `FRAUD_REVIEW → PAID` — corrupting the audit trail used for dispute evidence submission.
 **Fix:** Read `fromStatus` from `payment.order.status` at transaction time rather than hardcoding it.
+---
+
+---
+
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
+
+Agent agreement noted where 2+ agents independently identified the same issue.
+
 ---
 
 ## 🟡 MEDIUM — `CouponUse` has no cascade on `Coupon` deletion — `reconcileCurrentUses` FK error *(1/5 agents)*
@@ -275,6 +276,7 @@ const recentOrders = await this.prisma.order.count({
 });
 if (recentOrders > 3) throw new BadRequestException('Order velocity limit reached');
 ```
+**Implementation note:** The check lives in `PaymentsService.initiatePayment` (not `OrdersService`) against `snapshotCity` (the correct field name). Uses `HttpException(…, HttpStatus.TOO_MANY_REQUESTS)` since `TooManyRequestsException` is not exported by `@nestjs/common`. `checkout.integration.spec.ts`'s `prisma.order` mock also needed `count: jest.fn().mockResolvedValue(0)` — `initiatePayment` is called transitively via `OrdersService.createFromCart` in that suite.
 ---
 
 ## 🟡 MEDIUM — Sentry captures raw email addresses in `withScope` tags — GDPR/DPA violation *(1/5 agents)*
