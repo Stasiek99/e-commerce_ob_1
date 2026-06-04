@@ -4,12 +4,16 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
+import { StorageService } from '../storage/storage.service';
 
 @Processor('email')
 export class EmailQueueProcessor extends WorkerHost implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(EmailQueueProcessor.name);
 
-  constructor(private readonly emailService: EmailService) {
+  constructor(
+    private readonly emailService: EmailService,
+    private readonly storageService: StorageService,
+  ) {
     super();
   }
 
@@ -39,12 +43,14 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         break;
 
       case 'payment_confirmed_with_invoice': {
-        const pdfRes = await fetch(payload.invoiceUrl);
+        const { invoiceStoragePath, ...rest } = payload;
+        const invoiceUrl = await this.storageService.getInvoiceSignedUrl(invoiceStoragePath, 3600);
+        const pdfRes = await fetch(invoiceUrl);
         if (!pdfRes.ok) {
-          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${payload.invoiceUrl}`);
+          throw new Error(`Invoice PDF download failed (${pdfRes.status}): ${invoiceUrl}`);
         }
         const invoicePdf = Buffer.from(await pdfRes.arrayBuffer());
-        await this.emailService.sendPaymentConfirmedWithInvoice({ ...payload, invoicePdf });
+        await this.emailService.sendPaymentConfirmedWithInvoice({ ...rest, invoiceUrl, invoicePdf });
         break;
       }
 

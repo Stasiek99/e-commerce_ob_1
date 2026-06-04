@@ -6,6 +6,7 @@ import { EmailQueueService } from '../email-queue.service';
 import { EmailQueueProcessor } from '../email-queue.processor';
 import { EmailService } from '../email.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../../storage/storage.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -216,7 +217,7 @@ describe('EmailQueueService', () => {
   });
 
   describe('sendPaymentConfirmedWithInvoice', () => {
-    it('enqueues job with only invoiceUrl — no base64 blob in Redis payload', async () => {
+    it('enqueues job with only invoiceStoragePath — no base64 blob in Redis payload', async () => {
       const data = {
         to: 'user@test.com',
         orderNumber: 'ORD-2026-000001',
@@ -224,17 +225,18 @@ describe('EmailQueueService', () => {
         items: [{ name: 'Rose Perfume', quantity: 1, price: 14999 }],
         shippingCostInCents: 1500,
         totalInCents: 16499,
-        invoiceUrl: 'https://storage/inv.pdf',
+        invoiceStoragePath: 'invoices/FV-2026-000001.pdf',
       };
 
       await service.sendPaymentConfirmedWithInvoice(data);
 
       const [jobName, jobData] = queueAdd.mock.calls[0];
       expect(jobName).toBe('payment_confirmed_with_invoice');
-      expect(jobData.payload.invoiceUrl).toBe(data.invoiceUrl);
-      // PDF is fetched at processing time — no binary in Redis
+      expect(jobData.payload.invoiceStoragePath).toBe(data.invoiceStoragePath);
+      // PDF is fetched at processing time — no binary or pre-signed URL in Redis
       expect(jobData.payload).not.toHaveProperty('invoicePdfBase64');
       expect(jobData.payload).not.toHaveProperty('invoicePdf');
+      expect(jobData.payload).not.toHaveProperty('invoiceUrl');
     });
 
     it('preserves all scalar fields in the enqueued payload', async () => {
@@ -245,7 +247,7 @@ describe('EmailQueueService', () => {
         items: [{ name: 'Item', quantity: 2, price: 5000 }],
         shippingCostInCents: 900,
         totalInCents: 10900,
-        invoiceUrl: 'https://storage/inv.pdf',
+        invoiceStoragePath: 'invoices/FV-2026-000001.pdf',
       };
 
       await service.sendPaymentConfirmedWithInvoice(data);
@@ -253,7 +255,7 @@ describe('EmailQueueService', () => {
       const payload = queueAdd.mock.calls[0][1].payload;
       expect(payload.to).toBe('user@test.com');
       expect(payload.orderNumber).toBe('ORD-2026-000001');
-      expect(payload.invoiceUrl).toBe('https://storage/inv.pdf');
+      expect(payload.invoiceStoragePath).toBe('invoices/FV-2026-000001.pdf');
       expect(payload.totalInCents).toBe(10900);
     });
   });
@@ -365,7 +367,7 @@ describe('EmailQueueService', () => {
         items: [],
         shippingCostInCents: 900,
         totalInCents: 10000,
-        invoiceUrl: 'https://storage/inv.pdf',
+        invoiceStoragePath: 'invoices/FV-2026-000042.pdf',
       });
 
       const [, , opts] = queueAdd.mock.calls[0];
@@ -572,6 +574,7 @@ describe('EmailQueueService', () => {
 describe('EmailQueueProcessor', () => {
   let processor: EmailQueueProcessor;
   let emailService: jest.Mocked<EmailService>;
+  let storageService: jest.Mocked<StorageService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -601,11 +604,18 @@ describe('EmailQueueProcessor', () => {
             sendPayoutFailedAlert: jest.fn().mockResolvedValue(undefined),
           },
         },
+        {
+          provide: StorageService,
+          useValue: {
+            getInvoiceSignedUrl: jest.fn().mockResolvedValue('https://storage/signed-inv.pdf'),
+          },
+        },
       ],
     }).compile();
 
     processor = module.get(EmailQueueProcessor);
     emailService = module.get(EmailService);
+    storageService = module.get(StorageService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -908,9 +918,9 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendPayoutFailedAlert).toHaveBeenCalledWith(payload);
   });
 
-  // ── PDF fetched at processing time (no base64 in Redis) ──────────────────────
+  // ── PDF fetched at processing time (no pre-signed URL in Redis) ─────────────
 
-  describe('payment_confirmed_with_invoice — PDF fetched from invoiceUrl at processing time', () => {
+  describe('payment_confirmed_with_invoice — fresh signed URL generated at processing time', () => {
     const basePayload = {
       to: 'u@t.com',
       orderNumber: 'ORD-1',
@@ -918,7 +928,7 @@ describe('EmailQueueProcessor', () => {
       items: [{ name: 'Item', quantity: 1, price: 9999 }],
       shippingCostInCents: 900,
       totalInCents: 10899,
-      invoiceUrl: 'https://storage/inv.pdf',
+      invoiceStoragePath: 'invoices/FV-2026-000001.pdf',
     };
 
     let fetchSpy: jest.SpyInstance;
@@ -937,12 +947,20 @@ describe('EmailQueueProcessor', () => {
 
     afterEach(() => fetchSpy.mockRestore());
 
-    it('fetches the invoice PDF from invoiceUrl at processing time', async () => {
+    it('generates a fresh 1-hour signed URL from invoiceStoragePath at processing time', async () => {
       await processor.process(
         makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
 
-      expect(fetchSpy).toHaveBeenCalledWith(basePayload.invoiceUrl);
+      expect(storageService.getInvoiceSignedUrl).toHaveBeenCalledWith(basePayload.invoiceStoragePath, 3600);
+    });
+
+    it('fetches the invoice PDF from the freshly generated signed URL', async () => {
+      await processor.process(
+        makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
+      );
+
+      expect(fetchSpy).toHaveBeenCalledWith('https://storage/signed-inv.pdf');
     });
 
     it('passes the downloaded content as a Buffer to emailService', async () => {
@@ -965,7 +983,7 @@ describe('EmailQueueProcessor', () => {
       ).rejects.toThrow('Invoice PDF download failed');
     });
 
-    it('preserves all non-binary fields when calling emailService', async () => {
+    it('passes invoiceUrl (fresh signed URL) and other fields to emailService — no invoiceStoragePath in email call', async () => {
       await processor.process(
         makeJob({ type: 'payment_confirmed_with_invoice' as const, payload: basePayload }),
       );
@@ -974,10 +992,13 @@ describe('EmailQueueProcessor', () => {
         expect.objectContaining({
           to: basePayload.to,
           orderNumber: basePayload.orderNumber,
-          invoiceUrl: basePayload.invoiceUrl,
+          invoiceUrl: 'https://storage/signed-inv.pdf',
           totalInCents: basePayload.totalInCents,
         }),
       );
+      // invoiceStoragePath must NOT leak into the EmailService call — it's only used to re-sign
+      const callArg = (emailService.sendPaymentConfirmedWithInvoice as jest.Mock).mock.calls[0][0];
+      expect(callArg).not.toHaveProperty('invoiceStoragePath');
     });
   });
 
