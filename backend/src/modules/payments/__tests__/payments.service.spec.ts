@@ -1203,6 +1203,39 @@ describe('PaymentsService', () => {
 
       await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
     });
+
+    // ── Index coverage — query shape for @@index([status, createdAt]) and @@index([stripeCheckoutSessionId]) ──
+
+    it('queries payment.findMany with status=PENDING, 30-min cutoff, and non-null stripeCheckoutSessionId', async () => {
+      // Arrange: lock acquired, no stale rows (we only care about the WHERE shape)
+      prisma.payment.findMany.mockResolvedValue([]);
+      const before = Date.now();
+
+      // Act
+      await service.reconcilePendingPayments();
+
+      // Assert
+      expect(prisma.payment.findMany).toHaveBeenCalledTimes(1);
+      const [callArg] = prisma.payment.findMany.mock.calls[0];
+      expect(callArg.where.status).toBe(PaymentStatus.PENDING);
+      expect(callArg.where.stripeCheckoutSessionId).toEqual({ not: null });
+      // cutoff is Date.now() - 30 min; verify it's a Date within the expected range
+      const cutoff: Date = callArg.where.createdAt.lt;
+      expect(cutoff).toBeInstanceOf(Date);
+      const THIRTY_MIN_MS = 30 * 60 * 1000;
+      const after = Date.now();
+      expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - THIRTY_MIN_MS - 1000);
+      expect(cutoff.getTime()).toBeLessThanOrEqual(after - THIRTY_MIN_MS + 1000);
+    });
+
+    it('skips findMany entirely when Redis lock is already held by another process', async () => {
+      // Redis NX returns null when key already exists (lock held)
+      redis.set.mockResolvedValueOnce(null);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.payment.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('partialRefund', () => {

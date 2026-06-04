@@ -466,6 +466,8 @@ model Payment {
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt
 
+  @@index([status, createdAt])
+  @@index([stripeCheckoutSessionId])
   @@map("payments")
 }
 
