@@ -724,6 +724,7 @@ export class ProductsService {
   // Returns the same product objects enriched with `lowestPrice30dInCents` on
   // every variant. Falls back to the current price when no history exists yet.
   private async attachOmnibusData<T extends {
+    avgRating?: Prisma.Decimal | number | null;
     variants: Array<{ id: string; priceInCents: number; compareAtPriceInCents?: number | null }>;
   }>(products: T[]): Promise<T[]> {
     const promoVariantIds = products.flatMap(p =>
@@ -745,11 +746,12 @@ export class ProductsService {
 
     return products.map(p => ({
       ...p,
+      avgRating: p.avgRating != null ? Number(p.avgRating) : null,
       variants: p.variants.map(v => ({
         ...v,
         lowestPrice30dInCents: minMap.get(v.id) ?? v.priceInCents,
       })),
-    }));
+    })) as unknown as T[];
   }
 
   private invalidateProductCaches(): void {

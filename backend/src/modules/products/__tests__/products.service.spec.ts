@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { ProductsService } from '../products.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailQueueService } from '../../email/email-queue.service';
@@ -1206,5 +1207,79 @@ describe('ProductsService — deleteVariant', () => {
     expect(mockPrisma.orderItem.count).toHaveBeenCalledWith({
       where: { productVariantId: 'var-1' },
     });
+  });
+});
+
+// ─── avgRating Decimal → number normalization ─────────────────────────────────
+// Regression guard: attachOmnibusData must convert Prisma.Decimal avgRating to a
+// plain JS number before returning. Without this, JSON.stringify serialises the
+// Decimal as a string ("4.65"), breaking frontend .toFixed() and numeric filters.
+
+describe('ProductsService — avgRating Decimal normalization', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('converts Prisma.Decimal avgRating to a plain JS number', async () => {
+    const productWithDecimal = makeProduct({ avgRating: new Prisma.Decimal('4.65') });
+    mockPrisma.product.findFirst.mockResolvedValue(productWithDecimal);
+
+    const result = await service.findBySlug('test-perfume') as any;
+
+    expect(typeof result.avgRating).toBe('number');
+    expect(result.avgRating).toBe(4.65);
+  });
+
+  it('preserves null when avgRating is null', async () => {
+    mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ avgRating: null }));
+
+    const result = await service.findBySlug('test-perfume') as any;
+
+    expect(result.avgRating).toBeNull();
+  });
+
+  it('returns an avgRating that supports toFixed(1) without throwing', async () => {
+    const productWithDecimal = makeProduct({ avgRating: new Prisma.Decimal('4.65') });
+    mockPrisma.product.findFirst.mockResolvedValue(productWithDecimal);
+
+    const result = await service.findBySlug('test-perfume') as any;
+
+    expect(() => (result.avgRating as number).toFixed(1)).not.toThrow();
+    expect((result.avgRating as number).toFixed(1)).toBe('4.7');
+  });
+
+  it('stores avgRating as a JSON number in the Redis cache, not a Decimal string', async () => {
+    const productWithDecimal = makeProduct({ avgRating: new Prisma.Decimal('4.20') });
+    mockPrisma.product.findUnique.mockResolvedValue({ id: 'current-id', categoryId: 'cat-1' });
+    mockPrisma.product.findMany.mockResolvedValue([productWithDecimal]);
+
+    await service.findRelated('test-perfume');
+
+    const cachedJson: string = mockRedis.setex.mock.calls[0]?.[2];
+    expect(cachedJson).toBeDefined();
+    const cached = JSON.parse(cachedJson) as Array<{ avgRating: unknown }>;
+    expect(typeof cached[0].avgRating).toBe('number');
+    expect(cached[0].avgRating).toBe(4.2);
   });
 });

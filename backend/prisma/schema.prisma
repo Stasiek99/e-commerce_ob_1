@@ -269,7 +269,7 @@ model Product {
   updatedAt        DateTime @updatedAt
 
   reviewCount  Int     @default(0)
-  avgRating    Float?
+  avgRating    Decimal? @db.Decimal(3, 2)
 
   variants      ProductVariant[]
   images        ProductImage[]

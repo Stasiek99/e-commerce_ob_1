@@ -224,19 +224,6 @@ if (existing) throw new ConflictException('A return request for this order is al
 **Fix:** Read `fromStatus` from `payment.order.status` at transaction time rather than hardcoding it.
 ---
 
----
-
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
-
-Agent agreement noted where 2+ agents independently identified the same issue.
-
----
 
 ## 🟡 MEDIUM — `CouponUse` has no cascade on `Coupon` deletion — `reconcileCurrentUses` FK error *(1/5 agents)*
 **File:** `backend/prisma/schema.prisma:551`
@@ -278,6 +265,7 @@ if (recentOrders > 3) throw new BadRequestException('Order velocity limit reache
 ```
 **Implementation note:** The check lives in `PaymentsService.initiatePayment` (not `OrdersService`) against `snapshotCity` (the correct field name). Uses `HttpException(…, HttpStatus.TOO_MANY_REQUESTS)` since `TooManyRequestsException` is not exported by `@nestjs/common`. `checkout.integration.spec.ts`'s `prisma.order` mock also needed `count: jest.fn().mockResolvedValue(0)` — `initiatePayment` is called transitively via `OrdersService.createFromCart` in that suite.
 ---
+
 
 ## 🟡 MEDIUM — Sentry captures raw email addresses in `withScope` tags — GDPR/DPA violation *(1/5 agents)*
 **Files:** `backend/src/modules/email/email-webhook.controller.ts:89-101`, `backend/src/modules/email/email.service.ts:305-337`
@@ -355,6 +343,17 @@ If a user submits a review, the admin rejects it, and the user tries to resubmit
 ## 🟢 LOW — No `security.txt` and no documented GDPR Art. 33 breach-notification process *(1/5 agents)*
 No `/.well-known/security.txt`, no DPO contact on the privacy page, no internal runbook for the 72-hour UODO notification window. For a store processing payment data and health-adjacent (fragrance sensitivity/preference) data, this is a gap that regulators specifically look for in audits.
 **Fix:** Add `/.well-known/security.txt` (auto-served by Vercel from `public/`), publish a `iod@<domain>.pl` contact on the privacy policy page, and document the breach-notification runbook in an internal wiki.
+---
+
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
+
+Agent agreement noted where 2+ agents independently identified the same issue.
 ---
 
 ## Prioritised Fix Order
