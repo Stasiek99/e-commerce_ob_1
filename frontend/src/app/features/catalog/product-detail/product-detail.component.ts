@@ -55,6 +55,7 @@ interface ProductDetail {
   avgRating?: number | null;
   reviewCount?: number;
   sdsUrl?: string | null;
+  allergens?: string[] | null;
   ingredients?: string | null;
   warnings?: string | null;
   paoMonths?: number | null;
@@ -320,14 +321,25 @@ const CATEGORY_LABELS: Record<string, string> = {
             </div>
           }
 
-          <!-- PAO + Ingredients + Warnings (EU Cosmetics Reg. 1223/2009) -->
-          @if (product()!.paoMonths || product()!.ingredients || product()!.warnings) {
+          <!-- PAO + Allergens + Ingredients + Warnings (EU Cosmetics Reg. 1223/2009 Art. 19(1)(f)) -->
+          @if (product()!.paoMonths || product()!.allergens?.length || product()!.ingredients || product()!.warnings) {
             <div class="detail__compliance">
 
               @if (product()!.paoMonths) {
                 <div class="detail__pao">
                   <span class="detail__pao-symbol" aria-hidden="true">{{ product()!.paoMonths }}M</span>
                   <span class="detail__pao-label">Okres przydatności po otwarciu: <strong>{{ product()!.paoMonths }} miesięcy</strong></span>
+                </div>
+              }
+
+              @if (product()!.allergens?.length) {
+                <div class="detail__allergens-section">
+                  <p class="detail__allergens-label">Składniki alergenne (EC 1223/2009 Zał. III)</p>
+                  <ul class="detail__allergens-list">
+                    @for (a of product()!.allergens!; track $index) {
+                      <li>{{ a }}</li>
+                    }
+                  </ul>
                 </div>
               }
 
@@ -763,6 +775,17 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__pao-label {
       font-size: 13px;
       color: var(--color-secondary);
+    }
+    .detail__allergens-section { }
+    .detail__allergens-label {
+      font-size: 12px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--color-secondary); margin: 0 0 8px;
+    }
+    .detail__allergens-list {
+      margin: 0; padding: 0 0 0 16px; list-style: disc;
+    }
+    .detail__allergens-list li {
+      font-size: 13px; color: var(--color-primary); line-height: 1.7;
     }
     .detail__ingredients-section { }
     .detail__inci-body {
