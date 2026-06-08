@@ -63,3 +63,44 @@ describe('CreateOrderDto — guestEmail validation', () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 });
+
+// ── CreateOrderDto — newAddress.country validation (UN 1266 DG gate) ─────────
+// Fragrances are classified as UN 1266 flammable liquid. Shipping is blocked
+// to destinations outside Poland. @IsIn(['PL']) enforces this at DTO level.
+
+async function getCountryErrors(country: unknown) {
+  const dto = plainToInstance(CreateOrderDto, {
+    carrierCode: CarrierCode.INPOST,
+    newAddress: {
+      firstName: 'Jan', lastName: 'Kowalski',
+      street: 'ul. Testowa 1', city: 'Warszawa',
+      postalCode: '00-001', phone: '+48500000000',
+      country,
+    },
+  });
+  const errors = await validate(dto, { skipMissingProperties: false });
+  const nestedErrors = errors.find((e) => e.property === 'newAddress');
+  return nestedErrors?.children?.filter((e) => e.property === 'country') ?? [];
+}
+
+describe('CreateOrderDto — newAddress.country validation', () => {
+  it('passes when country is absent (defaults to PL in the service)', async () => {
+    const errors = await getCountryErrors(undefined);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('passes when country is PL', async () => {
+    const errors = await getCountryErrors('PL');
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects non-PL country code — DE', async () => {
+    const errors = await getCountryErrors('DE');
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('rejects non-PL country code — GB', async () => {
+    const errors = await getCountryErrors('GB');
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});

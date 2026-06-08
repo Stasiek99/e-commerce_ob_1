@@ -146,6 +146,11 @@ export class OrdersService implements OnModuleInit {
         where: { id: dto.addressId, userId },
       });
       if (!address) throw new NotFoundException('Address not found');
+      if (address.country !== 'PL') {
+        throw new BadRequestException(
+          'Shipping is only available to Poland (PL) — UN 1266 dangerous goods restriction.',
+        );
+      }
     } else if (dto.newAddress) {
       address = { country: 'PL', ...dto.newAddress };
     } else {

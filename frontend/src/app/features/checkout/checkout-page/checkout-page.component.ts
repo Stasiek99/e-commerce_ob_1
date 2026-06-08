@@ -207,6 +207,11 @@ interface AppliedCoupon {
                 </div>
               </div>
 
+              <!-- DG shipping restriction notice -->
+              <p class="shipping-restriction-notice">
+                🇵🇱 Dostawa wyłącznie na terytorium Polski. Perfumy klasyfikowane są jako materiały niebezpieczne UN 1266 i nie mogą być wysyłane za granicę drogą lotniczą.
+              </p>
+
               <!-- Phone + email (2-column) -->
               <div class="addr-row-2">
                 <div>
@@ -520,6 +525,8 @@ interface AppliedCoupon {
     .street-hint--checking { color: var(--color-primary); }
     .street-hint--found    { color: #2a9d4e; }
     .street-hint--warning  { color: #c47a00; }
+
+    .shipping-restriction-notice { font-size: 12px; color: var(--color-secondary); margin: -4px 0 0; line-height: 1.5; }
 
     /* Carrier */
     .carrier-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; border: none; padding: 0; }

@@ -705,6 +705,21 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    it('throws BadRequestException when saved address has a non-PL country (UN 1266 DG gate)', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.address.findFirst.mockResolvedValue({
+        firstName: 'Hans', lastName: 'M', street: 'Hauptstr. 1',
+        city: 'Berlin', postalCode: '10115', country: 'DE', phone: '+49301234567',
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          addressId: 'addr-de',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     // ─── IDOR guard: guest + saved addressId ─────────────────────────────────
 
     it('throws BadRequestException when a guest supplies an addressId — IDOR guard', async () => {
