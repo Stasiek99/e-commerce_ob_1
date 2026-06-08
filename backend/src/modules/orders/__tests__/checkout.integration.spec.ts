@@ -139,6 +139,10 @@ describe('Checkout Integration Flow', () => {
             orderEvent: { create: jest.fn() },
             payment: { findUnique: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'payment-1' }), update: jest.fn().mockResolvedValue({}) },
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            outboxMessage: {
+              create: jest.fn().mockResolvedValue({ id: 'outbox-1' }),
+              update: jest.fn().mockResolvedValue({}),
+            },
             $transaction: jest.fn(),
           },
         },
@@ -200,6 +204,22 @@ describe('Checkout Integration Flow', () => {
     prisma = module.get(PrismaService);
     stripeClient = module.get(StripeClient);
     emailService = module.get(EmailQueueService);
+
+    // Default for payment webhook path (callback form). Order creation tests
+    // override this in their own beforeEach with buildTransactionMock().
+    prisma.$transaction.mockImplementation(async (fn: any) => {
+      if (typeof fn === 'function') {
+        return fn({
+          processedStripeEvent: prisma.processedStripeEvent,
+          payment: prisma.payment,
+          order: prisma.order,
+          orderEvent: prisma.orderEvent,
+          productVariant: prisma.productVariant,
+          outboxMessage: prisma.outboxMessage,
+        });
+      }
+      return Promise.all(fn);
+    });
   });
 
   describe('happy path: cart → order → payment initiated', () => {
@@ -341,7 +361,6 @@ describe('Checkout Integration Flow', () => {
   describe('webhook: checkout.session.completed → order marked PAID', () => {
     it('updates payment to COMPLETED and order to PAID atomically', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await paymentsService.handleWebhookEvent(
         buildStripeEvent('checkout.session.completed', mockStripeSession),
@@ -349,7 +368,7 @@ describe('Checkout Integration Flow', () => {
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       const txArgs = prisma.$transaction.mock.calls[0][0];
-      expect(Array.isArray(txArgs)).toBe(true);
+      expect(typeof txArgs).toBe('function');
       // Invoice + email chain is fire-and-forget; flush microtasks before asserting
       await Promise.resolve();
       expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalledWith(

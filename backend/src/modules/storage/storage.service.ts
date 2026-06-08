@@ -46,6 +46,9 @@ export class StorageService {
     return { url: data.publicUrl, path };
   }
 
+  // Returns the storage path (e.g. "labels/inpost-123.pdf"), NOT a public URL.
+  // The shipping-labels bucket must be set to private in Supabase; callers
+  // must use getShippingLabelSignedUrl() to produce a time-limited download link.
   async uploadShippingLabel(pdfBuffer: Buffer, filename: string): Promise<string> {
     const path = `labels/${filename}`;
 
@@ -58,11 +61,23 @@ export class StorageService {
       await new Promise<void>((r) => setTimeout(r, 500 * 2 ** attempt));
     }
 
-    const { data } = this.supabase.storage
-      .from(SHIPPING_LABELS_BUCKET)
-      .getPublicUrl(path);
+    return path;
+  }
 
-    return data.publicUrl;
+  async getShippingLabelSignedUrl(storagePath: string, expiresInSeconds = 14_400): Promise<string> {
+    const { data, error } = await this.supabase.storage
+      .from(SHIPPING_LABELS_BUCKET)
+      .createSignedUrl(storagePath, expiresInSeconds);
+
+    if (error || !data) throw new Error(`Label signing failed: ${error?.message}`);
+    return data.signedUrl;
+  }
+
+  async deleteShippingLabel(storagePath: string): Promise<void> {
+    const { error } = await this.supabase.storage
+      .from(SHIPPING_LABELS_BUCKET)
+      .remove([storagePath]);
+    if (error) throw new Error(`Label delete failed: ${error.message}`);
   }
 
   async uploadInvoice(pdfBuffer: Buffer, filename: string): Promise<string> {

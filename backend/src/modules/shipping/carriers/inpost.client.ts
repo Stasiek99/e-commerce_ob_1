@@ -30,9 +30,10 @@ export class InpostClient {
   private readonly mockShipments = new Map<string, MockShipment>();
 
   constructor(private readonly configService: ConfigService) {
-    this.mockEnabled =
-      configService.get<string>('INPOST_MOCK_ENABLED') === 'true' ||
-      !configService.get<string>('INPOST_ORGANIZATION_ID');
+    // Only the explicit flag enables mock mode. The previous OR clause
+    // (!INPOST_ORGANIZATION_ID) silently activated mocks when the env var was
+    // absent, writing fake tracking URLs to the DB in production.
+    this.mockEnabled = configService.get<string>('INPOST_MOCK_ENABLED') === 'true';
 
     const sandbox = configService.get<string>('INPOST_SANDBOX') === 'true';
     const baseURL = sandbox

@@ -93,6 +93,13 @@ enum EmailTokenType {
   MAGIC_LINK
 }
 
+enum ProductStatus {
+  ACTIVE
+  OUT_OF_STOCK
+  DISCONTINUED
+  COMING_SOON
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
 model User {
@@ -113,6 +120,8 @@ model User {
   analyticsConsentAt DateTime?
   emailBounced       Boolean   @default(false)
   emailBouncedAt     DateTime?
+  emailComplained       Boolean   @default(false)
+  emailComplainedAt     DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -243,6 +252,8 @@ model Product {
   categoryId       String
   category         Category @relation(fields: [categoryId], references: [id])
   brand            String?
+  status               ProductStatus @default(ACTIVE)
+  estimatedRestockDate DateTime?
   isActive         Boolean  @default(true)
   isFeatured       Boolean  @default(false)
   scentFamily      String?
@@ -415,8 +426,11 @@ model Order {
   invoiceNumber       String? @unique
   isRead        Boolean @default(false)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  invoiceCorrections InvoiceCorrection[]
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  retentionExpiresAt DateTime?
 
   items          OrderItem[]
   payment        Payment?
@@ -428,6 +442,7 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  @@index([retentionExpiresAt])
   @@map("orders")
 }
 
@@ -708,4 +723,46 @@ model ConsentLog {
   consentedAt  DateTime @default(now()) @map("consented_at")
 
   @@map("consent_logs")
+}
+
+// ─── Transactional Outbox ─────────────────────────────────────────────────────
+// Guarantees at-least-once delivery of post-payment notifications.
+// A row is inserted atomically inside the Stripe payment $transaction; a
+// background poller processes PENDING rows and marks them PROCESSED.
+// If the process crashes between the transaction commit and the in-process
+// dispatch, the poller recovers without relying on Stripe's retry window.
+
+model OutboxMessage {
+  id          String    @id @default(uuid())
+  type        String
+  orderId     String?
+  payload     Json      @default("{}")
+  status      String    @default("PENDING")
+  retries     Int       @default(0)
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@map("outbox_messages")
+}
+
+// ─── Invoice Corrections (faktura korygująca) ─────────────────────────────────
+// Art. 106j Ustawy o VAT: a corrective invoice is required whenever the taxable
+// amount decreases (partial refund). Each partial cancellation generates one row.
+// The correctiveInvoiceNumber follows its own sequential series (FK/YYYY/NNNNNN).
+
+model InvoiceCorrection {
+  id                      String   @id @default(uuid())
+  orderId                 String
+  order                   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  correctiveInvoiceNumber String   @unique
+  correctiveStoragePath   String
+  correctedAmountInCents  Int
+  refundReasonCode        String   @default("PARTIAL_CANCELLATION")
+  issuedAt                DateTime @default(now())
+  createdAt               DateTime @default(now())
+
+  @@index([orderId])
+  @@map("invoice_corrections")
 }

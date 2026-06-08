@@ -33,12 +33,17 @@ export class PaymentsService {
     });
 
     // Pre-checkout velocity guard: BLIK/P24 settles before Stripe Radar can block,
-    // so we check for suspicious order bursts from the same city before issuing a session.
+    // so we rate-limit payment initiations per identity (userId for authenticated users,
+    // snapshotEmail for guests). City-level checks are useless — Warsaw has 1.8M residents.
+    // Stripe Radar handles cross-card fraud scoring after session creation.
     const windowStart = new Date(Date.now() - 30 * 60 * 1000);
+    const velocityWhere = order.userId
+      ? { userId: order.userId }
+      : { snapshotEmail: order.snapshotEmail };
     const recentOrderCount = await this.prisma.order.count({
-      where: { snapshotCity: order.snapshotCity, createdAt: { gte: windowStart } },
+      where: { ...velocityWhere, createdAt: { gte: windowStart } },
     });
-    if (recentOrderCount > 3) {
+    if (recentOrderCount > 5) {
       throw new HttpException('Order velocity limit reached', HttpStatus.TOO_MANY_REQUESTS);
     }
 
@@ -258,15 +263,19 @@ export class PaymentsService {
     const isFraudFlagged = radarRiskLevel === 'elevated' || radarRiskLevel === 'highest';
     const newOrderStatus = isFraudFlagged ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
 
+    let outboxId: string | undefined;
     try {
-      await this.prisma.$transaction([
+      // Callback form allows returning the outbox row ID so the fast-path dispatch
+      // can mark it PROCESSED immediately — the poller then skips it.
+      outboxId = await this.prisma.$transaction(async (tx) => {
         // Always insert a session-scoped key so concurrent callers (webhook + reconcile cron)
         // racing on the same session both hit P2002 — only one commit wins.
-        this.prisma.processedStripeEvent.create({ data: { eventId: `paid-${session.id}` } }),
+        await tx.processedStripeEvent.create({ data: { eventId: `paid-${session.id}` } });
         // Additionally record the webhook event ID when present to deduplicate
         // multiple deliveries of the exact same Stripe event.
-        ...(eventId ? [this.prisma.processedStripeEvent.create({ data: { eventId } })] : []),
-        this.prisma.payment.update({
+        if (eventId) await tx.processedStripeEvent.create({ data: { eventId } });
+
+        await tx.payment.update({
           where: { id: payment.id },
           data: {
             status: PaymentStatus.COMPLETED,
@@ -274,12 +283,12 @@ export class PaymentsService {
             paidAt: new Date(),
             rawWebhookPayload: session as unknown as object,
           },
-        }),
-        this.prisma.order.update({
+        });
+        await tx.order.update({
           where: { id: payment.orderId },
           data: { status: newOrderStatus },
-        }),
-        this.prisma.orderEvent.create({
+        });
+        await tx.orderEvent.create({
           data: {
             orderId: payment.orderId,
             fromStatus: payment.order.status as OrderStatus,
@@ -289,8 +298,19 @@ export class PaymentsService {
               ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
               : `Stripe session ${session.id}`,
           },
-        }),
-      ]);
+        });
+
+        // Insert outbox row atomically alongside the payment flip so a crash
+        // between this commit and the in-process dispatch can be recovered by
+        // the OutboxProcessorService poller without relying on Stripe retries.
+        if (!isFraudFlagged) {
+          const outbox = await tx.outboxMessage.create({
+            data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: payment.orderId },
+          });
+          return outbox.id;
+        }
+        return undefined;
+      });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         this.logger.warn(
@@ -343,7 +363,16 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
+    // Fast path: dispatch notifications immediately for low latency.
+    // If the process crashes here before the outbox can be marked PROCESSED,
+    // OutboxProcessorService will recover after its 30s delay.
     this.dispatchPostPaymentNotifications(payment.order, paymentIntentId);
+
+    if (outboxId) {
+      this.prisma.outboxMessage
+        .update({ where: { id: outboxId }, data: { status: 'PROCESSED', processedAt: new Date() } })
+        .catch((err) => this.logger.warn(`Outbox mark-processed failed: ${(err as Error).message}`));
+    }
   }
 
   /**
@@ -727,6 +756,9 @@ export class PaymentsService {
   async reconcilePendingPayments() {
     const acquired = await this.redis.set('cron:reconcile-payments:lock', '1', 'EX', 540, 'NX');
     if (!acquired) return;
+
+    // Record liveness so GET /health can expose lastReconcileAt for pre-promotion validation.
+    await this.redis.set('cron:reconcile-payments:lastRun', new Date().toISOString());
 
     const cutoff = new Date(Date.now() - 30 * 60 * 1000);
     const stale = await this.prisma.payment.findMany({

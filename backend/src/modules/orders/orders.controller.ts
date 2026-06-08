@@ -74,6 +74,12 @@ export class OrdersController {
     return this.ordersService.generateInvoiceForUser(id, user.id);
   }
 
+  @Get(':id/corrective-invoice')
+  @UseGuards(JwtAuthGuard)
+  getCorrectiveInvoice(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.ordersService.getCorrectiveInvoiceForUser(id, user.id);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   getMyOrder(@CurrentUser() user: User, @Param('id') id: string) {
@@ -170,5 +176,13 @@ export class OrdersController {
   @HttpCode(HttpStatus.OK)
   generateInvoice(@Param('id') id: string) {
     return this.ordersService.generateInvoice(id);
+  }
+
+  @Get('admin/:id/corrective-invoice')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  getCorrectiveInvoiceAdmin(@Param('id') id: string) {
+    return this.ordersService.getCorrectiveInvoiceAdmin(id);
   }
 }

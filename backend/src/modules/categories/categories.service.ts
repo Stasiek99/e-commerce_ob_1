@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 
@@ -48,6 +48,11 @@ export class CategoriesService {
   }) {
     await this.findById(id);
     const { parentId, ...rest } = data;
+    if (parentId) {
+      if (await this.wouldCreateCycle(id, parentId)) {
+        throw new BadRequestException('Setting this parent would create a circular reference.');
+      }
+    }
     const prismaData: Prisma.CategoryUpdateInput = { ...rest };
     if (parentId !== undefined) {
       prismaData.parent = parentId ? { connect: { id: parentId } } : { disconnect: true };
@@ -70,5 +75,21 @@ export class CategoriesService {
     const cat = await this.prisma.category.findUnique({ where: { id } });
     if (!cat) throw new NotFoundException('Category not found');
     return cat;
+  }
+
+  private async wouldCreateCycle(categoryId: string, newParentId: string): Promise<boolean> {
+    if (categoryId === newParentId) return true;
+    let currentId: string | null = newParentId;
+    for (let depth = 0; depth < 20; depth++) {
+      const cat: { parentId: string | null } | null =
+        await this.prisma.category.findUnique({
+          where: { id: currentId! },
+          select: { parentId: true },
+        });
+      if (!cat || cat.parentId === null) return false;
+      if (cat.parentId === categoryId) return true;
+      currentId = cat.parentId;
+    }
+    return false;
   }
 }

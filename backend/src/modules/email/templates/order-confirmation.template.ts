@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 interface Item {
   name: string;
   quantity: number;
@@ -47,7 +49,7 @@ export function orderConfirmationTemplate(data: Data): { subject: string; html: 
 <html lang="pl">
 <head><meta charset="UTF-8"><title>Potwierdzenie zamówienia</title></head>
 <body style="font-family:sans-serif;color:#333;max-width:600px;margin:0 auto;padding:24px">
-  <h1 style="color:#1a1a1a;font-size:24px">Dziękujemy za zamówienie, ${data.firstName}!</h1>
+  <h1 style="color:#1a1a1a;font-size:24px">Dziękujemy za zamówienie, ${escapeHtml(data.firstName)}!</h1>
   <p>Twoje zamówienie nr <strong>#${data.orderNumber}</strong> zostało przyjęte i oczekuje na płatność.</p>
   ${deliveryLine}
   <table style="width:100%;border-collapse:collapse;margin:24px 0">

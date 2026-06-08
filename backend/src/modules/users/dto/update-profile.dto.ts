@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsOptional,
   IsString,
   Matches,
@@ -44,4 +45,8 @@ export class UpdateProfileDto {
   @Matches(/^\d{10}$/, { message: 'NIP must be exactly 10 digits' })
   @Validate(NipChecksumConstraint)
   nip?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  marketingConsent?: boolean;
 }

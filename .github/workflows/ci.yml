@@ -34,6 +34,18 @@ jobs:
       - name: Build backend
         run: pnpm build:backend
 
+      - name: Upload Sentry source maps
+        if: github.event_name == 'push'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          SENTRY_RELEASE: ${{ github.sha }}
+        run: |
+          [ -z "$SENTRY_AUTH_TOKEN" ] && echo "SENTRY_AUTH_TOKEN not configured — skipping sourcemaps upload" && exit 0
+          npx --yes @sentry/cli@2 sourcemaps inject ./backend/dist
+          npx --yes @sentry/cli@2 sourcemaps upload --release="$SENTRY_RELEASE" ./backend/dist
+
       - name: Build frontend
         run: pnpm build:frontend
 

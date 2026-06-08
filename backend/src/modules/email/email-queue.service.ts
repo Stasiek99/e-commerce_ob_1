@@ -40,10 +40,14 @@ export class EmailQueueService {
     if (to) {
       const user = await this.prisma.user.findFirst({
         where: { email: to },
-        select: { emailBounced: true },
+        select: { emailBounced: true, emailComplained: true },
       });
       if (user?.emailBounced) {
         this.logger.warn(`Email job "${name}" suppressed — ${to} has a hard bounce on record`);
+        return;
+      }
+      if (user?.emailComplained) {
+        this.logger.warn(`Email job "${name}" suppressed — ${to} has filed a spam complaint`);
         return;
       }
     }

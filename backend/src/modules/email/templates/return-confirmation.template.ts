@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 interface ReturnItem {
   productName: string;
   quantity: number;
@@ -34,7 +36,7 @@ export function returnConfirmationTemplate(data: {
       (item) => `
       <tr>
         <td style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; color: #1a1a1a;">
-          ${item.productName}
+          ${escapeHtml(item.productName)}
         </td>
         <td style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px;
                    color: #6b6b6b; text-align: right; width: 60px;">
@@ -70,7 +72,7 @@ export function returnConfirmationTemplate(data: {
             </h1>
             ${typeBadge}
             <p style="margin:0 0 24px;font-size:15px;color:#6b6b6b;line-height:1.6;">
-              Drogi/a <strong style="color:#1a1a1a;">${data.firstName}</strong>, zgłoszenie
+              Drogi/a <strong style="color:#1a1a1a;">${escapeHtml(data.firstName)}</strong>, zgłoszenie
               ${typeLabel} dotyczące zamówienia
               <strong style="color:#1a1a1a;">#${data.orderNumber}</strong>
               zostało przyjęte. Skontaktujemy się z Tobą w ciągu 2 dni roboczych.

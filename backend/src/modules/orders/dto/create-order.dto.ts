@@ -3,6 +3,7 @@ import {
   IsDateString,
   IsEmail,
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -45,8 +46,7 @@ class NewAddressDto {
   postalCode!: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(2)
+  @IsIn(['PL'], { message: 'Shipping is only available to Poland (PL) — UN 1266 dangerous goods restriction' })
   country?: string;
 
   @IsString()
@@ -108,7 +108,4 @@ export class CreateOrderDto {
   @MaxLength(32)
   couponCode?: string;
 
-  @IsOptional()
-  @IsBoolean()
-  marketingConsent?: boolean;
 }

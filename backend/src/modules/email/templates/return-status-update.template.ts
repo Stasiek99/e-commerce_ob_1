@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 export function returnStatusUpdateTemplate(data: {
   firstName: string;
   orderNumber: string;
@@ -58,7 +60,7 @@ export function returnStatusUpdateTemplate(data: {
            Wiadomość od obsługi klienta
          </p>
          <p style="margin:0;font-size:14px;color:#1a1a1a;line-height:1.6;">
-           ${data.adminNote}
+           ${escapeHtml(data.adminNote)}
          </p>
        </div>`
     : '';
@@ -93,7 +95,7 @@ export function returnStatusUpdateTemplate(data: {
               ${cfg.heading}
             </h1>
             <p style="margin:0 0 20px;font-size:15px;color:#6b6b6b;line-height:1.6;">
-              Drogi/a <strong style="color:#1a1a1a;">${data.firstName}</strong>,
+              Drogi/a <strong style="color:#1a1a1a;">${escapeHtml(data.firstName)}</strong>,
               ${cfg.body}
             </p>
 

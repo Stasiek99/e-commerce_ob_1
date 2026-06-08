@@ -159,11 +159,13 @@ export const routes: Routes = [
   },
   {
     path: 'wishlist',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/wishlist/wishlist.component').then((m) => m.WishlistComponent),
   },
   {
     path: 'returns',
+    canActivate: [authGuard],
     loadComponent: () =>
       import('./features/returns/return-request/return-request.component').then(
         (m) => m.ReturnRequestComponent,

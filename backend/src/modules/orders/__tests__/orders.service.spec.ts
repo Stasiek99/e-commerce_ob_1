@@ -705,6 +705,21 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
+    it('throws BadRequestException when saved address has a non-PL country (UN 1266 DG gate)', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.address.findFirst.mockResolvedValue({
+        firstName: 'Hans', lastName: 'M', street: 'Hauptstr. 1',
+        city: 'Berlin', postalCode: '10115', country: 'DE', phone: '+49301234567',
+      });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          addressId: 'addr-de',
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     // ─── IDOR guard: guest + saved addressId ─────────────────────────────────
 
     it('throws BadRequestException when a guest supplies an addressId — IDOR guard', async () => {
@@ -1717,6 +1732,75 @@ describe('OrdersService', () => {
 
         await expect(service.updateStatus('o-1', target)).resolves.not.toThrow();
       }
+    });
+
+    // ── DISPUTE_HOLD → CANCELLED guard ────────────────────────────────────────
+    // Admins must not manually cancel a disputed order — the dispute may still
+    // be pending in Stripe. Cancelling early desynchronises DB state from Stripe:
+    // when charge.dispute.closed arrives, handleDisputeClosed finds CANCELLED and
+    // silently exits, leaving the dispute unresolved. The only allowed exit from
+    // DISPUTE_HOLD is via the webhook.
+
+    it('throws ConflictException when admin attempts DISPUTE_HOLD → CANCELLED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('includes guidance to wait for the webhook in the ConflictException message', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow('charge.dispute.closed');
+    });
+
+    it('does not open a transaction when the DISPUTE_HOLD → CANCELLED guard fires', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('does not restore stock when the DISPUTE_HOLD → CANCELLED guard fires', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(ConflictException);
+
+      // $transaction never opened means no variant.update was ever called
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('allows DISPUTE_HOLD → PAID (legitimate dispute win resolved via admin)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.PAID),
+      ).resolves.not.toThrow();
     });
   });
 
@@ -3386,9 +3470,9 @@ describe('OrdersService', () => {
     });
   });
 
-  // ── GDPR: marketingConsent guard on dispatchReviewRequestEmail ───────────────
+  // ── Review-request email — transactional (no marketingConsent gate) ──────────
 
-  describe('dispatchReviewRequestEmail — GDPR marketingConsent guard', () => {
+  describe('dispatchReviewRequestEmail — transactional review emails', () => {
     it('does not send review email when order is not found', async () => {
       prisma.order.findUnique.mockResolvedValue(null);
       const emailService = (service as any).emailService;
@@ -3398,42 +3482,37 @@ describe('OrdersService', () => {
       expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
     });
 
-    it('does not send review email when order has no linked user (guest checkout)', async () => {
+    it('sends review email for guest checkout (transactional — no consent required)', async () => {
       prisma.order.findUnique.mockResolvedValue({
         orderNumber: 'ORD-001',
         snapshotEmail: 'guest@example.com',
         snapshotFirstName: 'Guest',
-        user: null,
-        items: [],
+        items: [
+          {
+            productVariant: {
+              product: {
+                name: 'Amber Wood',
+                slug: 'amber-wood',
+                images: [{ url: 'https://cdn.example.com/amber.jpg' }],
+              },
+            },
+          },
+        ],
       });
       const emailService = (service as any).emailService;
 
       await (service as any).dispatchReviewRequestEmail('order-guest');
 
-      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+      expect(emailService.sendReviewRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'guest@example.com' }),
+      );
     });
 
-    it('does not send review email when user has marketingConsent: false', async () => {
-      prisma.order.findUnique.mockResolvedValue({
-        orderNumber: 'ORD-001',
-        snapshotEmail: 'buyer@example.com',
-        snapshotFirstName: 'Jan',
-        user: { marketingConsent: false },
-        items: [],
-      });
-      const emailService = (service as any).emailService;
-
-      await (service as any).dispatchReviewRequestEmail('order-no-consent');
-
-      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
-    });
-
-    it('sends review email when user has marketingConsent: true', async () => {
+    it('sends review email for authenticated users without checking marketingConsent', async () => {
       prisma.order.findUnique.mockResolvedValue({
         orderNumber: 'ORD-042',
         snapshotEmail: 'jan@example.com',
         snapshotFirstName: 'Jan',
-        user: { marketingConsent: true },
         items: [
           {
             productVariant: {
@@ -3448,7 +3527,7 @@ describe('OrdersService', () => {
       });
       const emailService = (service as any).emailService;
 
-      await (service as any).dispatchReviewRequestEmail('order-consent');
+      await (service as any).dispatchReviewRequestEmail('order-auth');
 
       expect(emailService.sendReviewRequest).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3472,7 +3551,6 @@ describe('OrdersService', () => {
         orderNumber: 'ORD-043',
         snapshotEmail: 'jan@example.com',
         snapshotFirstName: 'Jan',
-        user: { marketingConsent: true },
         items: [
           { productVariant: { product: sharedProduct } },
           { productVariant: { product: sharedProduct } },
@@ -3488,9 +3566,10 @@ describe('OrdersService', () => {
     });
   });
 
-  // ── GDPR: marketingConsent persistence in createFromCart ─────────────────────
+  // ── createFromCart — marketingConsent not stored at order creation ────────────
+  // Newsletter opt-in is a separate flow via PATCH /users/me after purchase.
 
-  describe('createFromCart — marketingConsent persistence', () => {
+  describe('createFromCart — no marketingConsent side-effect', () => {
     const mockAddress = {
       firstName: 'Jan',
       lastName: 'Kowalski',
@@ -3506,8 +3585,8 @@ describe('OrdersService', () => {
       productVariant: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findMany: jest.fn()
-          .mockResolvedValueOnce([{ id: 'pv-1' }])                       // isActive pre-check (1-item cart)
-          .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]),      // fresh prices
+          .mockResolvedValueOnce([{ id: 'pv-1' }])
+          .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]),
       },
       coupon: { findUnique: jest.fn().mockResolvedValue(null) },
       order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
@@ -3537,47 +3616,10 @@ describe('OrdersService', () => {
       paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
     });
 
-    it('updates user marketingConsent when dto.marketingConsent is true and userId is provided', async () => {
+    it('does not call prisma.user.update with marketingConsent during order creation', async () => {
       await service.createFromCart('user-1', undefined, 'jan@example.com', {
         newAddress: mockAddress,
         carrierCode: CarrierCode.DHL,
-        marketingConsent: true,
-      });
-
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'user-1' },
-        data: { marketingConsent: true, marketingConsentAt: expect.any(Date) },
-      });
-    });
-
-    it('does not update marketingConsent when dto.marketingConsent is false', async () => {
-      await service.createFromCart('user-1', undefined, 'jan@example.com', {
-        newAddress: mockAddress,
-        carrierCode: CarrierCode.DHL,
-        marketingConsent: false,
-      });
-
-      expect(prisma.user.update).not.toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
-      );
-    });
-
-    it('does not update marketingConsent when dto.marketingConsent is undefined', async () => {
-      await service.createFromCart('user-1', undefined, 'jan@example.com', {
-        newAddress: mockAddress,
-        carrierCode: CarrierCode.DHL,
-      });
-
-      expect(prisma.user.update).not.toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
-      );
-    });
-
-    it('does not update marketingConsent for guest checkout even when dto.marketingConsent is true', async () => {
-      await service.createFromCart(undefined, 'sess-1', 'guest@example.com', {
-        newAddress: mockAddress,
-        carrierCode: CarrierCode.DHL,
-        marketingConsent: true,
       });
 
       expect(prisma.user.update).not.toHaveBeenCalledWith(

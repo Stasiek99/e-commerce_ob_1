@@ -7,21 +7,6 @@
 
 Done:
 
----
-
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🔴 BLOCKER | Must fix before any real customer |
-| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
-| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
-| 🟢 LOW | Polish / hardening |
-
-Agent agreement is noted where 2+ agents independently identified the same issue.
-
----
-
 ## 🔴 BLOCKER — `pg_trgm` extension never installed — all product search queries crash in production *(1/5 agents)*
 
 **File:** `backend/src/modules/products/products.service.ts:151-165`
@@ -52,6 +37,7 @@ For cosmetics sold via distance communication, EC Regulation 1223/2009 Art. 19(1
 **Fix:** Add `allergens`, `ingredients`, `paoMonths`, and `warnings` to `PRODUCT_SELECT`. Add an `allergens` field to `ProductDetail` interface. Render a "Skład i informacje" section on the product detail page with the full INCI list and individually named allergens (per the Phase 7 ROADMAP item — but this must be done *before any product is listed*, not at launch).
 
 ---
+
 
 ## 🟠 HIGH — `generateLabel` has no order-status guard — labels generated for CANCELLED/REFUNDED/PENDING_PAYMENT orders *(1/5 agents)*
 
@@ -123,7 +109,6 @@ if (allCancelled) {
 await this.paymentsService.partialRefund(...);
 ```
 
----
 
 ## 🟠 HIGH — `processInvoice` has no idempotency guard — concurrent webhook + reconciliation cron burns sequential invoice numbers *(2/5 agents)*
 
@@ -176,7 +161,6 @@ if (order.shipment?.deliveredAt) {
 }
 const windowEnd = addDays(authoritativeDate, 15); // end-of-day + 1 for boundary
 ```
-
 ---
 
 ## 🟠 HIGH — Supabase free-tier auto-pause triggers Railway health check cascade failure loop *(1/5 agents)*
@@ -195,7 +179,6 @@ Supabase only wakes from pause on the first real HTTP request to the dashboard o
 
 **Fix:** (a) Upgrade to Supabase Pro to disable auto-pause (already required for PITR per CLAUDE.md). (b) As a belt-and-suspenders guard, wrap the health check DB query in a try/catch and return `503` with `{ status: 'degraded', db: 'starting_up' }` instead of crashing; add exponential backoff on retry. (c) Add an UptimeRobot ping to the frontend URL (which uses Vercel, never sleeps) to generate the traffic needed to keep the DB awake — this also keeps the Railway container warm (per CLAUDE.md).
 
----
 
 ## 🟠 HIGH — ODR platform link absent — EU Regulation 524/2013 Art. 14 + UoK Art. 37a violation *(1/5 agents)*
 
@@ -211,7 +194,6 @@ Art. 14 of EU Regulation 524/2013 requires that online traders include a clickab
   Platforma ODR (rozwiązywanie sporów online)
 </a>
 ```
-
 ---
 
 ## 🟠 HIGH — CPNP notification record absent — cosmetics placed on EU market without mandatory notification *(1/5 agents)*
@@ -244,7 +226,6 @@ await this.redis.set(`order-token:${order.id}`, guestToken, 'EX', 3600);
 successUrl: `${successUrl}?orderId=${order.id}&token=${guestToken}`;
 ```
 Verify via Redis lookup instead of JWT verification. Additionally, in `CheckoutSuccessComponent.ngOnInit()`, strip the `token` param from the URL after reading it: `this.router.navigate([], { queryParams: { orderId }, replaceUrl: true })`.
-
 ---
 
 ## 🟠 HIGH — Stripe payout failure and account risk — no monitoring, no contingency *(1/5 agents)*
@@ -290,7 +271,6 @@ async remove(id: string) {
 }
 ```
 
----
 
 ## 🟡 MEDIUM — Invoice total (`DO ZAPŁATY`) can differ from summed line items by 1-3 gr due to accumulated VAT rounding *(1/5 agents)*
 
@@ -339,6 +319,8 @@ When a `email.bounced` Resend webhook fires, the code logs a warning and sends a
 **Fix:** Add `emailBounced Boolean @default(false)`, `emailBouncedAt DateTime?` to the `User` model. In the bounce webhook handler: `await prisma.user.updateMany({ where: { email: bouncedTo }, data: { emailBounced: true, emailBouncedAt: new Date() } })`. In `EmailQueueService.enqueue()`, skip enqueue if the recipient user has `emailBounced = true`. Surface the flag in AdminJS user view.
 
 ---
+
+
 
 ## 🟡 MEDIUM — Signed Supabase invoice URL stored in BullMQ job payload expires in 7 days — delayed jobs permanently fail *(1/5 agents)*
 
@@ -412,7 +394,6 @@ Orders in `FRAUD_REVIEW` or `DISPUTE_HOLD` pass this check and receive a fully s
 ```typescript
 const nonInvoiceable = [PENDING_PAYMENT, CANCELLED, FRAUD_REVIEW, DISPUTE_HOLD];
 ```
-
 ---
 
 ## 🟢 LOW — Cancel `reason` body has no DTO — unbounded string written to `order_events` table *(1/5 agents)*
@@ -433,7 +414,6 @@ class CancelOrderDto {
 }
 ```
 
----
 
 ## 🟢 LOW — DPD tracking URL absent from order detail page, tracking page, and email delivery-estimate map *(1/5 agents)*
 
@@ -476,6 +456,17 @@ const DELIVERY_ESTIMATES = {
 
 ---
 
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🔴 BLOCKER | Must fix before any real customer |
+| 🟠 HIGH | Real money loss, data corruption, legal exposure, or security breach |
+| 🟡 MEDIUM | Degrades correctness, UX, or compliance significantly |
+| 🟢 LOW | Polish / hardening |
+
+Agent agreement is noted where 2+ agents independently identified the same issue.
+---
 ## Prioritised Fix Order
 
 ### Launch blockers

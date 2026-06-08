@@ -92,6 +92,7 @@ export type EmailJobData =
         productName: string;
         variantLabel: string;
         productUrl: string;
+        wishlistItemId: string;
       };
     }
   | {

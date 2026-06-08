@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 interface ReturnItem {
   productName: string;
   quantity: number;
@@ -35,7 +37,7 @@ export function returnAdminNotificationTemplate(data: {
       (item) => `
       <tr>
         <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#1a1a1a;">
-          ${item.productName}
+          ${escapeHtml(item.productName)}
         </td>
         <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px;
                    color:#6b6b6b;text-align:right;width:60px;">
@@ -112,7 +114,7 @@ export function returnAdminNotificationTemplate(data: {
                 </td>
                 <td style="font-size:14px;color:#1a1a1a;padding:8px 0;
                            border-bottom:1px solid #f0f0f0;">
-                  ${data.customerName}
+                  ${escapeHtml(data.customerName)}
                 </td>
               </tr>
               <tr>
@@ -122,8 +124,8 @@ export function returnAdminNotificationTemplate(data: {
                   Email
                 </td>
                 <td style="font-size:14px;padding:8px 0;border-bottom:1px solid #f0f0f0;">
-                  <a href="mailto:${data.email}" style="color:#c9a96e;text-decoration:none;">
-                    ${data.email}
+                  <a href="mailto:${escapeHtml(data.email)}" style="color:#c9a96e;text-decoration:none;">
+                    ${escapeHtml(data.email)}
                   </a>
                 </td>
               </tr>
@@ -149,7 +151,7 @@ export function returnAdminNotificationTemplate(data: {
                 </td>
                 <td style="font-size:14px;color:#1a1a1a;padding:8px 0;
                            border-bottom:1px solid #f0f0f0;">
-                  ${data.phone}
+                  ${escapeHtml(data.phone)}
                 </td>
               </tr>` : ''}
               ${data.bankAccount ? `
@@ -161,7 +163,7 @@ export function returnAdminNotificationTemplate(data: {
                 </td>
                 <td style="font-size:14px;color:#1a1a1a;padding:8px 0;
                            border-bottom:1px solid #f0f0f0;font-family:monospace;">
-                  ${data.bankAccount}
+                  ${escapeHtml(data.bankAccount)}
                 </td>
               </tr>` : ''}
             </table>
@@ -183,7 +185,7 @@ export function returnAdminNotificationTemplate(data: {
             </p>
             <div style="background:#fff3cd;border-radius:6px;padding:12px 16px;
                         font-size:14px;font-weight:600;color:#856404;margin-bottom:16px;">
-              ${RESOLUTION_LABELS[data.requestedResolution] ?? data.requestedResolution}
+              ${escapeHtml(RESOLUTION_LABELS[data.requestedResolution] ?? data.requestedResolution)}
             </div>` : ''}
 
             ${data.reason ? `
@@ -194,7 +196,7 @@ export function returnAdminNotificationTemplate(data: {
             </p>
             <div style="background:#f9f9f9;border-radius:6px;padding:14px 16px;
                         font-size:14px;color:#1a1a1a;line-height:1.6;white-space:pre-line;">
-              ${data.reason}
+              ${escapeHtml(data.reason)}
             </div>` : ''}
 
           </td>
