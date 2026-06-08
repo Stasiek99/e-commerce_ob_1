@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
@@ -251,7 +252,56 @@ export class ShippingService {
   async getLabel(orderId: string) {
     const shipment = await this.prisma.shipment.findUnique({ where: { orderId } });
     if (!shipment) throw new NotFoundException('No shipment for this order');
-    return { labelUrl: shipment.labelUrl, trackingNumber: shipment.trackingNumber };
+
+    let signedLabelUrl: string | null = null;
+    if (shipment.labelUrl && !shipment.labelUrl.startsWith('mock-label-')) {
+      signedLabelUrl = await this.storage.getShippingLabelSignedUrl(shipment.labelUrl);
+    } else {
+      signedLabelUrl = shipment.labelUrl;
+    }
+
+    return { labelUrl: signedLabelUrl, trackingNumber: shipment.trackingNumber };
+  }
+
+  // Runs weekly on Monday at 03:00 Warsaw time.
+  // Deletes Supabase labels for CANCELLED/REFUNDED orders older than 30 days so
+  // PII on shipping labels (name, phone, locker code) is not retained indefinitely.
+  @Cron('0 3 * * 1', { timeZone: 'Europe/Warsaw' })
+  async cleanupStaleShippingLabels(): Promise<void> {
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const staleShipments = await this.prisma.shipment.findMany({
+      where: {
+        labelUrl: { not: null },
+        labelGeneratedAt: { lt: cutoff },
+        order: {
+          status: { in: [OrderStatus.CANCELLED, OrderStatus.REFUNDED] },
+        },
+      },
+      select: { id: true, labelUrl: true },
+    });
+
+    if (staleShipments.length === 0) return;
+
+    let deleted = 0;
+    let failed = 0;
+
+    for (const shipment of staleShipments) {
+      if (!shipment.labelUrl || shipment.labelUrl.startsWith('mock-label-')) continue;
+      try {
+        await this.storage.deleteShippingLabel(shipment.labelUrl);
+        await this.prisma.shipment.update({
+          where: { id: shipment.id },
+          data: { labelUrl: null },
+        });
+        deleted++;
+      } catch (err) {
+        failed++;
+        this.logger.warn(`Failed to delete stale label for shipment ${shipment.id}: ${(err as Error).message}`);
+      }
+    }
+
+    this.logger.log(`Stale shipping label cleanup: ${deleted} deleted, ${failed} failed`);
   }
 
   private getTrackingUrl(carrier: CarrierCode, trackingNumber: string): string {
