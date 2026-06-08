@@ -714,6 +714,28 @@ model ConsentLog {
   @@map("consent_logs")
 }
 
+// ─── Transactional Outbox ─────────────────────────────────────────────────────
+// Guarantees at-least-once delivery of post-payment notifications.
+// A row is inserted atomically inside the Stripe payment $transaction; a
+// background poller processes PENDING rows and marks them PROCESSED.
+// If the process crashes between the transaction commit and the in-process
+// dispatch, the poller recovers without relying on Stripe's retry window.
+
+model OutboxMessage {
+  id          String    @id @default(uuid())
+  type        String
+  orderId     String?
+  payload     Json      @default("{}")
+  status      String    @default("PENDING")
+  retries     Int       @default(0)
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@map("outbox_messages")
+}
+
 // ─── Invoice Corrections (faktura korygująca) ─────────────────────────────────
 // Art. 106j Ustawy o VAT: a corrective invoice is required whenever the taxable
 // amount decreases (partial refund). Each partial cancellation generates one row.
