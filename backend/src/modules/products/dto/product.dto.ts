@@ -2,6 +2,8 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsDateString,
+  IsEnum,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -14,6 +16,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { ProductStatus } from '@prisma/client';
 
 export class CreateProductDto {
   @IsString()
@@ -42,6 +45,14 @@ export class CreateProductDto {
   @IsString()
   @MaxLength(100)
   brand?: string;
+
+  @IsOptional()
+  @IsEnum(ProductStatus)
+  status?: ProductStatus;
+
+  @IsOptional()
+  @IsDateString()
+  estimatedRestockDate?: string;
 
   @IsOptional()
   @IsBoolean()
@@ -120,6 +131,14 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(100)
   brand?: string;
+
+  @IsOptional()
+  @IsEnum(ProductStatus)
+  status?: ProductStatus;
+
+  @IsOptional()
+  @IsDateString()
+  estimatedRestockDate?: string;
 
   @IsOptional()
   @IsBoolean()

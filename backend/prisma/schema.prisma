@@ -93,6 +93,13 @@ enum EmailTokenType {
   MAGIC_LINK
 }
 
+enum ProductStatus {
+  ACTIVE
+  OUT_OF_STOCK
+  DISCONTINUED
+  COMING_SOON
+}
+
 // ─── User & Auth ─────────────────────────────────────────────────────────────
 
 model User {
@@ -245,6 +252,8 @@ model Product {
   categoryId       String
   category         Category @relation(fields: [categoryId], references: [id])
   brand            String?
+  status               ProductStatus @default(ACTIVE)
+  estimatedRestockDate DateTime?
   isActive         Boolean  @default(true)
   isFeatured       Boolean  @default(false)
   scentFamily      String?

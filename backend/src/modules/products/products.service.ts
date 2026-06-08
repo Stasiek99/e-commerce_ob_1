@@ -6,7 +6,7 @@ import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, ProductStatus } from '@prisma/client';
 
 // Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
 // from public API responses to avoid leaking the inspiration mapping table.
@@ -17,6 +17,8 @@ const PRODUCT_SELECT = {
   description: true,
   shortDescription: true,
   brand: true,
+  status: true,
+  estimatedRestockDate: true,
   isActive: true,
   isFeatured: true,
   scentFamily: true,
@@ -121,6 +123,7 @@ export class ProductsService {
     // (category, gender, etc.) can be applied on top of the ranked ID set.
     const where: Prisma.ProductWhereInput = {
       isActive: true,
+      status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
       ...(categorySlugs && { category: { slug: { in: categorySlugs } } }),
       ...(query.brand && { brand: { equals: query.brand, mode: 'insensitive' } }),
       ...(query.gender?.length && { gender: { in: query.gender } }),
@@ -155,6 +158,7 @@ export class ProductsService {
         FROM products p
         LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
         WHERE p."isActive" = true
+          AND p."status" != 'DISCONTINUED'
           AND (
             ${term} = ANY(lr.aliases)
             OR lr.brand    ILIKE '%' || ${term} || '%'
@@ -352,6 +356,7 @@ export class ProductsService {
     const products = await this.prisma.product.findMany({
       where: {
         isActive: true,
+        status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
         ...(categorySlugs && { category: { slug: { in: categorySlugs } } }),
       },
       select: { scentFamily: true, gender: true },
@@ -389,6 +394,8 @@ export class ProductsService {
     description?: string;
     shortDescription?: string;
     brand?: string;
+    status?: ProductStatus;
+    estimatedRestockDate?: string;
     isActive?: boolean;
     isFeatured?: boolean;
     inspiredBy?: string;
@@ -416,6 +423,8 @@ export class ProductsService {
     description?: string;
     shortDescription?: string;
     brand?: string;
+    status?: ProductStatus;
+    estimatedRestockDate?: string;
     isActive?: boolean;
     isFeatured?: boolean;
     inspiredBy?: string;
@@ -596,7 +605,7 @@ export class ProductsService {
       SELECT p.id
       FROM products p
       LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
-      WHERE p."isActive" = true AND (
+      WHERE p."isActive" = true AND p."status" != 'DISCONTINUED' AND (
         p.name            ILIKE '%' || ${term} || '%'
         OR lr.brand       ILIKE '%' || ${term} || '%'
         OR ${term}        = ANY(lr.aliases)
@@ -700,7 +709,7 @@ export class ProductsService {
     if (!product) return [];
 
     const raw = await this.prisma.product.findMany({
-      where: { isActive: true, categoryId: product.categoryId, id: { not: product.id } },
+      where: { isActive: true, status: { in: ['ACTIVE', 'OUT_OF_STOCK'] }, categoryId: product.categoryId, id: { not: product.id } },
       select: PRODUCT_SELECT,
       orderBy: [{ isFeatured: 'desc' }, { sortOrder: 'asc' }],
       take: limit,
