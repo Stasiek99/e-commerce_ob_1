@@ -6,7 +6,7 @@ import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
-import { Prisma, ProductStatus } from '@prisma/client';
+import { OrderStatus, Prisma, ProductStatus } from '@prisma/client';
 
 // Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
 // from public API responses to avoid leaking the inspiration mapping table.
@@ -533,7 +533,20 @@ export class ProductsService {
 
   private async dispatchBackInStockNotifications(productId: string, variantLabel: string): Promise<void> {
     const wishlistItems = await this.prisma.wishlistItem.findMany({
-      where: { productId, notifyOnRestock: true },
+      where: {
+        productId,
+        notifyOnRestock: true,
+        NOT: {
+          user: {
+            orders: {
+              some: {
+                status: OrderStatus.DELIVERED,
+                items: { some: { productVariant: { productId } } },
+              },
+            },
+          },
+        },
+      },
       include: {
         user: { select: { email: true, firstName: true } },
         product: { select: { name: true, slug: true } },

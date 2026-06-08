@@ -160,4 +160,64 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
       expect(mockPrisma.wishlistItem.findMany).not.toHaveBeenCalled();
     });
   });
+
+  describe('ownership exclusion guard', () => {
+    beforeEach(() => {
+      mockPrisma.productVariant.findUnique.mockResolvedValue(outOfStockVariant);
+      mockPrisma.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 10 });
+      mockEmailQueue.sendBackInStock.mockResolvedValue(undefined);
+    });
+
+    it('queries wishlistItem.findMany with a NOT filter excluding users with a DELIVERED order for this product', async () => {
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([]);
+
+      await service.updateVariantStock(VARIANT_ID, { set: 10 });
+      await flushMicrotasks();
+
+      expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            productId: PRODUCT_ID,
+            notifyOnRestock: true,
+            NOT: expect.objectContaining({
+              user: expect.objectContaining({
+                orders: expect.objectContaining({
+                  some: expect.objectContaining({
+                    status: 'DELIVERED',
+                    items: expect.objectContaining({
+                      some: expect.objectContaining({
+                        productVariant: expect.objectContaining({ productId: PRODUCT_ID }),
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('sends no notifications when all wishlisters already own the product (findMany returns empty due to filter)', async () => {
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([]);
+
+      await service.updateVariantStock(VARIANT_ID, { set: 10 });
+      await flushMicrotasks();
+
+      expect(mockEmailQueue.sendBackInStock).not.toHaveBeenCalled();
+    });
+
+    it('still notifies the subscriber who does not own the product when another subscriber owns it', async () => {
+      // Simulates the filter: only the non-owner (alice) is returned by Prisma
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([wishlistSubscribers[0]]);
+
+      await service.updateVariantStock(VARIANT_ID, { set: 10 });
+      await flushMicrotasks();
+
+      expect(mockEmailQueue.sendBackInStock).toHaveBeenCalledTimes(1);
+      expect(mockEmailQueue.sendBackInStock).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'alice@example.com' }),
+      );
+    });
+  });
 });
