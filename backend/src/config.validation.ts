@@ -70,8 +70,33 @@ export const envValidationSchema = Joi.object({
 
   // ── InPost ShipX ──
   INPOST_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
-  INPOST_ORGANIZATION_ID: Joi.string().default('mock-org-id'),
-  INPOST_API_TOKEN: Joi.string().default('mock-api-token'),
+  // In production with mock disabled, both credentials are required — without them
+  // the client falls back to the 'mock-org-id' default and writes fake tracking URLs
+  // to the DB, triggering the customer cascade: 404 → support → refund → chargeback.
+  INPOST_ORGANIZATION_ID: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.when('INPOST_MOCK_ENABLED', {
+      is: 'true',
+      then: Joi.string().optional().allow(''),
+      otherwise: Joi.string().required().messages({
+        'any.required':
+          'INPOST_ORGANIZATION_ID is required in production when INPOST_MOCK_ENABLED is not "true"',
+      }),
+    }),
+    otherwise: Joi.string().default('mock-org-id'),
+  }),
+  INPOST_API_TOKEN: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.when('INPOST_MOCK_ENABLED', {
+      is: 'true',
+      then: Joi.string().optional().allow(''),
+      otherwise: Joi.string().required().messages({
+        'any.required':
+          'INPOST_API_TOKEN is required in production when INPOST_MOCK_ENABLED is not "true"',
+      }),
+    }),
+    otherwise: Joi.string().default('mock-api-token'),
+  }),
 
   // ── Supabase ──
   SUPABASE_URL: Joi.string().uri().required(),
