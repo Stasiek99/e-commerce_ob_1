@@ -27,6 +27,10 @@ export const envValidationSchema = Joi.object({
 
   // ── JWT (always required) ──
   JWT_ACCESS_SECRET: Joi.string().min(16).required(),
+  // Set during secret rotation: strategy validates against both keys for JWT_ACCESS_EXPIRES_IN
+  // (default 15 min) so active sessions survive the rotation without force-logging out users.
+  // Remove after one access-token lifetime once all old tokens have expired.
+  JWT_ACCESS_SECRET_PREV: Joi.string().min(16).optional(),
   JWT_REFRESH_SECRET: Joi.string().min(16).required(),
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),

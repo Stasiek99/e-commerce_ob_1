@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
 import * as Sentry from '@sentry/nestjs';
 import { JwtStrategy } from '../strategies/jwt.strategy';
@@ -28,6 +29,7 @@ const mockUser = {
 // A payload issued at Unix second 1_700_000_000 (arbitrary fixed point in time)
 const ISSUED_AT = 1_700_000_000;
 const validPayload = { sub: 'user-1', email: 'test@example.com', role: 'CUSTOMER', iat: ISSUED_AT };
+const payloadWithJti = { ...validPayload, jti: 'jti-abc123' };
 
 describe('JwtStrategy', () => {
   let strategy: JwtStrategy;
@@ -45,7 +47,12 @@ describe('JwtStrategy', () => {
               if (key === 'JWT_ACCESS_SECRET') return 'test-secret';
               throw new Error(`Missing env var: ${key}`);
             }),
+            get: jest.fn().mockReturnValue(undefined), // JWT_ACCESS_SECRET_PREV absent by default
           },
+        },
+        {
+          provide: JwtService,
+          useValue: { verify: jest.fn().mockReturnValue({}) },
         },
         {
           provide: UsersService,
@@ -206,6 +213,81 @@ describe('JwtStrategy', () => {
 
       expect(result).toEqual(mockUser);
       expect(usersService.findById).toHaveBeenCalledWith('user-1');
+    });
+  });
+
+  // ─── Per-token jti blocklist ──────────────────────────────────────────────────
+
+  describe('validate — jti blocklist', () => {
+    it('throws UnauthorizedException when the jti appears in the Redis blocklist', async () => {
+      redis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === `auth:revoked-jti:${payloadWithJti.jti}` ? '1' : null),
+      );
+
+      await expect(strategy.validate(payloadWithJti)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws "Token has been revoked" when the jti is blocklisted', async () => {
+      redis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === `auth:revoked-jti:${payloadWithJti.jti}` ? '1' : null),
+      );
+
+      await expect(strategy.validate(payloadWithJti)).rejects.toThrow('Token has been revoked');
+    });
+
+    it('does not reach the DB lookup when the jti is blocklisted', async () => {
+      redis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === `auth:revoked-jti:${payloadWithJti.jti}` ? '1' : null),
+      );
+
+      await expect(strategy.validate(payloadWithJti)).rejects.toThrow(UnauthorizedException);
+
+      expect(usersService.findById).not.toHaveBeenCalled();
+    });
+
+    it('allows token through when the jti is not in the blocklist (null)', async () => {
+      redis.get.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser);
+
+      const result = await strategy.validate(payloadWithJti);
+
+      expect(result).toEqual(mockUser);
+    });
+
+    it('checks the jti-scoped key in Redis when jti is present in payload', async () => {
+      redis.get.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser);
+
+      await strategy.validate(payloadWithJti);
+
+      expect(redis.get).toHaveBeenCalledWith(`auth:revoked-jti:${payloadWithJti.jti}`);
+    });
+
+    it('does not check any jti key when the payload has no jti field', async () => {
+      redis.get.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser);
+
+      await strategy.validate(validPayload);
+
+      const jtiCallArgs = redis.get.mock.calls.map((c) => c[0] as string);
+      expect(jtiCallArgs.every((k) => !k.startsWith('auth:revoked-jti:'))).toBe(true);
+    });
+
+    it('blocklists a specific token without affecting another token for the same user', async () => {
+      const otherJtiPayload = { ...validPayload, jti: 'other-jti-xyz' };
+
+      redis.get.mockImplementation((key: string) =>
+        // Only 'jti-abc123' is blocklisted; 'other-jti-xyz' is clean
+        Promise.resolve(key === `auth:revoked-jti:${payloadWithJti.jti}` ? '1' : null),
+      );
+      usersService.findById.mockResolvedValue(mockUser);
+
+      // Blocklisted token must fail
+      await expect(strategy.validate(payloadWithJti)).rejects.toThrow(UnauthorizedException);
+
+      // Clean token must succeed
+      const result = await strategy.validate(otherJtiPayload);
+      expect(result).toEqual(mockUser);
     });
   });
 });
