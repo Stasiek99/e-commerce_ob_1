@@ -33,12 +33,17 @@ export class PaymentsService {
     });
 
     // Pre-checkout velocity guard: BLIK/P24 settles before Stripe Radar can block,
-    // so we check for suspicious order bursts from the same city before issuing a session.
+    // so we rate-limit payment initiations per identity (userId for authenticated users,
+    // snapshotEmail for guests). City-level checks are useless — Warsaw has 1.8M residents.
+    // Stripe Radar handles cross-card fraud scoring after session creation.
     const windowStart = new Date(Date.now() - 30 * 60 * 1000);
+    const velocityWhere = order.userId
+      ? { userId: order.userId }
+      : { snapshotEmail: order.snapshotEmail };
     const recentOrderCount = await this.prisma.order.count({
-      where: { snapshotCity: order.snapshotCity, createdAt: { gte: windowStart } },
+      where: { ...velocityWhere, createdAt: { gte: windowStart } },
     });
-    if (recentOrderCount > 3) {
+    if (recentOrderCount > 5) {
       throw new HttpException('Order velocity limit reached', HttpStatus.TOO_MANY_REQUESTS);
     }
 

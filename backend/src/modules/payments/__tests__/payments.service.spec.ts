@@ -894,14 +894,17 @@ describe('PaymentsService', () => {
       expect((stripeClient as any).expireCheckoutSession).not.toHaveBeenCalled();
     });
 
-    // ── BLIK/P24 velocity guard ──────────────────────────────────────────────
+    // ── per-identity velocity guard (replaces the broken city-level check) ──────
+    // City-level guard blocked the 5th legitimate Warsaw customer during promotions.
+    // Per-userId (authenticated) or per-email (guest) scope prevents that while
+    // still catching the realistic abuse pattern: a single identity spamming checkout.
 
-    it('throws 429 when >3 orders from the same city were created in the last 30 minutes', async () => {
+    it('throws 429 when >5 orders from the same user were initiated in the last 30 minutes', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         ...mockOrderWithItems,
-        snapshotCity: 'Kraków',
+        userId: 'user-1',
       });
-      prisma.order.count.mockResolvedValue(4);
+      prisma.order.count.mockResolvedValue(6);
 
       await expect(service.initiatePayment('order-1')).rejects.toThrow(
         'Order velocity limit reached',
@@ -909,12 +912,12 @@ describe('PaymentsService', () => {
       expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
     });
 
-    it('allows checkout when exactly 3 orders from the same city exist in the window', async () => {
+    it('allows checkout when exactly 5 orders from the same user exist in the window', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         ...mockOrderWithItems,
-        snapshotCity: 'Kraków',
+        userId: 'user-1',
       });
-      prisma.order.count.mockResolvedValue(3);
+      prisma.order.count.mockResolvedValue(5);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
       prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
@@ -923,11 +926,10 @@ describe('PaymentsService', () => {
       expect(result.paymentUrl).toBe(mockSession.url);
     });
 
-    it('scopes velocity check to the order snapshotCity', async () => {
-      const city = 'Gdańsk';
+    it('scopes velocity check to userId for authenticated orders', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         ...mockOrderWithItems,
-        snapshotCity: city,
+        userId: 'user-abc',
       });
       prisma.order.count.mockResolvedValue(0);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
@@ -937,7 +939,45 @@ describe('PaymentsService', () => {
 
       expect(prisma.order.count).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ snapshotCity: city }),
+          where: expect.objectContaining({ userId: 'user-abc' }),
+        }),
+      );
+    });
+
+    it('scopes velocity check to snapshotEmail for guest orders (no userId)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        userId: null,
+        snapshotEmail: 'guest@example.com',
+      });
+      prisma.order.count.mockResolvedValue(0);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(prisma.order.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ snapshotEmail: 'guest@example.com' }),
+        }),
+      );
+    });
+
+    it('does NOT scope velocity check to snapshotCity — city-level guard is removed', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        userId: 'user-1',
+        snapshotCity: 'Warszawa',
+      });
+      prisma.order.count.mockResolvedValue(0);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(prisma.order.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ snapshotCity: expect.anything() }),
         }),
       );
     });
