@@ -558,13 +558,63 @@ describe('EmailQueueService', () => {
       );
     });
 
-    it('selects only emailBounced field — avoids pulling full user row', async () => {
+    it('selects emailBounced and emailComplained fields — avoids pulling full user row', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
 
       await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
 
       const [callArg] = mockPrisma.user.findFirst.mock.calls[0];
-      expect(callArg.select).toEqual({ emailBounced: true });
+      expect(callArg.select).toEqual({ emailBounced: true, emailComplained: true });
+    });
+  });
+
+  // ── complaint suppression gate ────────────────────────────────────────────────
+  // Invariant: enqueue() must not add a job when the recipient has filed a spam
+  // complaint (emailComplained=true). Resend terminates accounts at ≥0.08%
+  // complaint rate — a single repeat complainer receiving 4 transactional emails
+  // per order can push a low-volume account over the threshold.
+
+  describe('complaint suppression gate', () => {
+    it('suppresses enqueue and does not call queue.add when recipient has emailComplained=true', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: false, emailComplained: true });
+
+      await service.sendOrderConfirmation({
+        to: 'complainer@example.com',
+        orderNumber: 'ORD-C1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('enqueues normally when recipient has emailComplained=false', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: false, emailComplained: false });
+
+      await service.sendOrderConfirmation({
+        to: 'ok@example.com',
+        orderNumber: 'ORD-C2',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('complaint suppression applies to all job types — verified with sendShippingNotification', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: false, emailComplained: true });
+
+      await service.sendShippingNotification({
+        to: 'complainer@example.com',
+        orderNumber: 'ORD-C3',
+        firstName: 'Jan',
+        carrier: 'InPost',
+        trackingNumber: 'TRACK123',
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
     });
   });
 });

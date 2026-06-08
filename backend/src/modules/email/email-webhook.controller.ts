@@ -16,6 +16,7 @@ import { Request } from 'express';
 import { Webhook } from 'svix';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from './email.service';
 
 interface ResendEmailData {
   email_id: string;
@@ -41,6 +42,7 @@ export class EmailWebhookController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly emailService: EmailService,
   ) {
     this.webhookSecret = config.get<string>('RESEND_WEBHOOK_SECRET', '');
   }
@@ -111,6 +113,13 @@ export class EmailWebhookController {
         scope.setContext('email', { emailId: data.email_id, subject: data.subject });
         Sentry.captureMessage(`Spam complaint (to_hash=${toHash})`, 'warning');
       });
+      if (to) {
+        await this.prisma.user.updateMany({
+          where: { email: to },
+          data: { emailComplained: true, emailComplainedAt: new Date() },
+        });
+        await this.emailService.suppressContact(to);
+      }
     }
   }
 }
