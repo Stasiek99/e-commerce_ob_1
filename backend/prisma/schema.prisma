@@ -417,6 +417,8 @@ model Order {
   invoiceNumber       String? @unique
   isRead        Boolean @default(false)
 
+  invoiceCorrections InvoiceCorrection[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -710,4 +712,24 @@ model ConsentLog {
   consentedAt  DateTime @default(now()) @map("consented_at")
 
   @@map("consent_logs")
+}
+
+// ─── Invoice Corrections (faktura korygująca) ─────────────────────────────────
+// Art. 106j Ustawy o VAT: a corrective invoice is required whenever the taxable
+// amount decreases (partial refund). Each partial cancellation generates one row.
+// The correctiveInvoiceNumber follows its own sequential series (FK/YYYY/NNNNNN).
+
+model InvoiceCorrection {
+  id                      String   @id @default(uuid())
+  orderId                 String
+  order                   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  correctiveInvoiceNumber String   @unique
+  correctiveStoragePath   String
+  correctedAmountInCents  Int
+  refundReasonCode        String   @default("PARTIAL_CANCELLATION")
+  issuedAt                DateTime @default(now())
+  createdAt               DateTime @default(now())
+
+  @@index([orderId])
+  @@map("invoice_corrections")
 }

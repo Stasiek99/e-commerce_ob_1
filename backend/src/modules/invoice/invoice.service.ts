@@ -144,6 +144,227 @@ export class InvoiceService implements OnModuleInit {
     return this.storage.getInvoiceSignedUrl(storagePath, expiresInSeconds);
   }
 
+  /**
+   * Generates and persists a corrective invoice (faktura korygująca) per
+   * Art. 106j Ustawy o VAT. Called after each successful partial refund.
+   * Uses its own sequential series (FK/YYYY/NNNNNN).
+   */
+  async processCorrectiveInvoice(
+    orderId: string,
+    originalInvoiceNumber: string,
+    refundAmountInCents: number,
+    reasonCode: string,
+  ): Promise<{ correctiveUrl: string; correctiveStoragePath: string; correctiveInvoiceNumber: string }> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        snapshotFirstName: true,
+        snapshotLastName: true,
+        snapshotCompany: true,
+        snapshotNip: true,
+        snapshotStreet: true,
+        snapshotCity: true,
+        snapshotPostalCode: true,
+        snapshotCountry: true,
+        createdAt: true,
+      },
+    });
+
+    const year = new Date().getFullYear();
+    const seqName = `corrective_invoice_number_seq_${year}`;
+
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS ${seqName} START 1 INCREMENT 1`,
+    );
+    const seqRows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+      `SELECT nextval('${seqName}')`,
+    );
+    const seq = Number(seqRows[0].nextval);
+    const correctiveInvoiceNumber = `FK/${year}/${seq.toString().padStart(6, '0')}`;
+
+    const pdf = await this.generateCorrectivePdf(
+      order,
+      correctiveInvoiceNumber,
+      originalInvoiceNumber,
+      refundAmountInCents,
+    );
+    const filename = `${correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
+    const correctiveStoragePath = await this.storage.uploadInvoice(pdf, filename);
+
+    await this.prisma.invoiceCorrection.create({
+      data: {
+        orderId,
+        correctiveInvoiceNumber,
+        correctiveStoragePath,
+        correctedAmountInCents: -Math.abs(refundAmountInCents),
+        refundReasonCode: reasonCode,
+      },
+    });
+
+    this.logger.log(
+      `Corrective invoice ${correctiveInvoiceNumber} generated for order ${order.orderNumber} (refund: ${refundAmountInCents} gr)`,
+    );
+
+    const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+    const correctiveUrl = await this.storage.getInvoiceSignedUrl(correctiveStoragePath, SEVEN_DAYS_SECONDS);
+
+    return { correctiveUrl, correctiveStoragePath, correctiveInvoiceNumber };
+  }
+
+  async getCorrectiveInvoiceUrl(orderId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string } | null> {
+    const correction = await this.prisma.invoiceCorrection.findFirst({
+      where: { orderId },
+      orderBy: { createdAt: 'desc' },
+      select: { correctiveStoragePath: true, correctiveInvoiceNumber: true },
+    });
+    if (!correction) return null;
+    const correctiveInvoiceUrl = await this.storage.getInvoiceSignedUrl(correction.correctiveStoragePath);
+    return { correctiveInvoiceUrl, correctiveInvoiceNumber: correction.correctiveInvoiceNumber };
+  }
+
+  private generateCorrectivePdf(
+    order: {
+      orderNumber: string;
+      snapshotFirstName: string;
+      snapshotLastName: string;
+      snapshotCompany?: string | null;
+      snapshotNip?: string | null;
+      snapshotStreet: string;
+      snapshotCity: string;
+      snapshotPostalCode: string;
+      snapshotCountry?: string | null;
+      createdAt: Date;
+    },
+    correctiveNumber: string,
+    originalInvoiceNumber: string,
+    refundAmountInCents: number,
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({
+        size: 'A4',
+        margin: 50,
+        info: { Title: `Faktura korygujaca ${correctiveNumber}`, Author: this.sellerName },
+      });
+
+      const chunks: Buffer[] = [];
+      doc.on('data', (c: Buffer) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      doc.registerFont('Inter', path.join(FONTS_DIR, 'Inter-Regular.ttf'));
+      doc.registerFont('Inter-Bold', path.join(FONTS_DIR, 'Inter-Bold.ttf'));
+      doc.font('Inter');
+
+      this.renderCorrective(doc, order, correctiveNumber, originalInvoiceNumber, refundAmountInCents);
+      doc.end();
+    });
+  }
+
+  private renderCorrective(
+    doc: PDFKit.PDFDocument,
+    order: {
+      orderNumber: string;
+      snapshotFirstName: string;
+      snapshotLastName: string;
+      snapshotCompany?: string | null;
+      snapshotNip?: string | null;
+      snapshotStreet: string;
+      snapshotCity: string;
+      snapshotPostalCode: string;
+      snapshotCountry?: string | null;
+      createdAt: Date;
+    },
+    correctiveNumber: string,
+    originalInvoiceNumber: string,
+    refundAmountInCents: number,
+  ) {
+    const W = 495;
+    const issueDate = this.fmtDate(new Date());
+
+    // ── Title ──────────────────────────────────────────────────────────────
+    doc.fontSize(22).font('Inter-Bold').text('FAKTURA KORYGUJACA', { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(11).font('Inter').text(`Nr: ${correctiveNumber}`, { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(9).fillColor('#555')
+      .text(`do faktury nr: ${originalInvoiceNumber}`, { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(8).fillColor('#555')
+      .text(`Data wystawienia: ${issueDate}   |   Zamowienie: ${order.orderNumber}`, { align: 'center' });
+    doc.fillColor('#000');
+    doc.moveDown(1.5);
+
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).lineWidth(0.5).stroke();
+    doc.moveDown(1);
+
+    // ── Seller / Buyer ─────────────────────────────────────────────────────
+    const colL = 50;
+    const colR = 310;
+    const partyTop = doc.y;
+
+    doc.fontSize(7).font('Inter-Bold').fillColor('#888').text('SPRZEDAWCA', colL, partyTop);
+    doc.fillColor('#000').fontSize(9).font('Inter-Bold');
+    doc.text(this.sellerName, colL, partyTop + 14);
+    doc.font('Inter').fontSize(8.5);
+    if (this.sellerStreet) doc.text(this.sellerStreet, colL);
+    if (this.sellerPostalCode || this.sellerCity)
+      doc.text(`${this.sellerPostalCode} ${this.sellerCity}`.trim(), colL);
+    if (this.sellerNip) doc.text(`NIP: ${this.sellerNip}`, colL);
+
+    const buyerName = `${order.snapshotFirstName} ${order.snapshotLastName}`;
+    doc.fontSize(7).font('Inter-Bold').fillColor('#888').text('NABYWCA', colR, partyTop);
+    doc.fillColor('#000').fontSize(9).font('Inter-Bold');
+    doc.text(buyerName, colR, partyTop + 14);
+    doc.font('Inter').fontSize(8.5);
+    if (order.snapshotCompany) doc.text(order.snapshotCompany, colR);
+    doc.text(order.snapshotStreet, colR);
+    doc.text(`${order.snapshotPostalCode} ${order.snapshotCity}`, colR);
+    if (order.snapshotNip) doc.text(`NIP: ${order.snapshotNip}`, colR);
+
+    doc.moveDown(3);
+
+    // ── Correction table ───────────────────────────────────────────────────
+    const tableTop = doc.y + 8;
+    const ROW_H = 20;
+    const cx = { no: 50, desc: 72, gross: 470 };
+    const cw = { no: 20, desc: 395, gross: 75 };
+
+    doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
+    doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
+    const th = tableTop + 6;
+    doc.text('Lp.', cx.no, th, { width: cw.no });
+    doc.text('Opis korekty', cx.desc, th, { width: cw.desc });
+    doc.text('Kwota korekty', cx.gross, th, { width: cw.gross, align: 'right' });
+
+    doc.fillColor('#000').font('Inter').fontSize(8);
+    const rowY = tableTop + ROW_H;
+    doc.rect(50, rowY, W, ROW_H).fill('#fff').stroke();
+    doc.fillColor('#000');
+    doc.text('1', cx.no, rowY + 6, { width: cw.no });
+    doc.text('Zwrot czesciowy — korekta platnosci (Art. 106j Ustawy o VAT)', cx.desc, rowY + 6, { width: cw.desc });
+    doc.text(this.fmtMoney(-Math.abs(refundAmountInCents)), cx.gross, rowY + 6, { width: cw.gross, align: 'right' });
+
+    // ── Totals ─────────────────────────────────────────────────────────────
+    const sumX = 340;
+    const sumLabelW = 120;
+    const sumValueW = 85;
+    let y = rowY + ROW_H + 14;
+
+    doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
+    y += 6;
+    doc.rect(sumX - 4, y - 4, sumLabelW + sumValueW + 8, 24).fill('#1a1a1a').stroke();
+    doc.fillColor('#fff');
+    this.sumRow(doc, 'KOREKTA RAZEM:', this.fmtMoney(-Math.abs(refundAmountInCents)), sumX, y + 4, sumLabelW, sumValueW, true);
+
+    // ── Footer ─────────────────────────────────────────────────────────────
+    doc.fillColor('#888').fontSize(7.5).font('Inter');
+    const footerY = y + 50;
+    doc.text('Zwrot srodkow zostal zrealizowany na oryginalna metode platnosci (Stripe).', 50, footerY);
+    doc.text('Faktura korygujaca wystawiona elektronicznie — wazna bez podpisu i pieczatki.', 50, footerY + 12);
+    doc.text(`Wygenerowano: ${issueDate}`, 50, footerY + 24);
+  }
+
   private generatePdf(order: InvoiceOrder, invoiceNumber: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({

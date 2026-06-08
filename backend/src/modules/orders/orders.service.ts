@@ -821,6 +821,13 @@ export class OrdersService implements OnModuleInit {
     await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
 
     const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+
+    if (order.invoiceNumber) {
+      this.invoiceService
+        .processCorrectiveInvoice(orderId, order.invoiceNumber, refundAmountInCents, 'PARTIAL_CANCELLATION')
+        .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
+    }
+
     this.emailService
       .sendOrderCancellation({
         to: order.snapshotEmail,
@@ -830,6 +837,28 @@ export class OrdersService implements OnModuleInit {
         isRefund: true,
       })
       .catch((err) => this.logger.warn('Partial refund cancellation email failed', err));
+  }
+
+  async getCorrectiveInvoiceForUser(orderId: string, userId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string }> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    const result = await this.invoiceService.getCorrectiveInvoiceUrl(orderId);
+    if (!result) throw new NotFoundException('No corrective invoice found for this order');
+    return result;
+  }
+
+  async getCorrectiveInvoiceAdmin(orderId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    const result = await this.invoiceService.getCorrectiveInvoiceUrl(orderId);
+    if (!result) throw new NotFoundException('No corrective invoice found for this order');
+    return result;
   }
 
   async approveFraudReview(orderId: string): Promise<void> {
