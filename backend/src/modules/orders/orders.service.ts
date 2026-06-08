@@ -282,6 +282,13 @@ export class OrdersService implements OnModuleInit {
           notes: dto.notes,
           termsVersion: dto.termsVersion,
           termsAcceptedAt: dto.termsAcceptedAt ? new Date(dto.termsAcceptedAt) : undefined,
+          retentionExpiresAt: (() => {
+            // Ustawa o rachunkowości Art. 74: retain financial records for 5 years
+            // from year-end after the fiscal year closes. Order created in year Y
+            // must be kept until Dec 31 of year Y+5.
+            const y = new Date().getFullYear();
+            return new Date(Date.UTC(y + 5, 11, 31, 23, 59, 59, 999));
+          })(),
           items: {
             create: cart.items.map((item: CartItem) => ({
               productVariantId: item.productVariantId,

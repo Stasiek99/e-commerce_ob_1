@@ -419,8 +419,9 @@ model Order {
 
   invoiceCorrections InvoiceCorrection[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  retentionExpiresAt DateTime?
 
   items          OrderItem[]
   payment        Payment?
@@ -432,6 +433,7 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  @@index([retentionExpiresAt])
   @@map("orders")
 }
 
