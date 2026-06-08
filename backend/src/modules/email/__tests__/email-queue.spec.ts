@@ -660,6 +660,12 @@ describe('EmailQueueProcessor', () => {
             getInvoiceSignedUrl: jest.fn().mockResolvedValue('https://storage/signed-inv.pdf'),
           },
         },
+        {
+          provide: PrismaService,
+          useValue: {
+            wishlistItem: { update: jest.fn().mockResolvedValue({}) },
+          },
+        },
       ],
     }).compile();
 
@@ -778,18 +784,20 @@ describe('EmailQueueProcessor', () => {
     expect(emailService.sendLowStockAlert).toHaveBeenCalledWith(payload);
   });
 
-  it('routes back_in_stock to emailService.sendBackInStock', async () => {
+  it('routes back_in_stock to emailService.sendBackInStock (strips wishlistItemId from payload)', async () => {
     const payload = {
       to: 'u@t.com',
       firstName: 'Jan',
       productName: 'Rose Perfume',
       variantLabel: '50 ml',
       productUrl: 'https://store.pl/rose',
+      wishlistItemId: 'wl-test-1',
     };
 
     await processor.process(makeJob({ type: 'back_in_stock' as const, payload }));
 
-    expect(emailService.sendBackInStock).toHaveBeenCalledWith(payload);
+    const { wishlistItemId: _stripped, ...emailPayload } = payload;
+    expect(emailService.sendBackInStock).toHaveBeenCalledWith(emailPayload);
   });
 
   it('routes review_request to emailService.sendReviewRequest', async () => {

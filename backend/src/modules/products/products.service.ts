@@ -535,15 +535,9 @@ export class ProductsService {
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
 
-    // Reset flags BEFORE sending — prevents duplicate notifications if process
-    // crashes mid-loop; users who miss an email can re-enable the flag manually.
-    await this.prisma.wishlistItem.updateMany({
-      where: { productId, notifyOnRestock: true },
-      data: { notifyOnRestock: false },
-    });
-
-    // Fire all emails concurrently — sequential await would block the event loop
-    // for hundreds of ms × N users (e.g. 500 users × 300ms = 150 s blocked).
+    // Enqueue first — the processor resets notifyOnRestock after confirmed delivery.
+    // Resetting the flag here (before enqueue) would silently discard all notifications
+    // on a crash or Redis failure between the updateMany and queue.add.
     await Promise.allSettled(
       wishlistItems.map((item) =>
         this.emailService
@@ -553,8 +547,9 @@ export class ProductsService {
             productName: item.product.name,
             variantLabel,
             productUrl: `${frontendUrl}/products/${item.product.slug}`,
+            wishlistItemId: item.id,
           })
-          .catch((err) => this.logger.error(`Back-in-stock email failed for ${item.user.email}: ${err.message}`)),
+          .catch((err) => this.logger.error(`Back-in-stock enqueue failed for ${item.user.email}: ${err.message}`)),
       ),
     );
 

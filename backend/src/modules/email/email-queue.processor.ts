@@ -5,6 +5,7 @@ import { Job } from 'bullmq';
 import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
 import { StorageService } from '../storage/storage.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Processor('email')
 export class EmailQueueProcessor extends WorkerHost implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -13,6 +14,7 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
   constructor(
     private readonly emailService: EmailService,
     private readonly storageService: StorageService,
+    private readonly prisma: PrismaService,
   ) {
     super();
   }
@@ -82,9 +84,15 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         await this.emailService.sendLowStockAlert(payload);
         break;
 
-      case 'back_in_stock':
-        await this.emailService.sendBackInStock(payload);
+      case 'back_in_stock': {
+        const { wishlistItemId, ...emailPayload } = payload;
+        await this.emailService.sendBackInStock(emailPayload);
+        await this.prisma.wishlistItem.update({
+          where: { id: wishlistItemId },
+          data: { notifyOnRestock: false },
+        });
         break;
+      }
 
       case 'review_request':
         await this.emailService.sendReviewRequest(payload);
