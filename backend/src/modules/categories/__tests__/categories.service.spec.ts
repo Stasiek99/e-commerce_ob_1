@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CategoriesService } from '../categories.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -176,6 +176,95 @@ describe('CategoriesService', () => {
 
       expect(prisma.product.count).toHaveBeenCalledTimes(1);
       expect(prisma.category.count).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── update — cycle detection ──────────────────────────────────────────────
+  // Invariant: update() must reject any parentId that would form a cycle in
+  // the category tree. Without this guard, sitemap/breadcrumb traversal loops
+  // infinitely when A.parentId = B and B.parentId = A.
+
+  describe('update — cycle detection', () => {
+    it('throws NotFoundException when category does not exist', async () => {
+      prisma.category.findUnique.mockResolvedValue(null);
+
+      await expect(service.update('cat-missing', { name: 'New' })).rejects.toThrow(NotFoundException);
+      expect(prisma.category.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when parentId equals the category id (self-reference)', async () => {
+      prisma.category.findUnique.mockResolvedValueOnce(mockCategory);
+
+      await expect(service.update('cat-1', { parentId: 'cat-1' })).rejects.toThrow(BadRequestException);
+      expect(prisma.category.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException with "circular reference" message on self-reference', async () => {
+      prisma.category.findUnique.mockResolvedValueOnce(mockCategory);
+
+      await expect(service.update('cat-1', { parentId: 'cat-1' })).rejects.toThrow('circular reference');
+    });
+
+    it('throws BadRequestException when candidate parent is a direct child (depth-1 cycle)', async () => {
+      // cat-child.parentId = 'cat-1' → setting cat-1.parentId = cat-child creates A↔B
+      prisma.category.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === 'cat-1') return Promise.resolve(mockCategory);
+        if (where.id === 'cat-child') return Promise.resolve({ parentId: 'cat-1' });
+        return Promise.resolve(null);
+      });
+
+      await expect(service.update('cat-1', { parentId: 'cat-child' })).rejects.toThrow(BadRequestException);
+      expect(prisma.category.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when cycle exists two levels deep (depth-2 cycle)', async () => {
+      // cat-1 → cat-b → cat-c (cat-c.parentId=cat-b, cat-b.parentId=cat-1)
+      // setting cat-1.parentId = cat-c creates a 3-node cycle
+      prisma.category.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === 'cat-1') return Promise.resolve(mockCategory);
+        if (where.id === 'cat-c') return Promise.resolve({ parentId: 'cat-b' });
+        if (where.id === 'cat-b') return Promise.resolve({ parentId: 'cat-1' });
+        return Promise.resolve(null);
+      });
+
+      await expect(service.update('cat-1', { parentId: 'cat-c' })).rejects.toThrow(BadRequestException);
+      expect(prisma.category.update).not.toHaveBeenCalled();
+    });
+
+    it('calls prisma.category.update when candidate parent has no ancestors (happy path)', async () => {
+      prisma.category.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === 'cat-1') return Promise.resolve(mockCategory);
+        if (where.id === 'cat-root') return Promise.resolve({ parentId: null });
+        return Promise.resolve(null);
+      });
+      prisma.category.update.mockResolvedValue({ ...mockCategory, parentId: 'cat-root' });
+
+      const result = await service.update('cat-1', { parentId: 'cat-root' });
+
+      expect(prisma.category.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'cat-1' } }),
+      );
+      expect(result).toMatchObject({ parentId: 'cat-root' });
+    });
+
+    it('skips cycle detection and calls update when parentId is omitted', async () => {
+      prisma.category.findUnique.mockResolvedValue(mockCategory);
+      prisma.category.update.mockResolvedValue({ ...mockCategory, name: 'Renamed' });
+
+      const result = await service.update('cat-1', { name: 'Renamed' });
+
+      expect(prisma.category.update).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ name: 'Renamed' });
+    });
+
+    it('disconnects parent without cycle check when parentId is empty string', async () => {
+      prisma.category.findUnique.mockResolvedValue(mockCategory);
+      prisma.category.update.mockResolvedValue({ ...mockCategory, parentId: null });
+
+      const result = await service.update('cat-1', { parentId: '' });
+
+      expect(prisma.category.update).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ parentId: null });
     });
   });
 });
