@@ -10,6 +10,7 @@ const mockPrisma = {
 
 const mockRedis = {
   ping: jest.fn(),
+  get: jest.fn(),
 };
 
 const mockEmailQueue = {
@@ -31,6 +32,8 @@ describe('HealthController', () => {
 
     controller = module.get(HealthController);
     jest.clearAllMocks();
+    // Default: no reconciliation has run yet
+    mockRedis.get.mockResolvedValue(null);
   });
 
   describe('GET /health', () => {
@@ -145,6 +148,40 @@ describe('HealthController', () => {
           failed: -1,
         });
       });
+    });
+  });
+
+  describe('GET /health — lastReconcileAt cron liveness field', () => {
+    beforeEach(() => {
+      mockPrisma.$queryRaw.mockResolvedValue([{}]);
+      mockRedis.ping.mockResolvedValue('PONG');
+      mockEmailQueue.getJobCounts.mockResolvedValue({ waiting: 0, failed: 0 });
+    });
+
+    it('returns lastReconcileAt: null when the reconciliation cron has never fired', async () => {
+      mockRedis.get.mockResolvedValue(null);
+
+      const result = await controller.check();
+
+      expect(result.lastReconcileAt).toBeNull();
+    });
+
+    it('returns the ISO timestamp stored by reconcilePendingPayments when the cron has run', async () => {
+      const ts = '2026-06-08T10:00:00.000Z';
+      mockRedis.get.mockResolvedValue(ts);
+
+      const result = await controller.check();
+
+      expect(result.lastReconcileAt).toBe(ts);
+    });
+
+    it('returns lastReconcileAt: null and does not throw when Redis.get rejects', async () => {
+      mockRedis.get.mockRejectedValue(new Error('Redis timeout'));
+
+      const result = await controller.check();
+
+      expect(result.lastReconcileAt).toBeNull();
+      expect(result.status).toBe('ok');
     });
   });
 

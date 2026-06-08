@@ -1359,3 +1359,199 @@ describe('ProductsService — allergen disclosure in PRODUCT_SELECT', () => {
     expect(result.paoMonths).toBe(36);
   });
 });
+
+// ─── ProductStatus catalog filtering ─────────────────────────────────────────
+// Regression guard: DISCONTINUED products must never appear in catalog or
+// search results. findBySlug is exempt — it keeps the SEO page alive.
+
+describe('ProductsService — ProductStatus catalog filtering', () => {
+  let service: ProductsService;
+
+  const makeModuleAndService = async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+    return module.get(ProductsService);
+  };
+
+  beforeEach(async () => {
+    service = await makeModuleAndService();
+    jest.clearAllMocks();
+
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.incr.mockResolvedValue(1);
+    mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([]);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  describe('findAll — status filter in WHERE clause', () => {
+    it('passes status: { in: [ACTIVE, OUT_OF_STOCK] } in the paginated WHERE so DISCONTINUED products are excluded', async () => {
+      mockPrisma.product.findMany.mockResolvedValue([]);
+      mockPrisma.product.count.mockResolvedValue(0);
+
+      // featured:true bypasses interleaving → hits the standard paginated path
+      await service.findAll({ featured: true });
+
+      expect(mockPrisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+          }),
+        }),
+      );
+    });
+
+    it('includes the status filter alongside isActive: true (both guards active)', async () => {
+      mockPrisma.product.findMany.mockResolvedValue([]);
+      mockPrisma.product.count.mockResolvedValue(0);
+
+      await service.findAll({ featured: true });
+
+      expect(mockPrisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+          }),
+        }),
+      );
+    });
+
+    it('passes status filter in the interleaved slim query (default all-products path)', async () => {
+      mockPrisma.product.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      await service.findAll({});
+
+      const slimCall = (mockPrisma.product.findMany as jest.Mock).mock.calls[0][0];
+      expect(slimCall.where).toMatchObject({
+        isActive: true,
+        status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+      });
+    });
+  });
+
+  describe('findRelated — DISCONTINUED excluded from cross-sell', () => {
+    it('passes status: { in: [ACTIVE, OUT_OF_STOCK] } so DISCONTINUED products are not recommended', async () => {
+      mockPrisma.product.findUnique.mockResolvedValue({ id: 'current-id', categoryId: 'cat-1' });
+      mockPrisma.product.findMany.mockResolvedValue([]);
+
+      await service.findRelated('test-perfume');
+
+      expect(mockPrisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+          }),
+        }),
+      );
+    });
+
+    it('applies the status filter alongside isActive and categoryId', async () => {
+      mockPrisma.product.findUnique.mockResolvedValue({ id: 'current-id', categoryId: 'cat-99' });
+      mockPrisma.product.findMany.mockResolvedValue([]);
+
+      await service.findRelated('test-perfume');
+
+      expect(mockPrisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isActive: true,
+            status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+            categoryId: 'cat-99',
+            id: { not: 'current-id' },
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('findBySlug — DISCONTINUED pages stay alive (SEO)', () => {
+    it('returns the product when status is DISCONTINUED (no 404)', async () => {
+      const discontinued = makeProduct({ status: 'DISCONTINUED', slug: 'old-scent' });
+      mockPrisma.product.findFirst.mockResolvedValue(discontinued);
+
+      const result = await service.findBySlug('old-scent') as any;
+
+      expect(result).toMatchObject({ id: 'product-1', status: 'DISCONTINUED' });
+    });
+
+    it('does NOT include a status filter in the findBySlug WHERE clause', async () => {
+      mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ status: 'DISCONTINUED' }));
+
+      await service.findBySlug('old-scent');
+
+      const call = (mockPrisma.product.findFirst as jest.Mock).mock.calls[0][0];
+      expect(call.where).not.toHaveProperty('status');
+    });
+
+    it('still requires isActive: true in findBySlug so hard-deleted products return 404', async () => {
+      mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ status: 'ACTIVE' }));
+
+      await service.findBySlug('test-perfume');
+
+      expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ isActive: true }),
+        }),
+      );
+    });
+  });
+
+  describe('PRODUCT_SELECT includes new fields', () => {
+    it('requests status from Prisma in every findBySlug call', async () => {
+      mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ status: 'ACTIVE' }));
+
+      await service.findBySlug('test-perfume');
+
+      expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({ status: true }),
+        }),
+      );
+    });
+
+    it('requests estimatedRestockDate from Prisma in every findBySlug call', async () => {
+      mockPrisma.product.findFirst.mockResolvedValue(makeProduct({ status: 'ACTIVE' }));
+
+      await service.findBySlug('test-perfume');
+
+      expect(mockPrisma.product.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({ estimatedRestockDate: true }),
+        }),
+      );
+    });
+
+    it('returns estimatedRestockDate in the product payload when set', async () => {
+      const restockDate = new Date('2025-12-01T00:00:00.000Z');
+      mockPrisma.product.findFirst.mockResolvedValue(
+        makeProduct({ status: 'OUT_OF_STOCK', estimatedRestockDate: restockDate }),
+      );
+
+      const result = await service.findBySlug('test-perfume') as any;
+
+      expect(result.estimatedRestockDate).toEqual(restockDate);
+    });
+
+    it('returns null estimatedRestockDate when none is set', async () => {
+      mockPrisma.product.findFirst.mockResolvedValue(
+        makeProduct({ status: 'ACTIVE', estimatedRestockDate: null }),
+      );
+
+      const result = await service.findBySlug('test-perfume') as any;
+
+      expect(result.estimatedRestockDate).toBeNull();
+    });
+  });
+});

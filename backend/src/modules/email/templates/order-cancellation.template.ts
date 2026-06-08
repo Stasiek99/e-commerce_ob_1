@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 function formatPrice(cents: number): string {
   return (cents / 100).toFixed(2).replace('.', ',') + ' zł';
 }
@@ -27,7 +29,7 @@ export function orderCancellationTemplate(data: Data): { subject: string; html: 
 <head><meta charset="UTF-8"><title>${subject}</title></head>
 <body style="font-family:sans-serif;color:#333;max-width:600px;margin:0 auto;padding:24px">
   <h1 style="color:#1a1a1a;font-size:24px">${data.isRefund ? 'Zwrot zamówienia' : 'Anulowanie zamówienia'}</h1>
-  <p>Cześć ${data.firstName},</p>
+  <p>Cześć ${escapeHtml(data.firstName)},</p>
   ${body}
   <p style="color:#666;font-size:14px">Jeśli masz pytania, skontaktuj się z nami, odpowiadając na tę wiadomość.</p>
 </body>

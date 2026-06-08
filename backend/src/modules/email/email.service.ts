@@ -330,6 +330,19 @@ export class EmailService {
     return this.send('payout_failed_alert', data.to, subject, html, { payoutId: data.payoutId });
   }
 
+  async suppressContact(email: string): Promise<void> {
+    const audienceId = this.configService.get<string>('RESEND_AUDIENCE_ID', '');
+    if (!audienceId) {
+      this.logger.warn(`RESEND_AUDIENCE_ID not set — skipping Resend contact suppression for ${email}`);
+      return;
+    }
+    try {
+      await this.resend.contacts.create({ audienceId, email, unsubscribed: true });
+    } catch (err) {
+      this.logger.warn(`Failed to suppress contact in Resend audience: ${(err as Error).message}`);
+    }
+  }
+
   async sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {
     const { subject, html } = magicLinkTemplate({ firstName: data.firstName, magicUrl: data.magicUrl });
     return this.send('magic_link_login', data.to, subject, html, { magicUrl: data.magicUrl });

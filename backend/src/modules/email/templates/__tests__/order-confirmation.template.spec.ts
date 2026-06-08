@@ -116,4 +116,31 @@ describe('orderConfirmationTemplate()', () => {
       expect(html).toContain('lang="pl"');
     });
   });
+
+  // ── XSS — user-supplied fields are HTML-escaped ───────────────────────────
+
+  describe('XSS — escaping', () => {
+    it('escapes HTML tags in firstName', () => {
+      const { html } = orderConfirmationTemplate({
+        ...BASE,
+        firstName: '<script>alert(1)</script>',
+      });
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+
+    it('escapes quotes in firstName', () => {
+      const { html } = orderConfirmationTemplate({
+        ...BASE,
+        firstName: '" onmouseover="alert(1)',
+      });
+      expect(html).not.toContain('" onmouseover=');
+      expect(html).toContain('&quot;');
+    });
+
+    it('passes safe firstName through unchanged', () => {
+      const { html } = orderConfirmationTemplate(BASE);
+      expect(html).toContain('Anna');
+    });
+  });
 });

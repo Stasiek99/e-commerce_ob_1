@@ -1,4 +1,4 @@
-import { CarrierCode } from '../enums';
+import { CarrierCode, ProductStatus } from '../enums';
 
 export interface ProductVariantDto {
   id: string;
@@ -33,6 +33,8 @@ export interface ProductDto {
   gender?: string;
   line?: string;
   categoryId: string;
+  status: ProductStatus;
+  estimatedRestockDate?: string | null;
   isActive: boolean;
   isFeatured: boolean;
   variants: ProductVariantDto[];

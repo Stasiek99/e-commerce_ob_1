@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
 import { EmailWebhookController } from '../email-webhook.controller';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EmailService } from '../email.service';
 
 jest.mock('svix', () => ({ Webhook: jest.fn() }));
 jest.mock('@sentry/nestjs', () => ({
@@ -55,16 +56,20 @@ async function buildController(secret: string) {
   const config = {
     get: jest.fn((key: string, def = '') => (key === 'RESEND_WEBHOOK_SECRET' ? secret : def)),
   };
+  const emailService = {
+    suppressContact: jest.fn().mockResolvedValue(undefined),
+  };
 
   const module: TestingModule = await Test.createTestingModule({
     controllers: [EmailWebhookController],
     providers: [
       { provide: PrismaService, useValue: prisma },
       { provide: ConfigService, useValue: config },
+      { provide: EmailService, useValue: emailService },
     ],
   }).compile();
 
-  return { controller: module.get(EmailWebhookController), prisma };
+  return { controller: module.get(EmailWebhookController), prisma, emailService };
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -72,6 +77,7 @@ async function buildController(secret: string) {
 describe('EmailWebhookController', () => {
   let controller: EmailWebhookController;
   let prisma: { emailLog: { create: jest.Mock }; user: { updateMany: jest.Mock } };
+  let emailService: { suppressContact: jest.Mock };
   let mockVerify: jest.Mock;
 
   afterEach(() => jest.clearAllMocks());
@@ -82,7 +88,7 @@ describe('EmailWebhookController', () => {
     beforeEach(async () => {
       mockVerify = jest.fn();
       MockedWebhook.mockImplementation(() => ({ verify: mockVerify }) as any);
-      ({ controller, prisma } = await buildController(''));
+      ({ controller, prisma, emailService } = await buildController(''));
     });
 
     it('throws ServiceUnavailableException — 503 not a silent pass-through', async () => {
@@ -130,7 +136,7 @@ describe('EmailWebhookController', () => {
     beforeEach(async () => {
       mockVerify = jest.fn();
       MockedWebhook.mockImplementation(() => ({ verify: mockVerify }) as any);
-      ({ controller, prisma } = await buildController(VALID_SECRET));
+      ({ controller, prisma, emailService } = await buildController(VALID_SECRET));
     });
 
     describe('signature verification', () => {
@@ -277,14 +283,6 @@ describe('EmailWebhookController', () => {
           expect(prisma.user.updateMany).not.toHaveBeenCalled();
         });
 
-        it('does not call user.updateMany for email.complained events', async () => {
-          const req = makeReq(makeEvent('email.complained'));
-
-          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
-
-          expect(prisma.user.updateMany).not.toHaveBeenCalled();
-        });
-
         it('still calls user.updateMany even when the bounced address has no user row (updateMany is safe for 0 matches)', async () => {
           prisma.user.updateMany.mockResolvedValue({ count: 0 });
           const req = makeReq(makeEvent('email.bounced', 'em-guest', ['guest@nonexistent.com']));
@@ -296,6 +294,63 @@ describe('EmailWebhookController', () => {
           expect(prisma.user.updateMany).toHaveBeenCalledTimes(1);
         });
       });
+
+      // ── complaint suppression flag (DB update + Resend contact suppression) ────
+      // Invariant: a verified email.complained event must set emailComplained=true
+      // and call EmailService.suppressContact so the address is also marked
+      // unsubscribed in the Resend audience. Without this, the complaint rate
+      // accumulates silently until Resend terminates the account.
+
+      describe('email.complained — user emailComplained flag update', () => {
+        it('calls user.updateMany with emailComplained=true for the complained address', async () => {
+          const req = makeReq(makeEvent('email.complained', 'em-cmp-1', ['complainer@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(prisma.user.updateMany).toHaveBeenCalledWith({
+            where: { email: 'complainer@customer.com' },
+            data: expect.objectContaining({ emailComplained: true }),
+          });
+        });
+
+        it('sets emailComplainedAt to a Date on the user record', async () => {
+          const req = makeReq(makeEvent('email.complained', 'em-cmp-2', ['complainer@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          const [callArg] = prisma.user.updateMany.mock.calls[0];
+          expect(callArg.data.emailComplainedAt).toBeInstanceOf(Date);
+        });
+
+        it('calls emailService.suppressContact with the complained address', async () => {
+          const req = makeReq(makeEvent('email.complained', 'em-cmp-3', ['complainer@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(emailService.suppressContact).toHaveBeenCalledWith('complainer@customer.com');
+        });
+
+        it('does not call user.updateMany for email.bounced events using the complained flag', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-b-1', ['bounced@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          const calls = prisma.user.updateMany.mock.calls;
+          expect(calls.every((c: any[]) => !('emailComplained' in c[0].data))).toBe(true);
+        });
+
+        it('still calls user.updateMany even when the complained address has no user row', async () => {
+          prisma.user.updateMany.mockResolvedValue({ count: 0 });
+          const req = makeReq(makeEvent('email.complained', 'em-cmp-guest', ['guest@nonexistent.com']));
+
+          await expect(
+            controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature),
+          ).resolves.not.toThrow();
+
+          expect(prisma.user.updateMany).toHaveBeenCalledTimes(1);
+        });
+      });
     });
   });
 });
+

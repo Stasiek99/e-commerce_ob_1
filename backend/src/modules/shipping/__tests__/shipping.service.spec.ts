@@ -61,6 +61,8 @@ describe('ShippingService', () => {
             shipment: {
               findUnique: jest.fn(),
               upsert: jest.fn(),
+              findMany: jest.fn(),
+              update: jest.fn(),
             },
           },
         },
@@ -74,6 +76,8 @@ describe('ShippingService', () => {
           provide: StorageService,
           useValue: {
             uploadShippingLabel: jest.fn(),
+            getShippingLabelSignedUrl: jest.fn(),
+            deleteShippingLabel: jest.fn(),
           },
         },
         {
@@ -573,22 +577,139 @@ describe('ShippingService', () => {
     });
   });
 
-  describe('getLabel', () => {
-    it('returns labelUrl and trackingNumber when shipment exists', async () => {
-      prisma.shipment.findUnique.mockResolvedValue({
-        labelUrl: 'https://label.pdf',
-        trackingNumber: 'TRK123',
-      });
-
-      const result = await service.getLabel('order-1');
-
-      expect(result).toEqual({ labelUrl: 'https://label.pdf', trackingNumber: 'TRK123' });
-    });
-
+  describe('getLabel — signed URL generation', () => {
     it('throws NotFoundException when no shipment exists for the order', async () => {
       prisma.shipment.findUnique.mockResolvedValue(null);
 
       await expect(service.getLabel('order-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('calls getShippingLabelSignedUrl and returns the signed URL for a real storage path', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        labelUrl: 'labels/inpost-123.pdf',
+        trackingNumber: 'TRK123',
+      });
+      storage.getShippingLabelSignedUrl.mockResolvedValue('https://supabase.io/signed/labels/inpost-123.pdf?token=xyz');
+
+      const result = await service.getLabel('order-1');
+
+      expect(storage.getShippingLabelSignedUrl).toHaveBeenCalledWith('labels/inpost-123.pdf');
+      expect(result).toEqual({
+        labelUrl: 'https://supabase.io/signed/labels/inpost-123.pdf?token=xyz',
+        trackingNumber: 'TRK123',
+      });
+    });
+
+    it('returns the mock label path as-is without calling getShippingLabelSignedUrl', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        labelUrl: 'mock-label-MOCK_INPOST_ABC.pdf',
+        trackingNumber: 'TRK-MOCK',
+      });
+
+      const result = await service.getLabel('order-1');
+
+      expect(storage.getShippingLabelSignedUrl).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        labelUrl: 'mock-label-MOCK_INPOST_ABC.pdf',
+        trackingNumber: 'TRK-MOCK',
+      });
+    });
+
+    it('returns null labelUrl without calling getShippingLabelSignedUrl when label has not been generated', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        labelUrl: null,
+        trackingNumber: 'TRK-NOLABEL',
+      });
+
+      const result = await service.getLabel('order-1');
+
+      expect(storage.getShippingLabelSignedUrl).not.toHaveBeenCalled();
+      expect(result.labelUrl).toBeNull();
+    });
+  });
+
+  // ─── cleanupStaleShippingLabels cron ──────────────────────────────────────────
+
+  describe('cleanupStaleShippingLabels', () => {
+    it('does not call deleteShippingLabel when there are no stale shipments', async () => {
+      prisma.shipment.findMany.mockResolvedValue([]);
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(storage.deleteShippingLabel).not.toHaveBeenCalled();
+    });
+
+    it('calls deleteShippingLabel for each stale shipment with a real label path', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-1', labelUrl: 'labels/inpost-111.pdf' },
+        { id: 'ship-2', labelUrl: 'labels/gls-222.pdf' },
+      ]);
+      storage.deleteShippingLabel.mockResolvedValue(undefined);
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(storage.deleteShippingLabel).toHaveBeenCalledTimes(2);
+      expect(storage.deleteShippingLabel).toHaveBeenCalledWith('labels/inpost-111.pdf');
+      expect(storage.deleteShippingLabel).toHaveBeenCalledWith('labels/gls-222.pdf');
+    });
+
+    it('nulls out labelUrl in DB for each successfully deleted label', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-1', labelUrl: 'labels/inpost-111.pdf' },
+      ]);
+      storage.deleteShippingLabel.mockResolvedValue(undefined);
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'ship-1' },
+        data: { labelUrl: null },
+      });
+    });
+
+    it('skips mock-label-* paths without calling deleteShippingLabel', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-m', labelUrl: 'mock-label-MOCK_INPOST_XYZ.pdf' },
+      ]);
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(storage.deleteShippingLabel).not.toHaveBeenCalled();
+      expect(prisma.shipment.update).not.toHaveBeenCalled();
+    });
+
+    it('skips shipments with null labelUrl', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-null', labelUrl: null },
+      ]);
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(storage.deleteShippingLabel).not.toHaveBeenCalled();
+    });
+
+    it('continues processing remaining shipments when one deletion fails', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-fail', labelUrl: 'labels/inpost-fail.pdf' },
+        { id: 'ship-ok', labelUrl: 'labels/inpost-ok.pdf' },
+      ]);
+      storage.deleteShippingLabel
+        .mockRejectedValueOnce(new Error('Supabase 503'))
+        .mockResolvedValueOnce(undefined);
+      prisma.shipment.update.mockResolvedValue({});
+
+      // Should not throw even though one deletion failed
+      await expect(service.cleanupStaleShippingLabels()).resolves.toBeUndefined();
+
+      // The second label was still processed
+      expect(storage.deleteShippingLabel).toHaveBeenCalledTimes(2);
+      expect(prisma.shipment.update).toHaveBeenCalledTimes(1);
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'ship-ok' },
+        data: { labelUrl: null },
+      });
     });
   });
 });

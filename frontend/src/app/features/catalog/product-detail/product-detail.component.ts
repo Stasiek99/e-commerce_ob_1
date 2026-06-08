@@ -49,6 +49,8 @@ interface ProductDetail {
   pyramidTop?: string | null;
   pyramidHeart?: string | null;
   pyramidBase?: string | null;
+  status?: string | null;
+  estimatedRestockDate?: string | null;
   images: Array<{ url: string; altText?: string | null }>;
   variants: ProductVariantDetail[];
   category?: { id: string; name: string; slug: string } | null;
@@ -102,6 +104,15 @@ const CATEGORY_LABELS: Record<string, string> = {
           Wróć
         </button>
       </div>
+      @if (product()!.status === 'DISCONTINUED') {
+        <div class="discontinued-banner">
+          <tui-icon icon="@tui.alert-circle" class="discontinued-banner__icon" aria-hidden="true"></tui-icon>
+          <div>
+            <strong>Ten produkt nie jest już dostępny.</strong>
+            <p class="discontinued-banner__hint">Sprawdź podobne produkty w tej kategorii poniżej.</p>
+          </div>
+        </div>
+      }
       <div class="detail">
 
         <!-- Gallery -->
@@ -233,7 +244,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                   appearance="primary"
                   size="l"
                   class="detail__add-btn"
-                  [disabled]="adding() || selectedVariant()!.stock === 0"
+                  [disabled]="adding() || selectedVariant()!.stock === 0 || product()!.status === 'DISCONTINUED'"
                   (click)="addToCart()">
                 {{ adding() ? 'Dodawanie…' : 'Dodaj do koszyka' }}
               </button>
@@ -619,6 +630,19 @@ const CATEGORY_LABELS: Record<string, string> = {
 
     .page { padding: 32px 0 0; }
     .back-btn { margin-bottom: 8px; }
+
+    .discontinued-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 16px 20px;
+      margin: 16px 0;
+      background: var(--tui-background-neutral-1, #f5f5f5);
+      border-left: 4px solid var(--tui-status-warning, #f5a623);
+      border-radius: var(--border-radius-sm, 4px);
+    }
+    .discontinued-banner__icon { color: var(--tui-status-warning, #f5a623); flex-shrink: 0; margin-top: 2px; }
+    .discontinued-banner__hint { margin: 4px 0 0; font-size: 0.875rem; color: var(--tui-text-secondary, #666); }
 
     .detail {
       display: grid;

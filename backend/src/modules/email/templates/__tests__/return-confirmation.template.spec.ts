@@ -122,4 +122,36 @@ describe('returnConfirmationTemplate()', () => {
       expect(html).toContain('lang="pl"');
     });
   });
+
+  // ── XSS — user-supplied fields are HTML-escaped ───────────────────
+
+  describe('XSS — escaping', () => {
+    it('escapes HTML in firstName', () => {
+      const { html } = returnConfirmationTemplate({
+        ...BASE_WITHDRAWAL,
+        firstName: '<script>alert(1)</script>',
+      });
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    });
+
+    it('escapes HTML in item productName', () => {
+      const { html } = returnConfirmationTemplate({
+        ...BASE_WITHDRAWAL,
+        items: [{ productName: '<img src=x onerror=alert(1)>', quantity: 1 }],
+      });
+      expect(html).not.toContain('<img');
+      expect(html).toContain('&lt;img');
+    });
+
+    it('passes safe firstName through unchanged', () => {
+      const { html } = returnConfirmationTemplate(BASE_WITHDRAWAL);
+      expect(html).toContain('Anna');
+    });
+
+    it('passes safe productName through unchanged', () => {
+      const { html } = returnConfirmationTemplate(BASE_WITHDRAWAL);
+      expect(html).toContain('Perfumy Gold 50ml');
+    });
+  });
 });

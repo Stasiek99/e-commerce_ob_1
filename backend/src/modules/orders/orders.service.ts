@@ -52,7 +52,7 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
-  [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.CANCELLED],
+  [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
 };
 
 @Injectable()
@@ -109,7 +109,6 @@ export class OrdersService implements OnModuleInit {
       termsAcceptedAt?: string;
       nip?: string;
       couponCode?: string;
-      marketingConsent?: boolean;
     },
   ) {
     let cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -147,6 +146,11 @@ export class OrdersService implements OnModuleInit {
         where: { id: dto.addressId, userId },
       });
       if (!address) throw new NotFoundException('Address not found');
+      if (address.country !== 'PL') {
+        throw new BadRequestException(
+          'Shipping is only available to Poland (PL) — UN 1266 dangerous goods restriction.',
+        );
+      }
     } else if (dto.newAddress) {
       address = { country: 'PL', ...dto.newAddress };
     } else {
@@ -181,14 +185,6 @@ export class OrdersService implements OnModuleInit {
     if (!snapshotNip && userId) {
       const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { nip: true } });
       snapshotNip = user?.nip ?? null;
-    }
-
-    // Persist marketing consent when customer opts in — once per order, non-blocking
-    if (dto.marketingConsent && userId) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { marketingConsent: true, marketingConsentAt: new Date() },
-      });
     }
 
     // Use the transaction for everything: stock decrement, order creation, cart clearing
@@ -282,6 +278,13 @@ export class OrdersService implements OnModuleInit {
           notes: dto.notes,
           termsVersion: dto.termsVersion,
           termsAcceptedAt: dto.termsAcceptedAt ? new Date(dto.termsAcceptedAt) : undefined,
+          retentionExpiresAt: (() => {
+            // Ustawa o rachunkowości Art. 74: retain financial records for 5 years
+            // from year-end after the fiscal year closes. Order created in year Y
+            // must be kept until Dec 31 of year Y+5.
+            const y = new Date().getFullYear();
+            return new Date(Date.UTC(y + 5, 11, 31, 23, 59, 59, 999));
+          })(),
           items: {
             create: cart.items.map((item: CartItem) => ({
               productVariantId: item.productVariantId,
@@ -821,6 +824,13 @@ export class OrdersService implements OnModuleInit {
     await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
 
     const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+
+    if (order.invoiceNumber) {
+      this.invoiceService
+        .processCorrectiveInvoice(orderId, order.invoiceNumber, refundAmountInCents, 'PARTIAL_CANCELLATION')
+        .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
+    }
+
     this.emailService
       .sendOrderCancellation({
         to: order.snapshotEmail,
@@ -830,6 +840,28 @@ export class OrdersService implements OnModuleInit {
         isRefund: true,
       })
       .catch((err) => this.logger.warn('Partial refund cancellation email failed', err));
+  }
+
+  async getCorrectiveInvoiceForUser(orderId: string, userId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string }> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    const result = await this.invoiceService.getCorrectiveInvoiceUrl(orderId);
+    if (!result) throw new NotFoundException('No corrective invoice found for this order');
+    return result;
+  }
+
+  async getCorrectiveInvoiceAdmin(orderId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    const result = await this.invoiceService.getCorrectiveInvoiceUrl(orderId);
+    if (!result) throw new NotFoundException('No corrective invoice found for this order');
+    return result;
   }
 
   async approveFraudReview(orderId: string): Promise<void> {
@@ -868,6 +900,12 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (current.status === status) return;
+
+    if (current.status === OrderStatus.DISPUTE_HOLD && status === OrderStatus.CANCELLED) {
+      throw new ConflictException(
+        'Cannot manually cancel an order under dispute. Wait for the Stripe charge.dispute.closed webhook to resolve the dispute before taking action.',
+      );
+    }
 
     if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
       throw new BadRequestException(
@@ -1056,7 +1094,6 @@ export class OrdersService implements OnModuleInit {
         orderNumber: true,
         snapshotEmail: true,
         snapshotFirstName: true,
-        user: { select: { marketingConsent: true } },
         items: {
           include: {
             productVariant: {
@@ -1076,7 +1113,6 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (!order) return;
-    if (!order.user?.marketingConsent) return;
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
 

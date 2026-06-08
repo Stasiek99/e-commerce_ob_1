@@ -56,7 +56,9 @@ async function bootstrap() {
   app.use(cookieParser());
 
   app.useGlobalFilters(new PrismaPoolExceptionFilter());
-  app.useGlobalInterceptors(new TimeoutInterceptor(30_000));
+  // 8 s < Railway's SIGTERM→SIGKILL window (≈10 s), so in-flight requests are
+  // always aborted by the interceptor before the OS tears the process down.
+  app.useGlobalInterceptors(new TimeoutInterceptor(8_000));
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -101,6 +103,16 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
+
+  const server = app.getHttpServer();
+  // Idle keep-alive connections hold the process open past Railway's SIGKILL.
+  // 5 s < SIGKILL window (≈10 s), so they drain before the OS force-kills.
+  server.keepAliveTimeout = 5_000;
+  // On SIGTERM, immediately drop idle connections so the process can exit cleanly
+  // within the SIGKILL window. Active in-flight requests finish normally (bounded
+  // by the 8 s TimeoutInterceptor above).
+  process.once('SIGTERM', () => server.closeIdleConnections());
+
   app.get(Logger).log(`Backend running on http://localhost:${port}`, 'Bootstrap');
 }
 

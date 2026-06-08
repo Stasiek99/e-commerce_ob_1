@@ -75,3 +75,10 @@ export enum ReturnStatus {
   REJECTED = 'REJECTED',
   COMPLETED = 'COMPLETED',
 }
+
+export enum ProductStatus {
+  ACTIVE = 'ACTIVE',
+  OUT_OF_STOCK = 'OUT_OF_STOCK',
+  DISCONTINUED = 'DISCONTINUED',
+  COMING_SOON = 'COMING_SOON',
+}

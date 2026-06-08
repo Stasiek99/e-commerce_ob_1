@@ -5,7 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { combineLatest, debounceTime, switchMap, catchError, of } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { TuiButton, TuiDataList, TuiDropdown, TuiIcon, TuiLink, TuiPopup } from '@taiga-ui/core';
-import { TuiAccordion, TuiCheckbox, TuiChevron, TuiChip, TuiDrawer, TuiPagination, TuiSwitch } from '@taiga-ui/kit';
+import { TuiAccordion, TuiCheckbox, TuiChevron, TuiChip, TuiDrawer, TuiPagination, TuiSwitch, TuiTooltip } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 import { SeoService } from '../../../core/services/seo.service';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
@@ -140,6 +140,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
     TuiDrawer,
     TuiPagination,
     TuiSwitch,
+    TuiTooltip,
     ProductCardComponent,
     BreadcrumbComponent,
   ],
@@ -175,6 +176,12 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
           @for (option of sortOptions; track option.value) {
             <button tuiOption type="button" (click)="setSortBy(option.value)">
               {{ option.label }}
+              @if (option.value === 'relevance') {
+                <tui-icon
+                  [tuiHintDirection]="'right'"
+                  tuiTooltip="Polecane — sortowanie na podstawie popularności i dostępności, bez płatnego promowania."
+                />
+              }
               @if (sortBy() === option.value) {
                 <tui-icon icon="@tui.check" />
               }

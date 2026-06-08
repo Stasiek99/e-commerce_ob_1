@@ -521,7 +521,7 @@ export class AuthService {
   }
 
   private signAccessToken(user: User): string {
-    return this.jwtService.sign({ sub: user.id, email: user.email, role: user.role });
+    return this.jwtService.sign({ sub: user.id, email: user.email, role: user.role, jti: uuidv4() });
   }
 
   /**
@@ -536,5 +536,15 @@ export class AuthService {
       'EX',
       AuthService.REVOKE_BEFORE_TTL_SECS,
     );
+  }
+
+  /**
+   * Revokes a single access token by its jti. Use this for targeted device
+   * logout (e.g., "log out this session only") without invalidating other
+   * active sessions. ttlSecs should be set to the token's remaining validity
+   * so the Redis key self-expires when the token would have expired anyway.
+   */
+  async revokeAccessTokenJti(jti: string, ttlSecs: number): Promise<void> {
+    await this.redis.set(`auth:revoked-jti:${jti}`, '1', 'EX', ttlSecs);
   }
 }

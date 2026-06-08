@@ -109,6 +109,11 @@ describe('PaymentsService', () => {
               create: jest.fn().mockResolvedValue({}),
               deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
+            outboxMessage: {
+              create: jest.fn().mockResolvedValue({ id: 'outbox-1' }),
+              update: jest.fn().mockResolvedValue({}),
+              findMany: jest.fn().mockResolvedValue([]),
+            },
             $transaction: jest.fn(),
           },
         },
@@ -164,6 +169,23 @@ describe('PaymentsService', () => {
     stripeClient = module.get(StripeClient);
     emailService = module.get(EmailQueueService);
     invoiceService = module.get(InvoiceService);
+
+    // Default: pass prisma mock methods as tx so callback-form $transaction
+    // executes the callback and tests can assert on prisma.* directly.
+    // Individual tests that need different transaction behaviour override this.
+    prisma.$transaction.mockImplementation(async (fn: any) => {
+      if (typeof fn === 'function') {
+        return fn({
+          processedStripeEvent: prisma.processedStripeEvent,
+          payment: prisma.payment,
+          order: prisma.order,
+          orderEvent: prisma.orderEvent,
+          productVariant: prisma.productVariant,
+          outboxMessage: prisma.outboxMessage,
+        });
+      }
+      return Promise.all(fn);
+    });
   });
 
   describe('handleWebhookEvent', () => {
@@ -192,7 +214,6 @@ describe('PaymentsService', () => {
 
     it('marks payment COMPLETED on checkout.session.completed', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.completed', mockSession),
@@ -204,7 +225,7 @@ describe('PaymentsService', () => {
       });
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       const txArgs = prisma.$transaction.mock.calls[0][0];
-      expect(Array.isArray(txArgs)).toBe(true);
+      expect(typeof txArgs).toBe('function');
       // The invoice + email chain is fire-and-forget; flush microtasks before asserting
       await Promise.resolve();
       expect(emailService.sendPaymentConfirmedWithInvoice).toHaveBeenCalled();
@@ -328,7 +349,6 @@ describe('PaymentsService', () => {
 
     it('records the event_id before dispatching to any handler', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       const event = buildEvent('checkout.session.completed', mockSession);
       await service.handleWebhookEvent(event);
@@ -383,7 +403,6 @@ describe('PaymentsService', () => {
 
       it('sets order status to FRAUD_REVIEW and alerts admin when Radar risk_level is elevated', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
         stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
           latest_charge: { outcome: { risk_level: 'elevated' } },
         } as any);
@@ -401,7 +420,6 @@ describe('PaymentsService', () => {
 
       it('sets order status to FRAUD_REVIEW when Radar risk_level is highest', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
         stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
           latest_charge: { outcome: { risk_level: 'highest' } },
         } as any);
@@ -417,7 +435,6 @@ describe('PaymentsService', () => {
 
       it('does not send customer confirmation when order is held for fraud review', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
         stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
           latest_charge: { outcome: { risk_level: 'elevated' } },
         } as any);
@@ -433,7 +450,6 @@ describe('PaymentsService', () => {
 
       it('sets order status to PAID and sends customer email when risk_level is normal', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
         stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
           latest_charge: { outcome: { risk_level: 'normal' } },
         } as any);
@@ -452,7 +468,6 @@ describe('PaymentsService', () => {
 
       it('defaults to PAID when retrievePaymentIntentWithCharge throws (resilience)', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
         stripeClient.retrievePaymentIntentWithCharge.mockRejectedValue(
           new Error('Stripe API timeout'),
         );
@@ -469,7 +484,6 @@ describe('PaymentsService', () => {
 
       it('defaults to PAID and skips Radar check when paymentIntentId is null', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
 
         await service.handleWebhookEvent(
           buildEvent('checkout.session.completed', { ...mockSession, payment_intent: null }),
@@ -483,7 +497,6 @@ describe('PaymentsService', () => {
 
       it('includes the Radar risk level in the orderEvent note when flagged', async () => {
         prisma.payment.findUnique.mockResolvedValue(mockPaymentForFraud);
-        prisma.$transaction.mockResolvedValue([{}, {}, {}]);
         stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
           latest_charge: { outcome: { risk_level: 'elevated' } },
         } as any);
@@ -516,7 +529,6 @@ describe('PaymentsService', () => {
         order: { ...mockPayment.order, status: OrderStatus.PENDING_PAYMENT },
       };
       prisma.payment.findUnique.mockResolvedValue(paymentInPending);
-      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.completed', mockSession),
@@ -535,7 +547,6 @@ describe('PaymentsService', () => {
         order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
       };
       prisma.payment.findUnique.mockResolvedValue(paymentInFraudReview);
-      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.completed', mockSession),
@@ -554,7 +565,6 @@ describe('PaymentsService', () => {
         order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
       };
       prisma.payment.findUnique.mockResolvedValue(paymentInFraudReview);
-      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
 
       await service.handleWebhookEvent(
         buildEvent('checkout.session.completed', mockSession),
@@ -570,7 +580,6 @@ describe('PaymentsService', () => {
         order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
       };
       prisma.payment.findUnique.mockResolvedValue(paymentInFraudReview);
-      prisma.$transaction.mockResolvedValue([{}, {}, {}]);
       stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
         latest_charge: { outcome: { risk_level: 'normal' } },
       } as any);
@@ -885,14 +894,17 @@ describe('PaymentsService', () => {
       expect((stripeClient as any).expireCheckoutSession).not.toHaveBeenCalled();
     });
 
-    // ── BLIK/P24 velocity guard ──────────────────────────────────────────────
+    // ── per-identity velocity guard (replaces the broken city-level check) ──────
+    // City-level guard blocked the 5th legitimate Warsaw customer during promotions.
+    // Per-userId (authenticated) or per-email (guest) scope prevents that while
+    // still catching the realistic abuse pattern: a single identity spamming checkout.
 
-    it('throws 429 when >3 orders from the same city were created in the last 30 minutes', async () => {
+    it('throws 429 when >5 orders from the same user were initiated in the last 30 minutes', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         ...mockOrderWithItems,
-        snapshotCity: 'Kraków',
+        userId: 'user-1',
       });
-      prisma.order.count.mockResolvedValue(4);
+      prisma.order.count.mockResolvedValue(6);
 
       await expect(service.initiatePayment('order-1')).rejects.toThrow(
         'Order velocity limit reached',
@@ -900,12 +912,12 @@ describe('PaymentsService', () => {
       expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
     });
 
-    it('allows checkout when exactly 3 orders from the same city exist in the window', async () => {
+    it('allows checkout when exactly 5 orders from the same user exist in the window', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         ...mockOrderWithItems,
-        snapshotCity: 'Kraków',
+        userId: 'user-1',
       });
-      prisma.order.count.mockResolvedValue(3);
+      prisma.order.count.mockResolvedValue(5);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
       prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
@@ -914,11 +926,10 @@ describe('PaymentsService', () => {
       expect(result.paymentUrl).toBe(mockSession.url);
     });
 
-    it('scopes velocity check to the order snapshotCity', async () => {
-      const city = 'Gdańsk';
+    it('scopes velocity check to userId for authenticated orders', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         ...mockOrderWithItems,
-        snapshotCity: city,
+        userId: 'user-abc',
       });
       prisma.order.count.mockResolvedValue(0);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
@@ -928,7 +939,45 @@ describe('PaymentsService', () => {
 
       expect(prisma.order.count).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ snapshotCity: city }),
+          where: expect.objectContaining({ userId: 'user-abc' }),
+        }),
+      );
+    });
+
+    it('scopes velocity check to snapshotEmail for guest orders (no userId)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        userId: null,
+        snapshotEmail: 'guest@example.com',
+      });
+      prisma.order.count.mockResolvedValue(0);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(prisma.order.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ snapshotEmail: 'guest@example.com' }),
+        }),
+      );
+    });
+
+    it('does NOT scope velocity check to snapshotCity — city-level guard is removed', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithItems,
+        userId: 'user-1',
+        snapshotCity: 'Warszawa',
+      });
+      prisma.order.count.mockResolvedValue(0);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(prisma.order.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.not.objectContaining({ snapshotCity: expect.anything() }),
         }),
       );
     });
@@ -2141,7 +2190,11 @@ describe('PaymentsService', () => {
               orderItem: { update: jest.fn(), findMany: jest.fn() },
               productVariant: { update: jest.fn() },
               processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-              $transaction: jest.fn().mockResolvedValue([{}, {}]),
+              outboxMessage: {
+                create: jest.fn().mockResolvedValue({ id: 'outbox-notif-1' }),
+                update: jest.fn().mockResolvedValue({}),
+              },
+              $transaction: jest.fn(),
             },
           },
           {
@@ -2190,6 +2243,20 @@ describe('PaymentsService', () => {
       notifService = module.get(PaymentsService);
       notifPrisma = module.get(PrismaService);
       notifEmail = module.get(EmailQueueService);
+
+      notifPrisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          return fn({
+            processedStripeEvent: notifPrisma.processedStripeEvent,
+            payment: notifPrisma.payment,
+            order: notifPrisma.order,
+            orderEvent: notifPrisma.orderEvent,
+            productVariant: notifPrisma.productVariant,
+            outboxMessage: notifPrisma.outboxMessage,
+          });
+        }
+        return Promise.all(fn);
+      });
     });
 
     const triggerPaid = async () => {
@@ -2444,7 +2511,6 @@ describe('PaymentsService', () => {
       ]);
       stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.reconcilePendingPayments();
 
@@ -2459,7 +2525,6 @@ describe('PaymentsService', () => {
       ]);
       stripeClient.retrieveCheckoutSession.mockResolvedValue(paidSession);
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.reconcilePendingPayments();
 
@@ -2471,7 +2536,6 @@ describe('PaymentsService', () => {
 
     it('inserts both paid-{session.id} and eventId when called from webhook path', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       const event = buildEvent('checkout.session.completed', mockSession);
       await service.handleWebhookEvent(event);
