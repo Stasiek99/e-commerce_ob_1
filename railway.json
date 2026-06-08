@@ -2,6 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
+    "installCommand": "pnpm install --frozen-lockfile",
     "buildCommand": "pnpm --filter @fragrance-store/shared-types build && pnpm --filter backend exec prisma generate && pnpm --filter backend build",
     "watchPatterns": [
       "backend/**",
