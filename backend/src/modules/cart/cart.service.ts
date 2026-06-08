@@ -48,16 +48,13 @@ export class CartService {
     quantity: number,
   ) {
     await this.prisma.$transaction(async (tx) => {
-      // Lock the variant row for the duration of this transaction.
-      // Without FOR UPDATE, two concurrent addItem calls can both read the same
-      // stale stock value and both succeed — creating a silent oversell window.
-      const rows = await tx.$queryRaw<Array<{ id: string; isActive: boolean; stock: number }>>`
-        SELECT id, "isActive", stock
-        FROM product_variants
-        WHERE id = ${productVariantId}::uuid
-        FOR UPDATE
-      `;
-      const variant = rows[0];
+      // Best-effort stock guard: FOR UPDATE is a no-op on pgbouncer transaction mode,
+      // so we read without a lock. The authoritative atomic check-and-decrement
+      // happens in createFromCart via updateMany WHERE stock >= quantity.
+      const variant = await tx.productVariant.findUnique({
+        where: { id: productVariantId },
+        select: { id: true, isActive: true, stock: true },
+      });
       if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
 
       const cart =
@@ -104,13 +101,10 @@ export class CartService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ stock: number; isActive: boolean }>>`
-        SELECT stock, "isActive"
-        FROM product_variants
-        WHERE id = ${productVariantId}::uuid
-        FOR UPDATE
-      `;
-      const variant = rows[0];
+      const variant = await tx.productVariant.findUnique({
+        where: { id: productVariantId },
+        select: { isActive: true, stock: true },
+      });
       if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
       if (quantity > MAX_CART_QTY_PER_VARIANT)
         throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
@@ -142,17 +136,13 @@ export class CartService {
 
   async mergeGuestCart(userId: string, sessionId: string) {
     await this.prisma.$transaction(async (tx) => {
-      // Lock the guest cart row for the duration of this transaction.
-      // Without FOR UPDATE, a concurrent addItem call can insert a new item
-      // between our read and the delete below, orphaning that item.
-      const rows = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM carts
-        WHERE "sessionId" = ${sessionId} AND "userId" IS NULL
-        FOR UPDATE
-      `;
-      if (rows.length === 0) return;
+      const guestCart = await tx.cart.findFirst({
+        where: { sessionId, userId: null },
+        select: { id: true },
+      });
+      if (!guestCart) return;
 
-      const guestCartId = rows[0].id;
+      const guestCartId = guestCart.id;
       const guestItems = await tx.cartItem.findMany({ where: { cartId: guestCartId } });
       if (guestItems.length === 0) return;
 

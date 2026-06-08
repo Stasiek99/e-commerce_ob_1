@@ -28,7 +28,6 @@ const makeCartItem = (qty = 2) => ({
 // Minimal tx stub reused across transaction-based tests — mirrors the real PrismaService shape
 // that the transaction callback receives.
 const makeTx = (overrides: Record<string, any> = {}) => ({
-  $queryRaw: jest.fn(),
   cart: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
   cartItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   productVariant: { findUnique: jest.fn() },
@@ -79,7 +78,7 @@ describe('CartService', () => {
 
     it('throws NotFoundException when variant does not exist', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([]); // no rows → variant not found
+      tx.productVariant.findUnique.mockResolvedValue(null);
       setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
@@ -89,7 +88,7 @@ describe('CartService', () => {
 
     it('throws NotFoundException when variant is inactive', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: false, stock: 10 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: false, stock: 10 });
       setupTx(tx);
 
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
@@ -99,7 +98,7 @@ describe('CartService', () => {
 
     it('throws BadRequestException when requested quantity exceeds stock', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 3 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 3 });
       tx.cart.findFirst.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(null);
       setupTx(tx);
@@ -111,7 +110,7 @@ describe('CartService', () => {
 
     it('creates a new cart if one does not exist', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 10 });
       tx.cart.findFirst.mockResolvedValue(null);
       tx.cart.create.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(null);
@@ -128,7 +127,7 @@ describe('CartService', () => {
 
     it('creates a new cart item when variant is not yet in cart', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 10 });
       tx.cart.findFirst.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cartItem.create.mockResolvedValue({});
@@ -149,7 +148,7 @@ describe('CartService', () => {
     it('increments quantity when variant is already in cart', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 1 };
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 10 });
       tx.cart.findFirst.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(existing);
       tx.cartItem.update.mockResolvedValue({});
@@ -168,7 +167,7 @@ describe('CartService', () => {
     it('throws BadRequestException when cumulative quantity exceeds MAX_CART_QTY_PER_VARIANT', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 2 };
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 10 });
       tx.cart.findFirst.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(existing);
       setupTx(tx);
@@ -182,7 +181,7 @@ describe('CartService', () => {
     it('throws BadRequestException when cumulative quantity exceeds stock', async () => {
       const existing = { id: 'ci-1', cartId: 'cart-1', productVariantId: 'pv-1', quantity: 8 };
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 10 }]);
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 10 });
       tx.cart.findFirst.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(existing);
       setupTx(tx);
@@ -193,21 +192,35 @@ describe('CartService', () => {
       );
     });
 
-    it('FOR UPDATE lock serializes concurrent adds: second caller sees updated stock', async () => {
-      // Simulate what happens in production: after the first transaction commits,
-      // the row lock is released and the next caller reads the fresh (decremented) stock.
-      // Here we verify that the service correctly rejects when $queryRaw returns a
-      // stock value that already reflects a prior caller's reservation.
+    it('rejects when stock was depleted by a concurrent request (optimistic guard)', async () => {
+      // Optimistic concurrency: stock=0 means another request already reserved the last unit.
+      // The real atomic guard is in createFromCart (updateMany WHERE stock >= qty);
+      // addItem provides a best-effort UX guard that still catches the obvious case.
       const tx = makeTx();
-      // Stock is 0 — a concurrent request already reserved the last unit
-      tx.$queryRaw.mockResolvedValue([{ id: 'pv-1', isActive: true, stock: 0 }]);
-      tx.cart.findFirst.mockResolvedValue(makeCart()); // reach the stock check
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 0 });
+      tx.cart.findFirst.mockResolvedValue(makeCart());
       tx.cartItem.findUnique.mockResolvedValue(null);
       setupTx(tx);
 
-      // Requesting qty=1 against stock=0 must be rejected
       await expect(service.addItem(undefined, 'sess-1', 'pv-1', 1)).rejects.toThrow(
         BadRequestException,
+      );
+    });
+
+    it('reads variant via findUnique (not raw SQL) — confirms pgbouncer-safe path', async () => {
+      const tx = makeTx();
+      tx.productVariant.findUnique.mockResolvedValue({ id: 'pv-1', isActive: true, stock: 10 });
+      tx.cart.findFirst.mockResolvedValue(makeCart());
+      tx.cartItem.findUnique.mockResolvedValue(null);
+      tx.cartItem.create.mockResolvedValue({});
+      setupTx(tx);
+
+      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [makeCartItem(1)] });
+
+      await service.addItem(undefined, 'sess-1', 'pv-1', 1);
+
+      expect(tx.productVariant.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'pv-1' } }),
       );
     });
   });
@@ -218,9 +231,9 @@ describe('CartService', () => {
       prisma.$transaction.mockImplementation((fn: (tx: any) => Promise<any>) => fn(tx));
     };
 
-    it('does nothing when no guest cart exists (FOR UPDATE returns no rows)', async () => {
+    it('does nothing when no guest cart exists', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([]); // no guest cart locked
+      tx.cart.findFirst.mockResolvedValue(null); // no guest cart
       setupMergeTx(tx);
 
       await service.mergeGuestCart('user-1', 'sess-1');
@@ -231,7 +244,8 @@ describe('CartService', () => {
 
     it('does nothing when guest cart exists but has no items', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      // First call: guest cart lookup; second call would be user cart (never reached)
+      tx.cart.findFirst.mockResolvedValueOnce({ id: 'guest-cart' });
       tx.cartItem.findMany.mockResolvedValue([]); // empty cart
       setupMergeTx(tx);
 
@@ -242,9 +256,10 @@ describe('CartService', () => {
 
     it('claims guest cart by assigning userId when user has no existing cart', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })  // guest cart lookup
+        .mockResolvedValueOnce(null);                   // user cart lookup → none
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
-      tx.cart.findFirst.mockResolvedValue(null); // no user cart
       tx.cart.update.mockResolvedValue({});
       setupMergeTx(tx);
 
@@ -259,9 +274,10 @@ describe('CartService', () => {
 
     it('merges new items into user cart and deletes guest cart', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })   // guest cart lookup
+        .mockResolvedValueOnce({ id: 'user-cart' });   // user cart lookup
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null); // variant not yet in user cart
       tx.cartItem.create.mockResolvedValue({});
@@ -278,9 +294,10 @@ describe('CartService', () => {
 
     it('accumulates quantity when item already exists in user cart (within cap)', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]); // guest qty 1
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 1 }); // user qty 1
       tx.cartItem.update.mockResolvedValue({});
@@ -297,11 +314,12 @@ describe('CartService', () => {
       expect(tx.cart.delete).toHaveBeenCalledWith({ where: { id: 'guest-cart' } });
     });
 
-    it('acquires FOR UPDATE lock on the guest cart row to prevent concurrent item orphaning', async () => {
+    it('uses cart.findFirst (not raw SQL) to locate the guest cart — confirms pgbouncer-safe path', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cartItem.create.mockResolvedValue({});
@@ -310,16 +328,18 @@ describe('CartService', () => {
 
       await service.mergeGuestCart('user-1', 'sess-1');
 
-      const rawQuery: string = (tx.$queryRaw.mock.calls[0][0] as string[]).join('');
-      expect(rawQuery).toMatch(/FOR UPDATE/i);
-      expect(rawQuery).toMatch(/carts/i);
+      // Guest cart lookup must use ORM findFirst (WHERE sessionId + userId IS NULL)
+      expect(tx.cart.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { sessionId: 'sess-1', userId: null } }),
+      );
     });
 
     it('runs the entire merge atomically inside a single $transaction call', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cartItem.create.mockResolvedValue({});
@@ -331,18 +351,16 @@ describe('CartService', () => {
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
-    // ── Fix: MAX_CART_QTY_PER_VARIANT and stock guard in mergeGuestCart ────────
+    // ── MAX_CART_QTY_PER_VARIANT and stock guard in mergeGuestCart ────────────
     // Invariant: merged quantity must never exceed MAX (2) or variant.stock.
-    // An attacker could bypass addItem's per-unit guard by adding 2 as guest
-    // then logging in to an account that already has 2 — producing qty=4 and
-    // negative stock at checkout time.
 
     it('caps merged quantity at MAX_CART_QTY_PER_VARIANT when sum would exceed cap', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       // Guest has 2 units; user cart also has 2 → uncapped sum = 4, capped = 2
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
       tx.cartItem.update.mockResolvedValue({});
@@ -357,10 +375,11 @@ describe('CartService', () => {
 
     it('caps merged quantity at MAX_CART_QTY_PER_VARIANT when creating a new user cart item', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
-      // Guest has qty 2 but stock is also 2 — cap at min(2, 2, 2) = 2, which is the cap
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
+      // Guest has qty 2, stock is 10 — cap at min(2, 2, 10) = 2
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cartItem.create.mockResolvedValue({});
@@ -377,9 +396,10 @@ describe('CartService', () => {
 
     it('caps merged quantity at available stock when stock is less than MAX', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 2 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       // Only 1 unit left in stock
       tx.productVariant.findUnique.mockResolvedValue({ stock: 1 });
       tx.cartItem.findUnique.mockResolvedValue(null);
@@ -397,9 +417,10 @@ describe('CartService', () => {
 
     it('skips item entirely when variant has zero stock', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 0 });
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cart.delete.mockResolvedValue({});
@@ -413,9 +434,10 @@ describe('CartService', () => {
 
     it('skips item when variant lookup returns null (variant deleted between add and merge)', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-deleted', quantity: 2 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue(null); // variant no longer exists
       tx.cartItem.findUnique.mockResolvedValue(null);
       tx.cart.delete.mockResolvedValue({});
@@ -429,10 +451,11 @@ describe('CartService', () => {
 
     it('does not call update when newQty equals existing quantity after capping', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       // Guest has 1 qty, user already has 2 → min(3, 2, 10) = 2 === existing.quantity
       tx.cartItem.findMany.mockResolvedValue([{ productVariantId: 'pv-1', quantity: 1 }]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique.mockResolvedValue({ stock: 10 });
       tx.cartItem.findUnique.mockResolvedValue({ id: 'ci-1', quantity: 2 });
       tx.cart.delete.mockResolvedValue({});
@@ -445,12 +468,13 @@ describe('CartService', () => {
 
     it('handles multiple guest items: caps each independently', async () => {
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ id: 'guest-cart' }]);
+      tx.cart.findFirst
+        .mockResolvedValueOnce({ id: 'guest-cart' })
+        .mockResolvedValueOnce({ id: 'user-cart' });
       tx.cartItem.findMany.mockResolvedValue([
         { productVariantId: 'pv-1', quantity: 2 }, // would exceed cap when merged with existing 2
         { productVariantId: 'pv-2', quantity: 1 }, // within cap — no existing user item
       ]);
-      tx.cart.findFirst.mockResolvedValue({ id: 'user-cart' });
       tx.productVariant.findUnique
         .mockResolvedValueOnce({ stock: 10 }) // pv-1
         .mockResolvedValueOnce({ stock: 10 }); // pv-2
@@ -523,7 +547,7 @@ describe('CartService', () => {
     it('throws NotFoundException when variant does not exist', async () => {
       prisma.cart.findFirst.mockResolvedValue(makeCart());
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([]); // no rows → variant not found
+      tx.productVariant.findUnique.mockResolvedValue(null);
       setupUpdateTx(tx);
 
       await expect(
@@ -534,7 +558,7 @@ describe('CartService', () => {
     it('throws NotFoundException when variant is inactive', async () => {
       prisma.cart.findFirst.mockResolvedValue(makeCart());
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: false }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10, isActive: false });
       setupUpdateTx(tx);
 
       await expect(
@@ -545,7 +569,7 @@ describe('CartService', () => {
     it('throws BadRequestException when requested quantity exceeds stock', async () => {
       prisma.cart.findFirst.mockResolvedValue(makeCart());
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ stock: 1, isActive: true }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 1, isActive: true });
       setupUpdateTx(tx);
 
       await expect(
@@ -560,7 +584,7 @@ describe('CartService', () => {
         .mockResolvedValueOnce(cart)        // findCart
         .mockResolvedValueOnce(cartWithItem); // getOrCreate re-fetch
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10, isActive: true });
       tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
       setupUpdateTx(tx);
 
@@ -575,7 +599,7 @@ describe('CartService', () => {
       const cart = makeCart();
       prisma.cart.findFirst.mockResolvedValue(cart);
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10, isActive: true });
       setupUpdateTx(tx);
 
       // quantity=3 > MAX_CART_QTY_PER_VARIANT (2)
@@ -584,11 +608,10 @@ describe('CartService', () => {
       );
     });
 
-    it('FOR UPDATE lock serializes concurrent updates: second caller sees depleted stock', async () => {
+    it('rejects when stock was depleted by a concurrent request (optimistic guard)', async () => {
       prisma.cart.findFirst.mockResolvedValue(makeCart());
       const tx = makeTx();
-      // Stock is 0 after a concurrent request already updated the item
-      tx.$queryRaw.mockResolvedValue([{ stock: 0, isActive: true }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 0, isActive: true });
       setupUpdateTx(tx);
 
       await expect(
@@ -596,22 +619,22 @@ describe('CartService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('acquires FOR UPDATE lock on the variant row', async () => {
+    it('reads variant via findUnique (not raw SQL) — confirms pgbouncer-safe path', async () => {
       const cart = makeCart();
       const cartWithItem = { ...cart, items: [makeCartItem(2)] };
       prisma.cart.findFirst
         .mockResolvedValueOnce(cart)
         .mockResolvedValueOnce(cartWithItem);
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10, isActive: true });
       tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
       setupUpdateTx(tx);
 
       await service.updateItem(undefined, 'sess-1', 'pv-1', 2);
 
-      const rawQuery: string = (tx.$queryRaw.mock.calls[0][0] as string[]).join('');
-      expect(rawQuery).toMatch(/FOR UPDATE/i);
-      expect(rawQuery).toMatch(/product_variants/i);
+      expect(tx.productVariant.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'pv-1' } }),
+      );
     });
 
     it('runs the stock check and cart write inside a single $transaction call', async () => {
@@ -621,7 +644,7 @@ describe('CartService', () => {
         .mockResolvedValueOnce(cart)
         .mockResolvedValueOnce(cartWithItem);
       const tx = makeTx();
-      tx.$queryRaw.mockResolvedValue([{ stock: 10, isActive: true }]);
+      tx.productVariant.findUnique.mockResolvedValue({ stock: 10, isActive: true });
       tx.cartItem.updateMany.mockResolvedValue({ count: 1 });
       setupUpdateTx(tx);
 
