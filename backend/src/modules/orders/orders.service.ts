@@ -52,7 +52,7 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
-  [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.CANCELLED],
+  [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
 };
 
 @Injectable()
@@ -897,6 +897,12 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (current.status === status) return;
+
+    if (current.status === OrderStatus.DISPUTE_HOLD && status === OrderStatus.CANCELLED) {
+      throw new ConflictException(
+        'Cannot manually cancel an order under dispute. Wait for the Stripe charge.dispute.closed webhook to resolve the dispute before taking action.',
+      );
+    }
 
     if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
       throw new BadRequestException(

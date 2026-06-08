@@ -1718,6 +1718,75 @@ describe('OrdersService', () => {
         await expect(service.updateStatus('o-1', target)).resolves.not.toThrow();
       }
     });
+
+    // ── DISPUTE_HOLD → CANCELLED guard ────────────────────────────────────────
+    // Admins must not manually cancel a disputed order — the dispute may still
+    // be pending in Stripe. Cancelling early desynchronises DB state from Stripe:
+    // when charge.dispute.closed arrives, handleDisputeClosed finds CANCELLED and
+    // silently exits, leaving the dispute unresolved. The only allowed exit from
+    // DISPUTE_HOLD is via the webhook.
+
+    it('throws ConflictException when admin attempts DISPUTE_HOLD → CANCELLED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('includes guidance to wait for the webhook in the ConflictException message', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow('charge.dispute.closed');
+    });
+
+    it('does not open a transaction when the DISPUTE_HOLD → CANCELLED guard fires', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('does not restore stock when the DISPUTE_HOLD → CANCELLED guard fires', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.CANCELLED),
+      ).rejects.toThrow(ConflictException);
+
+      // $transaction never opened means no variant.update was ever called
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('allows DISPUTE_HOLD → PAID (legitimate dispute win resolved via admin)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_HOLD,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateStatus('o-1', OrderStatus.PAID),
+      ).resolves.not.toThrow();
+    });
   });
 
   describe('createFromCart (coupon branches)', () => {
