@@ -15,6 +15,7 @@ interface User {
   phone?: string;
   nip?: string | null;
   isEmailVerified: boolean;
+  marketingConsent?: boolean;
 }
 
 interface TokensResponse {

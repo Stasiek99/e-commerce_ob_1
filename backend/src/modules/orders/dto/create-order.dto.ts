@@ -108,7 +108,4 @@ export class CreateOrderDto {
   @MaxLength(32)
   couponCode?: string;
 
-  @IsOptional()
-  @IsBoolean()
-  marketingConsent?: boolean;
 }

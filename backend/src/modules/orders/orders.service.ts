@@ -109,7 +109,6 @@ export class OrdersService implements OnModuleInit {
       termsAcceptedAt?: string;
       nip?: string;
       couponCode?: string;
-      marketingConsent?: boolean;
     },
   ) {
     let cart = await this.cartService.getOrCreate(userId, sessionId);
@@ -181,14 +180,6 @@ export class OrdersService implements OnModuleInit {
     if (!snapshotNip && userId) {
       const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { nip: true } });
       snapshotNip = user?.nip ?? null;
-    }
-
-    // Persist marketing consent when customer opts in — once per order, non-blocking
-    if (dto.marketingConsent && userId) {
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { marketingConsent: true, marketingConsentAt: new Date() },
-      });
     }
 
     // Use the transaction for everything: stock decrement, order creation, cart clearing
@@ -1098,7 +1089,6 @@ export class OrdersService implements OnModuleInit {
         orderNumber: true,
         snapshotEmail: true,
         snapshotFirstName: true,
-        user: { select: { marketingConsent: true } },
         items: {
           include: {
             productVariant: {
@@ -1118,7 +1108,6 @@ export class OrdersService implements OnModuleInit {
     });
 
     if (!order) return;
-    if (!order.user?.marketingConsent) return;
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
 

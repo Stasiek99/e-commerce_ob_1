@@ -438,19 +438,6 @@ interface AppliedCoupon {
                   i&nbsp;<a routerLink="/legal/privacy" target="_blank">politykę prywatności</a>. *
                 </span>
               </label>
-              @if (auth.currentUser()) {
-                <label class="consent-label consent-label--marketing">
-                  <input
-                    type="checkbox"
-                    [checked]="marketingConsent()"
-                    (change)="marketingConsent.set($any($event.target).checked)"
-                    class="consent-checkbox" />
-                  <span>
-                    Wyrażam zgodę na otrzymywanie wiadomości e-mail z prośbą o ocenę zakupionych produktów.
-                    Zgoda jest dobrowolna i możesz ją wycofać w ustawieniach konta.
-                  </span>
-                </label>
-              }
             </div>
           }
 
@@ -651,7 +638,6 @@ export class CheckoutPageComponent implements OnInit {
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
-  readonly marketingConsent = signal(false);
   readonly saveAddress = signal(false);
   readonly savedAddresses = signal<any[]>([]);
   readonly selectedSavedId = signal<string | null>(null);
@@ -1049,7 +1035,6 @@ export class CheckoutPageComponent implements OnInit {
         termsVersion: TERMS_VERSION,
         termsAcceptedAt: new Date().toISOString(),
         couponCode: this.appliedCoupon()?.code ?? undefined,
-        marketingConsent: this.marketingConsent() || undefined,
       },
       { headers: new HttpHeaders(headers) },
     ).subscribe({

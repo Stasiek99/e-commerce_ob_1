@@ -15,11 +15,13 @@ import { ActivatedRoute, Router, provideRouter } from '@angular/router';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { CheckoutSuccessComponent } from '../checkout-success.component';
 import { CartService } from '../../../../core/services/cart.service';
+import { AuthService } from '../../../../core/services/auth.service';
 import { AnalyticsService } from '../../../../core/services/analytics.service';
 
 function setup(orderId: string | null = 'order-1') {
   const mockCart     = { clear: jest.fn() };
   const mockAnalytics = { trackPurchase: jest.fn(), push: jest.fn() };
+  const mockAuth = { currentUser: jest.fn().mockReturnValue(null) };
 
   TestBed.configureTestingModule({
     imports: [CheckoutSuccessComponent],
@@ -37,6 +39,7 @@ function setup(orderId: string | null = 'order-1') {
         },
       },
       { provide: CartService,      useValue: mockCart },
+      { provide: AuthService,      useValue: mockAuth },
       { provide: AnalyticsService, useValue: mockAnalytics },
     ],
   });
