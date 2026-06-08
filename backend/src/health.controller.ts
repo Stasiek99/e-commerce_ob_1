@@ -21,10 +21,11 @@ export class HealthController {
 
   @Get()
   async check() {
-    const [db, redis, queue] = await Promise.all([
+    const [db, redis, queue, lastReconcileAt] = await Promise.all([
       this.checkDb(),
       this.checkRedis(),
       this.checkEmailQueue(),
+      this.redis.get('cron:reconcile-payments:lastRun').catch(() => null),
     ]);
 
     const healthy = db === 'connected' && redis === 'connected';
@@ -33,6 +34,7 @@ export class HealthController {
       db,
       redis,
       queue,
+      lastReconcileAt: lastReconcileAt ?? null,
       timestamp: new Date().toISOString(),
     };
 

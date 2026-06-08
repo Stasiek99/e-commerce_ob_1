@@ -752,6 +752,9 @@ export class PaymentsService {
     const acquired = await this.redis.set('cron:reconcile-payments:lock', '1', 'EX', 540, 'NX');
     if (!acquired) return;
 
+    // Record liveness so GET /health can expose lastReconcileAt for pre-promotion validation.
+    await this.redis.set('cron:reconcile-payments:lastRun', new Date().toISOString());
+
     const cutoff = new Date(Date.now() - 30 * 60 * 1000);
     const stale = await this.prisma.payment.findMany({
       where: {
