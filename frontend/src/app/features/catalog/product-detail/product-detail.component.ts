@@ -24,6 +24,7 @@ import { TurnstileService } from '../../../core/services/turnstile.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 
 interface ProductVariantDetail {
   id: string;
@@ -73,7 +74,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton],
+  imports: [FormsModule, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton, CdkTrapFocus],
   template: `
     @if (loading()) {
       <div class="skeleton-detail">
@@ -565,7 +566,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
       <!-- Lightbox -->
       @if (lightboxOpen()) {
-        <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1">
+        <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1" cdkTrapFocus>
           <div class="lightbox__backdrop" (click)="closeLightbox()"></div>
           <div class="lightbox__ui">
             <div class="lightbox__header">
@@ -1154,6 +1155,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   readonly lightboxOpen = signal(false);
   readonly lightboxIndex = signal(0);
+  private _lightboxTrigger: HTMLElement | null = null;
   readonly activeImageIndex = computed(() => {
     const url = this.activeImage();
     const imgs = this.product()?.images ?? [];
@@ -1174,12 +1176,20 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   openLightbox(index: number): void {
     this.lightboxIndex.set(index);
     this.lightboxOpen.set(true);
-    if (isPlatformBrowser(this.platformId)) document.body.style.overflow = 'hidden';
+    if (isPlatformBrowser(this.platformId)) {
+      this._lightboxTrigger = document.activeElement as HTMLElement;
+      document.body.style.overflow = 'hidden';
+      setTimeout(() => (document.querySelector('.lightbox') as HTMLElement)?.focus(), 0);
+    }
   }
 
   closeLightbox(): void {
     this.lightboxOpen.set(false);
-    if (isPlatformBrowser(this.platformId)) document.body.style.overflow = '';
+    if (isPlatformBrowser(this.platformId)) {
+      document.body.style.overflow = '';
+      this._lightboxTrigger?.focus();
+      this._lightboxTrigger = null;
+    }
   }
 
   lightboxNext(): void {

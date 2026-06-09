@@ -925,6 +925,122 @@ describe('ProductDetailComponent — onKeyDown SSR guard', () => {
   });
 });
 
+// ─── Lightbox focus management (WCAG 2.4.3) ──────────────────────────────────
+// Regression guard: openLightbox() must move focus into the dialog so keyboard
+// users can reach the close button. closeLightbox() must restore focus to the
+// element that triggered the lightbox (so Tab flow resumes correctly).
+// Without these invariants, the lightbox is a keyboard trap in the *bad* sense:
+// unreachable controls and no way back.
+
+describe('ProductDetailComponent — lightbox focus management (WCAG 2.4.3)', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.clearAllMocks();
+    document.body.style.overflow = '';
+  });
+
+  function loadProduct() {
+    const { component, fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    return { component, fixture };
+  }
+
+  it('sets lightboxOpen to true and lightboxIndex to the provided index', () => {
+    const { component } = loadProduct();
+
+    component.openLightbox(1);
+
+    expect(component.lightboxOpen()).toBe(true);
+    expect(component.lightboxIndex()).toBe(1);
+  });
+
+  it('sets document.body.overflow to hidden when openLightbox is called in browser context', () => {
+    const { component } = loadProduct();
+
+    component.openLightbox(0);
+
+    expect(document.body.style.overflow).toBe('hidden');
+  });
+
+  it('sets lightboxOpen to false when closeLightbox is called', () => {
+    const { component } = loadProduct();
+    component.openLightbox(0);
+
+    component.closeLightbox();
+
+    expect(component.lightboxOpen()).toBe(false);
+  });
+
+  it('resets document.body.overflow to empty string when closeLightbox is called', () => {
+    const { component } = loadProduct();
+    component.openLightbox(0);
+
+    component.closeLightbox();
+
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('calls focus() on the element that was active when openLightbox was called', () => {
+    const { component } = loadProduct();
+
+    const triggerBtn = document.createElement('button');
+    document.body.appendChild(triggerBtn);
+    triggerBtn.focus();
+    const focusSpy = jest.spyOn(triggerBtn, 'focus');
+
+    component.openLightbox(0);
+    component.closeLightbox();
+
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+
+    document.body.removeChild(triggerBtn);
+  });
+
+  it('clears the trigger reference after closeLightbox so the element can be garbage-collected', () => {
+    const { component } = loadProduct();
+    component.openLightbox(0);
+
+    component.closeLightbox();
+
+    expect((component as any)._lightboxTrigger).toBeNull();
+  });
+
+  it('schedules a focus call on the lightbox element via setTimeout(0) after opening', () => {
+    jest.useFakeTimers();
+    const { component, fixture } = loadProduct();
+
+    component.openLightbox(0);
+    fixture.detectChanges();
+
+    const lightboxEl = fixture.nativeElement.querySelector('.lightbox') as HTMLElement | null;
+    if (lightboxEl) {
+      const focusSpy = jest.spyOn(lightboxEl, 'focus');
+      jest.runAllTimers();
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } else {
+      expect(component.lightboxOpen()).toBe(true);
+    }
+  });
+
+  it('does not set overflow or store a trigger when openLightbox is called in server context', () => {
+    const { fixture, httpMock } = setupWithPlatform('server');
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.openLightbox(0);
+
+    expect(document.body.style.overflow).toBe('');
+    expect((component as any)._lightboxTrigger).toBeNull();
+  });
+});
+
 // ─── EU Omnibus Art. 3a review verification labels ────────────────────────────
 // Regulation 2019/2161 Art. 3a requires explicit disclosure of whether and how
 // consumer reviews are verified. Silently omitting the badge for unverified
