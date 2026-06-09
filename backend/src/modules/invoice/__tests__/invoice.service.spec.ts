@@ -518,6 +518,59 @@ describe('InvoiceService', () => {
     });
   });
 
+  // ── ensureCorrectiveSequence — year validation guard ─────────────────────
+  // Regression guard for the $executeRawUnsafe interpolation hardening in
+  // processCorrectiveInvoice. Without the extracted guard, a future refactor
+  // that makes `year` a caller-supplied parameter would have no protection.
+
+  describe('ensureCorrectiveSequence — year validation guard', () => {
+    it('throws for year below 2020 (lower boundary breach)', async () => {
+      await expect(
+        (service as any).ensureCorrectiveSequence(2019),
+      ).rejects.toThrow('Invalid corrective invoice year: 2019');
+    });
+
+    it('throws for year above 2100 (upper boundary breach)', async () => {
+      await expect(
+        (service as any).ensureCorrectiveSequence(2101),
+      ).rejects.toThrow('Invalid corrective invoice year: 2101');
+    });
+
+    it('throws for a non-integer year (floating-point injection vector)', async () => {
+      await expect(
+        (service as any).ensureCorrectiveSequence(2024.5),
+      ).rejects.toThrow('Invalid corrective invoice year: 2024.5');
+    });
+
+    it('does not call $executeRawUnsafe when year is out of range', async () => {
+      await expect(
+        (service as any).ensureCorrectiveSequence(2019),
+      ).rejects.toThrow();
+
+      expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it('accepts year 2020 (lower boundary) without throwing', async () => {
+      await expect(
+        (service as any).ensureCorrectiveSequence(2020),
+      ).resolves.toBeUndefined();
+    });
+
+    it('accepts year 2100 (upper boundary) without throwing', async () => {
+      await expect(
+        (service as any).ensureCorrectiveSequence(2100),
+      ).resolves.toBeUndefined();
+    });
+
+    it('calls $executeRawUnsafe with the safe sequence name — only integer year interpolated', async () => {
+      await (service as any).ensureCorrectiveSequence(2026);
+
+      expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        'CREATE SEQUENCE IF NOT EXISTS corrective_invoice_number_seq_2026 START 1 INCREMENT 1',
+      );
+    });
+  });
+
   // ── VAT arithmetic invariants ──────────────────────────────────────────────
   // These verify the math: netCents = round(grossCents / (1 + rate))
   // We confirm the expected formula holds for the rates we support.

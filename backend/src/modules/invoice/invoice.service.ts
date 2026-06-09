@@ -68,6 +68,15 @@ export class InvoiceService implements OnModuleInit {
     );
   }
 
+  private async ensureCorrectiveSequence(year: number): Promise<void> {
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+      throw new Error(`Invalid corrective invoice year: ${year}`);
+    }
+    await this.prisma.$executeRawUnsafe(
+      `CREATE SEQUENCE IF NOT EXISTS corrective_invoice_number_seq_${year} START 1 INCREMENT 1`,
+    );
+  }
+
   /**
    * Generates the invoice PDF, uploads it to Supabase, persists the raw storage
    * path and invoice number on the order, then returns all four values.
@@ -172,11 +181,8 @@ export class InvoiceService implements OnModuleInit {
     });
 
     const year = new Date().getFullYear();
+    await this.ensureCorrectiveSequence(year);
     const seqName = `corrective_invoice_number_seq_${year}`;
-
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS ${seqName} START 1 INCREMENT 1`,
-    );
     const seqRows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
       `SELECT nextval('${seqName}')`,
     );
