@@ -931,6 +931,117 @@ describe('OrdersService', () => {
         expect(emailService.sendOrderAcknowledgement).not.toHaveBeenCalled();
       });
     });
+
+    // ─── sub-50gr total guard ─────────────────────────────────────────────────
+    // Stripe rejects PLN amounts below 50 gr with amount_too_small.
+    // The guard must fire inside the transaction so the DB write never commits.
+
+    describe('sub-50gr total guard', () => {
+      const makeSingleItemCart = (priceInCents: number) => ({
+        id: 'cart-1',
+        items: [{
+          productVariantId: 'pv-low',
+          quantity: 1,
+          productName: 'Mini Perfume',
+          variantLabel: '1ml',
+          priceInCents,
+          vatRate: 2300,
+          sku: 'MINI-001',
+          stock: 10,
+          imageUrl: null,
+          slug: 'mini-perfume',
+        }],
+        totalInCents: priceInCents,
+      });
+
+      const makeSubTx = (freshPriceInCents: number) => ({
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+        productVariant: {
+          findMany: jest.fn()
+            .mockResolvedValueOnce([{ id: 'pv-low' }])
+            .mockResolvedValueOnce([{ id: 'pv-low', priceInCents: freshPriceInCents }]),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        coupon: { findUnique: jest.fn().mockResolvedValue(null) },
+        order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: freshPriceInCents }) },
+        orderEvent: { create: jest.fn().mockResolvedValue({}) },
+      });
+
+      const guardDto = {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      };
+
+      it('throws BadRequestException when txTotal is 1 cent (below Stripe 50 gr minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(1) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(1);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('throws with the Polish minimum-amount message for sub-50gr totals', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(25) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(25);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow('Kwota zamówienia jest zbyt niska (minimum 0,50 zł po rabacie).');
+      });
+
+      it('throws BadRequestException when txTotal is 49 cents (boundary just below Stripe minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(49) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(49);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('does not call tx.order.create when the sub-50gr guard fires', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(10) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(10);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow(BadRequestException);
+
+        expect(tx.order.create).not.toHaveBeenCalled();
+      });
+
+      it('does NOT fire the guard when txTotal is exactly 50 cents (at Stripe minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(50) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(50);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', guardDto);
+
+        expect(tx.order.create).toHaveBeenCalled();
+      });
+
+      it('does NOT fire the guard when txTotal is 0 cents (free order)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(0) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(0);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', guardDto);
+
+        expect(tx.order.create).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('findAllForUser', () => {

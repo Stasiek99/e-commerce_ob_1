@@ -249,6 +249,12 @@ export class OrdersService implements OnModuleInit {
 
       const txTotalInCents = Math.max(0, txItemsTotalInCents + shippingCostInCents - txDiscountInCents);
 
+      if (txTotalInCents > 0 && txTotalInCents < 50) {
+        throw new BadRequestException(
+          'Kwota zamówienia jest zbyt niska (minimum 0,50 zł po rabacie).',
+        );
+      }
+
       // Create order with address snapshot
       const newOrder = await tx.order.create({
         data: {
