@@ -17,7 +17,7 @@ import { AnalyticsService } from '../../../../core/services/analytics.service';
 import { SeoService } from '../../../../core/services/seo.service';
 import { WishlistService } from '../../../../core/services/wishlist.service';
 import { StockStreamService } from '../../../../core/services/stock-stream.service';
-import { ReviewsService } from '../../../../core/services/reviews.service';
+import { ReviewsService, ReviewSummary } from '../../../../core/services/reviews.service';
 import { RESPONSE } from '../../../../core/tokens/ssr.tokens';
 
 const SLUG = 'rose-oud';
@@ -922,5 +922,86 @@ describe('ProductDetailComponent — onKeyDown SSR guard', () => {
     component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
 
     expect(closeSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── EU Omnibus Art. 3a review verification labels ────────────────────────────
+// Regulation 2019/2161 Art. 3a requires explicit disclosure of whether and how
+// consumer reviews are verified. Silently omitting the badge for unverified
+// reviews is non-compliant — the UI must label them "Niezweryfikowany zakup".
+// Invariant: @else block renders .review-card__unverified when verifiedPurchase
+// is false; the verified badge must not appear for the same review.
+
+describe('ProductDetailComponent — EU Omnibus Art. 3a review verification labels', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  const makeReview = (overrides: Partial<ReviewSummary> = {}): ReviewSummary => ({
+    id: 'r-1',
+    rating: 4,
+    title: null,
+    body: 'Świetny zapach',
+    adminReply: null,
+    helpfulCount: 0,
+    createdAt: '2025-01-15T10:00:00.000',
+    verifiedPurchase: true,
+    authorName: 'Jan K.',
+    ...overrides,
+  });
+
+  function setupWithReviews(reviews: ReviewSummary[]) {
+    const { fixture, component, httpMock } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ reviewCount: reviews.length }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    component.reviewsLoading.set(false);
+    component.reviews.set(reviews);
+    fixture.detectChanges();
+
+    return { fixture, component };
+  }
+
+  it('renders "Zweryfikowany zakup" badge when verifiedPurchase is true', () => {
+    const { fixture } = setupWithReviews([makeReview({ verifiedPurchase: true })]);
+
+    const badge = fixture.nativeElement.querySelector('.review-card__verified');
+
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain('Zweryfikowany zakup');
+  });
+
+  it('renders "Niezweryfikowany zakup" label when verifiedPurchase is false', () => {
+    const { fixture } = setupWithReviews([makeReview({ verifiedPurchase: false })]);
+
+    const label = fixture.nativeElement.querySelector('.review-card__unverified');
+
+    expect(label).not.toBeNull();
+    expect(label.textContent).toContain('Niezweryfikowany zakup');
+  });
+
+  it('does NOT render the verified badge when verifiedPurchase is false', () => {
+    const { fixture } = setupWithReviews([makeReview({ verifiedPurchase: false })]);
+
+    const badge = fixture.nativeElement.querySelector('.review-card__verified');
+
+    expect(badge).toBeNull();
+  });
+
+  it('renders verified and unverified labels independently in a mixed review list', () => {
+    const { fixture } = setupWithReviews([
+      makeReview({ id: 'r-1', verifiedPurchase: true }),
+      makeReview({ id: 'r-2', verifiedPurchase: false }),
+    ]);
+
+    const verified = fixture.nativeElement.querySelectorAll('.review-card__verified');
+    const unverified = fixture.nativeElement.querySelectorAll('.review-card__unverified');
+
+    expect(verified.length).toBe(1);
+    expect(unverified.length).toBe(1);
   });
 });

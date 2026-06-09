@@ -477,6 +477,10 @@ const CATEGORY_LABELS: Record<string, string> = {
                         <tui-icon icon="@tui.badge-check"></tui-icon>
                         Zweryfikowany zakup
                       </span>
+                    } @else {
+                      <span class="review-card__unverified">
+                        Niezweryfikowany zakup
+                      </span>
                     }
                     <time class="review-card__date">
                       {{ formatDate(review.createdAt) }}

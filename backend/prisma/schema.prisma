@@ -596,7 +596,7 @@ model Review {
   userId       String
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   orderId      String?
-  order        Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  order        Order?       @relation(fields: [orderId], references: [id], onDelete: Restrict)
   rating       Int
   title        String?
   body         String?
