@@ -869,3 +869,58 @@ describe('ProductDetailComponent — subscription cleanup', () => {
     expect(component.relatedProducts()).toEqual([]);
   });
 });
+
+// ─── onKeyDown SSR platform guard ────────────────────────────────────────────
+// Regression guard: @HostListener fires during SSR; without the platform check
+// closeLightbox() would call lightboxOpen.set(false) server-side, corrupting
+// the initial rendered state.
+
+describe('ProductDetailComponent — onKeyDown SSR guard', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('is a no-op on the server platform regardless of lightboxOpen state', () => {
+    const { fixture, httpMock } = setupWithPlatform('server');
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.lightboxOpen.set(true);
+    fixture.detectChanges();
+
+    const closeSpy = jest.spyOn(component, 'closeLightbox');
+    component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(component.lightboxOpen()).toBe(true);
+  });
+
+  it('handles Escape and closes the lightbox in browser context', () => {
+    const { fixture, httpMock } = setupWithPlatform('browser');
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.lightboxOpen.set(true);
+    fixture.detectChanges();
+
+    component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(component.lightboxOpen()).toBe(false);
+  });
+
+  it('is a no-op in browser context when lightbox is closed', () => {
+    const { fixture, httpMock } = setupWithPlatform('browser');
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.lightboxOpen.set(false);
+    const closeSpy = jest.spyOn(component, 'closeLightbox');
+    component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+});

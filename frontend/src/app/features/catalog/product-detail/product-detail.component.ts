@@ -1202,7 +1202,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   @HostListener('document:keydown', ['$event'])
   onKeyDown(e: KeyboardEvent): void {
-    if (!this.lightboxOpen()) return;
+    if (!isPlatformBrowser(this.platformId) || !this.lightboxOpen()) return;
     if (e.key === 'Escape') this.closeLightbox();
     else if (e.key === 'ArrowRight') this.lightboxNext();
     else if (e.key === 'ArrowLeft') this.lightboxPrev();
