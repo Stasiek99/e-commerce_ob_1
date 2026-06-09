@@ -34,9 +34,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# Prisma
-backend/prisma/migrations/
-
 # Angular
 frontend/.angular/
 
