@@ -141,14 +141,14 @@ interface AppliedCoupon {
                     <label tuiLabel>Imię *</label>
                     <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
                   </tui-textfield>
-                  @if (errorMsg('firstName'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('firstName'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div class="name-col">
                   <tui-textfield>
                     <label tuiLabel>Nazwisko *</label>
                     <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
                   </tui-textfield>
-                  @if (errorMsg('lastName'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('lastName'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
               </div>
 
@@ -166,7 +166,7 @@ interface AppliedCoupon {
                     placeholder="np. ul. Marszałkowska 12/4" />
                 </tui-textfield>
                 @if (errorMsg('street'); as msg) {
-                  <p class="field-error">{{ msg }}</p>
+                  <p class="field-error" role="alert">{{ msg }}</p>
                 } @else {
                   @switch (streetStatus()) {
                     @case ('checking')  { <p class="street-hint street-hint--checking">Weryfikuję adres…</p> }
@@ -184,7 +184,7 @@ interface AppliedCoupon {
                     <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000"
                       autocomplete="postal-code" />
                   </tui-textfield>
-                  @if (errorMsg('postalCode'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('postalCode'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div class="name-col">
                   <tui-textfield>
@@ -199,7 +199,7 @@ interface AppliedCoupon {
                       }
                     </div>
                   }
-                  @if (errorMsg('city'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('city'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div>
                   <tui-textfield class="field-disabled">
@@ -226,14 +226,14 @@ interface AppliedCoupon {
                            [countrySearch]="true"
                            (countryIsoCodeChange)="countryIsoCode = $event" />
                   </tui-textfield>
-                  @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('phone'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div>
                   <tui-textfield>
                     <label tuiLabel>Email *</label>
                     <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
                   </tui-textfield>
-                  @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('email'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
               </div>
 
@@ -290,7 +290,7 @@ interface AppliedCoupon {
                       Wybierz paczkomat
                     </button>
                     @if (lockerPickerTouched()) {
-                      <p class="field-error">Wybierz paczkomat, aby kontynuować.</p>
+                      <p class="field-error" role="alert">Wybierz paczkomat, aby kontynuować.</p>
                     }
                   }
                 </div>
@@ -312,7 +312,7 @@ interface AppliedCoupon {
                       Wybierz punkt DPD
                     </button>
                     @if (dpdPickerTouched()) {
-                      <p class="field-error">Wybierz punkt odbioru DPD, aby kontynuować.</p>
+                      <p class="field-error" role="alert">Wybierz punkt odbioru DPD, aby kontynuować.</p>
                     }
                   }
                 </div>
@@ -374,7 +374,7 @@ interface AppliedCoupon {
                       />
                     </tui-textfield>
                     @if (couponError()) {
-                      <p class="field-error">{{ couponError() }}</p>
+                      <p class="field-error" role="alert">{{ couponError() }}</p>
                     }
                     <div class="coupon-actions">
                       <button

@@ -29,13 +29,13 @@ import { ToastService } from '../../../core/services/toast.service';
           <label tuiLabel>Email</label>
           <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
         </tui-textfield>
-        @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
+        @if (errorMsg('email'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
 
         <tui-textfield>
           <label tuiLabel>Hasło</label>
           <input tuiTextfield type="password" formControlName="password" autocomplete="current-password" />
         </tui-textfield>
-        @if (errorMsg('password'); as msg) { <p class="field-error">{{ msg }}</p> }
+        @if (errorMsg('password'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
 
         <p class="forgot-link">
           <a [routerLink]="['/auth/forgot-password']">Nie pamiętasz hasła?</a>

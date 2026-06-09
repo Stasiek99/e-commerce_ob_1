@@ -122,7 +122,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                            placeholder="np. ORD-2025-001" autocomplete="off" />
                   </tui-textfield>
                   @if (touched('orderNumber')) {
-                    <p class="field-error">Podaj numer zamówienia</p>
+                    <p class="field-error" role="alert">Podaj numer zamówienia</p>
                   }
                 </div>
                 <div>
@@ -132,7 +132,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                            autocomplete="email" />
                   </tui-textfield>
                   @if (touched('email')) {
-                    <p class="field-error">Podaj prawidłowy adres e-mail</p>
+                    <p class="field-error" role="alert">Podaj prawidłowy adres e-mail</p>
                   }
                 </div>
               </div>
@@ -150,7 +150,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                          [max]="today" />
                 </tui-textfield>
                 @if (touched('deliveryDate')) {
-                  <p class="field-error">Podaj datę odbioru towaru</p>
+                  <p class="field-error" role="alert">Podaj datę odbioru towaru</p>
                 }
 
                 <!-- 14-day deadline status -->
@@ -190,7 +190,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                            autocomplete="given-name" />
                   </tui-textfield>
                   @if (touched('firstName')) {
-                    <p class="field-error">Podaj imię</p>
+                    <p class="field-error" role="alert">Podaj imię</p>
                   }
                 </div>
                 <div>
@@ -200,7 +200,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                            autocomplete="family-name" />
                   </tui-textfield>
                   @if (touched('lastName')) {
-                    <p class="field-error">Podaj nazwisko</p>
+                    <p class="field-error" role="alert">Podaj nazwisko</p>
                   }
                 </div>
               </div>
@@ -264,7 +264,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                   </span>
                 </label>
                 @if (sealError()) {
-                  <p class="field-error">
+                  <p class="field-error" role="alert">
                     Potwierdzenie stanu opakowania jest wymagane do złożenia odstąpienia
                   </p>
                 }
@@ -289,7 +289,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                   }
                 </div>
                 @if (touched('requestedResolution') && !form.value.requestedResolution) {
-                  <p class="field-error">Wybierz żądanie</p>
+                  <p class="field-error" role="alert">Wybierz żądanie</p>
                 }
               </div>
             }
@@ -308,7 +308,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                           style="min-height: 100px;"></textarea>
               </tui-textfield>
               @if (form.value.type === 'COMPLAINT' && touched('reason') && !form.value.reason) {
-                <p class="field-error">Opisz wadę produktu</p>
+                <p class="field-error" role="alert">Opisz wadę produktu</p>
               }
             </div>
 
@@ -344,7 +344,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                 </span>
               </label>
               @if (touched('rodoConsent') && form.get('rodoConsent')?.invalid) {
-                <p class="field-error">Zgoda na przetwarzanie danych jest wymagana</p>
+                <p class="field-error" role="alert">Zgoda na przetwarzanie danych jest wymagana</p>
               }
             </div>
 
