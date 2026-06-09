@@ -124,6 +124,7 @@ export class PaymentsService {
       session = await this.stripeClient.createCheckoutSession({
         orderId: order.id,
         orderNumber: order.orderNumber,
+        paymentId: payment.id,
         customerEmail: order.snapshotEmail,
         currency,
         lineItems,

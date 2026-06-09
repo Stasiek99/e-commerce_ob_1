@@ -30,6 +30,7 @@ jest.mock('stripe', () => {
 const BASE_INPUT: CreateCheckoutSessionInput = {
   orderId: 'order-1',
   orderNumber: 'ORD-2026-000001',
+  paymentId: 'pay-1',
   customerEmail: 'jan@example.com',
   currency: 'pln',
   lineItems: [{ name: 'Perfumy Gold 50ml', unitAmount: 12999, quantity: 1 }],
@@ -152,6 +153,37 @@ describe('StripeClient.createCheckoutSession', () => {
     });
   });
 
+  // ── idempotency keys ─────────────────────────────────────────────────
+  // Guards the fix: LB retries must not produce duplicate Stripe objects.
+
+  describe('idempotency keys', () => {
+    it('passes checkout-<paymentId> idempotency key to sessions.create', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, paymentId: 'pay-abc' });
+
+      const options = mockSessionsCreate.mock.calls[0][1];
+      expect(options).toEqual({ idempotencyKey: 'checkout-pay-abc' });
+    });
+
+    it('passes coupon-<paymentId> idempotency key to coupons.create when discount is present', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession({ ...BASE_INPUT, paymentId: 'pay-xyz', discountAmountInCents: 500 });
+
+      const options = mockCouponsCreate.mock.calls[0][1];
+      expect(options).toEqual({ idempotencyKey: 'coupon-pay-xyz' });
+    });
+
+    it('does not call coupons.create (no idempotency key concern) when no discount', async () => {
+      const client = await buildClient();
+
+      await client.createCheckoutSession(BASE_INPUT);
+
+      expect(mockCouponsCreate).not.toHaveBeenCalled();
+    });
+  });
+
   // ── payment methods ──────────────────────────────────────────────────
   // Guards the fix: BLIK and P24 must be explicitly listed.
   // Passing only ['card'] silently excludes them — Stripe does not
@@ -238,6 +270,7 @@ describe('StripeClient.createCheckoutSession', () => {
           max_redemptions: 1,
           name: 'SUMMER20',
         }),
+        expect.objectContaining({ idempotencyKey: 'coupon-pay-1' }),
       );
     });
 
@@ -248,6 +281,7 @@ describe('StripeClient.createCheckoutSession', () => {
 
       expect(mockCouponsCreate).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'VIP15' }),
+        expect.anything(),
       );
     });
 
@@ -258,6 +292,7 @@ describe('StripeClient.createCheckoutSession', () => {
 
       expect(mockCouponsCreate).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Rabat' }),
+        expect.anything(),
       );
     });
 
