@@ -131,22 +131,24 @@ interface SuggestResult {
 
         <!-- RIGHT: actions -->
         <div class="header__actions">
-          <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()">
-            <tui-icon icon="@tui.heart" />
+          <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()"
+             [attr.aria-label]="wishlist.count() > 0 ? 'Ulubione (' + wishlist.count() + ' produktów)' : 'Ulubione'">
+            <tui-icon icon="@tui.heart" aria-hidden="true" />
             @defer (on immediate) {
               @if (wishlist.count() > 0) {
-                <span class="header__wishlist-badge">{{ wishlist.count() }}</span>
+                <span class="header__wishlist-badge" aria-hidden="true">{{ wishlist.count() }}</span>
               }
             }
-            <span>Ulubione</span>
+            <span aria-hidden="true">Ulubione</span>
           </a>
 
-          <a routerLink="/cart" class="header__action-link header__action-link--cart" (click)="closeMobileMenu()">
-            <tui-icon icon="@tui.shopping-cart" />
+          <a routerLink="/cart" class="header__action-link header__action-link--cart" (click)="closeMobileMenu()"
+             [attr.aria-label]="cartService.itemCount() > 0 ? 'Koszyk (' + cartService.itemCount() + ' produktów)' : 'Koszyk'">
+            <tui-icon icon="@tui.shopping-cart" aria-hidden="true" />
             @if (cartService.itemCount() > 0) {
-              <span class="header__cart-badge">{{ cartService.itemCount() }}</span>
+              <span class="header__cart-badge" aria-hidden="true">{{ cartService.itemCount() }}</span>
             }
-            <span>Koszyk</span>
+            <span aria-hidden="true">Koszyk</span>
           </a>
 
           <a [routerLink]="auth.isAuthenticated() ? '/account' : '/auth/login'" class="header__action-link" (click)="closeMobileMenu()">

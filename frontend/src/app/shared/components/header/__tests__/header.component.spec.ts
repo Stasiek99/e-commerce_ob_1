@@ -48,6 +48,43 @@ function setup(wishlistCount = 0) {
   return { fixture, wishlistCountSignal };
 }
 
+function setupWithCounts(cartCount: number, wishlistCount = 0) {
+  const cartCountSignal = signal(cartCount);
+  const wishlistCountSignal = signal(wishlistCount);
+  const mockWishlist = {
+    count: wishlistCountSignal,
+    items: signal([]),
+    loading: signal(false),
+    isInWishlist: jest.fn().mockReturnValue(false),
+    toggle: jest.fn(),
+    setNotify: jest.fn(),
+  };
+
+  TestBed.configureTestingModule({
+    imports: [HeaderComponent],
+    providers: [
+      provideRouter([]),
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      { provide: WishlistService, useValue: mockWishlist },
+      { provide: CartService, useValue: { itemCount: cartCountSignal } },
+      { provide: AuthService, useValue: { isAuthenticated: signal(false) } },
+    ],
+    deferBlockBehavior: DeferBlockBehavior.Manual,
+  });
+
+  TestBed.overrideComponent(HeaderComponent, {
+    set: {
+      imports: [ReactiveFormsModule],
+      schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
+    },
+  });
+
+  const fixture = TestBed.createComponent(HeaderComponent);
+  fixture.detectChanges();
+  return { fixture, cartCountSignal, wishlistCountSignal };
+}
+
 describe('HeaderComponent — wishlist badge @defer (SSR hydration guard)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
@@ -98,5 +135,104 @@ describe('HeaderComponent — wishlist badge @defer (SSR hydration guard)', () =
 
     const badge = fixture.debugElement.query(By.css('.header__wishlist-badge'));
     expect(badge.nativeElement.textContent.trim()).toBe('5');
+  });
+});
+
+// ── WCAG 4.1.3 — accessible badge names ───────────────────────────────────────
+
+describe('HeaderComponent — WCAG 4.1.3 cart link accessible name', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function getCartLink(fixture: ReturnType<typeof setupWithCounts>['fixture']) {
+    return fixture.debugElement.query(By.css('.header__action-link--cart'));
+  }
+
+  it('aria-label is "Koszyk" when cart is empty', () => {
+    const { fixture } = setupWithCounts(0);
+
+    const link = getCartLink(fixture);
+
+    expect(link.nativeElement.getAttribute('aria-label')).toBe('Koszyk');
+  });
+
+  it('aria-label is "Koszyk (3 produktów)" when cart has 3 items', () => {
+    const { fixture } = setupWithCounts(3);
+
+    const link = getCartLink(fixture);
+
+    expect(link.nativeElement.getAttribute('aria-label')).toBe('Koszyk (3 produktów)');
+  });
+
+  it('aria-label updates reactively when cart count changes from 0 to 2', () => {
+    const { fixture, cartCountSignal } = setupWithCounts(0);
+
+    cartCountSignal.set(2);
+    fixture.detectChanges();
+
+    expect(getCartLink(fixture).nativeElement.getAttribute('aria-label')).toBe('Koszyk (2 produktów)');
+  });
+
+  it('aria-label returns to "Koszyk" when cart is emptied', () => {
+    const { fixture, cartCountSignal } = setupWithCounts(1);
+
+    cartCountSignal.set(0);
+    fixture.detectChanges();
+
+    expect(getCartLink(fixture).nativeElement.getAttribute('aria-label')).toBe('Koszyk');
+  });
+
+  it('cart badge span has aria-hidden="true" so the count is not double-announced', () => {
+    const { fixture } = setupWithCounts(4);
+
+    fixture.detectChanges();
+    const badge = fixture.debugElement.query(By.css('.header__cart-badge'));
+
+    expect(badge).not.toBeNull();
+    expect(badge.nativeElement.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('HeaderComponent — WCAG 4.1.3 wishlist link accessible name', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function getWishlistLink(fixture: ReturnType<typeof setupWithCounts>['fixture']) {
+    return fixture.debugElement.query(By.css('.header__action-link--wishlist'));
+  }
+
+  it('aria-label is "Ulubione" when wishlist is empty', () => {
+    const { fixture } = setupWithCounts(0, 0);
+
+    const link = getWishlistLink(fixture);
+
+    expect(link.nativeElement.getAttribute('aria-label')).toBe('Ulubione');
+  });
+
+  it('aria-label is "Ulubione (5 produktów)" when wishlist has 5 items', () => {
+    const { fixture } = setupWithCounts(0, 5);
+
+    const link = getWishlistLink(fixture);
+
+    expect(link.nativeElement.getAttribute('aria-label')).toBe('Ulubione (5 produktów)');
+  });
+
+  it('aria-label updates reactively when wishlist count changes', () => {
+    const { fixture, wishlistCountSignal } = setupWithCounts(0, 0);
+
+    wishlistCountSignal.set(3);
+    fixture.detectChanges();
+
+    expect(getWishlistLink(fixture).nativeElement.getAttribute('aria-label')).toBe('Ulubione (3 produktów)');
+  });
+
+  it('wishlist badge has aria-hidden="true" after defer resolves so count is not double-announced', async () => {
+    const { fixture } = setupWithCounts(0, 2);
+
+    const deferBlocks = await fixture.getDeferBlocks();
+    await deferBlocks[0].render(DeferBlockState.Complete);
+    fixture.detectChanges();
+
+    const badge = fixture.debugElement.query(By.css('.header__wishlist-badge'));
+    expect(badge).not.toBeNull();
+    expect(badge.nativeElement.getAttribute('aria-hidden')).toBe('true');
   });
 });
