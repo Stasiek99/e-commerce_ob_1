@@ -133,8 +133,10 @@ interface SuggestResult {
         <div class="header__actions">
           <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()">
             <tui-icon icon="@tui.heart" />
-            @if (wishlist.count() > 0) {
-              <span class="header__wishlist-badge">{{ wishlist.count() }}</span>
+            @defer (on immediate) {
+              @if (wishlist.count() > 0) {
+                <span class="header__wishlist-badge">{{ wishlist.count() }}</span>
+              }
             }
             <span>Ulubione</span>
           </a>
