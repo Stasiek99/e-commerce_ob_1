@@ -6,11 +6,13 @@ import { guestGuard } from './core/guards/guest.guard';
 export const routes: Routes = [
   {
     path: '',
+    title: 'Strona główna',
     loadComponent: () =>
       import('./features/home/home.component').then((m) => m.HomeComponent),
   },
   {
     path: 'products',
+    title: 'Sklep',
     loadComponent: () =>
       import('./features/catalog/product-list/product-list.component').then(
         (m) => m.ProductListComponent,
@@ -18,6 +20,7 @@ export const routes: Routes = [
   },
   {
     path: 'products/:slug',
+    title: 'Produkt',
     loadComponent: () =>
       import('./features/catalog/product-detail/product-detail.component').then(
         (m) => m.ProductDetailComponent,
@@ -25,6 +28,7 @@ export const routes: Routes = [
   },
   {
     path: 'category/:slug',
+    title: 'Kategoria',
     loadComponent: () =>
       import('./features/catalog/product-list/product-list.component').then(
         (m) => m.ProductListComponent,
@@ -32,6 +36,7 @@ export const routes: Routes = [
   },
   {
     path: 'cart',
+    title: 'Koszyk',
     loadComponent: () =>
       import('./features/cart/cart-page/cart-page.component').then(
         (m) => m.CartPageComponent,
@@ -39,6 +44,7 @@ export const routes: Routes = [
   },
   {
     path: 'checkout',
+    title: 'Realizacja zamówienia',
     canActivate: [checkoutGuard],
     loadComponent: () =>
       import('./features/checkout/checkout-page/checkout-page.component').then(
@@ -47,6 +53,7 @@ export const routes: Routes = [
   },
   {
     path: 'checkout/auth-choice',
+    title: 'Logowanie do zamówienia',
     loadComponent: () =>
       import('./features/checkout/checkout-auth-choice/checkout-auth-choice.component').then(
         (m) => m.CheckoutAuthChoiceComponent,
@@ -54,6 +61,7 @@ export const routes: Routes = [
   },
   {
     path: 'checkout/success',
+    title: 'Zamówienie złożone',
     loadComponent: () =>
       import('./features/checkout/checkout-success/checkout-success.component').then(
         (m) => m.CheckoutSuccessComponent,
@@ -61,6 +69,7 @@ export const routes: Routes = [
   },
   {
     path: 'checkout/failure',
+    title: 'Błąd płatności',
     loadComponent: () =>
       import('./features/checkout/checkout-failure/checkout-failure.component').then(
         (m) => m.CheckoutFailureComponent,
@@ -68,12 +77,14 @@ export const routes: Routes = [
   },
   {
     path: 'auth/login',
+    title: 'Logowanie',
     canActivate: [guestGuard],
     loadComponent: () =>
       import('./features/auth/login/login.component').then((m) => m.LoginComponent),
   },
   {
     path: 'auth/register',
+    title: 'Rejestracja',
     canActivate: [guestGuard],
     loadComponent: () =>
       import('./features/auth/register/register.component').then(
@@ -82,6 +93,7 @@ export const routes: Routes = [
   },
   {
     path: 'auth/callback',
+    title: 'Logowanie przez Google',
     loadComponent: () =>
       import('./features/auth/google-callback/google-callback.component').then(
         (m) => m.GoogleCallbackComponent,
@@ -89,6 +101,7 @@ export const routes: Routes = [
   },
   {
     path: 'auth/verify-email',
+    title: 'Weryfikacja e-mail',
     loadComponent: () =>
       import('./features/auth/verify-email/verify-email.component').then(
         (m) => m.VerifyEmailComponent,
@@ -96,6 +109,7 @@ export const routes: Routes = [
   },
   {
     path: 'auth/forgot-password',
+    title: 'Przypomnij hasło',
     loadComponent: () =>
       import('./features/auth/forgot-password/forgot-password.component').then(
         (m) => m.ForgotPasswordComponent,
@@ -103,6 +117,7 @@ export const routes: Routes = [
   },
   {
     path: 'auth/reset-password',
+    title: 'Resetowanie hasła',
     loadComponent: () =>
       import('./features/auth/reset-password/reset-password.component').then(
         (m) => m.ResetPasswordComponent,
@@ -114,6 +129,7 @@ export const routes: Routes = [
     children: [
       {
         path: '',
+        title: 'Moje konto',
         loadComponent: () =>
           import('./features/account/dashboard/dashboard.component').then(
             (m) => m.DashboardComponent,
@@ -122,6 +138,7 @@ export const routes: Routes = [
       },
       {
         path: 'orders',
+        title: 'Moje zamówienia',
         loadComponent: () =>
           import('./features/account/orders/order-list.component').then(
             (m) => m.OrderListComponent,
@@ -129,6 +146,7 @@ export const routes: Routes = [
       },
       {
         path: 'orders/:id',
+        title: 'Szczegóły zamówienia',
         loadComponent: () =>
           import('./features/account/orders/order-detail.component').then(
             (m) => m.OrderDetailComponent,
@@ -136,6 +154,7 @@ export const routes: Routes = [
       },
       {
         path: 'profile',
+        title: 'Mój profil',
         loadComponent: () =>
           import('./features/account/profile/profile.component').then(
             (m) => m.ProfileComponent,
@@ -143,6 +162,7 @@ export const routes: Routes = [
       },
       {
         path: 'addresses',
+        title: 'Moje adresy',
         loadComponent: () =>
           import('./features/account/addresses/addresses.component').then(
             (m) => m.AddressesComponent,
@@ -152,6 +172,7 @@ export const routes: Routes = [
   },
   {
     path: 'orders/track',
+    title: 'Śledzenie zamówienia',
     loadComponent: () =>
       import('./features/orders/track-order/track-order.component').then(
         (m) => m.TrackOrderComponent,
@@ -159,12 +180,14 @@ export const routes: Routes = [
   },
   {
     path: 'wishlist',
+    title: 'Lista życzeń',
     canActivate: [authGuard],
     loadComponent: () =>
       import('./features/wishlist/wishlist.component').then((m) => m.WishlistComponent),
   },
   {
     path: 'returns',
+    title: 'Zwrot towaru',
     canActivate: [authGuard],
     loadComponent: () =>
       import('./features/returns/return-request/return-request.component').then(
@@ -173,16 +196,19 @@ export const routes: Routes = [
   },
   {
     path: 'legal/terms',
+    title: 'Regulamin',
     loadComponent: () =>
       import('./features/legal/terms/terms.component').then((m) => m.TermsComponent),
   },
   {
     path: 'legal/privacy',
+    title: 'Polityka prywatności',
     loadComponent: () =>
       import('./features/legal/privacy/privacy.component').then((m) => m.PrivacyComponent),
   },
   {
     path: 'legal/withdrawal',
+    title: 'Prawo do odstąpienia od umowy',
     loadComponent: () =>
       import('./features/legal/withdrawal/withdrawal.component').then(
         (m) => m.WithdrawalComponent,
@@ -190,6 +216,7 @@ export const routes: Routes = [
   },
   {
     path: 'partnership',
+    title: 'Współpraca',
     loadComponent: () =>
       import('./features/partnership/partnership.component').then(
         (m) => m.PartnershipComponent,
@@ -197,6 +224,7 @@ export const routes: Routes = [
   },
   {
     path: '**',
+    title: 'Nie znaleziono strony',
     loadComponent: () =>
       import('./features/not-found/not-found.component').then(
         (m) => m.NotFoundComponent,
