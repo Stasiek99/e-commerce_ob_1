@@ -16,7 +16,7 @@ import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
-import { verifyOrderToken } from '../../common/utils/order-token.util';
+import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
 
 
 interface CartItem {
@@ -369,9 +369,29 @@ export class OrdersService implements OnModuleInit {
       await this.prisma.cartItem.deleteMany({ where: { cartId: cartRecord.id } });
     }
 
-    // Order confirmation email is sent in markSessionPaid() after the Stripe
-    // webhook confirms payment — not here, to avoid emailing customers who
-    // abandon the Stripe checkout before paying.
+    // UoK Art. 21: contract formation occurs at order creation, not at payment capture.
+    // Send the order-acknowledged email immediately so the customer always has a
+    // durable confirmation on a durable medium, even if they close the browser before paying.
+    // The payment-confirmed + invoice email is still sent from markSessionPaid() as the second email.
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
+    const cancelUrl = `${frontendUrl}/orders/${order.id}/cancel?token=${cancelToken}`;
+    this.emailService
+      .sendOrderAcknowledgement({
+        to: order.snapshotEmail,
+        orderNumber: order.orderNumber,
+        firstName: order.snapshotFirstName,
+        items: cart.items.map((i: CartItem) => ({
+          name: `${i.productName} – ${i.variantLabel}`,
+          quantity: i.quantity,
+          price: i.priceInCents,
+        })),
+        totalInCents: order.totalInCents,
+        paymentUrl,
+        cancelUrl,
+      })
+      .catch((err) => this.logger.warn('Order acknowledged email failed', err));
 
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
     this.sendStockAlertIfNeeded(

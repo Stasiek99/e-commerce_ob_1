@@ -183,4 +183,16 @@ export type EmailJobData =
         failureMessage: string | null;
         arrivalDate: string;
       };
+    }
+  | {
+      type: 'order_acknowledged';
+      payload: {
+        to: string;
+        orderNumber: string;
+        firstName: string;
+        items: Array<{ name: string; quantity: number; price: number }>;
+        totalInCents: number;
+        paymentUrl: string;
+        cancelUrl: string;
+      };
     };

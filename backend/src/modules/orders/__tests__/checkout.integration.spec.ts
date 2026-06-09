@@ -161,6 +161,7 @@ describe('Checkout Integration Flow', () => {
             sendPaymentConfirmed: jest.fn().mockResolvedValue(undefined),
             sendPaymentConfirmedWithInvoice: jest.fn().mockResolvedValue(undefined),
             sendNewOrderNotification: jest.fn().mockResolvedValue(undefined),
+            sendOrderAcknowledgement: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
