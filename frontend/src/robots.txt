@@ -1,0 +1,8 @@
+User-agent: *
+Disallow: /checkout/
+Disallow: /account/
+Disallow: /auth/
+Disallow: /cart
+Allow: /
+
+Sitemap: https://aromaterie.pl/sitemap.xml
