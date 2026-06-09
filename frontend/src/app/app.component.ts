@@ -18,9 +18,10 @@ import { ToastService } from './core/services/toast.service';
   imports: [RouterOutlet, TuiRoot, HeaderComponent, FooterComponent, CookieConsentComponent, AnnouncementBannerComponent],
   template: `
     <tui-root>
+      <a href="#main-content" class="skip-link">Przejdź do treści</a>
       <app-announcement-banner />
       <app-header />
-      <main>
+      <main id="main-content">
         <router-outlet />
       </main>
       <app-footer />
@@ -28,6 +29,24 @@ import { ToastService } from './core/services/toast.service';
     </tui-root>
   `,
   styles: [`
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 0;
+      padding: 8px 16px;
+      background: #fff;
+      color: #000;
+      font-weight: 600;
+      z-index: 9999;
+      text-decoration: none;
+      border: 2px solid #000;
+      border-radius: 0 0 4px 0;
+    }
+
+    .skip-link:focus {
+      top: 0;
+    }
+
     main {
       min-height: calc(100vh - 64px - 120px);
       max-width: var(--max-width);
