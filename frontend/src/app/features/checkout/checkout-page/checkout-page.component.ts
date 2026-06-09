@@ -534,7 +534,7 @@ interface AppliedCoupon {
     .street-hint { font-size: 12px; margin-top: 4px; }
     .street-hint--checking { color: var(--color-primary); }
     .street-hint--found    { color: #2a9d4e; }
-    .street-hint--warning  { color: #c47a00; }
+    .street-hint--warning  { color: #9a5e00; }
 
     .shipping-restriction-notice { font-size: 12px; color: var(--color-secondary); margin: -4px 0 0; line-height: 1.5; }
 
