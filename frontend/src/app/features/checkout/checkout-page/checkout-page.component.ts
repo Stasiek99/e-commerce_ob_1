@@ -51,6 +51,7 @@ interface AppliedCoupon {
   code: string;
   discountAmountInCents: number;
   isFreeShipping: boolean;
+  appliesToItemsOnly?: boolean;
 }
 
 @Component({
@@ -394,6 +395,9 @@ interface AppliedCoupon {
                     <span class="coupon-applied__badge">✓ {{ appliedCoupon()!.code }}</span>
                     <button type="button" class="coupon-remove" (click)="removeCoupon()">Usuń</button>
                   </div>
+                  @if (appliedCoupon()!.appliesToItemsOnly) {
+                    <p class="coupon-items-only-note">Rabat nie obejmuje kosztu dostawy</p>
+                  }
                 }
               </div>
 
@@ -597,6 +601,7 @@ interface AppliedCoupon {
     .coupon-applied { display: flex; align-items: center; gap: 12px; }
     .coupon-applied__badge { background: #e8f5e9; color: #2a9d4e; border: 1px solid #a5d6a7; border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
     .coupon-remove { background: none; border: none; font-size: 12px; color: var(--color-secondary); text-decoration: underline; cursor: pointer; padding: 0; }
+    .coupon-items-only-note { margin: 0; font-size: 12px; color: var(--color-secondary); }
     .total-row--discount { color: #2a9d4e; }
     .discount-value { font-weight: 600; color: #2a9d4e; }
 
@@ -808,6 +813,7 @@ export class CheckoutPageComponent implements OnInit {
           code,
           discountAmountInCents: isFreeShipping ? (this.selectedCarrier()?.price ?? 0) : (res.discountAmountInCents ?? 0),
           isFreeShipping,
+          appliesToItemsOnly: res.appliesToItemsOnly ?? false,
         });
         this.couponExpanded.set(false);
       },
