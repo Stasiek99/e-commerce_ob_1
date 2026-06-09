@@ -1,4 +1,5 @@
-import { Component, HostListener, OnDestroy, OnInit, inject, signal, computed, PLATFORM_ID } from '@angular/core';
+import { Component, DestroyRef, HostListener, OnDestroy, OnInit, inject, signal, computed, PLATFORM_ID } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Subscription } from 'rxjs';
 import { isPlatformBrowser, isPlatformServer, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -1093,6 +1094,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly turnstile = inject(TurnstileService);
   private readonly router = inject(Router);
   private readonly ssrResponse = inject(RESPONSE, { optional: true });
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -1275,6 +1277,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   private subscribeStockStream(variantIds: string[]): void {
     if (!variantIds.length) return;
+    this.stockSub?.unsubscribe();
     this.stockSub = this.stockStream.connect(variantIds).subscribe({
       next: (updates) => {
         this.stockLive.set(true);
@@ -1301,6 +1304,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private loadRelatedProducts(slug: string): void {
     this.http
       .get<ProductCardData[]>(`${environment.apiUrl}/products/${slug}/related?limit=6`)
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({ next: (data) => this.relatedProducts.set(data) });
   }
 

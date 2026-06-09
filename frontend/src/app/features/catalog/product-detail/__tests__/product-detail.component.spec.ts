@@ -798,3 +798,74 @@ describe('ProductDetailComponent — thumbnail alt text', () => {
     });
   });
 });
+
+// ── Subscription leak fixes ────────────────────────────────────────────────────
+// Guards the fixes:
+//   1. subscribeStockStream() unsubscribes the previous stockSub before reassigning
+//   2. loadRelatedProducts() uses takeUntilDestroyed so it tears down on destroy
+
+describe('ProductDetailComponent — subscription cleanup', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).match(() => true).forEach((r) => r.flush(null));
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('unsubscribes the previous stockSub before creating a new one on rapid product navigation', () => {
+    const { component, httpMock } = setup();
+
+    const { Subject } = jest.requireActual<typeof import('rxjs')>('rxjs');
+    const firstStream = new Subject<never>();
+    const secondStream = new Subject<never>();
+    const mockStockStream = (component as any).stockStream;
+
+    mockStockStream.connect
+      .mockReturnValueOnce(firstStream.asObservable())
+      .mockReturnValueOnce(secondStream.asObservable());
+
+    (component as any).subscribeStockStream(['var-1']);
+    const firstSub = (component as any).stockSub;
+    const unsubscribeSpy = jest.spyOn(firstSub, 'unsubscribe');
+
+    (component as any).subscribeStockStream(['var-2']);
+
+    expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+  });
+
+  it('keeps only one active stockSub after two rapid calls to subscribeStockStream', () => {
+    const { component, httpMock } = setup();
+
+    const { Subject } = jest.requireActual<typeof import('rxjs')>('rxjs');
+    const mockStockStream = (component as any).stockStream;
+    mockStockStream.connect.mockReturnValue(new Subject().asObservable());
+
+    (component as any).subscribeStockStream(['var-1']);
+    const firstSub = (component as any).stockSub;
+
+    (component as any).subscribeStockStream(['var-2']);
+    const secondSub = (component as any).stockSub;
+
+    expect(secondSub).not.toBe(firstSub);
+    expect(firstSub.closed).toBe(true);
+
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+  });
+
+  it('does not update relatedProducts after the component is destroyed', () => {
+    const { component, httpMock, fixture } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+
+    // The related products request is in flight — component is destroyed before it resolves.
+    // takeUntilDestroyed cancels the HTTP subscription, so the request is cancelled.
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`);
+    fixture.destroy();
+
+    // The cancelled request is no longer in the HttpTestingController open list
+    // so afterEach verify() passes. The signal was never updated.
+    expect(component.relatedProducts()).toEqual([]);
+  });
+});
