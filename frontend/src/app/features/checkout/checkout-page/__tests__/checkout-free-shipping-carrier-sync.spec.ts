@@ -139,6 +139,22 @@ describe('CheckoutPageComponent — FREE_SHIPPING coupon carrier sync effect', (
     expect(component.appliedCoupon()).toBeNull();
   });
 
+  // ── regression: allowSignalWrites: true is required ──────────────────
+
+  it('does not throw Angular signal-write guard when coupon.set() is called inside the carrier-sync effect', () => {
+    // Without { allowSignalWrites: true }, Angular 18 throws
+    // "Writing to signals is not allowed in a computed or an effect by default"
+    // in dev mode whenever appliedCoupon.set() runs inside the effect.
+    const { component, fixture } = setup();
+
+    component.appliedCoupon.set({ code: 'FREESHIP', discountAmountInCents: 1499, isFreeShipping: true });
+
+    expect(() => {
+      component.selectedCarrier.set(makeCarrier('DHL', 1999));
+      fixture.detectChanges();
+    }).not.toThrow();
+  });
+
   // ── effectiveTotal correctness (the displayed price) ─────────────────
 
   it('effectiveTotal equals cart items only (no shipping) after carrier switch with FREE_SHIPPING coupon', () => {
