@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID, ElementRef } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -7,6 +7,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
 import { tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
@@ -69,6 +70,7 @@ interface AppliedCoupon {
     TuiSlides,
     TuiStep,
     TuiInputPhoneInternational,
+    CdkTrapFocus,
   ],
   providers: [
     tuiInputPhoneInternationalOptionsProvider({
@@ -452,7 +454,15 @@ interface AppliedCoupon {
       <!-- ── DPD Pickup modal ──────────────────────────────────── -->
       @if (dpdModalOpen()) {
         <div class="dpd-modal-backdrop" (click)="closeDpdModal()">
-          <div class="dpd-modal-content" (click)="$event.stopPropagation()">
+          <div
+            class="dpd-modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Wybierz punkt odbioru DPD"
+            cdkTrapFocus
+            cdkTrapFocusAutoCapture
+            (click)="$event.stopPropagation()"
+          >
             <button type="button" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">✕</button>
             <iframe
               class="dpd-modal-iframe"
@@ -643,6 +653,7 @@ export class CheckoutPageComponent implements OnInit {
     'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
   );
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
+  private dpdOpenerEl: HTMLElement | null = null;
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
   readonly saveAddress = signal(false);
@@ -939,6 +950,7 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   openDpdPicker(): void {
+    this.dpdOpenerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
       if (e.origin !== 'https://api.dpd.cz') return;
@@ -959,6 +971,8 @@ export class CheckoutPageComponent implements OnInit {
       window.removeEventListener('message', this.dpdMessageListener);
       this.dpdMessageListener = null;
     }
+    this.dpdOpenerEl?.focus();
+    this.dpdOpenerEl = null;
   }
 
   openLockerPicker(): void {
