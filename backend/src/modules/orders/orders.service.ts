@@ -622,6 +622,12 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    if (order.status === OrderStatus.DISPUTE_HOLD) {
+      throw new ConflictException(
+        'Twoje zamówienie jest aktualnie w trakcie sporu płatniczego — skontaktuj się z obsługą.',
+      );
+    }
+
     const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {

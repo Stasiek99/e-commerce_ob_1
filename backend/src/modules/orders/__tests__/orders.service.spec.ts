@@ -2068,6 +2068,27 @@ describe('OrdersService', () => {
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
     });
 
+    it('throws ConflictException when order is in DISPUTE_HOLD — prevents merchant-losing refund on disputed charge', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not issue refund or expire session when order is in DISPUTE_HOLD', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
+    });
+
     it('issues full refund when order is PROCESSING (PARTIALLY_REFUNDED guard does not affect PROCESSING)', async () => {
       prisma.order.findFirst.mockResolvedValue({
         ...mockOrderWithItems,
