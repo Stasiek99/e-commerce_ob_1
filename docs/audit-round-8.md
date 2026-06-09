@@ -7,18 +7,7 @@
 
 ---
 
-## Legend
-
-| Label | Meaning |
-|---|---|
-| 🔴 CRITICAL | Broken in production right now, silent or catastrophic |
-| 🟠 HIGH | Direct money loss, legal exposure, or security breach |
-| 🟡 MEDIUM | Material UX degradation, data integrity, or operational risk |
-| 🟢 LOW | Hardening / polish |
-
-Agent agreement noted where 2+ agents independently identified the same issue.
-
----
+Done:
 
 ## 🔴 CRITICAL — `FOR UPDATE` inside interactive transactions is a no-op on pgbouncer transaction mode — oversell protection broken in production *(Infrastructure agent)*
 
@@ -72,6 +61,7 @@ Note: `generatePicklistHtml` in `admin.setup.ts` correctly uses an `esc()` funct
 
 ---
 
+
 ## 🟠 HIGH — Spam complaints not suppressed from future sends — silent Resend account degradation *(Risk Analyst)*
 
 **File:** `backend/src/modules/email/email-webhook.controller.ts:98–103`
@@ -111,6 +101,7 @@ The `$transaction` atomically commits the idempotency key and the payment status
 Short-term fix: move the BullMQ enqueue inside the Prisma `$transaction` using the BullMQ-Prisma transactional outbox pattern (`QueueEvents` + `FlowProducer`).
 
 ---
+
 
 ## 🟠 HIGH — JWT revocation bypass when Redis is unavailable — admin revocation doesn't hold during Redis outage *(Risk Analyst)*
 
@@ -158,23 +149,12 @@ The product list offers a "Polecane" (Relevance) sort. EU Directive 2019/2161 Ar
 
 ---
 
-## 🟠 HIGH — Pre-contractual seller telephone number missing (Ustawa o prawach konsumenta Art. 12) *(Legal)*
-
-Polish Ustawa o prawach konsumenta Art. 12 ust. 1 pkt 3 requires the seller's **telephone number** to be displayed in pre-contractual information — before the consumer is bound to the contract. The checkout summary and Regulamin show an email address and company address but no phone number. This is a mandatory disclosure; its absence is a basis for UOKiK complaints and retail inspections.
-
-**Fix:** Add seller telephone number to checkout Step 2 summary and to the Regulamin's seller data block (`Dane sprzedawcy` section).
-
----
-
 ## 🟡 MEDIUM — HTTP graceful shutdown gap — in-flight `createFromCart` cut by Railway SIGKILL *(Infrastructure)*
-
 **File:** `backend/src/main.ts`
-
 `main.ts` calls `app.enableShutdownHooks()` and the BullMQ worker correctly drains on `onApplicationShutdown`. However, the HTTP server itself has no drain timeout. Railway sends SIGTERM then SIGKILL after approximately 10 seconds. The `TimeoutInterceptor(30_000)` allows 30-second HTTP responses — requests that have been in-flight for 25 seconds are violently interrupted by the SIGKILL, leaving orders in a half-committed state (e.g., stock decremented, payment not yet initiated).
-
 **Fix:** Add `server.closeIdleConnections()` and set `keepAliveTimeout: 5000` to stop accepting new connections immediately on SIGTERM. Reduce `TimeoutInterceptor` to a value below Railway's SIGKILL window, or disable it for the order creation endpoint and let the BullMQ outbox handle retries.
+--- 
 
----
 
 ## 🟡 MEDIUM — Data retention — no enforced deletion schedule for orders/invoices after 5-year accounting window *(Legal)*
 
@@ -242,7 +222,6 @@ The pre-checkout velocity guard counts orders in the last 30 minutes from the sa
 
 **Fix:** Replace or supplement the city-level guard with a per-IP or per-user velocity check. Use Stripe Radar for fraud scoring instead of homegrown city heuristics.
 
----
 
 ## 🟡 MEDIUM — Sentry source maps never uploaded — production stack traces are minified *(Infrastructure)*
 
@@ -281,6 +260,20 @@ The schema has only `isActive Boolean`. There is no `DISCONTINUED`, `TEMPORARILY
 `POST /coupons/validate` accepts client-supplied `cartTotalInCents`. An attacker sends `cartTotalInCents: 999999999` to probe whether a code passes the `minSpendInCents` check without real cart items. The response returns the `discountAmountInCents`, letting an attacker enumerate valid codes and their discount values systematically. The actual order transaction recomputes discount from real prices (safe for money), but the validate endpoint is an oracle for coupon brute-force beyond what the rate-limit counter covers.
 
 **Fix:** Rate-limit `POST /coupons/validate` to 10 requests per minute per IP (add `@Throttle`). Optionally, require an active cart session token in the validate request.
+
+---
+
+
+## Legend
+
+| Label | Meaning |
+|---|---|
+| 🔴 CRITICAL | Broken in production right now, silent or catastrophic |
+| 🟠 HIGH | Direct money loss, legal exposure, or security breach |
+| 🟡 MEDIUM | Material UX degradation, data integrity, or operational risk |
+| 🟢 LOW | Hardening / polish |
+
+Agent agreement noted where 2+ agents independently identified the same issue.
 
 ---
 
