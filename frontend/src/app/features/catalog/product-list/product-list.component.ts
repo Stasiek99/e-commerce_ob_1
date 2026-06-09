@@ -778,6 +778,7 @@ export class ProductListComponent implements OnInit {
     const params = new URLSearchParams({ category: slug });
     this.http
       .get<CategoryFacets>(`${environment.apiUrl}/products/facets?${params.toString()}`)
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({ next: (res) => this.facets.set(res), error: () => this.facets.set(null) });
   }
 }

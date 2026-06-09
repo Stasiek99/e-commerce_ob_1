@@ -1,5 +1,5 @@
 import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA, PLATFORM_ID } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
+import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
@@ -120,4 +120,95 @@ describe('ProductListComponent — Omnibus ranking disclosure', () => {
 
     expect(component.sortLabel()).toBe('Polecane');
   });
+});
+
+// ── loadFacets subscription lifecycle ─────────────────────────────────────────
+// Invariant: takeUntilDestroyed must cancel the in-flight facets HTTP request
+// when the component is destroyed, so facets.set(res) never executes on a dead
+// component instance.
+
+describe('ProductListComponent — loadFacets subscription lifecycle', () => {
+  const PERFUME_FACETS = { scentFamilies: ['woody'], genders: ['unisex'] };
+
+  function setupWithSlug(slug: string | null) {
+    const mockRoute = {
+      paramMap: of(makeParamMap(slug ? { slug } : {})),
+      queryParamMap: of(makeParamMap({})),
+    };
+    const mockRouter = { navigate: jest.fn() };
+    const mockSeo = { updatePageMeta: jest.fn(), setRobotsTag: jest.fn() };
+
+    TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ActivatedRoute, useValue: mockRoute },
+        { provide: Router, useValue: mockRouter },
+        { provide: SeoService, useValue: mockSeo },
+        { provide: PLATFORM_ID, useValue: 'browser' },
+      ],
+      schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
+    });
+
+    TestBed.overrideComponent(ProductListComponent, {
+      set: { imports: [], schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA] },
+    });
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    const component = fixture.componentInstance;
+    const httpMock = TestBed.inject(HttpTestingController);
+
+    return { fixture, component, httpMock };
+  }
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('sets facets to null and makes no HTTP request when slug is null', fakeAsync(() => {
+    const { fixture, component, httpMock } = setupWithSlug(null);
+
+    fixture.detectChanges();
+    tick(0); // advance past debounceTime(0) in ngOnInit
+
+    httpMock.expectNone(req => req.url.includes('/products/facets'));
+    expect(component.facets()).toBeNull();
+
+    httpMock.expectOne(req => req.url.includes('/api/products'))
+      .flush({ data: [], meta: { totalPages: 1 } });
+    httpMock.verify();
+  }));
+
+  it('updates the facets signal with the HTTP response when the component is alive', fakeAsync(() => {
+    const { fixture, component, httpMock } = setupWithSlug('perfume');
+
+    fixture.detectChanges();
+    tick(0); // advance past debounceTime(0) in ngOnInit
+
+    httpMock.expectOne(req => req.url.includes('/products/facets')).flush(PERFUME_FACETS);
+
+    expect(component.facets()).toEqual(PERFUME_FACETS);
+
+    httpMock
+      .expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+      .flush({ data: [], meta: { totalPages: 1 } });
+    httpMock.verify();
+  }));
+
+  it('cancels the in-flight facets HTTP request when the component is destroyed mid-flight', fakeAsync(() => {
+    const { fixture, component, httpMock } = setupWithSlug('perfume');
+
+    fixture.detectChanges();
+    tick(0); // advance past debounceTime(0) in ngOnInit
+
+    const facetsReq = httpMock.expectOne(req => req.url.includes('/products/facets'));
+    expect(facetsReq.cancelled).toBe(false); // request is pending before destruction
+
+    // Destroy triggers DestroyRef → takeUntilDestroyed unsubscribes the facets observable
+    fixture.destroy();
+
+    // Angular HttpClient must have cancelled the in-flight request
+    expect(facetsReq.cancelled).toBe(true);
+    // facets signal must remain null — facets.set(res) was never called
+    expect(component.facets()).toBeNull();
+  }));
 });
