@@ -387,6 +387,7 @@ model CartItem {
 model Order {
   id                 String      @id @default(uuid())
   orderNumber        String      @unique
+  idempotencyKey     String?     @unique
   userId             String?
   user               User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   status             OrderStatus @default(PENDING_PAYMENT)

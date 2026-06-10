@@ -108,4 +108,8 @@ export class CreateOrderDto {
   @MaxLength(32)
   couponCode?: string;
 
+  @IsOptional()
+  @IsUUID()
+  idempotencyKey?: string;
+
 }

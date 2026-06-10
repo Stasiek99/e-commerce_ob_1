@@ -5,7 +5,7 @@
 > **Excludes** everything already in `audit-weak-points.md`, `audit-round-2.md`, `audit-round-3.md`, `audit-round-4.md`, `audit-round-5.md`, `audit-round-6.md`, `audit-round-7.md`, `audit-round-8.md`, and `project-gaps-audit.md`.
 > **Excludes** Phase 7 (pre-launch checklist) items in ROADMAP.md.
 
----
+Done:
 
 ## 🔴 CRITICAL — All 37 Prisma migration files are gitignored — `prisma migrate deploy` is a no-op on Railway *(Supply-Chain agent)*
 
@@ -42,8 +42,6 @@ Prisma's own docs explicitly state: *"You should commit your migration files to 
 ```
 as the second argument to `sessions.create`. Pass `{ idempotencyKey: `coupon-${paymentId}` }` to `coupons.create`.
 
----
-
 ## 🔴 CRITICAL — EU Accessibility Act 2025 (EAA) — No skip-navigation link — WCAG 2.4.1 failure *(EAA agent)*
 
 **File:** `frontend/src/app/app.component.ts:20–27`
@@ -73,6 +71,7 @@ WCAG 2.4.2 (Page Titled) is a Level A criterion — mandatory under EAA.
 **Fix:** Either add `title:` to every route and provide `withRouterConfig({ titleStrategy: ... })`, or ensure every routed component calls `SeoService.updatePageMeta()` on init.
 
 ---
+
 
 ## 🔴 CRITICAL — EAA/WCAG 2.1.2 — DPD pickup modal has no focus trap, no `aria-modal`, no focus restoration *(EAA agent)*
 
@@ -156,6 +155,7 @@ Apply to all error paragraphs across checkout, auth forms, and reviews.
 
 ---
 
+
 ## 🟠 HIGH — EAA/WCAG 2.1.1 — Hero scroll-jacking completely inaccessible to keyboard users *(EAA agent)*
 
 **File:** `frontend/src/app/features/home/home.component.ts:521–533, 541–547, 248`
@@ -210,6 +210,7 @@ Consequences:
 **Fix:** Create an `ORDER_ACKNOWLEDGED` email job type. In `createFromCart`, after line 382, enqueue it containing: order number, items summary, total, payment link, and cancel link. Label it "Potwierdzenie zamówienia — oczekujemy na płatność" (not "potwierdzenie płatności"). The existing payment-confirmed email with invoice remains as the second email.
 
 ---
+
 
 ## 🟠 HIGH — Sub-50gr order total bypasses pre-flight — Stripe throws, rollback can fail, leaving orphaned order and locked stock *(Payment Logic agent)*
 
@@ -267,6 +268,7 @@ this.updateQueues.clear();
 
 ---
 
+
 ## 🟠 HIGH — WishlistService: `_items` signal initialized from `localStorage` — SSR hydration mismatch *(Angular agent)*
 
 **File:** `frontend/src/app/core/services/wishlist.service.ts:23`
@@ -300,6 +302,7 @@ const seqRows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
 **Fix:** Extract a `ensureCorrectiveSequence(year: number)` that mirrors the integer + range check in `ensureSequence`.
 
 ---
+
 
 ## 🟠 HIGH — No `robots.txt` — `/cart` prerendered and indexable; sensitive routes unprotected *(Supply-Chain agent)*
 
@@ -341,6 +344,7 @@ A real production Sentry DSN is committed to the repository. While DSNs are inte
 **Fix:** Use Angular's environment file replacement mechanism to inject the DSN from a Vercel env var at build time (via `@angular/build`'s `define` replacements or `fileReplacements`). Rotate the exposed DSN in the Sentry Dashboard.
 
 ---
+
 
 ## 🟠 HIGH — EAA/WCAG 1.4.3 — Multiple low-contrast text failures *(EAA agent)*
 
@@ -419,7 +423,6 @@ onKeyDown(e: KeyboardEvent): void {
 }
 ```
 
----
 
 ## 🟡 MEDIUM — Angular: `ProductListComponent.loadFacets` subscription has no `takeUntilDestroyed` *(Angular agent)*
 
@@ -442,6 +445,7 @@ Separately: EU Omnibus Art. 3a requires disclosure of whether and how consumer r
 **Fix:** Change the `Review.order` relation from `onDelete: SetNull` to `onDelete: Restrict` in the schema. Admin order deletion should soft-delete or warn about linked verified reviews. On the frontend, display "Niezweryfikowany zakup" explicitly on reviews where `verifiedPurchase: false` (or exclude them from the public listing).
 
 ---
+
 
 ## 🟡 MEDIUM — FIXED_AMOUNT coupon excludes shipping with no UI disclosure — UoK Art. 13 violation *(Polish Law agent)*
 
@@ -475,6 +479,7 @@ openLightbox(index: number): void {
 Also add `CdkTrapFocus` and restore focus to the triggering element on close.
 
 ---
+
 
 ## 🟡 MEDIUM — EAA/WCAG 2.4.6 — In-stock filter toggle has no programmatic label association *(EAA agent)*
 
@@ -514,6 +519,7 @@ An `<a>` without `href` is not keyboard-focusable by default. `role="button"` ov
 
 ---
 
+
 ## 🟡 MEDIUM — No `pnpm audit` or Dependabot in CI — dependency CVEs go undetected *(Supply-Chain agent)*
 
 **File:** `.github/workflows/ci.yml` (no audit step)
@@ -549,6 +555,7 @@ Add `form-action 'self'; manifest-src 'self';` to the existing CSP string.
 
 ---
 
+
 ## 🟡 MEDIUM — Replacement delivery does not reset the 14-day withdrawal clock *(Polish Law agent)*
 
 **File:** `backend/src/modules/returns/returns.service.ts`
@@ -574,6 +581,7 @@ The system has no `replacementDeliveredAt` field on `ReturnRequest`. When a cust
 
 ---
 
+
 ## 🟡 MEDIUM — Guest order self-cancel from failure page always fails silently *(Payment Logic agent)*
 
 **File:** `frontend/src/app/features/checkout/checkout-failure/checkout-failure.component.ts:107–114`
@@ -594,6 +602,7 @@ Taiga UI's `tuiLabel` + bare `<input tuiTextfield>` pattern may not inject `id`/
 
 ---
 
+
 ## 🟢 LOW — EAA/WCAG — Mobile nav panel has no focus trap *(EAA agent)*
 
 **File:** `frontend/src/app/shared/components/header/header.component.ts:170–186`
@@ -613,8 +622,6 @@ The mobile menu opens without moving focus into it, has no `role="dialog"` or `a
 ```
 
 `<time>` without `datetime` is meaningless to assistive technology. Fix: `[attr.datetime]="review.createdAt"`.
-
----
 
 ## 🟢 LOW — CI does not trigger on `fix/**` branches *(Supply-Chain agent)*
 
