@@ -36,7 +36,6 @@ const STATIC_ROUTES = [
 
 const STATIC_PRERENDER_ROUTES = [
   '/',
-  '/cart',
   '/legal/terms',
   '/legal/privacy',
   '/legal/withdrawal',

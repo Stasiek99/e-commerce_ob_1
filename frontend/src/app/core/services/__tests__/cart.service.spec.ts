@@ -1,4 +1,5 @@
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { Subject } from 'rxjs';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { PLATFORM_ID } from '@angular/core';
@@ -139,6 +140,40 @@ describe('CartService', () => {
       expect(() => service.clear()).not.toThrow();
       expect(service.items()).toEqual([]);
       expect(service.cartId()).toBeNull();
+    });
+
+    it('completes all pending updateQueue subjects so debounce pipelines are torn down', () => {
+      const { service } = setup();
+
+      // Inject subjects directly so no HTTP pipeline is created (avoids afterEach verify issues)
+      const subject1 = new Subject<number>();
+      const subject2 = new Subject<number>();
+      const queues = (service as any).updateQueues as Map<string, Subject<number>>;
+      queues.set('pv-1', subject1);
+      queues.set('pv-2', subject2);
+
+      let pv1Done = false;
+      let pv2Done = false;
+      subject1.subscribe({ complete: () => { pv1Done = true; } });
+      subject2.subscribe({ complete: () => { pv2Done = true; } });
+
+      service.clear();
+
+      expect(pv1Done).toBe(true);
+      expect(pv2Done).toBe(true);
+    });
+
+    it('empties updateQueues Map so subsequent updateQuantity calls start fresh pipelines', () => {
+      const { service } = setup();
+
+      const queues = (service as any).updateQueues as Map<string, unknown>;
+      queues.set('pv-1', new Subject<number>());
+      queues.set('pv-2', new Subject<number>());
+      expect(queues.size).toBe(2);
+
+      service.clear();
+
+      expect(queues.size).toBe(0);
     });
   });
 

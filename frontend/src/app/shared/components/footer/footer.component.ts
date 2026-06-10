@@ -68,13 +68,13 @@ import { environment } from '../../../../environments/environment';
       align-items: center;
       gap: 4px;
       font-size: 11px;
-      color: rgba(255,255,255,0.55);
+      color: rgba(255,255,255,0.65);
       border-top: 1px solid rgba(255,255,255,0.1);
       padding-top: 16px;
       margin-top: 8px;
       width: 100%;
     }
-    .footer__seller-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: 4px; }
+    .footer__seller-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.65); margin-bottom: 4px; }
     .footer__seller a { color: rgba(255,255,255,0.55); transition: color 0.15s; }
     .footer__seller a:hover { color: white; }
     .footer__copy { font-size: 12px; margin-top: 16px; }

@@ -69,7 +69,7 @@ interface Address {
                 <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
               </tui-textfield>
               @if (fieldError(addForm.controls.firstName); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
             <div class="name-col">
@@ -78,7 +78,7 @@ interface Address {
                 <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
               </tui-textfield>
               @if (fieldError(addForm.controls.lastName); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
           </div>
@@ -95,7 +95,7 @@ interface Address {
                 placeholder="np. ul. Marszałkowska 12/4" />
             </tui-textfield>
             @if (fieldError(addForm.controls.street); as msg) {
-              <p class="field-error">{{ msg }}</p>
+              <p class="field-error" role="alert">{{ msg }}</p>
             }
             @if (!addForm.controls.street.errors) {
               @switch (addStreetStatus()) {
@@ -114,7 +114,7 @@ interface Address {
                   autocomplete="postal-code" />
               </tui-textfield>
               @if (fieldError(addForm.controls.postalCode); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
             <div class="name-col">
@@ -133,7 +133,7 @@ interface Address {
                 </div>
               }
               @if (fieldError(addForm.controls.city); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
           </div>
@@ -155,7 +155,7 @@ interface Address {
               Telefon *
             </tui-input-phone-international>
             @if (fieldError(addForm.controls.phone); as msg) {
-              <p class="field-error">{{ msg }}</p>
+              <p class="field-error" role="alert">{{ msg }}</p>
             }
           </div>
 
@@ -183,7 +183,7 @@ interface Address {
                   <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
                 </tui-textfield>
                 @if (fieldError(editForm.controls.firstName); as msg) {
-                  <p class="field-error">{{ msg }}</p>
+                  <p class="field-error" role="alert">{{ msg }}</p>
                 }
               </div>
               <div class="name-col">
@@ -192,7 +192,7 @@ interface Address {
                   <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
                 </tui-textfield>
                 @if (fieldError(editForm.controls.lastName); as msg) {
-                  <p class="field-error">{{ msg }}</p>
+                  <p class="field-error" role="alert">{{ msg }}</p>
                 }
               </div>
             </div>
@@ -209,7 +209,7 @@ interface Address {
                   placeholder="np. ul. Marszałkowska 12/4" />
               </tui-textfield>
               @if (fieldError(editForm.controls.street); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
 
@@ -221,7 +221,7 @@ interface Address {
                     autocomplete="postal-code" />
                 </tui-textfield>
                 @if (fieldError(editForm.controls.postalCode); as msg) {
-                  <p class="field-error">{{ msg }}</p>
+                  <p class="field-error" role="alert">{{ msg }}</p>
                 }
               </div>
               <div class="name-col">
@@ -240,7 +240,7 @@ interface Address {
                   </div>
                 }
                 @if (fieldError(editForm.controls.city); as msg) {
-                  <p class="field-error">{{ msg }}</p>
+                  <p class="field-error" role="alert">{{ msg }}</p>
                 }
               </div>
             </div>
@@ -262,7 +262,7 @@ interface Address {
                 Telefon *
               </tui-input-phone-international>
               @if (fieldError(editForm.controls.phone); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
 

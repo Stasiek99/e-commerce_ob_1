@@ -19,6 +19,7 @@ import { returnAdminNotificationTemplate } from './templates/return-admin-notifi
 import { returnStatusUpdateTemplate } from './templates/return-status-update.template';
 import { emailChangeTemplate } from './templates/email-change.template';
 import { magicLinkTemplate } from './templates/magic-link.template';
+import { orderAcknowledgedTemplate } from './templates/order-acknowledged.template';
 
 type EmailKind =
   | 'order_confirmation'
@@ -39,7 +40,8 @@ type EmailKind =
   | 'magic_link_login'
   | 'fraud_review_alert'
   | 'payout_failed_alert'
-  | 'dispute_alert';
+  | 'dispute_alert'
+  | 'order_acknowledged';
 
 @Injectable()
 export class EmailService {
@@ -346,6 +348,19 @@ export class EmailService {
   async sendMagicLink(data: { to: string; firstName: string; magicUrl: string }) {
     const { subject, html } = magicLinkTemplate({ firstName: data.firstName, magicUrl: data.magicUrl });
     return this.send('magic_link_login', data.to, subject, html, { magicUrl: data.magicUrl });
+  }
+
+  async sendOrderAcknowledgement(data: {
+    to: string;
+    orderNumber: string;
+    firstName: string;
+    items: Array<{ name: string; quantity: number; price: number }>;
+    totalInCents: number;
+    paymentUrl: string;
+    cancelUrl: string;
+  }) {
+    const { subject, html } = orderAcknowledgedTemplate(data);
+    return this.send('order_acknowledged', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async sendShippingNotification(data: {

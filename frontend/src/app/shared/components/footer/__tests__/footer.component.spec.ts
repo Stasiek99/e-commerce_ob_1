@@ -1,8 +1,32 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import { FooterComponent } from '../footer.component';
 import { environment } from '../../../../../environments/environment';
+
+describe('FooterComponent — WCAG 1.4.3 contrast', () => {
+  const COMPONENT_SRC = path.resolve(__dirname, '../footer.component.ts');
+
+  it('footer__seller color is rgba(255,255,255,0.65) — raised from failing 0.55 (≈4.2:1)', () => {
+    const src = fs.readFileSync(COMPONENT_SRC, 'utf8');
+    // Extract just the .footer__seller { } block (not the .footer__seller a override)
+    const blockStart = src.indexOf('.footer__seller {');
+    const blockEnd = src.indexOf('}', blockStart);
+    const block = src.substring(blockStart, blockEnd);
+    expect(block).toContain('rgba(255,255,255,0.65)');
+    expect(block).not.toContain('rgba(255,255,255,0.55)');
+  });
+
+  it('footer__seller-title color is rgba(255,255,255,0.65) — raised from failing 0.4 (≈3.0:1)', () => {
+    const src = fs.readFileSync(COMPONENT_SRC, 'utf8');
+    const sellerTitleIdx = src.indexOf('.footer__seller-title');
+    const block = src.substring(sellerTitleIdx, src.indexOf('}', sellerTitleIdx));
+    expect(block).toContain('rgba(255,255,255,0.65)');
+    expect(block).not.toContain('rgba(255,255,255,0.4)');
+  });
+});
 
 function setup() {
   TestBed.configureTestingModule({

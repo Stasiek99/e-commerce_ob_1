@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID, ElementRef } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -7,6 +7,7 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
 import { tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
@@ -50,6 +51,7 @@ interface AppliedCoupon {
   code: string;
   discountAmountInCents: number;
   isFreeShipping: boolean;
+  appliesToItemsOnly?: boolean;
 }
 
 @Component({
@@ -69,6 +71,7 @@ interface AppliedCoupon {
     TuiSlides,
     TuiStep,
     TuiInputPhoneInternational,
+    CdkTrapFocus,
   ],
   providers: [
     tuiInputPhoneInternationalOptionsProvider({
@@ -139,14 +142,14 @@ interface AppliedCoupon {
                     <label tuiLabel>Imię *</label>
                     <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
                   </tui-textfield>
-                  @if (errorMsg('firstName'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('firstName'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div class="name-col">
                   <tui-textfield>
                     <label tuiLabel>Nazwisko *</label>
                     <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
                   </tui-textfield>
-                  @if (errorMsg('lastName'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('lastName'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
               </div>
 
@@ -164,7 +167,7 @@ interface AppliedCoupon {
                     placeholder="np. ul. Marszałkowska 12/4" />
                 </tui-textfield>
                 @if (errorMsg('street'); as msg) {
-                  <p class="field-error">{{ msg }}</p>
+                  <p class="field-error" role="alert">{{ msg }}</p>
                 } @else {
                   @switch (streetStatus()) {
                     @case ('checking')  { <p class="street-hint street-hint--checking">Weryfikuję adres…</p> }
@@ -182,7 +185,7 @@ interface AppliedCoupon {
                     <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000"
                       autocomplete="postal-code" />
                   </tui-textfield>
-                  @if (errorMsg('postalCode'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('postalCode'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div class="name-col">
                   <tui-textfield>
@@ -197,7 +200,7 @@ interface AppliedCoupon {
                       }
                     </div>
                   }
-                  @if (errorMsg('city'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('city'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div>
                   <tui-textfield class="field-disabled">
@@ -224,14 +227,14 @@ interface AppliedCoupon {
                            [countrySearch]="true"
                            (countryIsoCodeChange)="countryIsoCode = $event" />
                   </tui-textfield>
-                  @if (errorMsg('phone'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('phone'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
                 <div>
                   <tui-textfield>
                     <label tuiLabel>Email *</label>
                     <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
                   </tui-textfield>
-                  @if (errorMsg('email'); as msg) { <p class="field-error">{{ msg }}</p> }
+                  @if (errorMsg('email'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
                 </div>
               </div>
 
@@ -288,7 +291,7 @@ interface AppliedCoupon {
                       Wybierz paczkomat
                     </button>
                     @if (lockerPickerTouched()) {
-                      <p class="field-error">Wybierz paczkomat, aby kontynuować.</p>
+                      <p class="field-error" role="alert">Wybierz paczkomat, aby kontynuować.</p>
                     }
                   }
                 </div>
@@ -310,7 +313,7 @@ interface AppliedCoupon {
                       Wybierz punkt DPD
                     </button>
                     @if (dpdPickerTouched()) {
-                      <p class="field-error">Wybierz punkt odbioru DPD, aby kontynuować.</p>
+                      <p class="field-error" role="alert">Wybierz punkt odbioru DPD, aby kontynuować.</p>
                     }
                   }
                 </div>
@@ -372,7 +375,7 @@ interface AppliedCoupon {
                       />
                     </tui-textfield>
                     @if (couponError()) {
-                      <p class="field-error">{{ couponError() }}</p>
+                      <p class="field-error" role="alert">{{ couponError() }}</p>
                     }
                     <div class="coupon-actions">
                       <button
@@ -392,6 +395,9 @@ interface AppliedCoupon {
                     <span class="coupon-applied__badge">✓ {{ appliedCoupon()!.code }}</span>
                     <button type="button" class="coupon-remove" (click)="removeCoupon()">Usuń</button>
                   </div>
+                  @if (appliedCoupon()!.appliesToItemsOnly) {
+                    <p class="coupon-items-only-note">Rabat nie obejmuje kosztu dostawy</p>
+                  }
                 }
               </div>
 
@@ -452,7 +458,15 @@ interface AppliedCoupon {
       <!-- ── DPD Pickup modal ──────────────────────────────────── -->
       @if (dpdModalOpen()) {
         <div class="dpd-modal-backdrop" (click)="closeDpdModal()">
-          <div class="dpd-modal-content" (click)="$event.stopPropagation()">
+          <div
+            class="dpd-modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Wybierz punkt odbioru DPD"
+            cdkTrapFocus
+            cdkTrapFocusAutoCapture
+            (click)="$event.stopPropagation()"
+          >
             <button type="button" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">✕</button>
             <iframe
               class="dpd-modal-iframe"
@@ -524,7 +538,7 @@ interface AppliedCoupon {
     .street-hint { font-size: 12px; margin-top: 4px; }
     .street-hint--checking { color: var(--color-primary); }
     .street-hint--found    { color: #2a9d4e; }
-    .street-hint--warning  { color: #c47a00; }
+    .street-hint--warning  { color: #9a5e00; }
 
     .shipping-restriction-notice { font-size: 12px; color: var(--color-secondary); margin: -4px 0 0; line-height: 1.5; }
 
@@ -587,6 +601,7 @@ interface AppliedCoupon {
     .coupon-applied { display: flex; align-items: center; gap: 12px; }
     .coupon-applied__badge { background: #e8f5e9; color: #2a9d4e; border: 1px solid #a5d6a7; border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
     .coupon-remove { background: none; border: none; font-size: 12px; color: var(--color-secondary); text-decoration: underline; cursor: pointer; padding: 0; }
+    .coupon-items-only-note { margin: 0; font-size: 12px; color: var(--color-secondary); }
     .total-row--discount { color: #2a9d4e; }
     .discount-value { font-weight: 600; color: #2a9d4e; }
 
@@ -643,6 +658,7 @@ export class CheckoutPageComponent implements OnInit {
     'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
   );
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
+  private dpdOpenerEl: HTMLElement | null = null;
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
   readonly saveAddress = signal(false);
@@ -797,6 +813,7 @@ export class CheckoutPageComponent implements OnInit {
           code,
           discountAmountInCents: isFreeShipping ? (this.selectedCarrier()?.price ?? 0) : (res.discountAmountInCents ?? 0),
           isFreeShipping,
+          appliesToItemsOnly: res.appliesToItemsOnly ?? false,
         });
         this.couponExpanded.set(false);
       },
@@ -939,6 +956,7 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   openDpdPicker(): void {
+    this.dpdOpenerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
       if (e.origin !== 'https://api.dpd.cz') return;
@@ -959,6 +977,8 @@ export class CheckoutPageComponent implements OnInit {
       window.removeEventListener('message', this.dpdMessageListener);
       this.dpdMessageListener = null;
     }
+    this.dpdOpenerEl?.focus();
+    this.dpdOpenerEl = null;
   }
 
   openLockerPicker(): void {

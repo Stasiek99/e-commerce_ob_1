@@ -1263,4 +1263,153 @@ describe('ReturnsService', () => {
       expect(createCall.data.bankAccount).toBe(SAMPLE_IBAN.trim().toUpperCase());
     });
   });
+
+  // ── replacement delivery resets the 14-day withdrawal clock ─────────────
+  // Art. 27 UoK / Directive 2011/83/EU Art. 14(1): when a replacement is delivered,
+  // the withdrawal window restarts from replacementDeliveredAt, not the original shipment.
+
+  describe('replacement delivery resets the 14-day withdrawal clock (Art. 27 / Directive 2011/83/EU Art. 14(1))', () => {
+    it('allows withdrawal when original delivery is expired but replacementDeliveredAt is within the 14-day window', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(20)) },
+      });
+      await createModule(mock);
+      // Prime the first findFirst (prior-replacement query) with a recent replacementDeliveredAt;
+      // the second findFirst (duplicate check) falls back to the default mockResolvedValue(null).
+      prisma.returnRequest.findFirst.mockResolvedValueOnce({
+        replacementDeliveredAt: new Date(daysAgo(3)),
+      });
+
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(3) };
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+
+    it('rejects when replacementDeliveredAt is also outside the 14-day window', async () => {
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(30)) },
+      });
+      await createModule(mock);
+      prisma.returnRequest.findFirst.mockResolvedValueOnce({
+        replacementDeliveredAt: new Date(daysAgo(20)),
+      });
+
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(20) };
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when dto.deliveryDate predates replacementDeliveredAt', async () => {
+      // Replacement arrived 3 days ago; client claims delivery was 5 days ago — impossible.
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(10)) },
+      });
+      await createModule(mock);
+      prisma.returnRequest.findFirst.mockResolvedValueOnce({
+        replacementDeliveredAt: new Date(daysAgo(3)),
+      });
+
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(5) };
+      await expect(service.create(dto as any, OWNER_ID)).rejects.toThrow(BadRequestException);
+    });
+
+    it('uses replacementDeliveredAt as authoritative date (not original shipment) when both are present', async () => {
+      // dto.deliveryDate = 3 days ago (after original 6d-ago delivery — no backdating issue).
+      // dbDeliveryDate = replacementDeliveredAt = 3 days ago → window end = 12 days from now.
+      const mock = buildPrismaMock({}, {
+        id: 'order-uuid-1',
+        userId: OWNER_ID,
+        status: 'DELIVERED',
+        shipment: { deliveredAt: new Date(daysAgo(6)) },
+      });
+      await createModule(mock);
+      prisma.returnRequest.findFirst.mockResolvedValueOnce({
+        replacementDeliveredAt: new Date(daysAgo(3)),
+      });
+
+      const dto = { ...WITHDRAWAL_DTO, deliveryDate: daysAgo(3) };
+      const result = await service.create(dto as any, OWNER_ID);
+
+      expect(result).toEqual({ id: 'return-id-001', orderNumber: 'ORD-2026-001' });
+    });
+  });
+
+  // ── setReplacementDeliveredAt() ─────────────────────────────────────────────
+  // Admin records the date the replacement unit was delivered to the customer,
+  // which resets the Art. 27 withdrawal clock for any subsequent return request.
+
+  describe('setReplacementDeliveredAt()', () => {
+    it('throws NotFoundException when the return request does not exist', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(null);
+      await createModule(mock);
+
+      await expect(
+        service.setReplacementDeliveredAt('nonexistent-id', new Date()),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws BadRequestException when request is REJECTED', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'REJECTED' }),
+      );
+      await createModule(mock);
+
+      await expect(
+        service.setReplacementDeliveredAt('return-id-001', new Date()),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('stores replacementDeliveredAt on an APPROVED return request', async () => {
+      const deliveredAt = new Date(daysAgo(2));
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED' }),
+      );
+      await createModule(mock);
+
+      await service.setReplacementDeliveredAt('return-id-001', deliveredAt);
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { replacementDeliveredAt: deliveredAt },
+      });
+    });
+
+    it('stores replacementDeliveredAt on a PENDING return request', async () => {
+      const deliveredAt = new Date(daysAgo(1));
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'PENDING' }),
+      );
+      await createModule(mock);
+
+      await service.setReplacementDeliveredAt('return-id-001', deliveredAt);
+
+      expect(mock.returnRequest.update).toHaveBeenCalledWith({
+        where: { id: 'return-id-001' },
+        data: { replacementDeliveredAt: deliveredAt },
+      });
+    });
+
+    it('does not call update when the request does not exist', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(null);
+      await createModule(mock);
+
+      await service.setReplacementDeliveredAt('nonexistent-id', new Date()).catch(() => undefined);
+
+      expect(mock.returnRequest.update).not.toHaveBeenCalled();
+    });
+  });
 });

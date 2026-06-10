@@ -1,4 +1,5 @@
 import { randomBytes } from 'crypto';
+import { generateOrderToken } from '../../common/utils/order-token.util';
 import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
@@ -75,6 +76,11 @@ export class PaymentsService {
     const existingPayment = await this.prisma.payment.findUnique({ where: { orderId } });
     let payment: { id: string };
 
+    // Tracks the Stripe coupon ID from the old session so we can delete it before
+    // nulling stripeCheckoutSessionId (otherwise the webhook lookup fails and the
+    // coupon is orphaned permanently — one per abandoned-and-retried discounted order).
+    let oldCouponId: string | null = null;
+
     if (existingPayment?.status === PaymentStatus.PENDING && existingPayment.stripeCheckoutSessionId) {
       try {
         const existingSession = await this.stripeClient.retrieveCheckoutSession(
@@ -82,6 +88,11 @@ export class PaymentsService {
         );
         if (existingSession.status === 'open' && existingSession.url) {
           return { paymentUrl: existingSession.url };
+        }
+        // Session expired/closed — capture the coupon ID before we drop the session ID.
+        const couponRef = existingSession.discounts?.[0]?.coupon;
+        if (couponRef) {
+          oldCouponId = typeof couponRef === 'string' ? couponRef : couponRef.id;
         }
       } catch {
         // Session not retrievable — fall through to reset and create a fresh session
@@ -91,6 +102,24 @@ export class PaymentsService {
     if (existingPayment?.status === PaymentStatus.FAILED ||
         existingPayment?.status === PaymentStatus.PENDING) {
       if (existingPayment.stripeCheckoutSessionId) {
+        // For FAILED rows the retrieval block above didn't run; fetch the session now
+        // so we can extract the coupon ID before expiring and dropping the session reference.
+        if (!oldCouponId) {
+          try {
+            const oldSession = await this.stripeClient.retrieveCheckoutSession(
+              existingPayment.stripeCheckoutSessionId,
+            );
+            const couponRef = oldSession.discounts?.[0]?.coupon;
+            if (couponRef) {
+              oldCouponId = typeof couponRef === 'string' ? couponRef : couponRef.id;
+            }
+          } catch {
+            // Session not retrievable — skip coupon cleanup
+          }
+        }
+        if (oldCouponId) {
+          await this.stripeClient.deleteCoupon(oldCouponId);
+        }
         await this.stripeClient
           .expireCheckoutSession(existingPayment.stripeCheckoutSessionId)
           .catch(() => {});
@@ -124,11 +153,12 @@ export class PaymentsService {
       session = await this.stripeClient.createCheckoutSession({
         orderId: order.id,
         orderNumber: order.orderNumber,
+        paymentId: payment.id,
         customerEmail: order.snapshotEmail,
         currency,
         lineItems,
         successUrl: `${successUrl}?orderId=${order.id}&token=${guestToken}`,
-        cancelUrl: `${cancelUrl}?orderId=${order.id}`,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}&guestToken=${generateOrderToken(order.id, order.snapshotEmail, this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'))}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
           couponLabel: order.couponCode ?? undefined,

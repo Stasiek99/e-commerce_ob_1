@@ -126,6 +126,10 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
         await this.emailService.sendPayoutFailedAlert(payload);
         break;
 
+      case 'order_acknowledged':
+        await this.emailService.sendOrderAcknowledgement(payload);
+        break;
+
       default: {
         const _exhaustive: never = job.data;
         throw new Error(`Unknown email job type: ${(_exhaustive as any).type}`);

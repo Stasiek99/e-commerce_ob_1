@@ -158,3 +158,50 @@ describe('RegisterComponent — errorMsg inline validation', () => {
     );
   });
 });
+
+describe('RegisterComponent — field-error role="alert" (WCAG 3.3.1)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('renders no field-error paragraphs when form is pristine and untouched', () => {
+    const { fixture } = setup();
+
+    const errors = fixture.nativeElement.querySelectorAll('.field-error');
+
+    expect(errors.length).toBe(0);
+  });
+
+  it('renders email error paragraph with role="alert" when field is touched and empty', () => {
+    const { fixture, component } = setup();
+
+    component.form.get('email')!.markAsTouched();
+    fixture.detectChanges();
+
+    const emailErrors: NodeListOf<Element> = fixture.nativeElement.querySelectorAll('p.field-error');
+    expect(emailErrors.length).toBeGreaterThan(0);
+    expect(emailErrors[0].getAttribute('role')).toBe('alert');
+  });
+
+  it('renders password error paragraph with role="alert" when field is touched and empty', () => {
+    const { fixture, component } = setup();
+
+    component.form.get('password')!.markAsTouched();
+    fixture.detectChanges();
+
+    const pwErrors: NodeListOf<Element> = fixture.nativeElement.querySelectorAll('p.field-error');
+    expect(pwErrors.length).toBeGreaterThan(0);
+    expect(pwErrors[0].getAttribute('role')).toBe('alert');
+  });
+
+  it('all field-error paragraphs carry role="alert" after a failed submit attempt', () => {
+    const { fixture, component } = setup();
+
+    component.submit();
+    fixture.detectChanges();
+
+    const errors: NodeListOf<Element> = fixture.nativeElement.querySelectorAll('p.field-error');
+    expect(errors.length).toBeGreaterThan(0);
+    errors.forEach((el) => {
+      expect(el.getAttribute('role')).toBe('alert');
+    });
+  });
+});

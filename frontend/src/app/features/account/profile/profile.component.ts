@@ -94,7 +94,7 @@ function formatPhone(raw: string): string {
                 <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
               </tui-textfield>
               @if (nameError('firstName'); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
             <div class="name-col">
@@ -103,7 +103,7 @@ function formatPhone(raw: string): string {
                 <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
               </tui-textfield>
               @if (nameError('lastName'); as msg) {
-                <p class="field-error">{{ msg }}</p>
+                <p class="field-error" role="alert">{{ msg }}</p>
               }
             </div>
           </div>
@@ -121,7 +121,7 @@ function formatPhone(raw: string): string {
           </tui-textfield>
 
           @if (form.controls.phone.errors?.['invalidPhone'] && (form.controls.phone.dirty || form.controls.phone.touched)) {
-            <p class="field-error">Wprowadź poprawny numer telefonu</p>
+            <p class="field-error" role="alert">Wprowadź poprawny numer telefonu</p>
           }
 
           <tui-textfield>
@@ -129,7 +129,7 @@ function formatPhone(raw: string): string {
             <input tuiTextfield type="text" formControlName="nip" autocomplete="off" placeholder="10 cyfr" />
           </tui-textfield>
           @if (form.controls.nip.errors?.['pattern'] && (form.controls.nip.dirty || form.controls.nip.touched)) {
-            <p class="field-error">NIP musi zawierać dokładnie 10 cyfr</p>
+            <p class="field-error" role="alert">NIP musi zawierać dokładnie 10 cyfr</p>
           }
 
           <div class="form-actions">

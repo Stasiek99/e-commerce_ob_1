@@ -1,4 +1,5 @@
 import { Component, DestroyRef, ElementRef, OnInit, inject, signal } from '@angular/core';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { RouterLink, Router } from '@angular/router';
 import { ReactiveFormsModule, FormControl } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
@@ -36,6 +37,7 @@ interface SuggestResult {
     TuiChevron,
     TuiList,
     PricePipe,
+    CdkTrapFocus,
   ],
   template: `
     <header class="header">
@@ -131,20 +133,24 @@ interface SuggestResult {
 
         <!-- RIGHT: actions -->
         <div class="header__actions">
-          <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()">
-            <tui-icon icon="@tui.heart" />
-            @if (wishlist.count() > 0) {
-              <span class="header__wishlist-badge">{{ wishlist.count() }}</span>
+          <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()"
+             [attr.aria-label]="wishlist.count() > 0 ? 'Ulubione (' + wishlist.count() + ' produktów)' : 'Ulubione'">
+            <tui-icon icon="@tui.heart" aria-hidden="true" />
+            @defer (on immediate) {
+              @if (wishlist.count() > 0) {
+                <span class="header__wishlist-badge" aria-hidden="true">{{ wishlist.count() }}</span>
+              }
             }
-            <span>Ulubione</span>
+            <span aria-hidden="true">Ulubione</span>
           </a>
 
-          <a routerLink="/cart" class="header__action-link header__action-link--cart" (click)="closeMobileMenu()">
-            <tui-icon icon="@tui.shopping-cart" />
+          <a routerLink="/cart" class="header__action-link header__action-link--cart" (click)="closeMobileMenu()"
+             [attr.aria-label]="cartService.itemCount() > 0 ? 'Koszyk (' + cartService.itemCount() + ' produktów)' : 'Koszyk'">
+            <tui-icon icon="@tui.shopping-cart" aria-hidden="true" />
             @if (cartService.itemCount() > 0) {
-              <span class="header__cart-badge">{{ cartService.itemCount() }}</span>
+              <span class="header__cart-badge" aria-hidden="true">{{ cartService.itemCount() }}</span>
             }
-            <span>Koszyk</span>
+            <span aria-hidden="true">Koszyk</span>
           </a>
 
           <a [routerLink]="auth.isAuthenticated() ? '/account' : '/auth/login'" class="header__action-link" (click)="closeMobileMenu()">
@@ -168,8 +174,17 @@ interface SuggestResult {
 
       <!-- Mobile navigation panel -->
       @if (mobileMenuOpen) {
-        <div class="mobile-nav" (click)="closeMobileMenu()" (keydown.escape)="closeMobileMenu()">
-          <nav class="mobile-nav__links" aria-label="Nawigacja mobilna" (click)="$event.stopPropagation()">
+        <div class="mobile-nav" (click)="closeMobileMenu()">
+          <nav
+            class="mobile-nav__links"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menu nawigacyjne"
+            cdkTrapFocus
+            [cdkTrapFocusAutoCapture]="true"
+            (click)="$event.stopPropagation()"
+            (keydown.escape)="closeMobileMenu()"
+          >
             <a routerLink="/products" class="mobile-nav__link" (click)="closeMobileMenu()">Wszystkie produkty</a>
             <a routerLink="/category/perfume" class="mobile-nav__link" (click)="closeMobileMenu()">Perfumy</a>
             <a routerLink="/category/diffusers" class="mobile-nav__link" (click)="closeMobileMenu()">Dyfuzory</a>
@@ -426,6 +441,7 @@ export class HeaderComponent implements OnInit {
   dropdownOpen = false;
   mobileMenuOpen = false;
   showAutocomplete = false;
+  private hamburgerEl: HTMLElement | null = null;
 
   readonly autocomplete = signal<SuggestResult[]>([]);
   readonly activeIndex = signal(-1);
@@ -475,11 +491,19 @@ export class HeaderComponent implements OnInit {
   }
 
   toggleMobileMenu(): void {
+    if (!this.mobileMenuOpen) {
+      this.hamburgerEl = this.elRef.nativeElement.querySelector('.header__hamburger');
+    }
     this.mobileMenuOpen = !this.mobileMenuOpen;
+    if (!this.mobileMenuOpen) {
+      this.hamburgerEl?.focus();
+    }
   }
 
   closeMobileMenu(): void {
     this.mobileMenuOpen = false;
+    this.hamburgerEl?.focus();
+    this.hamburgerEl = null;
   }
 
   onInputFocus(): void {

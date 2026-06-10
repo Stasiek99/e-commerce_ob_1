@@ -10,6 +10,8 @@ const DEFAULT_SESSION_TTL_MINUTES = 30;
 export interface CreateCheckoutSessionInput {
   orderId: string;
   orderNumber: string;
+  /** Stable payment row ID used as idempotency key — prevents duplicate sessions on LB retries. */
+  paymentId: string;
   customerEmail: string;
   currency: string;
   lineItems: Array<{
@@ -63,17 +65,21 @@ export class StripeClient {
 
     let discounts: Array<{ coupon: string }> | undefined;
     if (input.discountAmountInCents && input.discountAmountInCents > 0) {
-      const coupon = await this.stripe.coupons.create({
-        amount_off: input.discountAmountInCents,
-        currency: input.currency.toLowerCase(),
-        duration: 'once',
-        max_redemptions: 1,
-        name: input.couponLabel ?? 'Rabat',
-      });
+      const coupon = await this.stripe.coupons.create(
+        {
+          amount_off: input.discountAmountInCents,
+          currency: input.currency.toLowerCase(),
+          duration: 'once',
+          max_redemptions: 1,
+          name: input.couponLabel ?? 'Rabat',
+        },
+        { idempotencyKey: `coupon-${input.paymentId}` },
+      );
       discounts = [{ coupon: coupon.id }];
     }
 
-    const session = await this.stripe.checkout.sessions.create({
+    const session = await this.stripe.checkout.sessions.create(
+      {
       mode: 'payment',
       payment_method_types: ['card', 'blik', 'p24'],
       customer_email: input.customerEmail,
@@ -103,7 +109,9 @@ export class StripeClient {
       success_url: `${input.successUrl}?orderId=${input.orderId}&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: input.cancelUrl,
       locale: 'pl',
-    });
+    },
+    { idempotencyKey: `checkout-${input.paymentId}` },
+    );
 
     this.logger.log(
       `Stripe Checkout Session created: id=${session.id} order=${input.orderNumber}`,

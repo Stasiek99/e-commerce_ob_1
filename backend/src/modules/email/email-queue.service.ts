@@ -138,4 +138,8 @@ export class EmailQueueService {
   sendPayoutFailedAlert(data: Payload<'payout_failed_alert'>) {
     return this.enqueue('payout_failed_alert', { type: 'payout_failed_alert', payload: data });
   }
+
+  sendOrderAcknowledgement(data: Payload<'order_acknowledged'>) {
+    return this.enqueue('order_acknowledged', { type: 'order_acknowledged', payload: data });
+  }
 }

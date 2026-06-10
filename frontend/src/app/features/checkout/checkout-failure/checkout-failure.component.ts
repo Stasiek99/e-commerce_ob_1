@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
 
@@ -38,6 +38,9 @@ import { environment } from '../../../../environments/environment';
             {{ cancelling() ? 'Anulowanie...' : 'Anuluj zamówienie' }}
           </button>
         </div>
+        @if (cancelError()) {
+          <p class="page__error" role="alert">{{ cancelError() }}</p>
+        }
       } @else {
         <a routerLink="/cart" tuiButton appearance="outline" size="l" type="button">
           Wróć do koszyka
@@ -83,6 +86,12 @@ import { environment } from '../../../../environments/environment';
       flex-wrap: wrap;
       justify-content: center;
     }
+
+    .page__error {
+      font-size: 13px;
+      color: var(--tui-status-negative);
+      margin: 0;
+    }
   `],
 })
 export class CheckoutFailureComponent {
@@ -90,9 +99,11 @@ export class CheckoutFailureComponent {
   private readonly router = inject(Router);
   private readonly http   = inject(HttpClient);
 
-  readonly orderId   = signal<string | null>(this.route.snapshot.queryParamMap.get('orderId'));
-  readonly retrying  = signal(false);
+  readonly orderId    = signal<string | null>(this.route.snapshot.queryParamMap.get('orderId'));
+  readonly guestToken = signal<string | null>(this.route.snapshot.queryParamMap.get('guestToken'));
+  readonly retrying   = signal(false);
   readonly cancelling = signal(false);
+  readonly cancelError = signal<string | null>(null);
 
   retryPayment(): void {
     const id = this.orderId();
@@ -108,9 +119,16 @@ export class CheckoutFailureComponent {
     const id = this.orderId();
     if (!id) return;
     this.cancelling.set(true);
-    this.http.post(`${environment.apiUrl}/orders/${id}/cancel`, {}).subscribe({
+    this.cancelError.set(null);
+    const token = this.guestToken();
+    let params = new HttpParams();
+    if (token) params = params.set('token', token);
+    this.http.post(`${environment.apiUrl}/orders/${id}/cancel`, {}, { params }).subscribe({
       next: () => { this.router.navigate(['/cart']); },
-      error: () => { this.cancelling.set(false); },
+      error: () => {
+        this.cancelling.set(false);
+        this.cancelError.set('Nie udało się anulować zamówienia. Skontaktuj się z obsługą sklepu.');
+      },
     });
   }
 }
