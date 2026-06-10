@@ -185,7 +185,6 @@ describe('fetchAllProducts() — pagination', () => {
 
 const STATIC_PRERENDER = [
   '/',
-  '/cart',
   '/legal/terms',
   '/legal/privacy',
   '/legal/withdrawal',
@@ -203,18 +202,22 @@ function buildPrerenderRoutes(
 }
 
 describe('prerender-routes.txt generation', () => {
-  it('always includes the 5 static routes', () => {
+  it('always includes the 4 static routes', () => {
     const routes = buildPrerenderRoutes([], []);
     for (const r of STATIC_PRERENDER) {
       expect(routes).toContain(r);
     }
-    expect(routes.filter(r => !r.includes(':'))).toHaveLength(5);
+    expect(routes.filter(r => !r.includes(':'))).toHaveLength(4);
   });
 
   it('does NOT include /products as a static prerender route — catalog must hit SSR for fresh prices', () => {
-    // Regression guard: if /products is re-added to STATIC_PRERENDER, this test fails.
     const routes = buildPrerenderRoutes([], []);
     expect(routes).not.toContain('/products');
+  });
+
+  it('does NOT include /cart — disallowed by robots.txt and has no SEO value', () => {
+    const routes = buildPrerenderRoutes([], []);
+    expect(routes).not.toContain('/cart');
   });
 
   it('maps product slugs to /products/:slug', () => {

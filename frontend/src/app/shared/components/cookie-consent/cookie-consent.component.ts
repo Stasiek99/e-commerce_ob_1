@@ -95,13 +95,13 @@ import { ConsentService } from '../../../core/services/consent.service';
       border: none;
       padding: 2px 0;
       font-size: 12px;
-      color: rgba(255, 255, 255, 0.42);
+      color: rgba(255, 255, 255, 0.70);
       cursor: pointer;
       text-decoration: underline;
       text-underline-offset: 2px;
       transition: color 0.15s;
     }
-    .btn-minimal:hover { color: rgba(255, 255, 255, 0.72); }
+    .btn-minimal:hover { color: rgba(255, 255, 255, 0.90); }
   `],
 })
 export class CookieConsentComponent {

@@ -6,7 +6,7 @@
 
 import { DOCUMENT } from '@angular/common';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
-import { TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { NavigationError, NavigationStart, Router } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
 import { EMPTY, Subject } from 'rxjs';
@@ -232,5 +232,69 @@ describe('AppComponent — SwUpdate version reload notification', () => {
 
       expect(toastStub.info).not.toHaveBeenCalled();
     }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 3 — Skip-navigation link (WCAG 2.4.1 / EAA)
+// ---------------------------------------------------------------------------
+
+describe('AppComponent — skip-navigation link (WCAG 2.4.1)', () => {
+  let fixture: ComponentFixture<AppComponent>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AppComponent],
+      providers: [
+        { provide: Router, useValue: makeRouterStub(new Subject()) },
+        { provide: SeoService, useValue: makeSeoStub() },
+        { provide: DOCUMENT, useValue: document },
+        { provide: SwUpdate, useValue: makeSwUpdateStub(false) },
+        { provide: ToastService, useValue: makeToastStub() },
+      ],
+    })
+      .overrideComponent(AppComponent, {
+        set: {
+          imports: [],
+          schemas: [NO_ERRORS_SCHEMA],
+        },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    TestBed.resetTestingModule();
+  });
+
+  it('renders a.skip-link with href pointing to #main-content', () => {
+    const skipLink: HTMLAnchorElement | null = fixture.nativeElement.querySelector('a.skip-link');
+
+    expect(skipLink).not.toBeNull();
+    expect(skipLink!.getAttribute('href')).toBe('#main-content');
+  });
+
+  it('skip link carries the correct Polish label', () => {
+    const skipLink: HTMLAnchorElement | null = fixture.nativeElement.querySelector('a.skip-link');
+
+    expect(skipLink?.textContent?.trim()).toBe('Przejdź do treści');
+  });
+
+  it('main element carries id="main-content" so the skip link target resolves', () => {
+    const main: HTMLElement | null = fixture.nativeElement.querySelector('main');
+
+    expect(main).not.toBeNull();
+    expect(main!.getAttribute('id')).toBe('main-content');
+  });
+
+  it('skip link is the first element child of the app shell', () => {
+    const appShell: Element | null = fixture.nativeElement.querySelector('tui-root');
+    const firstChild = appShell?.firstElementChild;
+
+    expect(firstChild?.tagName.toLowerCase()).toBe('a');
+    expect(firstChild?.classList.contains('skip-link')).toBe(true);
   });
 });

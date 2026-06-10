@@ -32,14 +32,20 @@ import { TuiButton } from '@taiga-ui/core';
           <div class="expand-media__overlay" [style.opacity]="overlayOpacity"></div>
         </div>
 
-        <p class="expand-hint" [style.opacity]="hintOpacity">
-          Przewijaj, aby odkryć
-        </p>
+        @if (!mediaFullyExpanded) {
+          <button class="expand-hint"
+                  type="button"
+                  [style.opacity]="hintOpacity"
+                  (click)="expandHero()"
+                  aria-label="Odkryj kolekcję — kliknij lub naciśnij Enter">
+            Przewijaj, aby odkryć
+          </button>
+        }
       </div>
     </div>
 
     <!-- ── CONTENT (fades in after full expansion) ───────────────────────── -->
-    <div class="expand-content" [class.expand-content--visible]="showContent">
+    <div class="expand-content" [class.expand-content--visible]="showContent" [attr.inert]="showContent ? null : ''">
 
       <!-- FOR HER + FOR HIM side by side -->
       <div class="feature-duo">
@@ -235,6 +241,17 @@ import { TuiButton } from '@taiga-ui/core';
       margin: 0;
       white-space: nowrap;
       transition: opacity 0.12s linear;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      font-family: inherit;
+    }
+    button.expand-hint:focus-visible {
+      opacity: 1 !important;
+      outline: 2px solid rgba(255, 255, 255, 0.7);
+      outline-offset: 6px;
+      border-radius: 2px;
     }
 
     /* ── CONTENT REVEAL ─────────────────────────────────────────────────── */
@@ -487,6 +504,17 @@ import { TuiButton } from '@taiga-ui/core';
       .category-card { min-height: 50vh; padding: 40px var(--gutter) 0; }
     }
 
+    /* ── REDUCED MOTION ────────────────────────────────────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      .expand-media__overlay,
+      .expand-content,
+      .feature__image,
+      .showcase__image,
+      .category-card__image {
+        transition: none !important;
+      }
+    }
+
     /* ── DEBUG ─────────────────────────────────────────────────────────── */
     .debug-sentry {
       position: fixed; bottom: 16px; right: 16px; z-index: 9999;
@@ -564,9 +592,23 @@ get overlayOpacity() { return Math.max(0, 0.5 - this.scrollProgress * 0.35); }
   private touchEndHandler = () => { this.touchStartY = 0; };
   private resizeHandler = () => { this.ngZone.run(() => { this.isMobile = window.innerWidth < 768; }); };
 
+  expandHero() {
+    this.ngZone.run(() => {
+      this.scrollProgress = 1;
+      this.showContent = true;
+      this.mediaFullyExpanded = true;
+    });
+  }
+
   ngOnInit() {
     if (!this.isBrowser) return;
     this.isMobile = window.innerWidth < 768;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      this.scrollProgress = 1;
+      this.showContent = true;
+      this.mediaFullyExpanded = true;
+      return;
+    }
     window.scrollTo(0, 0);
     this.ngZone.runOutsideAngular(() => {
       window.addEventListener('wheel', this.wheelHandler as EventListener, { passive: false });

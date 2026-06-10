@@ -1,9 +1,10 @@
 import { TestBed } from '@angular/core/testing';
-import { PreloadAllModules, PreloadingStrategy } from '@angular/router';
+import { PreloadAllModules, PreloadingStrategy, TitleStrategy } from '@angular/router';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { of } from 'rxjs';
 
 import { appConfig } from './app.config';
+import { AppTitleStrategy } from './core/strategies/title.strategy';
 import { AuthService } from './core/services/auth.service';
 import { AnalyticsService } from './core/services/analytics.service';
 
@@ -27,5 +28,18 @@ describe('appConfig', () => {
     const strategy = TestBed.inject(PreloadingStrategy);
 
     expect(strategy).toBeInstanceOf(PreloadAllModules);
+  });
+
+  // Regression guard: AppTitleStrategy must be wired as the TitleStrategy so screen
+  // readers receive unique page names on navigation (WCAG 2.4.2 / EAA compliance).
+  // We inspect the providers array directly to avoid resolving the DI chain (which
+  // needs platform-browser providers not available in this lightweight test module).
+  it('registers AppTitleStrategy as the TitleStrategy provider', () => {
+    const entry = (appConfig.providers as { provide?: unknown; useClass?: unknown }[]).find(
+      (p) => p?.provide === TitleStrategy,
+    );
+
+    expect(entry).toBeDefined();
+    expect(entry?.useClass).toBe(AppTitleStrategy);
   });
 });

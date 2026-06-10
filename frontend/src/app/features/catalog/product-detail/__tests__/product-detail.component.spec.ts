@@ -17,7 +17,7 @@ import { AnalyticsService } from '../../../../core/services/analytics.service';
 import { SeoService } from '../../../../core/services/seo.service';
 import { WishlistService } from '../../../../core/services/wishlist.service';
 import { StockStreamService } from '../../../../core/services/stock-stream.service';
-import { ReviewsService } from '../../../../core/services/reviews.service';
+import { ReviewsService, ReviewSummary } from '../../../../core/services/reviews.service';
 import { RESPONSE } from '../../../../core/tokens/ssr.tokens';
 
 const SLUG = 'rose-oud';
@@ -796,5 +796,479 @@ describe('ProductDetailComponent — thumbnail alt text', () => {
         expect(thumb.getAttribute('alt')).not.toBe('');
       });
     });
+  });
+});
+
+// ── Subscription leak fixes ────────────────────────────────────────────────────
+// Guards the fixes:
+//   1. subscribeStockStream() unsubscribes the previous stockSub before reassigning
+//   2. loadRelatedProducts() uses takeUntilDestroyed so it tears down on destroy
+
+describe('ProductDetailComponent — subscription cleanup', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).match(() => true).forEach((r) => r.flush(null));
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('unsubscribes the previous stockSub before creating a new one on rapid product navigation', () => {
+    const { component, httpMock } = setup();
+
+    const { Subject } = jest.requireActual<typeof import('rxjs')>('rxjs');
+    const firstStream = new Subject<never>();
+    const secondStream = new Subject<never>();
+    const mockStockStream = (component as any).stockStream;
+
+    mockStockStream.connect
+      .mockReturnValueOnce(firstStream.asObservable())
+      .mockReturnValueOnce(secondStream.asObservable());
+
+    (component as any).subscribeStockStream(['var-1']);
+    const firstSub = (component as any).stockSub;
+    const unsubscribeSpy = jest.spyOn(firstSub, 'unsubscribe');
+
+    (component as any).subscribeStockStream(['var-2']);
+
+    expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+  });
+
+  it('keeps only one active stockSub after two rapid calls to subscribeStockStream', () => {
+    const { component, httpMock } = setup();
+
+    const { Subject } = jest.requireActual<typeof import('rxjs')>('rxjs');
+    const mockStockStream = (component as any).stockStream;
+    mockStockStream.connect.mockReturnValue(new Subject().asObservable());
+
+    (component as any).subscribeStockStream(['var-1']);
+    const firstSub = (component as any).stockSub;
+
+    (component as any).subscribeStockStream(['var-2']);
+    const secondSub = (component as any).stockSub;
+
+    expect(secondSub).not.toBe(firstSub);
+    expect(firstSub.closed).toBe(true);
+
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+  });
+
+  it('does not update relatedProducts after the component is destroyed', () => {
+    const { component, httpMock, fixture } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+
+    // The related products request is in flight — component is destroyed before it resolves.
+    // takeUntilDestroyed cancels the HTTP subscription, so the request is cancelled.
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`);
+    fixture.destroy();
+
+    // The cancelled request is no longer in the HttpTestingController open list
+    // so afterEach verify() passes. The signal was never updated.
+    expect(component.relatedProducts()).toEqual([]);
+  });
+});
+
+// ─── onKeyDown SSR platform guard ────────────────────────────────────────────
+// Regression guard: @HostListener fires during SSR; without the platform check
+// closeLightbox() would call lightboxOpen.set(false) server-side, corrupting
+// the initial rendered state.
+
+describe('ProductDetailComponent — onKeyDown SSR guard', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('is a no-op on the server platform regardless of lightboxOpen state', () => {
+    const { fixture, httpMock } = setupWithPlatform('server');
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.lightboxOpen.set(true);
+    fixture.detectChanges();
+
+    const closeSpy = jest.spyOn(component, 'closeLightbox');
+    component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(component.lightboxOpen()).toBe(true);
+  });
+
+  it('handles Escape and closes the lightbox in browser context', () => {
+    const { fixture, httpMock } = setupWithPlatform('browser');
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.lightboxOpen.set(true);
+    fixture.detectChanges();
+
+    component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(component.lightboxOpen()).toBe(false);
+  });
+
+  it('is a no-op in browser context when lightbox is closed', () => {
+    const { fixture, httpMock } = setupWithPlatform('browser');
+    const component = fixture.componentInstance;
+
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.lightboxOpen.set(false);
+    const closeSpy = jest.spyOn(component, 'closeLightbox');
+    component.onKeyDown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Lightbox focus management (WCAG 2.4.3) ──────────────────────────────────
+// Regression guard: openLightbox() must move focus into the dialog so keyboard
+// users can reach the close button. closeLightbox() must restore focus to the
+// element that triggered the lightbox (so Tab flow resumes correctly).
+// Without these invariants, the lightbox is a keyboard trap in the *bad* sense:
+// unreachable controls and no way back.
+
+describe('ProductDetailComponent — lightbox focus management (WCAG 2.4.3)', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.clearAllMocks();
+    document.body.style.overflow = '';
+  });
+
+  function loadProduct() {
+    const { component, fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(makeProductResponse());
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    return { component, fixture };
+  }
+
+  it('sets lightboxOpen to true and lightboxIndex to the provided index', () => {
+    const { component } = loadProduct();
+
+    component.openLightbox(1);
+
+    expect(component.lightboxOpen()).toBe(true);
+    expect(component.lightboxIndex()).toBe(1);
+  });
+
+  it('sets document.body.overflow to hidden when openLightbox is called in browser context', () => {
+    const { component } = loadProduct();
+
+    component.openLightbox(0);
+
+    expect(document.body.style.overflow).toBe('hidden');
+  });
+
+  it('sets lightboxOpen to false when closeLightbox is called', () => {
+    const { component } = loadProduct();
+    component.openLightbox(0);
+
+    component.closeLightbox();
+
+    expect(component.lightboxOpen()).toBe(false);
+  });
+
+  it('resets document.body.overflow to empty string when closeLightbox is called', () => {
+    const { component } = loadProduct();
+    component.openLightbox(0);
+
+    component.closeLightbox();
+
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('calls focus() on the element that was active when openLightbox was called', () => {
+    const { component } = loadProduct();
+
+    const triggerBtn = document.createElement('button');
+    document.body.appendChild(triggerBtn);
+    triggerBtn.focus();
+    const focusSpy = jest.spyOn(triggerBtn, 'focus');
+
+    component.openLightbox(0);
+    component.closeLightbox();
+
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+
+    document.body.removeChild(triggerBtn);
+  });
+
+  it('clears the trigger reference after closeLightbox so the element can be garbage-collected', () => {
+    const { component } = loadProduct();
+    component.openLightbox(0);
+
+    component.closeLightbox();
+
+    expect((component as any)._lightboxTrigger).toBeNull();
+  });
+
+  it('schedules a focus call on the lightbox element via setTimeout(0) after opening', () => {
+    jest.useFakeTimers();
+    const { component, fixture } = loadProduct();
+
+    component.openLightbox(0);
+    fixture.detectChanges();
+
+    const lightboxEl = fixture.nativeElement.querySelector('.lightbox') as HTMLElement | null;
+    if (lightboxEl) {
+      const focusSpy = jest.spyOn(lightboxEl, 'focus');
+      jest.runAllTimers();
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } else {
+      expect(component.lightboxOpen()).toBe(true);
+    }
+  });
+
+  it('does not set overflow or store a trigger when openLightbox is called in server context', () => {
+    const { fixture, httpMock } = setupWithPlatform('server');
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    httpMock.match(() => true).forEach((r) => r.flush(null));
+
+    component.openLightbox(0);
+
+    expect(document.body.style.overflow).toBe('');
+    expect((component as any)._lightboxTrigger).toBeNull();
+  });
+});
+
+// ─── Rating summary keyboard accessibility (WCAG 4.1.2) ─────────────────────
+// Regression guard: the rating summary element must be a native <button>, not
+// <a role="button">, so it is keyboard-focusable without any extra JS.
+// An <a> without href is not reachable via Tab; replacing it with <button> fixes this.
+// Invariant: button.detail__rating-summary exists; a.detail__rating-summary is absent.
+
+describe('ProductDetailComponent — rating summary keyboard accessibility (WCAG 4.1.2)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  function loadWithRatings() {
+    const { component, fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ avgRating: 4.5, reviewCount: 12 }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    return { component, fixture };
+  }
+
+  it('renders the rating summary as a <button>, not an <a>', () => {
+    const { fixture } = loadWithRatings();
+
+    const btn = fixture.nativeElement.querySelector('button.detail__rating-summary');
+    const anchor = fixture.nativeElement.querySelector('a.detail__rating-summary');
+
+    expect(btn).not.toBeNull();
+    expect(anchor).toBeNull();
+  });
+
+  it('rating summary button has type="button" to prevent accidental form submission', () => {
+    const { fixture } = loadWithRatings();
+
+    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.detail__rating-summary');
+
+    expect(btn.type).toBe('button');
+  });
+
+  it('rating summary button has aria-label "Przejdź do opinii"', () => {
+    const { fixture } = loadWithRatings();
+
+    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.detail__rating-summary');
+
+    expect(btn.getAttribute('aria-label')).toBe('Przejdź do opinii');
+  });
+
+  it('clicking the rating summary button calls scrollToReviews', () => {
+    const { component, fixture } = loadWithRatings();
+    const scrollSpy = jest.spyOn(component, 'scrollToReviews');
+
+    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.detail__rating-summary');
+    btn.click();
+
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the rating summary when reviewCount is 0', () => {
+    const { fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ avgRating: null, reviewCount: 0 }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    const el = fixture.nativeElement.querySelector('.detail__rating-summary');
+    expect(el).toBeNull();
+  });
+});
+
+// ─── EU Omnibus Art. 3a review verification labels ────────────────────────────
+// Regulation 2019/2161 Art. 3a requires explicit disclosure of whether and how
+// consumer reviews are verified. Silently omitting the badge for unverified
+// reviews is non-compliant — the UI must label them "Niezweryfikowany zakup".
+// Invariant: @else block renders .review-card__unverified when verifiedPurchase
+// is false; the verified badge must not appear for the same review.
+
+describe('ProductDetailComponent — EU Omnibus Art. 3a review verification labels', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  const makeReview = (overrides: Partial<ReviewSummary> = {}): ReviewSummary => ({
+    id: 'r-1',
+    rating: 4,
+    title: null,
+    body: 'Świetny zapach',
+    adminReply: null,
+    helpfulCount: 0,
+    createdAt: '2025-01-15T10:00:00.000',
+    verifiedPurchase: true,
+    authorName: 'Jan K.',
+    ...overrides,
+  });
+
+  function setupWithReviews(reviews: ReviewSummary[]) {
+    const { fixture, component, httpMock } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ reviewCount: reviews.length }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    component.reviewsLoading.set(false);
+    component.reviews.set(reviews);
+    fixture.detectChanges();
+
+    return { fixture, component };
+  }
+
+  it('renders "Zweryfikowany zakup" badge when verifiedPurchase is true', () => {
+    const { fixture } = setupWithReviews([makeReview({ verifiedPurchase: true })]);
+
+    const badge = fixture.nativeElement.querySelector('.review-card__verified');
+
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain('Zweryfikowany zakup');
+  });
+
+  it('renders "Niezweryfikowany zakup" label when verifiedPurchase is false', () => {
+    const { fixture } = setupWithReviews([makeReview({ verifiedPurchase: false })]);
+
+    const label = fixture.nativeElement.querySelector('.review-card__unverified');
+
+    expect(label).not.toBeNull();
+    expect(label.textContent).toContain('Niezweryfikowany zakup');
+  });
+
+  it('does NOT render the verified badge when verifiedPurchase is false', () => {
+    const { fixture } = setupWithReviews([makeReview({ verifiedPurchase: false })]);
+
+    const badge = fixture.nativeElement.querySelector('.review-card__verified');
+
+    expect(badge).toBeNull();
+  });
+
+  it('renders verified and unverified labels independently in a mixed review list', () => {
+    const { fixture } = setupWithReviews([
+      makeReview({ id: 'r-1', verifiedPurchase: true }),
+      makeReview({ id: 'r-2', verifiedPurchase: false }),
+    ]);
+
+    const verified = fixture.nativeElement.querySelectorAll('.review-card__verified');
+    const unverified = fixture.nativeElement.querySelectorAll('.review-card__unverified');
+
+    expect(verified.length).toBe(1);
+    expect(unverified.length).toBe(1);
+  });
+});
+
+// ── WCAG 3.1.2 — <time> datetime attribute ────────────────────────────────────
+
+describe('ProductDetailComponent — review <time> datetime attribute (WCAG 3.1.2)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  const makeReview = (overrides: Partial<ReviewSummary> = {}): ReviewSummary => ({
+    id: 'r-1',
+    rating: 4,
+    title: null,
+    body: 'Świetny zapach',
+    adminReply: null,
+    helpfulCount: 0,
+    createdAt: '2025-01-15T10:00:00.000',
+    verifiedPurchase: true,
+    authorName: 'Jan K.',
+    ...overrides,
+  });
+
+  function setupWithReviews(reviews: ReviewSummary[]) {
+    const { fixture, component, httpMock } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ reviewCount: reviews.length }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    component.reviewsLoading.set(false);
+    component.reviews.set(reviews);
+    fixture.detectChanges();
+
+    return { fixture };
+  }
+
+  it('<time> element has datetime attribute matching review.createdAt', () => {
+    const ISO = '2025-01-15T10:00:00.000';
+    const { fixture } = setupWithReviews([makeReview({ createdAt: ISO })]);
+
+    const timeEl = fixture.nativeElement.querySelector('.review-card__date');
+
+    expect(timeEl).not.toBeNull();
+    expect(timeEl.getAttribute('datetime')).toBe(ISO);
+  });
+
+  it('datetime attribute holds the raw ISO string, not the human-readable formatted text', () => {
+    const ISO = '2025-06-20T08:30:00.000';
+    const { fixture } = setupWithReviews([makeReview({ createdAt: ISO })]);
+
+    const timeEl = fixture.nativeElement.querySelector('.review-card__date');
+    const datetime = timeEl.getAttribute('datetime');
+
+    // The formatted text would be something like "20 cze 2025" — not an ISO string
+    expect(datetime).toBe(ISO);
+    expect(datetime).not.toBe(timeEl.textContent.trim());
+  });
+
+  it('each <time> in a multi-review list has its own correct datetime attribute', () => {
+    const ISO_A = '2025-01-10T12:00:00.000';
+    const ISO_B = '2025-03-25T08:00:00.000';
+    const { fixture } = setupWithReviews([
+      makeReview({ id: 'r-1', createdAt: ISO_A }),
+      makeReview({ id: 'r-2', createdAt: ISO_B }),
+    ]);
+
+    const timeEls: NodeListOf<HTMLElement> = fixture.nativeElement.querySelectorAll('.review-card__date');
+
+    expect(timeEls.length).toBe(2);
+    expect(timeEls[0].getAttribute('datetime')).toBe(ISO_A);
+    expect(timeEls[1].getAttribute('datetime')).toBe(ISO_B);
   });
 });

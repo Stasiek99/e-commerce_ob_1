@@ -1,4 +1,5 @@
-import { Component, HostListener, OnDestroy, OnInit, inject, signal, computed, PLATFORM_ID } from '@angular/core';
+import { Component, DestroyRef, HostListener, OnDestroy, OnInit, inject, signal, computed, PLATFORM_ID } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Subscription } from 'rxjs';
 import { isPlatformBrowser, isPlatformServer, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -23,6 +24,7 @@ import { TurnstileService } from '../../../core/services/turnstile.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 
 interface ProductVariantDetail {
   id: string;
@@ -72,7 +74,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton],
+  imports: [FormsModule, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton, CdkTrapFocus],
   template: `
     @if (loading()) {
       <div class="skeleton-detail">
@@ -172,8 +174,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 
           <!-- Rating summary (above price, clickable anchor) -->
           @if ((product()!.reviewCount ?? 0) > 0) {
-            <a class="detail__rating-summary" role="button" style="cursor:pointer" aria-label="Przejdź do opinii"
-               (click)="scrollToReviews()">
+            <button type="button" class="detail__rating-summary" aria-label="Przejdź do opinii"
+                    (click)="scrollToReviews()">
               <span class="detail__stars" aria-hidden="true">
                 @for (s of starsArray(product()!.avgRating ?? 0); track $index) {
                   <tui-icon [icon]="s === 'full' ? '@tui.star' : s === 'half' ? '@tui.star-half' : '@tui.star'"
@@ -185,7 +187,7 @@ const CATEGORY_LABELS: Record<string, string> = {
               <span
                   class="detail__rating-count">({{ product()!.reviewCount }} {{ product()!.reviewCount === 1 ? 'opinia' : product()!.reviewCount! <= 4 ? 'opinie' : 'opinii' }}
                 )</span>
-            </a>
+            </button>
           }
 
           <!-- Price + stock -->
@@ -476,8 +478,12 @@ const CATEGORY_LABELS: Record<string, string> = {
                         <tui-icon icon="@tui.badge-check"></tui-icon>
                         Zweryfikowany zakup
                       </span>
+                    } @else {
+                      <span class="review-card__unverified">
+                        Niezweryfikowany zakup
+                      </span>
                     }
-                    <time class="review-card__date">
+                    <time class="review-card__date" [attr.datetime]="review.createdAt">
                       {{ formatDate(review.createdAt) }}
                     </time>
                   </div>
@@ -560,7 +566,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
       <!-- Lightbox -->
       @if (lightboxOpen()) {
-        <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1">
+        <div class="lightbox" role="dialog" aria-modal="true" aria-label="Galeria zdjęć" tabindex="-1" cdkTrapFocus>
           <div class="lightbox__backdrop" (click)="closeLightbox()"></div>
           <div class="lightbox__ui">
             <div class="lightbox__header">
@@ -856,10 +862,11 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__meta-row:last-child { border-bottom: none; }
     .detail__meta-label { color: var(--color-secondary); font-weight: 500; }
 
-    /* Rating summary link */
+    /* Rating summary button */
     .detail__rating-summary {
       display: flex; align-items: center; gap: 6px;
-      text-decoration: none; color: inherit; margin-bottom: 12px;
+      background: none; border: none; padding: 0; cursor: pointer;
+      color: inherit; margin-bottom: 12px;
       width: fit-content;
     }
     .detail__rating-summary:hover .detail__rating-count { text-decoration: underline; }
@@ -1093,6 +1100,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly turnstile = inject(TurnstileService);
   private readonly router = inject(Router);
   private readonly ssrResponse = inject(RESPONSE, { optional: true });
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly loading = signal(true);
   readonly product = signal<ProductDetail | null>(null);
@@ -1148,6 +1156,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   readonly lightboxOpen = signal(false);
   readonly lightboxIndex = signal(0);
+  private _lightboxTrigger: HTMLElement | null = null;
   readonly activeImageIndex = computed(() => {
     const url = this.activeImage();
     const imgs = this.product()?.images ?? [];
@@ -1168,12 +1177,20 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   openLightbox(index: number): void {
     this.lightboxIndex.set(index);
     this.lightboxOpen.set(true);
-    if (isPlatformBrowser(this.platformId)) document.body.style.overflow = 'hidden';
+    if (isPlatformBrowser(this.platformId)) {
+      this._lightboxTrigger = document.activeElement as HTMLElement;
+      document.body.style.overflow = 'hidden';
+      setTimeout(() => (document.querySelector('.lightbox') as HTMLElement)?.focus(), 0);
+    }
   }
 
   closeLightbox(): void {
     this.lightboxOpen.set(false);
-    if (isPlatformBrowser(this.platformId)) document.body.style.overflow = '';
+    if (isPlatformBrowser(this.platformId)) {
+      document.body.style.overflow = '';
+      this._lightboxTrigger?.focus();
+      this._lightboxTrigger = null;
+    }
   }
 
   lightboxNext(): void {
@@ -1200,7 +1217,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   @HostListener('document:keydown', ['$event'])
   onKeyDown(e: KeyboardEvent): void {
-    if (!this.lightboxOpen()) return;
+    if (!isPlatformBrowser(this.platformId) || !this.lightboxOpen()) return;
     if (e.key === 'Escape') this.closeLightbox();
     else if (e.key === 'ArrowRight') this.lightboxNext();
     else if (e.key === 'ArrowLeft') this.lightboxPrev();
@@ -1275,6 +1292,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
 
   private subscribeStockStream(variantIds: string[]): void {
     if (!variantIds.length) return;
+    this.stockSub?.unsubscribe();
     this.stockSub = this.stockStream.connect(variantIds).subscribe({
       next: (updates) => {
         this.stockLive.set(true);
@@ -1301,6 +1319,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private loadRelatedProducts(slug: string): void {
     this.http
       .get<ProductCardData[]>(`${environment.apiUrl}/products/${slug}/related?limit=6`)
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({ next: (data) => this.relatedProducts.set(data) });
   }
 

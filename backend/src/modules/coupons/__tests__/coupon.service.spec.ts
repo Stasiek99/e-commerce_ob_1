@@ -357,6 +357,65 @@ describe('CouponService', () => {
         expect(result.discountAmountInCents).toBe(0);
       });
     });
+
+    describe('appliesToItemsOnly disclosure (UoK Art. 13)', () => {
+      it('sets appliesToItemsOnly when FIXED_AMOUNT value exceeds items total', async () => {
+        // 100 PLN coupon on a 50 PLN cart — customer will still pay shipping
+        prisma.coupon.findUnique.mockResolvedValue(
+          makeCoupon({ discountType: DiscountType.FIXED_AMOUNT, value: 10000 }),
+        );
+
+        const result = await service.validate('FLAT100', 5000);
+
+        expect(result.valid).toBe(true);
+        expect(result.appliesToItemsOnly).toBe(true);
+      });
+
+      it('sets appliesToItemsOnly when FIXED_AMOUNT value exactly equals items total (boundary)', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(
+          makeCoupon({ discountType: DiscountType.FIXED_AMOUNT, value: 5000 }),
+        );
+
+        const result = await service.validate('FLAT50', 5000);
+
+        expect(result.valid).toBe(true);
+        expect(result.appliesToItemsOnly).toBe(true);
+      });
+
+      it('does not set appliesToItemsOnly when FIXED_AMOUNT value is below items total', async () => {
+        // Coupon covers only part of items — no disclosure needed
+        prisma.coupon.findUnique.mockResolvedValue(
+          makeCoupon({ discountType: DiscountType.FIXED_AMOUNT, value: 500 }),
+        );
+
+        const result = await service.validate('FLAT5', 10000);
+
+        expect(result.valid).toBe(true);
+        expect(result.appliesToItemsOnly).toBeUndefined();
+      });
+
+      it('does not set appliesToItemsOnly for PERCENTAGE coupons', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(
+          makeCoupon({ discountType: DiscountType.PERCENTAGE, value: 100 }),
+        );
+
+        const result = await service.validate('ALL100', 5000);
+
+        expect(result.valid).toBe(true);
+        expect(result.appliesToItemsOnly).toBeUndefined();
+      });
+
+      it('does not set appliesToItemsOnly for FREE_SHIPPING coupons', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(
+          makeCoupon({ discountType: DiscountType.FREE_SHIPPING, value: 0 }),
+        );
+
+        const result = await service.validate('SHIP0', 5000);
+
+        expect(result.valid).toBe(true);
+        expect(result.appliesToItemsOnly).toBeUndefined();
+      });
+    });
   });
 
   // ─── calculateDiscount ───────────────────────────────────────────────────

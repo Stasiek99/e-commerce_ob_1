@@ -17,12 +17,14 @@ import { AnalyticsService } from './core/services/analytics.service';
 import {
   PreloadAllModules,
   Router,
+  TitleStrategy,
   provideRouter,
   withComponentInputBinding,
   withInMemoryScrolling,
   withPreloading,
   withViewTransitions,
 } from '@angular/router';
+import { AppTitleStrategy } from './core/strategies/title.strategy';
 import {
   provideHttpClient,
   withInterceptors,
@@ -91,6 +93,7 @@ export const appConfig: ApplicationConfig = {
               length: 0,
             } as Storage),
     },
+    { provide: TitleStrategy, useClass: AppTitleStrategy },
     ...sentryProviders,
     provideServiceWorker('ngsw-worker.js', {
       enabled: !isDevMode(),

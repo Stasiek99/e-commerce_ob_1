@@ -128,6 +128,8 @@ export class CartService {
   clear() {
     this._items.set([]);
     this._cartId.set(null);
+    this.updateQueues.forEach((subject) => subject.complete());
+    this.updateQueues.clear();
   }
 
   getSessionId(): string {

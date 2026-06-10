@@ -30,6 +30,7 @@ describe('OrdersService', () => {
   let cartService: jest.Mocked<CartService>;
   let paymentsService: jest.Mocked<PaymentsService>;
   let invoiceService: jest.Mocked<InvoiceService>;
+  let emailService: jest.Mocked<EmailQueueService>;
 
   const mockAddress = {
     firstName: 'Jan',
@@ -115,6 +116,7 @@ describe('OrdersService', () => {
             sendShippingNotification: jest.fn().mockResolvedValue(undefined),
             sendLowStockAlert: jest.fn().mockResolvedValue(undefined),
             sendReviewRequest: jest.fn().mockResolvedValue(undefined),
+            sendOrderAcknowledgement: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -132,7 +134,7 @@ describe('OrdersService', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn().mockReturnValue(undefined),
+            get: jest.fn().mockImplementation((_key: string, defaultVal?: string) => defaultVal ?? undefined),
             getOrThrow: jest.fn().mockReturnValue('https://example.com'),
           },
         },
@@ -155,6 +157,7 @@ describe('OrdersService', () => {
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
     invoiceService = module.get(InvoiceService);
+    emailService = module.get(EmailQueueService);
   });
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
@@ -306,7 +309,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -335,7 +338,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
-              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -368,7 +371,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedShipping = args.data.shippingCostInCents;
-              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -400,7 +403,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedShipping = args.data.shippingCostInCents;
-              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -436,6 +439,8 @@ describe('OrdersService', () => {
         id: 'order-1',
         orderNumber: 'ORD-2026-000001',
         totalInCents: mockCart.totalInCents + 1999, // DHL = 19.99
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
       };
 
       // Capture the order data passed to tx.order.create
@@ -499,7 +504,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
-              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -537,7 +542,7 @@ describe('OrdersService', () => {
             }),
             findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -601,7 +606,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedOrderData = args.data;
-              return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -640,7 +645,7 @@ describe('OrdersService', () => {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -673,7 +678,7 @@ describe('OrdersService', () => {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -758,7 +763,7 @@ describe('OrdersService', () => {
           $executeRawUnsafe: jest.fn(),
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -796,7 +801,7 @@ describe('OrdersService', () => {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -825,7 +830,7 @@ describe('OrdersService', () => {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
           },
-          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue(null) }, // no cart record
           cartItem: { deleteMany: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -841,6 +846,201 @@ describe('OrdersService', () => {
       });
 
       expect(result.orderId).toBe('o-1');
+    });
+
+    describe('ORDER_ACKNOWLEDGED email — UoK Art. 21', () => {
+      const buildAckTx = () => ({
+        $executeRawUnsafe: jest.fn(),
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+        productVariant: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findMany: jest.fn().mockResolvedValue([
+            { id: 'pv-1', priceInCents: 34900 },
+            { id: 'pv-2', priceInCents: 44900 },
+          ]),
+        },
+        order: {
+          create: jest.fn().mockResolvedValue({
+            id: 'o-ack',
+            orderNumber: 'ORD-2026-000099',
+            snapshotEmail: 'jan@example.com',
+            snapshotFirstName: 'Jan',
+            totalInCents: 114700,
+          }),
+        },
+        cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+        cartItem: { deleteMany: jest.fn() },
+        orderEvent: { create: jest.fn() },
+      });
+
+      beforeEach(() => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+        prisma.$transaction.mockImplementation(async (fn: any) => fn(buildAckTx()));
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe/pay' });
+      });
+
+      it('calls sendOrderAcknowledgement once after successful order creation', async () => {
+        await service.createFromCart('user-1', undefined, 'jan@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        expect(emailService.sendOrderAcknowledgement).toHaveBeenCalledTimes(1);
+      });
+
+      it('passes correct to, orderNumber, firstName and paymentUrl', async () => {
+        await service.createFromCart('user-1', undefined, 'jan@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        expect(emailService.sendOrderAcknowledgement).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to: 'jan@example.com',
+            orderNumber: 'ORD-2026-000099',
+            firstName: 'Jan',
+            paymentUrl: 'https://stripe/pay',
+          }),
+        );
+      });
+
+      it('includes orderId and a non-empty cancel token in cancelUrl', async () => {
+        await service.createFromCart('user-1', undefined, 'jan@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        const callArg = emailService.sendOrderAcknowledgement.mock.calls[0][0];
+        expect(callArg.cancelUrl).toContain('o-ack');
+        expect(callArg.cancelUrl).toMatch(/token=.+/);
+      });
+
+      it('does NOT call sendOrderAcknowledgement when Stripe initiatePayment throws', async () => {
+        paymentsService.initiatePayment.mockRejectedValue(new Error('Stripe error'));
+        prisma.$transaction
+          .mockImplementationOnce(async (fn: any) => fn(buildAckTx()))
+          .mockImplementationOnce(async () => undefined);
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'jan@example.com', {
+            newAddress: mockAddress,
+            carrierCode: CarrierCode.DHL,
+          }),
+        ).rejects.toThrow('Stripe error');
+
+        expect(emailService.sendOrderAcknowledgement).not.toHaveBeenCalled();
+      });
+    });
+
+    // ─── sub-50gr total guard ─────────────────────────────────────────────────
+    // Stripe rejects PLN amounts below 50 gr with amount_too_small.
+    // The guard must fire inside the transaction so the DB write never commits.
+
+    describe('sub-50gr total guard', () => {
+      const makeSingleItemCart = (priceInCents: number) => ({
+        id: 'cart-1',
+        items: [{
+          productVariantId: 'pv-low',
+          quantity: 1,
+          productName: 'Mini Perfume',
+          variantLabel: '1ml',
+          priceInCents,
+          vatRate: 2300,
+          sku: 'MINI-001',
+          stock: 10,
+          imageUrl: null,
+          slug: 'mini-perfume',
+        }],
+        totalInCents: priceInCents,
+      });
+
+      const makeSubTx = (freshPriceInCents: number) => ({
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+        productVariant: {
+          findMany: jest.fn()
+            .mockResolvedValueOnce([{ id: 'pv-low' }])
+            .mockResolvedValueOnce([{ id: 'pv-low', priceInCents: freshPriceInCents }]),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        coupon: { findUnique: jest.fn().mockResolvedValue(null) },
+        order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: freshPriceInCents }) },
+        orderEvent: { create: jest.fn().mockResolvedValue({}) },
+      });
+
+      const guardDto = {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      };
+
+      it('throws BadRequestException when txTotal is 1 cent (below Stripe 50 gr minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(1) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(1);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('throws with the Polish minimum-amount message for sub-50gr totals', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(25) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(25);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow('Kwota zamówienia jest zbyt niska (minimum 0,50 zł po rabacie).');
+      });
+
+      it('throws BadRequestException when txTotal is 49 cents (boundary just below Stripe minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(49) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(49);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('does not call tx.order.create when the sub-50gr guard fires', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(10) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(10);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(
+          service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
+        ).rejects.toThrow(BadRequestException);
+
+        expect(tx.order.create).not.toHaveBeenCalled();
+      });
+
+      it('does NOT fire the guard when txTotal is exactly 50 cents (at Stripe minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(50) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(50);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', guardDto);
+
+        expect(tx.order.create).toHaveBeenCalled();
+      });
+
+      it('does NOT fire the guard when txTotal is 0 cents (free order)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(0) as any);
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
+        const tx = makeSubTx(0);
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', guardDto);
+
+        expect(tx.order.create).toHaveBeenCalled();
+      });
     });
   });
 
@@ -1813,7 +2013,7 @@ describe('OrdersService', () => {
         findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
       },
       coupon: { findUnique: jest.fn().mockResolvedValue(coupon) },
-      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
       orderEvent: { create: jest.fn() },
@@ -1848,7 +2048,7 @@ describe('OrdersService', () => {
         const tx = buildTx({ id: 'coupon-1', discountType: DiscountType.FIXED_AMOUNT, value: 1000, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedTotal = args.data.totalInCents;
-          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
         });
         return fn(tx);
       });
@@ -1879,7 +2079,7 @@ describe('OrdersService', () => {
         const tx = buildTx({ id: 'coupon-2', discountType: DiscountType.FREE_SHIPPING, value: 0, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedDiscount = args.data.discountInCents;
-          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
         });
         return fn(tx);
       });
@@ -2066,6 +2266,27 @@ describe('OrdersService', () => {
       await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
 
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException when order is in DISPUTE_HOLD — prevents merchant-losing refund on disputed charge', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not issue refund or expire session when order is in DISPUTE_HOLD', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.DISPUTE_HOLD,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
     it('issues full refund when order is PROCESSING (PARTIALLY_REFUNDED guard does not affect PROCESSING)', async () => {
@@ -2940,7 +3161,7 @@ describe('OrdersService', () => {
       $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
       productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]) },
       coupon: { findUnique: jest.fn().mockResolvedValue(null) },
-      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
       orderEvent: { create: jest.fn() },
@@ -2986,6 +3207,7 @@ describe('OrdersService', () => {
               sendLowStockAlert: jest.fn().mockResolvedValue(undefined),
               sendReviewRequest: jest.fn().mockResolvedValue(undefined),
               sendShippingNotification: jest.fn().mockResolvedValue(undefined),
+              sendOrderAcknowledgement: jest.fn().mockResolvedValue(undefined),
             },
           },
           {
@@ -3004,10 +3226,10 @@ describe('OrdersService', () => {
             provide: ConfigService,
             useValue: {
               // ADMIN_ALERT_EMAIL is set — notification must still NOT fire from createFromCart
-              get: jest.fn().mockImplementation((key: string) => {
+              get: jest.fn().mockImplementation((key: string, defaultVal?: string) => {
                 if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
                 if (key === 'FRONTEND_URL') return 'https://mystore.pl';
-                return undefined;
+                return defaultVal ?? undefined;
               }),
               getOrThrow: jest.fn().mockReturnValue('https://example.com'),
             },
@@ -3135,7 +3357,7 @@ describe('OrdersService', () => {
         findMany: jest.fn().mockResolvedValue(freshPrices),
       },
       coupon: { findUnique: jest.fn().mockResolvedValue(coupon) },
-      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
       cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
       cartItem: { deleteMany: jest.fn() },
       orderEvent: { create: jest.fn() },
@@ -3150,7 +3372,7 @@ describe('OrdersService', () => {
         const tx = buildRaceTx(freshPrices);
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedItems = args.data.items.create;
-          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
         });
         return fn(tx);
       });
@@ -3175,7 +3397,7 @@ describe('OrdersService', () => {
         const tx = buildRaceTx(freshPrices);
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedOrderData = args.data;
-          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
         });
         return fn(tx);
       });
@@ -3208,7 +3430,7 @@ describe('OrdersService', () => {
         const tx = buildRaceTx(freshPrices, { id: 'coupon-pct', discountType: DiscountType.PERCENTAGE, value: 10, minSpendInCents: null });
         tx.order.create = jest.fn().mockImplementation((args: any) => {
           capturedOrderData = args.data;
-          return { id: 'o-1', orderNumber: 'ORD-2026-000001' };
+          return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
         });
         return fn(tx);
       });
@@ -3273,7 +3495,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               generatedOrderNumber = args.data.orderNumber;
-              return { id: 'o-1', orderNumber: args.data.orderNumber };
+              return { id: 'o-1', orderNumber: args.data.orderNumber, snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -3319,7 +3541,7 @@ describe('OrdersService', () => {
           order: {
             create: jest.fn().mockImplementation((args: any) => {
               generatedOrderNumber = args.data.orderNumber;
-              return { id: 'o-1', orderNumber: args.data.orderNumber };
+              return { id: 'o-1', orderNumber: args.data.orderNumber, snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
             }),
           },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -3589,7 +3811,7 @@ describe('OrdersService', () => {
           .mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }]),
       },
       coupon: { findUnique: jest.fn().mockResolvedValue(null) },
-      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001' }) },
+      order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
       cart: { findFirst: jest.fn().mockResolvedValue(null) },
       cartItem: { deleteMany: jest.fn() },
       orderEvent: { create: jest.fn() },

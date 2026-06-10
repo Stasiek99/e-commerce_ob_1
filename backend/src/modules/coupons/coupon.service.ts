@@ -28,6 +28,7 @@ export interface CouponValidationResult {
   couponId?: string;
   discountType?: DiscountType;
   discountAmountInCents?: number;
+  appliesToItemsOnly?: boolean;
   message?: string;
 }
 
@@ -96,11 +97,15 @@ export class CouponService {
 
     const discountAmountInCents = this.calculateDiscount(coupon.discountType, coupon.value, cartTotalInCents);
 
+    const appliesToItemsOnly =
+      coupon.discountType === DiscountType.FIXED_AMOUNT && coupon.value >= cartTotalInCents;
+
     return {
       valid: true,
       couponId: coupon.id,
       discountType: coupon.discountType,
       discountAmountInCents,
+      ...(appliesToItemsOnly && { appliesToItemsOnly: true }),
     };
   }
 

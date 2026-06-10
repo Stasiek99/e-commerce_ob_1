@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { TestBed } from '@angular/core/testing';
 import { computed } from '@angular/core';
 import { By } from '@angular/platform-browser';
@@ -43,6 +45,19 @@ describe('CookieConsentComponent', () => {
     it('hides the banner once the user has made a choice', () => {
       const { fixture } = setup(true);
       expect(fixture.debugElement.query(By.css('[role="dialog"]'))).toBeNull();
+    });
+  });
+
+  // ── WCAG 1.4.3 — contrast ─────────────────────────────────────────────────
+
+  describe('WCAG 1.4.3 — btn-minimal contrast', () => {
+    it('btn-minimal color is rgba(255,255,255,0.70) — raised from failing 0.42 (≈3.9:1)', () => {
+      const src = fs.readFileSync(
+        path.resolve(__dirname, 'cookie-consent.component.ts'),
+        'utf8',
+      );
+      expect(src).toContain('rgba(255, 255, 255, 0.70)');
+      expect(src).not.toContain('rgba(255, 255, 255, 0.42)');
     });
   });
 

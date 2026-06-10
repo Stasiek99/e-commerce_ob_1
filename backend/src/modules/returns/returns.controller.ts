@@ -1,18 +1,23 @@
 import { Body, Controller, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Role, User } from '@prisma/client';
+import { IsDateString, IsString, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ReturnsService } from './returns.service';
 import { CreateReturnRequestDto } from './dto/create-return.dto';
-import { IsString, MinLength } from 'class-validator';
 
 class RecordTrackingDto {
   @IsString()
   @MinLength(3)
   trackingNumber!: string;
+}
+
+class SetReplacementDeliveredDto {
+  @IsDateString()
+  deliveredAt!: string;
 }
 
 @Controller('returns')
@@ -31,5 +36,12 @@ export class ReturnsController {
   @Roles(Role.ADMIN)
   recordTracking(@Param('id') id: string, @Body() dto: RecordTrackingDto) {
     return this.returns.recordReturnTracking(id, dto.trackingNumber);
+  }
+
+  @Patch(':id/replacement-delivered')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  setReplacementDelivered(@Param('id') id: string, @Body() dto: SetReplacementDeliveredDto) {
+    return this.returns.setReplacementDeliveredAt(id, new Date(dto.deliveredAt));
   }
 }

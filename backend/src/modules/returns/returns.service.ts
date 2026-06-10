@@ -30,7 +30,7 @@ export class ReturnsService {
 
   async create(dto: CreateReturnRequestDto, userId: string) {
     const normalizedNumber = dto.orderNumber.trim().toUpperCase();
-    const [order, user] = await Promise.all([
+    const [order, user, priorReplacementReturn] = await Promise.all([
       this.prisma.order.findFirst({
         where: { orderNumber: normalizedNumber },
         select: {
@@ -44,6 +44,19 @@ export class ReturnsService {
         where: { id: userId },
         select: { email: true },
       }),
+      // Art. 27 UoK: if a replacement was previously dispatched and delivered,
+      // the 14-day clock restarts from replacementDeliveredAt, not the original delivery.
+      dto.type === 'WITHDRAWAL'
+        ? this.prisma.returnRequest.findFirst({
+            where: {
+              orderNumber: normalizedNumber,
+              status: 'COMPLETED',
+              replacementDeliveredAt: { not: null },
+            },
+            orderBy: { replacementDeliveredAt: 'desc' },
+            select: { replacementDeliveredAt: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     if (!order) throw new NotFoundException(`Order ${normalizedNumber} not found`);
@@ -81,13 +94,16 @@ export class ReturnsService {
           'Odstąpienie od umowy wymaga podania daty dostarczenia przesyłki.',
         );
       }
-      // Use the authoritative DB timestamp when the carrier confirmed delivery.
-      // If the client supplies a deliveryDate that predates the actual delivery, reject it —
-      // an attacker with a stale order cannot extend the 14-day window by providing today's date.
-      const authoritativeDate: Date = order.shipment?.deliveredAt ?? new Date(dto.deliveryDate);
-      if (order.shipment?.deliveredAt) {
+      // Art. 27 UoK: use the most recent authoritative delivery timestamp.
+      // When a replacement was delivered, that date resets the 14-day window
+      // (Directive 2011/83/EU Art. 14(1)). Fall back to the original shipment delivery,
+      // then to the client-supplied date as a last resort.
+      const dbDeliveryDate: Date | null =
+        priorReplacementReturn?.replacementDeliveredAt ?? order.shipment?.deliveredAt ?? null;
+      const authoritativeDate: Date = dbDeliveryDate ?? new Date(dto.deliveryDate);
+      if (dbDeliveryDate) {
         const submitted = new Date(dto.deliveryDate);
-        if (submitted < order.shipment.deliveredAt) {
+        if (submitted < dbDeliveryDate) {
           throw new BadRequestException(
             'Podana data dostarczenia nie może być wcześniejsza niż faktyczna data dostarczenia przesyłki.',
           );
@@ -303,5 +319,25 @@ export class ReturnsService {
       .catch((err: Error) =>
         this.logger.warn(`Return status email failed for ${id}: ${err.message}`),
       );
+  }
+
+  // Admin records the date the replacement unit was delivered to the customer.
+  // This restarts the Art. 27 UoK 14-day withdrawal clock on any subsequent
+  // return request for the same order.
+  async setReplacementDeliveredAt(id: string, deliveredAt: Date): Promise<void> {
+    const req = await this.prisma.returnRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException(`Return request ${id} not found`);
+    if (req.status === 'REJECTED') {
+      throw new BadRequestException('Cannot set replacement delivery date on a rejected request');
+    }
+
+    await this.prisma.returnRequest.update({
+      where: { id },
+      data: { replacementDeliveredAt: deliveredAt },
+    });
+
+    this.logger.log(
+      `Replacement delivered at set for return ${id} (order ${req.orderNumber}): ${deliveredAt.toISOString()}`,
+    );
   }
 }
