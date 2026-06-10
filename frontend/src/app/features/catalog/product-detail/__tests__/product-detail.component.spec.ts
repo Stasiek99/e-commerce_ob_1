@@ -1198,3 +1198,77 @@ describe('ProductDetailComponent — EU Omnibus Art. 3a review verification labe
     expect(unverified.length).toBe(1);
   });
 });
+
+// ── WCAG 3.1.2 — <time> datetime attribute ────────────────────────────────────
+
+describe('ProductDetailComponent — review <time> datetime attribute (WCAG 3.1.2)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  const makeReview = (overrides: Partial<ReviewSummary> = {}): ReviewSummary => ({
+    id: 'r-1',
+    rating: 4,
+    title: null,
+    body: 'Świetny zapach',
+    adminReply: null,
+    helpfulCount: 0,
+    createdAt: '2025-01-15T10:00:00.000',
+    verifiedPurchase: true,
+    authorName: 'Jan K.',
+    ...overrides,
+  });
+
+  function setupWithReviews(reviews: ReviewSummary[]) {
+    const { fixture, component, httpMock } = setup();
+
+    fixture.detectChanges();
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ reviewCount: reviews.length }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    component.reviewsLoading.set(false);
+    component.reviews.set(reviews);
+    fixture.detectChanges();
+
+    return { fixture };
+  }
+
+  it('<time> element has datetime attribute matching review.createdAt', () => {
+    const ISO = '2025-01-15T10:00:00.000';
+    const { fixture } = setupWithReviews([makeReview({ createdAt: ISO })]);
+
+    const timeEl = fixture.nativeElement.querySelector('.review-card__date');
+
+    expect(timeEl).not.toBeNull();
+    expect(timeEl.getAttribute('datetime')).toBe(ISO);
+  });
+
+  it('datetime attribute holds the raw ISO string, not the human-readable formatted text', () => {
+    const ISO = '2025-06-20T08:30:00.000';
+    const { fixture } = setupWithReviews([makeReview({ createdAt: ISO })]);
+
+    const timeEl = fixture.nativeElement.querySelector('.review-card__date');
+    const datetime = timeEl.getAttribute('datetime');
+
+    // The formatted text would be something like "20 cze 2025" — not an ISO string
+    expect(datetime).toBe(ISO);
+    expect(datetime).not.toBe(timeEl.textContent.trim());
+  });
+
+  it('each <time> in a multi-review list has its own correct datetime attribute', () => {
+    const ISO_A = '2025-01-10T12:00:00.000';
+    const ISO_B = '2025-03-25T08:00:00.000';
+    const { fixture } = setupWithReviews([
+      makeReview({ id: 'r-1', createdAt: ISO_A }),
+      makeReview({ id: 'r-2', createdAt: ISO_B }),
+    ]);
+
+    const timeEls: NodeListOf<HTMLElement> = fixture.nativeElement.querySelectorAll('.review-card__date');
+
+    expect(timeEls.length).toBe(2);
+    expect(timeEls[0].getAttribute('datetime')).toBe(ISO_A);
+    expect(timeEls[1].getAttribute('datetime')).toBe(ISO_B);
+  });
+});

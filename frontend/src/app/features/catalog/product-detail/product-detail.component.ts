@@ -483,7 +483,7 @@ const CATEGORY_LABELS: Record<string, string> = {
                         Niezweryfikowany zakup
                       </span>
                     }
-                    <time class="review-card__date">
+                    <time class="review-card__date" [attr.datetime]="review.createdAt">
                       {{ formatDate(review.createdAt) }}
                     </time>
                   </div>
