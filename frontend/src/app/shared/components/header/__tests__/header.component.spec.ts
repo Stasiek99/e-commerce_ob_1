@@ -236,3 +236,90 @@ describe('HeaderComponent — WCAG 4.1.3 wishlist link accessible name', () => {
     expect(badge.nativeElement.getAttribute('aria-hidden')).toBe('true');
   });
 });
+
+// ── WCAG 4.1.2 — mobile nav panel focus trap ──────────────────────────────────
+
+describe('HeaderComponent — mobile nav panel focus trap (WCAG)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('mobile nav panel is absent from DOM when menu is closed', () => {
+    const { fixture } = setup();
+
+    const panel = fixture.debugElement.query(By.css('.mobile-nav__links'));
+
+    expect(panel).toBeNull();
+  });
+
+  it('mobile nav panel has role="dialog" when menu is open', () => {
+    const { fixture } = setup();
+    const component = fixture.componentInstance;
+
+    component.toggleMobileMenu();
+    fixture.detectChanges();
+
+    const panel = fixture.debugElement.query(By.css('.mobile-nav__links'));
+    expect(panel.nativeElement.getAttribute('role')).toBe('dialog');
+  });
+
+  it('mobile nav panel has aria-modal="true" when menu is open', () => {
+    const { fixture } = setup();
+    const component = fixture.componentInstance;
+
+    component.toggleMobileMenu();
+    fixture.detectChanges();
+
+    const panel = fixture.debugElement.query(By.css('.mobile-nav__links'));
+    expect(panel.nativeElement.getAttribute('aria-modal')).toBe('true');
+  });
+
+  it('mobile nav panel has aria-label="Menu nawigacyjne" when menu is open', () => {
+    const { fixture } = setup();
+    const component = fixture.componentInstance;
+
+    component.toggleMobileMenu();
+    fixture.detectChanges();
+
+    const panel = fixture.debugElement.query(By.css('.mobile-nav__links'));
+    expect(panel.nativeElement.getAttribute('aria-label')).toBe('Menu nawigacyjne');
+  });
+
+  it('restores focus to hamburger button when closeMobileMenu is called after opening', () => {
+    const { fixture } = setup();
+    const component = fixture.componentInstance;
+
+    const hamburger = fixture.debugElement.query(By.css('.header__hamburger'));
+    jest.spyOn(hamburger.nativeElement, 'focus');
+
+    component.toggleMobileMenu();
+    fixture.detectChanges();
+
+    component.closeMobileMenu();
+
+    expect(hamburger.nativeElement.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores focus to hamburger button when toggleMobileMenu closes the panel', () => {
+    const { fixture } = setup();
+    const component = fixture.componentInstance;
+
+    const hamburger = fixture.debugElement.query(By.css('.header__hamburger'));
+    jest.spyOn(hamburger.nativeElement, 'focus');
+
+    component.toggleMobileMenu(); // open
+    component.toggleMobileMenu(); // close
+
+    expect(hamburger.nativeElement.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call focus on hamburger when closeMobileMenu is called without prior open', () => {
+    const { fixture } = setup();
+    const component = fixture.componentInstance;
+
+    const hamburger = fixture.debugElement.query(By.css('.header__hamburger'));
+    jest.spyOn(hamburger.nativeElement, 'focus');
+
+    component.closeMobileMenu(); // called without toggleMobileMenu first
+
+    expect(hamburger.nativeElement.focus).not.toHaveBeenCalled();
+  });
+});
