@@ -1041,6 +1041,83 @@ describe('ProductDetailComponent — lightbox focus management (WCAG 2.4.3)', ()
   });
 });
 
+// ─── Rating summary keyboard accessibility (WCAG 4.1.2) ─────────────────────
+// Regression guard: the rating summary element must be a native <button>, not
+// <a role="button">, so it is keyboard-focusable without any extra JS.
+// An <a> without href is not reachable via Tab; replacing it with <button> fixes this.
+// Invariant: button.detail__rating-summary exists; a.detail__rating-summary is absent.
+
+describe('ProductDetailComponent — rating summary keyboard accessibility (WCAG 4.1.2)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  function loadWithRatings() {
+    const { component, fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ avgRating: 4.5, reviewCount: 12 }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    return { component, fixture };
+  }
+
+  it('renders the rating summary as a <button>, not an <a>', () => {
+    const { fixture } = loadWithRatings();
+
+    const btn = fixture.nativeElement.querySelector('button.detail__rating-summary');
+    const anchor = fixture.nativeElement.querySelector('a.detail__rating-summary');
+
+    expect(btn).not.toBeNull();
+    expect(anchor).toBeNull();
+  });
+
+  it('rating summary button has type="button" to prevent accidental form submission', () => {
+    const { fixture } = loadWithRatings();
+
+    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.detail__rating-summary');
+
+    expect(btn.type).toBe('button');
+  });
+
+  it('rating summary button has aria-label "Przejdź do opinii"', () => {
+    const { fixture } = loadWithRatings();
+
+    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.detail__rating-summary');
+
+    expect(btn.getAttribute('aria-label')).toBe('Przejdź do opinii');
+  });
+
+  it('clicking the rating summary button calls scrollToReviews', () => {
+    const { component, fixture } = loadWithRatings();
+    const scrollSpy = jest.spyOn(component, 'scrollToReviews');
+
+    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.detail__rating-summary');
+    btn.click();
+
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the rating summary when reviewCount is 0', () => {
+    const { fixture, httpMock } = setup();
+
+    fixture.detectChanges();
+
+    httpMock.expectOne(`/api/products/${SLUG}`).flush(
+      makeProductResponse({ avgRating: null, reviewCount: 0 }),
+    );
+    httpMock.expectOne(`/api/products/${SLUG}/related?limit=6`).flush([]);
+    fixture.detectChanges();
+    httpMock.verify();
+
+    const el = fixture.nativeElement.querySelector('.detail__rating-summary');
+    expect(el).toBeNull();
+  });
+});
+
 // ─── EU Omnibus Art. 3a review verification labels ────────────────────────────
 // Regulation 2019/2161 Art. 3a requires explicit disclosure of whether and how
 // consumer reviews are verified. Silently omitting the badge for unverified

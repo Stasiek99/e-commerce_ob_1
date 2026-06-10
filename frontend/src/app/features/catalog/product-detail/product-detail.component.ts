@@ -174,8 +174,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 
           <!-- Rating summary (above price, clickable anchor) -->
           @if ((product()!.reviewCount ?? 0) > 0) {
-            <a class="detail__rating-summary" role="button" style="cursor:pointer" aria-label="Przejdź do opinii"
-               (click)="scrollToReviews()">
+            <button type="button" class="detail__rating-summary" aria-label="Przejdź do opinii"
+                    (click)="scrollToReviews()">
               <span class="detail__stars" aria-hidden="true">
                 @for (s of starsArray(product()!.avgRating ?? 0); track $index) {
                   <tui-icon [icon]="s === 'full' ? '@tui.star' : s === 'half' ? '@tui.star-half' : '@tui.star'"
@@ -187,7 +187,7 @@ const CATEGORY_LABELS: Record<string, string> = {
               <span
                   class="detail__rating-count">({{ product()!.reviewCount }} {{ product()!.reviewCount === 1 ? 'opinia' : product()!.reviewCount! <= 4 ? 'opinie' : 'opinii' }}
                 )</span>
-            </a>
+            </button>
           }
 
           <!-- Price + stock -->
@@ -862,10 +862,11 @@ const CATEGORY_LABELS: Record<string, string> = {
     .detail__meta-row:last-child { border-bottom: none; }
     .detail__meta-label { color: var(--color-secondary); font-weight: 500; }
 
-    /* Rating summary link */
+    /* Rating summary button */
     .detail__rating-summary {
       display: flex; align-items: center; gap: 6px;
-      text-decoration: none; color: inherit; margin-bottom: 12px;
+      background: none; border: none; padding: 0; cursor: pointer;
+      color: inherit; margin-bottom: 12px;
       width: fit-content;
     }
     .detail__rating-summary:hover .detail__rating-count { text-decoration: underline; }
