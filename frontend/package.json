@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "ng serve",
-    "prebuild": "node scripts/inject-sentry-dsn.mjs && node scripts/generate-sitemap.mjs",
+    "prebuild": "node scripts/inject-sentry-dsn.mjs && node scripts/inject-turnstile.mjs && node scripts/generate-sitemap.mjs",
     "build": "ng build --configuration production",
     "postbuild": "node scripts/upload-sourcemaps.mjs",
     "sitemap:generate": "node scripts/generate-sitemap.mjs",

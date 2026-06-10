@@ -659,6 +659,7 @@ export class CheckoutPageComponent implements OnInit {
   );
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   private dpdOpenerEl: HTMLElement | null = null;
+  private readonly checkoutIdempotencyKey = crypto.randomUUID();
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
   readonly saveAddress = signal(false);
@@ -1062,6 +1063,7 @@ export class CheckoutPageComponent implements OnInit {
         termsVersion: TERMS_VERSION,
         termsAcceptedAt: new Date().toISOString(),
         couponCode: this.appliedCoupon()?.code ?? undefined,
+        idempotencyKey: this.checkoutIdempotencyKey,
       },
       { headers: new HttpHeaders(headers) },
     ).subscribe({

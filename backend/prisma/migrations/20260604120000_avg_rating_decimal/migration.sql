@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "products" ALTER COLUMN "avg_rating" TYPE DECIMAL(3,2);
+ALTER TABLE "products" ALTER COLUMN "avgRating" TYPE DECIMAL(3,2);

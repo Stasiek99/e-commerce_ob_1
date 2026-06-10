@@ -109,8 +109,24 @@ export class OrdersService implements OnModuleInit {
       termsAcceptedAt?: string;
       nip?: string;
       couponCode?: string;
+      idempotencyKey?: string;
     },
   ) {
+    // Idempotency guard: if the same checkout request already created an order,
+    // return the existing result instead of creating a duplicate.
+    if (dto.idempotencyKey) {
+      const existing = await this.prisma.order.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+      });
+      if (existing) {
+        if (existing.status === OrderStatus.PENDING_PAYMENT) {
+          const { paymentUrl } = await this.paymentsService.initiatePayment(existing.id);
+          return { orderId: existing.id, orderNumber: existing.orderNumber, paymentUrl };
+        }
+        throw new ConflictException('Order already placed for this checkout session');
+      }
+    }
+
     let cart = await this.cartService.getOrCreate(userId, sessionId);
     // Fallback: if userId cart is empty, check sessionId cart (items added before merge)
     if (!cart.items.length && userId && sessionId) {
@@ -259,6 +275,7 @@ export class OrdersService implements OnModuleInit {
       const newOrder = await tx.order.create({
         data: {
           orderNumber,
+          ...(dto.idempotencyKey && { idempotencyKey: dto.idempotencyKey }),
           ...(userId && { userId }),
           status: OrderStatus.PENDING_PAYMENT,
           ...(dto.addressId && { addressId: dto.addressId }),

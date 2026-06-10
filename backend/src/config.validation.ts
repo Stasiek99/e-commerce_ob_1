@@ -119,6 +119,12 @@ export const envValidationSchema = Joi.object({
   // In dev, the controller logs a warning and skips verification.
   RESEND_WEBHOOK_SECRET: requiredInProd(Joi.string(), ''),
 
+  // ── Cloudflare Turnstile (bot protection) ──
+  // Required in production — without it the TurnstileGuard bypasses all challenges
+  // and bots can hammer cart/checkout endpoints unchallenged.
+  // Get from: Cloudflare Dashboard → Turnstile → your site → Secret key.
+  CLOUDFLARE_TURNSTILE_SECRET_KEY: requiredInProd(Joi.string(), ''),
+
   // ── Optional: DHL/GLS (not required for Phase 0) ──
   DHL_ACCOUNT_NUMBER: Joi.string().optional(),
   DHL_API_KEY: Joi.string().optional(),
