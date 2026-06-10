@@ -4,10 +4,41 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    versioning-strategy: lockfile-only
+    groups:
+      backend-patch:
+        update-types:
+          - patch
+      backend-minor:
+        update-types:
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    open-pull-requests-limit: 5
 
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    versioning-strategy: lockfile-only
+    groups:
+      angular:
+        patterns:
+          - "@angular/*"
+          - "@angular-devkit/*"
+      taiga-ui:
+        patterns:
+          - "@taiga-ui/*"
+      frontend-patch:
+        update-types:
+          - patch
+      frontend-minor:
+        update-types:
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    open-pull-requests-limit: 5
