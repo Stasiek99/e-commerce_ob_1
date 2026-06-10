@@ -642,11 +642,12 @@ model ReturnRequest {
   requestedResolution String?
   bankAccount         String?
   sealedOnReturn        Boolean?
-  returnTrackingNumber  String?      @map("return_tracking_number")
-  status                ReturnStatus @default(PENDING)
-  adminNote             String?
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
+  returnTrackingNumber    String?      @map("return_tracking_number")
+  replacementDeliveredAt  DateTime?    @map("replacement_delivered_at")
+  status                  ReturnStatus @default(PENDING)
+  adminNote               String?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
 
   @@index([orderId])
   @@index([email])
