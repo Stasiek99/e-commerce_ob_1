@@ -1,4 +1,5 @@
 import { randomBytes } from 'crypto';
+import { generateOrderToken } from '../../common/utils/order-token.util';
 import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
@@ -157,7 +158,7 @@ export class PaymentsService {
         currency,
         lineItems,
         successUrl: `${successUrl}?orderId=${order.id}&token=${guestToken}`,
-        cancelUrl: `${cancelUrl}?orderId=${order.id}`,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}&guestToken=${generateOrderToken(order.id, order.snapshotEmail, this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'))}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
           couponLabel: order.couponCode ?? undefined,
