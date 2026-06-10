@@ -288,7 +288,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
           >Zamknij</button>
         </div>
 
-        <div class="filter-instock">
+        <label class="filter-instock">
           <span>Pokaż tylko dostępne</span>
           <input
             type="checkbox"
@@ -297,7 +297,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
             [ngModelOptions]="{ standalone: true }"
             (ngModelChange)="stagedInStock.set($event)"
           />
-        </div>
+        </label>
 
         <tui-accordion>
           @for (group of filterGroups(); track group.key) {
