@@ -63,7 +63,7 @@
     "rxjs": "^7.8.1",
     "stripe": "^22.2.0",
     "svix": "^1.91.1",
-    "uuid": "^10.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.21",

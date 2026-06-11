@@ -20,6 +20,7 @@ const config: Config = {
   testEnvironment: 'node',
   moduleNameMapper: {
     '^@shared/(.*)$': '<rootDir>/../packages/shared-types/src/$1',
+    '^uuid$': '<rootDir>/src/__mocks__/uuid.js',
   },
 };
 
