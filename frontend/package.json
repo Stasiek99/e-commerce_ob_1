@@ -28,7 +28,7 @@
     "@angular/ssr": "^20.3.23",
     "@fragrance-store/shared-types": "workspace:*",
     "@ng-web-apis/common": "^4.14.0",
-    "@sentry/angular": "^10.48.0",
+    "@sentry/angular": "^10.57.0",
     "@taiga-ui/cdk": "^4.78.1",
     "@taiga-ui/core": "^4.78.1",
     "@taiga-ui/event-plugins": "^4.7.0",
@@ -52,8 +52,8 @@
     "@types/express": "^4.17.17",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
-    "jest": "^30.4.2",
-    "jest-environment-jsdom": "^30.3.0",
+    "jest": "~30.3.0",
+    "jest-environment-jsdom": "~30.3.0",
     "jest-preset-angular": "^16.2.0",
     "typescript": "~5.9.3"
   }
