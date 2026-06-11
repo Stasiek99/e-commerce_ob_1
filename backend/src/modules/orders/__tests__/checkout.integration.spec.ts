@@ -195,7 +195,7 @@ describe('Checkout Integration Flow', () => {
         },
         {
           provide: 'REDIS_CLIENT',
-          useValue: { set: jest.fn().mockResolvedValue('OK') },
+          useValue: { set: jest.fn().mockResolvedValue('OK'), eval: jest.fn().mockResolvedValue(1) },
         },
       ],
     }).compile();
