@@ -1,6 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -17,6 +20,8 @@ import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
 import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
+import type IORedis from 'ioredis';
+import { randomUUID } from 'node:crypto';
 
 
 interface CartItem {
@@ -68,6 +73,7 @@ export class OrdersService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly invoiceService: InvoiceService,
     private readonly shippingRatesService: ShippingRatesService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -126,6 +132,19 @@ export class OrdersService implements OnModuleInit {
         throw new ConflictException('Order already placed for this checkout session');
       }
     }
+
+    // Distributed lock: prevents two concurrent requests (double-click, two tabs, network retry)
+    // from both reading the same cart and creating duplicate orders / double-charges.
+    // Key is per-user (authenticated) or per-session (guest). TTL 30 s covers the full
+    // checkout flow including the Stripe API call; lock is released early in the finally block.
+    const lockKey = `checkout-lock:${userId ?? sessionId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException('Checkout already in progress — please wait a moment before trying again', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    try {
 
     let cart = await this.cartService.getOrCreate(userId, sessionId);
     // Fallback: if userId cart is empty, check sessionId cart (items added before merge)
@@ -423,6 +442,16 @@ export class OrdersService implements OnModuleInit {
     ).catch((err) => this.logger.warn('sendStockAlertIfNeeded failed', err));
 
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
+
+    } finally {
+      // Release the lock only if we still own it (Lua script is atomic).
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
   }
 
   async findAllForUser(userId: string, query: { page?: number; limit?: number } = {}) {

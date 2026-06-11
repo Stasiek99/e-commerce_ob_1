@@ -31,6 +31,7 @@ describe('OrdersService', () => {
   let paymentsService: jest.Mocked<PaymentsService>;
   let invoiceService: jest.Mocked<InvoiceService>;
   let emailService: jest.Mocked<EmailQueueService>;
+  let redisClient: { set: jest.Mock; eval: jest.Mock };
 
   const mockAddress = {
     firstName: 'Jan',
@@ -149,10 +150,18 @@ describe('OrdersService', () => {
           provide: ShippingRatesService,
           useValue: mockShippingRatesService,
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'), // NX acquired by default
+            eval: jest.fn().mockResolvedValue(1),   // lock released
+          },
+        },
       ],
     }).compile();
 
     service = module.get(OrdersService);
+    redisClient = module.get('REDIS_CLIENT');
     prisma = module.get(PrismaService);
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
@@ -204,6 +213,34 @@ describe('OrdersService', () => {
   });
 
   describe('createFromCart', () => {
+    it('throws 429 when the checkout lock is already held by a concurrent request', async () => {
+      redisClient.set.mockResolvedValue(null); // SET NX returns null = not acquired
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toMatchObject({ status: 429 });
+    });
+
+    it('releases the checkout lock in the finally block even when checkout fails', async () => {
+      redisClient.set.mockResolvedValue('OK');
+      cartService.getOrCreate.mockResolvedValue({ id: 'cart-1', items: [], totalInCents: 0 } as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
     it('should throw if cart is empty', async () => {
       cartService.getOrCreate.mockResolvedValue({ id: 'cart-1', items: [], totalInCents: 0 } as any);
 
@@ -3236,6 +3273,10 @@ describe('OrdersService', () => {
           },
           { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
           { provide: ShippingRatesService, useValue: mockShippingRatesService },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK'), eval: jest.fn().mockResolvedValue(1) },
+          },
         ],
       }).compile();
 
