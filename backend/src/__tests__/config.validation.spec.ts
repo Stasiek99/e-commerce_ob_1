@@ -5,6 +5,10 @@ import { envValidationSchema } from '../config.validation';
 const validate = (input: Record<string, unknown>) =>
   envValidationSchema.validate(input, { abortEarly: false, allowUnknown: true });
 
+// A structurally valid bcrypt hash (format: $2b$<cost>$<53-char salt+digest>).
+// Not a real hash — generated for test fixture purposes only.
+const VALID_BCRYPT_HASH = '$2b$12$LqvHW.I6oSyH3nNLb3MlUue9oQNfeFbOZ2OFI2TyHOh2GdBbfq3EC';
+
 const hasSentryDsnError = (error: ReturnType<typeof validate>['error']): boolean =>
   error?.details.some(
     (d) => d.context?.key === 'SENTRY_DSN' || d.message.includes('SENTRY_DSN'),
@@ -19,6 +23,72 @@ const hasInpostTokenError = (error: ReturnType<typeof validate>['error']): boole
   error?.details.some(
     (d) => d.context?.key === 'INPOST_API_TOKEN' || d.message.includes('INPOST_API_TOKEN'),
   ) ?? false;
+
+// ── ADMIN_DEFAULT_PASSWORD bcrypt format guard ────────────────────────────────
+// FIX: config.validation.ts previously accepted any string ≥10 chars for
+// ADMIN_DEFAULT_PASSWORD. A plaintext password is silently accepted at boot,
+// then bcrypt.compare(plaintext, plaintext) returns false, locking every admin
+// out of the panel. The pattern guard catches this at startup instead.
+
+const hasAdminPasswordError = (error: ReturnType<typeof validate>['error']): boolean =>
+  error?.details.some(
+    (d) => d.context?.key === 'ADMIN_DEFAULT_PASSWORD' || d.message.includes('ADMIN_DEFAULT_PASSWORD'),
+  ) ?? false;
+
+describe('envValidationSchema — ADMIN_DEFAULT_PASSWORD bcrypt format guard', () => {
+  describe('production environment', () => {
+    it('rejects a plaintext password in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', ADMIN_DEFAULT_PASSWORD: 'MyP@ssword123' });
+      expect(hasAdminPasswordError(error)).toBe(true);
+    });
+
+    it('rejects a password that starts with $2b$ but is too short', () => {
+      const { error } = validate({ NODE_ENV: 'production', ADMIN_DEFAULT_PASSWORD: '$2b$12$tooshort' });
+      expect(hasAdminPasswordError(error)).toBe(true);
+    });
+
+    it('rejects a password that uses an unsupported bcrypt prefix ($2y$)', () => {
+      const { error } = validate({
+        NODE_ENV: 'production',
+        ADMIN_DEFAULT_PASSWORD: '$2y$12$LqvHW.I6oSyH3nNLb3MlUue9oQNfeFbOZ2OFI2TyHOh2GdBbfq3EC',
+      });
+      expect(hasAdminPasswordError(error)).toBe(true);
+    });
+
+    it('accepts a valid $2b$ bcrypt hash in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', ADMIN_DEFAULT_PASSWORD: VALID_BCRYPT_HASH });
+      expect(hasAdminPasswordError(error)).toBe(false);
+    });
+
+    it('accepts a valid $2a$ bcrypt hash in production', () => {
+      const { error } = validate({
+        NODE_ENV: 'production',
+        ADMIN_DEFAULT_PASSWORD: '$2a$12$LqvHW.I6oSyH3nNLb3MlUue9oQNfeFbOZ2OFI2TyHOh2GdBbfq3EC',
+      });
+      expect(hasAdminPasswordError(error)).toBe(false);
+    });
+
+    it('error message contains bcrypt generation guidance', () => {
+      const { error } = validate({ NODE_ENV: 'production', ADMIN_DEFAULT_PASSWORD: 'plaintextpass' });
+      const adminPwdError = error?.details.find(
+        (d) => d.context?.key === 'ADMIN_DEFAULT_PASSWORD' || d.message.includes('ADMIN_DEFAULT_PASSWORD'),
+      );
+      expect(adminPwdError?.message).toContain('bcrypt');
+    });
+  });
+
+  describe('development environment', () => {
+    it('accepts a plaintext password in development (no bcrypt pattern check)', () => {
+      const { error } = validate({ NODE_ENV: 'development', ADMIN_DEFAULT_PASSWORD: 'plaintextpass' });
+      expect(hasAdminPasswordError(error)).toBe(false);
+    });
+
+    it('also accepts a valid bcrypt hash in development', () => {
+      const { error } = validate({ NODE_ENV: 'development', ADMIN_DEFAULT_PASSWORD: VALID_BCRYPT_HASH });
+      expect(hasAdminPasswordError(error)).toBe(false);
+    });
+  });
+});
 
 describe('envValidationSchema — SENTRY_DSN production guard', () => {
   describe('development environment', () => {

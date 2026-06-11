@@ -244,7 +244,11 @@ export async function setupAdmin(
     // Dev fallback: use password (acceptable for local only, never in prod).
     process.env.ADMIN_SESSION_SECRET = adminPassword;
   }
-  const resolvedSessionSecret = sessionSecret ?? adminPassword;
+  // After the guard above, ADMIN_SESSION_SECRET is guaranteed to be set
+  // (either already present or overwritten with the dev fallback). Read from
+  // the env var rather than the captured `sessionSecret` variable (which is
+  // undefined when the dev-fallback branch ran).
+  const resolvedSessionSecret = process.env.ADMIN_SESSION_SECRET!;
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
   // TypeScript compiles `await import()` to `require()` in commonjs mode, which
