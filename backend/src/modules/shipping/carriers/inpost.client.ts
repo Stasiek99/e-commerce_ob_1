@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
@@ -44,6 +44,7 @@ export class InpostClient {
 
     this.client = axios.create({
       baseURL,
+      timeout: 15_000,
       headers: {
         Authorization: `Bearer ${this.mockEnabled ? '' : configService.getOrThrow('INPOST_API_TOKEN')}`,
         'Content-Type': 'application/json',
@@ -87,10 +88,18 @@ export class InpostClient {
       ],
     };
 
-    const response = await this.client.post<any>(
-      `/organizations/${this.organizationId}/shipments`,
-      payload,
-    );
+    let response: Awaited<ReturnType<typeof this.client.post<any>>>;
+    try {
+      response = await this.client.post<any>(
+        `/organizations/${this.organizationId}/shipments`,
+        payload,
+      );
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('InPost API timed out');
+      }
+      throw err;
+    }
 
     const shipment = response.data;
     this.logger.log(`InPost shipment created: ${shipment.id}`);
@@ -111,10 +120,18 @@ export class InpostClient {
       return null;
     }
 
-    const response = await this.client.get<ArrayBuffer>(
-      `/organizations/${this.organizationId}/shipments/${shipmentId}/label`,
-      { responseType: 'arraybuffer', headers: { Accept: 'application/pdf' } },
-    );
+    let response: Awaited<ReturnType<typeof this.client.get<ArrayBuffer>>>;
+    try {
+      response = await this.client.get<ArrayBuffer>(
+        `/organizations/${this.organizationId}/shipments/${shipmentId}/label`,
+        { responseType: 'arraybuffer', headers: { Accept: 'application/pdf' } },
+      );
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('InPost label download timed out');
+      }
+      throw err;
+    }
 
     return Buffer.from(response.data);
   }

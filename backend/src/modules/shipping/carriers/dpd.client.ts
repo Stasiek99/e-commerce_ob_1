@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 
@@ -37,6 +37,7 @@ export class DpdClient {
 
     this.client = axios.create({
       baseURL: 'https://cig.dpd.com.pl/services/open/v1',
+      timeout: 15_000,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.mockEnabled ? '' : configService.getOrThrow<string>('DPD_API_KEY')}`,
@@ -74,7 +75,15 @@ export class DpdClient {
       services: { dox: false },
     };
 
-    const response = await this.client.post<any>('/shipment', payload);
+    let response: Awaited<ReturnType<typeof this.client.post<any>>>;
+    try {
+      response = await this.client.post<any>('/shipment', payload);
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('DPD API timed out');
+      }
+      throw err;
+    }
     const result = response.data;
 
     this.logger.log(`DPD shipment created: ${result.trackingNumber}`);

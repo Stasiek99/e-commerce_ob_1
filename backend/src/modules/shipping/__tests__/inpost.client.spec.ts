@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { InpostClient } from '../carriers/inpost.client';
 
 jest.mock('axios');
@@ -225,6 +226,60 @@ describe('InpostClient', () => {
 
       const createCall = mockedAxios.create.mock.calls[0][0];
       expect(createCall?.baseURL).not.toContain('sandbox');
+    });
+  });
+
+  // ── HTTP timeout handling ─────────────────────────────────────────────────
+
+  describe('HTTP timeout handling', () => {
+    it('passes timeout: 15_000 to axios.create()', () => {
+      buildClient();
+      const createCall = mockedAxios.create.mock.calls[0][0];
+      expect(createCall?.timeout).toBe(15_000);
+    });
+
+    describe('createShipment', () => {
+      it('throws ServiceUnavailableException when InPost API returns ECONNABORTED', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+
+        await expect(client.createShipment(PAYLOAD)).rejects.toThrow(ServiceUnavailableException);
+      });
+
+      it('throws ServiceUnavailableException when InPost API returns ETIMEDOUT', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.createShipment(PAYLOAD)).rejects.toThrow(ServiceUnavailableException);
+      });
+
+      it('re-throws non-timeout Axios errors without converting them', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('InPost 422'), { code: 'ERR_BAD_REQUEST' }));
+
+        await expect(client.createShipment(PAYLOAD)).rejects.toThrow('InPost 422');
+      });
+    });
+
+    describe('fetchLabelPdf', () => {
+      it('throws ServiceUnavailableException when label download returns ECONNABORTED', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockGet.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+
+        await expect(client.fetchLabelPdf('ship-99')).rejects.toThrow(ServiceUnavailableException);
+      });
+
+      it('throws ServiceUnavailableException when label download returns ETIMEDOUT', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockGet.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.fetchLabelPdf('ship-99')).rejects.toThrow(ServiceUnavailableException);
+      });
     });
   });
 });

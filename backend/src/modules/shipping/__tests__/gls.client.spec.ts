@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { GlsClient } from '../carriers/gls.client';
 
 jest.mock('axios');
@@ -81,6 +82,56 @@ describe('GlsClient', () => {
       mockPost.mockRejectedValue(new Error('GLS API 503'));
 
       await expect(client.fetchLabelPdf('P_BAD')).rejects.toThrow('GLS API 503');
+    });
+  });
+
+  // ── HTTP timeout handling ─────────────────────────────────────────────────
+
+  describe('HTTP timeout handling', () => {
+    it('passes timeout: 15_000 to axios.create()', () => {
+      buildClient();
+      const createCall = mockedAxios.create.mock.calls[0][0];
+      expect(createCall?.timeout).toBe(15_000);
+    });
+
+    describe('createShipment', () => {
+      it('throws ServiceUnavailableException when GLS API returns ECONNABORTED', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+
+        await expect(
+          client.createShipment({ receiver: { name: 'Test', street: 'ul. 1', city: 'Kraków', postalCode: '30-001', country: 'PL', phone: '+48100200300', email: 't@t.pl' }, weightKg: 1, reference: 'REF1' }),
+        ).rejects.toThrow(ServiceUnavailableException);
+      });
+
+      it('throws ServiceUnavailableException when GLS API returns ETIMEDOUT', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(
+          client.createShipment({ receiver: { name: 'Test', street: 'ul. 1', city: 'Kraków', postalCode: '30-001', country: 'PL', phone: '+48100200300', email: 't@t.pl' }, weightKg: 1, reference: 'REF1' }),
+        ).rejects.toThrow(ServiceUnavailableException);
+      });
+    });
+
+    describe('fetchLabelPdf', () => {
+      it('throws ServiceUnavailableException when label download returns ECONNABORTED', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+
+        await expect(client.fetchLabelPdf('P_TIMEOUT')).rejects.toThrow(ServiceUnavailableException);
+      });
+
+      it('throws ServiceUnavailableException when label download returns ETIMEDOUT', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.fetchLabelPdf('P_TIMEOUT')).rejects.toThrow(ServiceUnavailableException);
+      });
     });
   });
 });

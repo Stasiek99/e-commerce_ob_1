@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { DhlClient } from '../carriers/dhl.client';
 
 jest.mock('axios');
@@ -202,6 +203,46 @@ describe('DhlClient', () => {
 
       expect(url).toContain('JD014600006060060058');
       expect(url).toContain('dhl.com');
+    });
+  });
+
+  // ── HTTP timeout handling ─────────────────────────────────────────────────
+
+  describe('HTTP timeout handling', () => {
+    it('passes timeout: 15_000 to axios.create()', () => {
+      buildClient();
+      const createCall = mockedAxios.create.mock.calls[0][0];
+      expect(createCall?.timeout).toBe(15_000);
+    });
+
+    it('throws ServiceUnavailableException when DHL API returns ECONNABORTED', async () => {
+      const client = buildClient();
+      mockedAxios.isAxiosError.mockReturnValue(true);
+      mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+
+      await expect(
+        client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
+      ).rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it('throws ServiceUnavailableException when DHL API returns ETIMEDOUT', async () => {
+      const client = buildClient();
+      mockedAxios.isAxiosError.mockReturnValue(true);
+      mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+      await expect(
+        client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
+      ).rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it('re-throws non-timeout Axios errors without converting them', async () => {
+      const client = buildClient();
+      mockedAxios.isAxiosError.mockReturnValue(true);
+      mockPost.mockRejectedValue(Object.assign(new Error('DHL 401 Unauthorized'), { code: 'ERR_BAD_REQUEST' }));
+
+      await expect(
+        client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
+      ).rejects.toThrow('DHL 401 Unauthorized');
     });
   });
 });

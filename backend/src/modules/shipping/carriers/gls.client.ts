@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 
@@ -38,6 +38,7 @@ export class GlsClient {
 
     this.client = axios.create({
       baseURL: 'https://adeplus.gls-poland.com/adeplus/pm1/ade_webapi2.php',
+      timeout: 15_000,
       auth: {
         username: this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_USERNAME'),
         password: this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_PASSWORD'),
@@ -73,7 +74,15 @@ export class GlsClient {
       },
     };
 
-    const response = await this.client.post<any>('?wsdl', payload);
+    let response: Awaited<ReturnType<typeof this.client.post<any>>>;
+    try {
+      response = await this.client.post<any>('?wsdl', payload);
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('GLS API timed out');
+      }
+      throw err;
+    }
     const parcel = response.data?.Parcel?.[0];
 
     this.logger.log(`GLS shipment created: ${parcel?.TrackID}`);
@@ -95,11 +104,19 @@ export class GlsClient {
       return null;
     }
 
-    const response = await this.client.post<ArrayBuffer>(
-      '?labels',
-      { Parcels: [parcelNumber] },
-      { responseType: 'arraybuffer', headers: { Accept: 'application/pdf' } },
-    );
+    let response: Awaited<ReturnType<typeof this.client.post<ArrayBuffer>>>;
+    try {
+      response = await this.client.post<ArrayBuffer>(
+        '?labels',
+        { Parcels: [parcelNumber] },
+        { responseType: 'arraybuffer', headers: { Accept: 'application/pdf' } },
+      );
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('GLS label download timed out');
+      }
+      throw err;
+    }
 
     return Buffer.from(response.data);
   }
