@@ -233,8 +233,18 @@ export async function setupAdmin(
     );
   }
 
-  // Computed after guard so TypeScript narrows adminPassword to string
-  const sessionSecret = process.env.ADMIN_SESSION_SECRET ?? adminPassword;
+  // ADMIN_SESSION_SECRET must be set independently of the admin password.
+  // Falling back to adminPassword would expose the session secret whenever
+  // the password is rotated or logged, so we require an explicit secret in prod.
+  const sessionSecret = process.env.ADMIN_SESSION_SECRET;
+  if (!sessionSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ADMIN_SESSION_SECRET must be set in production — refusing to boot');
+    }
+    // Dev fallback: use password (acceptable for local only, never in prod).
+    process.env.ADMIN_SESSION_SECRET = adminPassword;
+  }
+  const resolvedSessionSecret = sessionSecret ?? adminPassword;
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
   // TypeScript compiles `await import()` to `require()` in commonjs mode, which
@@ -1035,7 +1045,7 @@ export async function setupAdmin(
     store,
     resave: false,
     saveUninitialized: false,
-    secret: sessionSecret,
+    secret: resolvedSessionSecret,
     name: 'adminjs', // must match the cookie name set by buildAuthenticatedRouter
   };
 
@@ -1078,7 +1088,7 @@ export async function setupAdmin(
         return valid ? { email } : null;
       },
       cookieName: 'adminjs',
-      cookiePassword: sessionSecret,
+      cookiePassword: resolvedSessionSecret,
     },
     null,
     sessionOpts,
