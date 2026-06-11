@@ -41,6 +41,33 @@ describe('TurnstileGuard', () => {
     });
   });
 
+  describe('production fail-closed (no secret key)', () => {
+    const originalNodeEnv = process.env['NODE_ENV'];
+
+    beforeEach(() => {
+      delete process.env['CLOUDFLARE_TURNSTILE_SECRET_KEY'];
+      process.env['NODE_ENV'] = 'production';
+      guard = new TurnstileGuard();
+    });
+
+    afterEach(() => {
+      if (originalNodeEnv === undefined) {
+        delete process.env['NODE_ENV'];
+      } else {
+        process.env['NODE_ENV'] = originalNodeEnv;
+      }
+    });
+
+    it('throws ForbiddenException in production when secret key is absent', async () => {
+      await expect(guard.canActivate(makeContext())).rejects.toThrow(ForbiddenException);
+    });
+
+    it('does not call Cloudflare when failing fast in production', async () => {
+      await expect(guard.canActivate(makeContext())).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('with secret key configured', () => {
     beforeEach(() => {
       process.env['CLOUDFLARE_TURNSTILE_SECRET_KEY'] = SECRET;

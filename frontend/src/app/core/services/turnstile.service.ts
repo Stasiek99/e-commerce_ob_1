@@ -30,8 +30,19 @@ export class TurnstileService {
   private widgetId: string | null = null;
 
   getToken(): Promise<string> {
-    if (!isPlatformBrowser(this.platformId) || !this.siteKey) {
-      return Promise.resolve('');
+    if (!isPlatformBrowser(this.platformId)) {
+      return Promise.resolve(''); // SSR — challenges cannot run server-side
+    }
+    if (!this.siteKey) {
+      if (environment.production) {
+        return Promise.reject(
+          new Error(
+            '[Turnstile] TURNSTILE_SITE_KEY is not set for production. ' +
+            'Set it in Vercel environment variables and trigger a redeploy.',
+          ),
+        );
+      }
+      return Promise.resolve(''); // dev bypass
     }
     const api = window.turnstile;
     if (!api) return Promise.resolve('');
