@@ -1,4 +1,5 @@
 import { Test } from '@nestjs/testing';
+import { getQueueToken } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { EmailQueueProcessor } from '../email-queue.processor';
 import { EmailService } from '../email.service';
@@ -46,6 +47,7 @@ describe('EmailQueueProcessor — back_in_stock job', () => {
         { provide: EmailService, useValue: mockEmailService },
         { provide: StorageService, useValue: mockStorageService },
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: getQueueToken('email-dlq'), useValue: { add: jest.fn().mockResolvedValue({}) } },
       ],
     }).compile();
 

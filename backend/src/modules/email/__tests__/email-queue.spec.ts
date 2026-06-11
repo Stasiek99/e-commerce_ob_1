@@ -10,6 +10,7 @@ import { StorageService } from '../../storage/storage.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
+  captureMessage: jest.fn(),
 }));
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -51,13 +52,13 @@ describe('EmailQueueService', () => {
   // because they are durably stored in Redis with retries before EmailService is called.
 
   describe('job options (outbox persistence guarantees)', () => {
-    it('enqueues with 3 retry attempts', async () => {
+    it('enqueues with 12 retry attempts to survive multi-hour outages', async () => {
       await service.sendEmailVerification({ to: 'a@b.com', firstName: 'Ana', verifyUrl: 'https://x' });
 
       expect(queueAdd).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(Object),
-        expect.objectContaining({ attempts: 3 }),
+        expect.objectContaining({ attempts: 12 }),
       );
     });
 
@@ -83,13 +84,13 @@ describe('EmailQueueService', () => {
       );
     });
 
-    it('keeps failed jobs for 7 days (604 800 s) for debugging', async () => {
+    it('never auto-deletes failed jobs (removeOnFail: false) so DLQ can capture them', async () => {
       await service.sendPasswordReset({ to: 'a@b.com', firstName: 'Ana', resetUrl: 'https://x' });
 
       expect(queueAdd).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(Object),
-        expect.objectContaining({ removeOnFail: { age: 604_800 } }),
+        expect.objectContaining({ removeOnFail: false }),
       );
     });
 
@@ -170,7 +171,7 @@ describe('EmailQueueService', () => {
       expect(queueAdd).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(Object),
-        expect.objectContaining({ attempts: 3, backoff: { type: 'exponential', delay: 5_000 } }),
+        expect.objectContaining({ attempts: 12, backoff: { type: 'exponential', delay: 5_000 } }),
       );
     });
   });
@@ -625,11 +626,18 @@ describe('EmailQueueProcessor', () => {
   let processor: EmailQueueProcessor;
   let emailService: jest.Mocked<EmailService>;
   let storageService: jest.Mocked<StorageService>;
+  let dlqAdd: jest.Mock;
 
   beforeEach(async () => {
+    dlqAdd = jest.fn().mockResolvedValue({ id: 'dlq-job-1' });
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EmailQueueProcessor,
+        {
+          provide: getQueueToken('email-dlq'),
+          useValue: { add: dlqAdd },
+        },
         {
           provide: EmailService,
           useValue: {
@@ -1182,6 +1190,96 @@ describe('EmailQueueProcessor', () => {
       processor.onApplicationBootstrap();
 
       expect(() => triggerFailed(undefined, new Error('stalled'))).not.toThrow();
+    });
+
+    // ── DLQ re-enqueue on terminal failure ──────────────────────────────────────
+    // Invariant: when attemptsMade reaches opts.attempts (all retries exhausted),
+    // the job MUST be re-enqueued to email-dlq so it is not permanently lost.
+    // Without the DLQ, a customer whose order confirmation email failed during
+    // a 36-second Resend outage would never receive it.
+
+    it('re-enqueues the job to email-dlq when all attempts are exhausted', async () => {
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      const terminalJob = {
+        id: 'job-terminal',
+        name: 'order_confirmation',
+        data: { type: 'order_confirmation', payload: { orderNumber: 'ORD-1' } },
+        attemptsMade: 12,
+        opts: { attempts: 12 },
+      } as unknown as Job;
+
+      triggerFailed(terminalJob, new Error('Resend outage'));
+
+      // Allow the async dlq.add to be called (it runs via .catch chained off the Promise)
+      await Promise.resolve();
+
+      expect(dlqAdd).toHaveBeenCalledWith(
+        'order_confirmation',
+        terminalJob.data,
+        expect.objectContaining({ removeOnComplete: false, removeOnFail: false }),
+      );
+    });
+
+    it('fires Sentry.captureMessage at error level on terminal failure', async () => {
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      const terminalJob = {
+        id: 'job-sentry',
+        name: 'payment_confirmed',
+        data: { type: 'payment_confirmed', payload: {} },
+        attemptsMade: 12,
+        opts: { attempts: 12 },
+      } as unknown as Job;
+
+      triggerFailed(terminalJob, new Error('permanent failure'));
+
+      await Promise.resolve();
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('payment_confirmed'),
+        expect.objectContaining({ level: 'error' }),
+      );
+    });
+
+    it('does NOT enqueue to DLQ on intermediate failures (attemptsMade < opts.attempts)', async () => {
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      const intermediateJob = {
+        id: 'job-retry',
+        name: 'order_confirmation',
+        data: { type: 'order_confirmation', payload: {} },
+        attemptsMade: 3,
+        opts: { attempts: 12 },
+      } as unknown as Job;
+
+      triggerFailed(intermediateJob, new Error('transient'));
+
+      await Promise.resolve();
+
+      expect(dlqAdd).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when DLQ enqueue fails — primary failure path must not be obscured', async () => {
+      dlqAdd.mockRejectedValue(new Error('Redis DLQ unreachable'));
+      const { triggerFailed } = stubWorkerWithEmitter(processor);
+      processor.onApplicationBootstrap();
+
+      const terminalJob = {
+        id: 'job-dlq-fail',
+        name: 'order_confirmation',
+        data: { type: 'order_confirmation', payload: {} },
+        attemptsMade: 12,
+        opts: { attempts: 12 },
+      } as unknown as Job;
+
+      expect(() => triggerFailed(terminalJob, new Error('original error'))).not.toThrow();
+
+      // Give the rejected promise a chance to settle
+      await new Promise((r) => setTimeout(r, 10));
     });
   });
 

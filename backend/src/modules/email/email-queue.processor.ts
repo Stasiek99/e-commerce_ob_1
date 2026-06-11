@@ -1,7 +1,7 @@
 import { Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
-import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job } from 'bullmq';
+import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
+import { Job, Queue } from 'bullmq';
 import { EmailService } from './email.service';
 import { EmailJobData } from './email-queue.types';
 import { StorageService } from '../storage/storage.service';
@@ -15,6 +15,7 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
     private readonly emailService: EmailService,
     private readonly storageService: StorageService,
     private readonly prisma: PrismaService,
+    @InjectQueue('email-dlq') private readonly dlq: Queue<EmailJobData>,
   ) {
     super();
   }
@@ -23,6 +24,22 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
     this.worker.on('failed', (job, err) => {
       Sentry.captureException(err, { extra: { jobName: job?.name, jobId: job?.id } });
       this.logger.error(`BullMQ job failed: ${job?.name}`, err.stack);
+
+      if (!job) return;
+      const isFinalAttempt = job.attemptsMade >= (job.opts?.attempts ?? 1);
+      if (isFinalAttempt) {
+        this.dlq
+          .add(job.name, job.data, { removeOnComplete: false, removeOnFail: false })
+          .catch((dlqErr: unknown) => {
+            this.logger.error(`Failed to move job ${job.id} to email-dlq`, (dlqErr as Error).stack);
+            Sentry.captureException(dlqErr, { extra: { source: 'email-dlq-enqueue', jobId: job.id } });
+          });
+        this.logger.warn(`Email job "${job.name}" permanently failed after ${job.attemptsMade} attempts — moved to DLQ`);
+        Sentry.captureMessage(`Email DLQ: "${job.name}" exhausted all retries`, {
+          level: 'error',
+          extra: { jobId: job.id, attemptsMade: job.attemptsMade, jobData: job.data },
+        });
+      }
     });
   }
 
