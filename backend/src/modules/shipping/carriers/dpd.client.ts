@@ -29,9 +29,7 @@ export class DpdClient {
   private readonly mockEnabled: boolean;
 
   constructor(configService: ConfigService) {
-    this.mockEnabled =
-      configService.get<string>('DPD_MOCK_ENABLED') === 'true' ||
-      !configService.get<string>('DPD_SENDER_ID');
+    this.mockEnabled = configService.get<string>('DPD_MOCK_ENABLED') === 'true';
 
     this.senderId = this.mockEnabled ? '' : configService.getOrThrow<string>('DPD_SENDER_ID');
 

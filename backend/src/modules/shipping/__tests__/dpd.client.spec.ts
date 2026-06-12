@@ -57,13 +57,23 @@ describe('DpdClient', () => {
       expect(mockPost).not.toHaveBeenCalled();
     });
 
-    it('falls back to mock mode when DPD_SENDER_ID is absent', async () => {
-      const client = buildClient({ DPD_MOCK_ENABLED: 'false', DPD_SENDER_ID: undefined });
+    // FIX: missing DPD_SENDER_ID must NOT silently activate mock mode.
+    // Before the fix the OR clause `|| !configService.get('DPD_SENDER_ID')` caused
+    // real customers to receive MOCK_DPD_* tracking numbers when the env var was absent.
+    it('throws at construction when DPD_SENDER_ID is absent and DPD_MOCK_ENABLED is false', () => {
+      expect(() =>
+        buildClient({ DPD_MOCK_ENABLED: 'false', DPD_SENDER_ID: undefined }),
+      ).toThrow();
+    });
+
+    it('does NOT activate mock mode when DPD_MOCK_ENABLED is explicitly "false" and credentials are present', async () => {
+      const client = buildClient({ DPD_MOCK_ENABLED: 'false' });
+      mockPost.mockResolvedValue({ data: { trackingNumber: 'DPD-REAL', labelUrl: '' } });
 
       const result = await client.createShipment(PAYLOAD);
 
-      expect(result.trackingNumber).toMatch(/^MOCK_DPD_/);
-      expect(mockPost).not.toHaveBeenCalled();
+      expect(result.trackingNumber).not.toMatch(/^MOCK_DPD_/);
+      expect(mockPost).toHaveBeenCalledTimes(1);
     });
   });
 

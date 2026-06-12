@@ -43,13 +43,13 @@ describe('GlsClient', () => {
       expect(mockPost).not.toHaveBeenCalled();
     });
 
-    it('returns null without any HTTP request when GLS_SENDER_ID is absent (auto-mock fallback)', async () => {
-      const client = buildClient({ GLS_MOCK_ENABLED: 'false', GLS_SENDER_ID: undefined });
-
-      const result = await client.fetchLabelPdf('P001');
-
-      expect(result).toBeNull();
-      expect(mockPost).not.toHaveBeenCalled();
+    // FIX: missing GLS_SENDER_ID must NOT silently activate mock mode.
+    // Before the fix the OR clause `|| !configService.get('GLS_SENDER_ID')` caused
+    // real customers to receive MOCK_GLS_* tracking numbers when the env var was absent.
+    it('throws at construction when GLS_SENDER_ID is absent and GLS_MOCK_ENABLED is false', () => {
+      expect(() =>
+        buildClient({ GLS_MOCK_ENABLED: 'false', GLS_SENDER_ID: undefined }),
+      ).toThrow();
     });
 
     it('POSTs to ?labels with the parcel number and arraybuffer responseType in real mode', async () => {

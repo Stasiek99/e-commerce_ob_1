@@ -36,9 +36,7 @@ export class DhlClient {
   private readonly shipperEmail: string;
 
   constructor(configService: ConfigService) {
-    this.mockEnabled =
-      configService.get<string>('DHL_MOCK_ENABLED') === 'true' ||
-      !configService.get<string>('DHL_ACCOUNT_NUMBER');
+    this.mockEnabled = configService.get<string>('DHL_MOCK_ENABLED') === 'true';
 
     const sandbox = configService.get<string>('DHL_SANDBOX') === 'true';
     const baseURL = sandbox

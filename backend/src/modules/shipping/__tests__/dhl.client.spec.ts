@@ -62,13 +62,23 @@ describe('DhlClient', () => {
       expect(mockPost).not.toHaveBeenCalled();
     });
 
-    it('falls back to mock mode when DHL_ACCOUNT_NUMBER is absent', async () => {
-      const client = buildClient({ DHL_MOCK_ENABLED: 'false', DHL_ACCOUNT_NUMBER: undefined });
+    // FIX: missing DHL_ACCOUNT_NUMBER must NOT silently activate mock mode.
+    // Before the fix the OR clause `|| !configService.get('DHL_ACCOUNT_NUMBER')` caused
+    // real customers to receive MOCK_DHL_* tracking numbers when the env var was absent.
+    it('throws at construction when DHL_ACCOUNT_NUMBER is absent and DHL_MOCK_ENABLED is false', () => {
+      expect(() =>
+        buildClient({ DHL_MOCK_ENABLED: 'false', DHL_ACCOUNT_NUMBER: undefined }),
+      ).toThrow();
+    });
+
+    it('does NOT activate mock mode when DHL_MOCK_ENABLED is explicitly "false" and credentials are present', async () => {
+      const client = buildClient({ DHL_MOCK_ENABLED: 'false' });
+      mockPost.mockResolvedValue({ data: { shipmentTrackingNumber: 'JD-REAL', documents: [] } });
 
       const result = await client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Perfumy' });
 
-      expect(result.trackingNumber).toMatch(/^MOCK_DHL_/);
-      expect(mockPost).not.toHaveBeenCalled();
+      expect(result.trackingNumber).not.toMatch(/^MOCK_DHL_/);
+      expect(mockPost).toHaveBeenCalledTimes(1);
     });
   });
 
