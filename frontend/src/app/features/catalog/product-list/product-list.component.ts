@@ -760,7 +760,7 @@ export class ProductListComponent implements OnInit {
 
   private updateSeo(slug: string | null, featured: boolean, hasFilters: boolean): void {
     const label = featured ? 'Bestsellery' : slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
-    const canonicalPath = slug ? `/products/${slug}` : '/products';
+    const canonicalPath = slug ? `/category/${slug}` : '/products';
     this.seo.updatePageMeta({
       title: label,
       description: slug
