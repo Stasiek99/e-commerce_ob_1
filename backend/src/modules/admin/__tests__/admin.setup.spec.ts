@@ -305,6 +305,90 @@ describe('setupAdmin — PgSession pool cap (source contract)', () => {
   });
 });
 
+// ─── ADMIN_SESSION_SECRET guard ──────────────────────────────────────────────
+// FIX: The session secret previously fell back to the bcrypt hash of the admin
+// password when ADMIN_SESSION_SECRET was not set in dev. A bcrypt hash is a
+// known-format string ($2b$12$...) which reduces entropy as an HMAC key. The
+// fix generates a random ephemeral secret via crypto.randomBytes instead.
+
+describe('setupAdmin — ADMIN_SESSION_SECRET guard', () => {
+  const BCRYPT_HASH = '$2b$12$LqvHW.I6oSyH3nNLb3MlUue9oQNfeFbOZ2OFI2TyHOh2GdBbfq3EC';
+
+  let savedEmail: string | undefined;
+  let savedPassword: string | undefined;
+  let savedSecret: string | undefined;
+  let savedNodeEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEmail = process.env.ADMIN_DEFAULT_EMAIL;
+    savedPassword = process.env.ADMIN_DEFAULT_PASSWORD;
+    savedSecret = process.env.ADMIN_SESSION_SECRET;
+    savedNodeEnv = process.env.NODE_ENV;
+
+    process.env.ADMIN_DEFAULT_EMAIL = 'admin@example.com';
+    process.env.ADMIN_DEFAULT_PASSWORD = BCRYPT_HASH;
+    delete process.env.ADMIN_SESSION_SECRET;
+  });
+
+  afterEach(() => {
+    if (savedEmail !== undefined) process.env.ADMIN_DEFAULT_EMAIL = savedEmail;
+    else delete process.env.ADMIN_DEFAULT_EMAIL;
+
+    if (savedPassword !== undefined) process.env.ADMIN_DEFAULT_PASSWORD = savedPassword;
+    else delete process.env.ADMIN_DEFAULT_PASSWORD;
+
+    if (savedSecret !== undefined) process.env.ADMIN_SESSION_SECRET = savedSecret;
+    else delete process.env.ADMIN_SESSION_SECRET;
+
+    if (savedNodeEnv !== undefined) process.env.NODE_ENV = savedNodeEnv;
+    else delete process.env.NODE_ENV;
+  });
+
+  it('throws when ADMIN_SESSION_SECRET is absent in production', async () => {
+    process.env.NODE_ENV = 'production';
+
+    await expect(callSetupAdmin()).rejects.toThrow(
+      'ADMIN_SESSION_SECRET must be set in production — refusing to boot',
+    );
+  });
+
+  it('does not use the bcrypt hash (adminPassword) as the dev session secret fallback', async () => {
+    process.env.NODE_ENV = 'development';
+
+    // setupAdmin still throws for ESM-load reasons in Jest, but the session
+    // secret assignment happens before the ESM import call.
+    try { await callSetupAdmin(); } catch { /* expected */ }
+
+    expect(process.env.ADMIN_SESSION_SECRET).toBeDefined();
+    expect(process.env.ADMIN_SESSION_SECRET).not.toBe(BCRYPT_HASH);
+  });
+
+  it('generates a hex string of ≥32 chars as the dev fallback (entropy from crypto.randomBytes)', async () => {
+    process.env.NODE_ENV = 'development';
+
+    try { await callSetupAdmin(); } catch { /* expected */ }
+
+    const secret = process.env.ADMIN_SESSION_SECRET;
+    expect(secret).toBeDefined();
+    expect(secret!.length).toBeGreaterThanOrEqual(32);
+    expect(secret).toMatch(/^[0-9a-f]+$/);
+  });
+});
+
+// ─── Session secret source contract ──────────────────────────────────────────
+
+describe('setupAdmin — session secret source contract', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it('uses crypto.randomBytes for the dev session secret (not adminPassword)', () => {
+    expect(setupSource).toContain('crypto.randomBytes');
+  });
+
+  it('imports the crypto module', () => {
+    expect(setupSource).toMatch(/import \* as crypto from ['"]crypto['"]/);
+  });
+});
+
 // ─── authService parameter ────────────────────────────────────────────────────
 
 describe('setupAdmin — authService parameter (source contract)', () => {

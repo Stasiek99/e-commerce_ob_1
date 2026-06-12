@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import { Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import * as bcrypt from 'bcrypt';
@@ -241,8 +242,10 @@ export async function setupAdmin(
     if (process.env.NODE_ENV === 'production') {
       throw new Error('ADMIN_SESSION_SECRET must be set in production — refusing to boot');
     }
-    // Dev fallback: use password (acceptable for local only, never in prod).
-    process.env.ADMIN_SESSION_SECRET = adminPassword;
+    // Dev fallback: random ephemeral secret (avoids using the bcrypt hash as an HMAC key).
+    // Sessions will not survive server restarts — set ADMIN_SESSION_SECRET in .env to persist them.
+    process.env.ADMIN_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+    logger.warn('ADMIN_SESSION_SECRET not set — using a random ephemeral secret for this dev session');
   }
   // After the guard above, ADMIN_SESSION_SECRET is guaranteed to be set
   // (either already present or overwritten with the dev fallback). Read from
