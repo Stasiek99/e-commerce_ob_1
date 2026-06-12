@@ -1107,11 +1107,11 @@ export async function setupAdmin(
   // login. Without this, an attacker who plants a known session ID before login
   // inherits the authenticated session after the admin logs in.
   expressApp.use('/admin', (req: any, res: any, next: any) => {
-    if (req.session?.adminUser && !req.session._regenerated) {
-      const adminUser = req.session.adminUser;
+    if (req.session?.passport?.user && !req.session._regenerated) {
+      const passportUser = req.session.passport.user;
       req.session.regenerate((err: Error | null) => {
         if (err) return next(err);
-        req.session.adminUser = adminUser;
+        req.session.passport = { user: passportUser };
         req.session._regenerated = true;
         next();
       });

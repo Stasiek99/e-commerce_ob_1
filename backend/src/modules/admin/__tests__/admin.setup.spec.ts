@@ -139,12 +139,12 @@ describe('setupAdmin — session fixation middleware (source contract)', () => {
     expect(setupSource).toContain('req.session._regenerated');
   });
 
-  it('restores adminUser onto the new session after regeneration', () => {
-    expect(setupSource).toContain('req.session.adminUser = adminUser');
+  it('restores passport.user onto the new session after regeneration', () => {
+    expect(setupSource).toContain("req.session.passport = { user: passportUser }");
   });
 
-  it('guards the regeneration on req.session.adminUser being set', () => {
-    expect(setupSource).toContain('req.session?.adminUser');
+  it('guards the regeneration on req.session.passport.user being set (not adminUser)', () => {
+    expect(setupSource).toContain('req.session?.passport?.user');
   });
 });
 
@@ -155,11 +155,11 @@ describe('setupAdmin — session fixation middleware (source contract)', () => {
 
 function makeSessionFixationMiddleware() {
   return (req: any, _res: any, next: any): void => {
-    if (req.session?.adminUser && !req.session._regenerated) {
-      const adminUser = req.session.adminUser;
+    if (req.session?.passport?.user && !req.session._regenerated) {
+      const passportUser = req.session.passport.user;
       req.session.regenerate((err: Error | null) => {
         if (err) return next(err);
-        req.session.adminUser = adminUser;
+        req.session.passport = { user: passportUser };
         req.session._regenerated = true;
         next();
       });
@@ -175,9 +175,19 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('calls next() without regenerating when session has no adminUser (unauthenticated request)', () => {
+  it('calls next() without regenerating when session has no passport.user (unauthenticated request)', () => {
     const next = jest.fn();
     const req = { session: {} };
+
+    middleware(req, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls next() without regenerating when session has passport but no user property', () => {
+    const next = jest.fn();
+    const req = { session: { passport: {} } };
 
     middleware(req, res, next);
 
@@ -198,7 +208,7 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
   it('calls next() without regenerating when session is already marked regenerated', () => {
     const next = jest.fn();
     const regenerate = jest.fn();
-    const req = { session: { adminUser: { email: 'admin@test.com' }, _regenerated: true, regenerate } };
+    const req = { session: { passport: { user: { email: 'admin@test.com' } }, _regenerated: true, regenerate } };
 
     middleware(req, res, next);
 
@@ -206,32 +216,12 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
     expect(next).toHaveBeenCalledWith();
   });
 
-  it('regenerates the session on first authenticated request', () => {
+  it('regenerates the session on the first authenticated request', () => {
     const next = jest.fn();
     const newSession: any = {};
     const req: any = {
       session: {
-        adminUser: { email: 'admin@test.com' },
-        regenerate: jest.fn((cb: (err: Error | null) => void) => {
-          req.session = newSession; // simulate session reset
-          cb(null);
-        }),
-      },
-    };
-
-    middleware(req, res, next);
-
-    expect(req.session.regenerate ?? newSession.regenerate ?? req.session === newSession).toBeTruthy();
-    expect(next).toHaveBeenCalledWith();
-  });
-
-  it('preserves adminUser on the new session after regeneration', () => {
-    const next = jest.fn();
-    const adminUser = { email: 'admin@test.com' };
-    const newSession: any = {};
-    const req: any = {
-      session: {
-        adminUser,
+        passport: { user: { email: 'admin@test.com' } },
         regenerate: jest.fn((cb: (err: Error | null) => void) => {
           req.session = newSession;
           cb(null);
@@ -241,7 +231,27 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
 
     middleware(req, res, next);
 
-    expect(newSession.adminUser).toBe(adminUser);
+    expect(next).toHaveBeenCalledWith();
+    expect(newSession._regenerated).toBe(true);
+  });
+
+  it('preserves passport.user on the new session after regeneration', () => {
+    const next = jest.fn();
+    const passportUser = { email: 'admin@test.com' };
+    const newSession: any = {};
+    const req: any = {
+      session: {
+        passport: { user: passportUser },
+        regenerate: jest.fn((cb: (err: Error | null) => void) => {
+          req.session = newSession;
+          cb(null);
+        }),
+      },
+    };
+
+    middleware(req, res, next);
+
+    expect(newSession.passport).toEqual({ user: passportUser });
   });
 
   it('sets _regenerated on the new session after regeneration', () => {
@@ -249,7 +259,7 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
     const newSession: any = {};
     const req: any = {
       session: {
-        adminUser: { email: 'admin@test.com' },
+        passport: { user: { email: 'admin@test.com' } },
         regenerate: jest.fn((cb: (err: Error | null) => void) => {
           req.session = newSession;
           cb(null);
@@ -267,7 +277,7 @@ describe('setupAdmin — session fixation middleware behaviour', () => {
     const regenerateError = new Error('session store unavailable');
     const req: any = {
       session: {
-        adminUser: { email: 'admin@test.com' },
+        passport: { user: { email: 'admin@test.com' } },
         regenerate: jest.fn((cb: (err: Error | null) => void) => cb(regenerateError)),
       },
     };
