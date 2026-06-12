@@ -1054,6 +1054,12 @@ export async function setupAdmin(
     saveUninitialized: false,
     secret: resolvedSessionSecret,
     name: 'adminjs', // must match the cookie name set by buildAuthenticatedRouter
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict' as const,
+      maxAge: 8 * 60 * 60 * 1000,
+    },
   };
 
   // Printer-friendly pick list — session-protected, registered before the AdminJS

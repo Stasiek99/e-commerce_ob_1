@@ -315,6 +315,54 @@ describe('setupAdmin — PgSession pool cap (source contract)', () => {
   });
 });
 
+// ─── Session cookie security flags — source contract ─────────────────────────
+// FIX: express-session defaults to cookie.secure=false and cookie.sameSite=undefined.
+// In production this means:
+//   - The cookie can be sent over HTTP (briefly unencrypted during Railway edge redirect)
+//   - The admin panel is exposed to CSRF via top-level cross-origin navigations
+//     (AdminJS has no CSRF tokens, so sameSite is the only defence)
+// The fix adds httpOnly, secure (prod-only), sameSite:'strict', and an 8-hour maxAge.
+
+describe('setupAdmin — session cookie security flags (source contract)', () => {
+  const setupSource = fs.readFileSync(
+    path.join(__dirname, '../admin.setup.ts'),
+    'utf-8',
+  );
+
+  it('sets cookie.httpOnly: true on the session to block JS access', () => {
+    expect(setupSource).toContain('httpOnly: true');
+  });
+
+  it('sets cookie.secure conditionally on NODE_ENV to enforce HTTPS in production', () => {
+    expect(setupSource).toContain("process.env.NODE_ENV === 'production'");
+  });
+
+  it("sets cookie.sameSite: 'strict' to prevent CSRF via cross-origin navigations", () => {
+    expect(setupSource).toContain("sameSite: 'strict'");
+  });
+
+  it('sets cookie.maxAge to 8 hours (8 * 60 * 60 * 1000)', () => {
+    expect(setupSource).toContain('8 * 60 * 60 * 1000');
+  });
+
+  it('places all four cookie flags inside the sessionOpts object (not elsewhere)', () => {
+    const sessionOptsIndex = setupSource.indexOf('const sessionOpts');
+    expect(sessionOptsIndex).toBeGreaterThan(-1);
+
+    // Find the closing brace of sessionOpts by looking for the next const/let/var after it
+    const afterSessionOpts = setupSource.indexOf('\n  const ', sessionOptsIndex + 1);
+    const sessionOptsBlock =
+      afterSessionOpts > -1
+        ? setupSource.slice(sessionOptsIndex, afterSessionOpts)
+        : setupSource.slice(sessionOptsIndex, sessionOptsIndex + 400);
+
+    expect(sessionOptsBlock).toContain('httpOnly: true');
+    expect(sessionOptsBlock).toContain('sameSite:');
+    expect(sessionOptsBlock).toContain('maxAge:');
+    expect(sessionOptsBlock).toContain('secure:');
+  });
+});
+
 // ─── ADMIN_SESSION_SECRET guard ──────────────────────────────────────────────
 // FIX: The session secret previously fell back to the bcrypt hash of the admin
 // password when ADMIN_SESSION_SECRET was not set in dev. A bcrypt hash is a
