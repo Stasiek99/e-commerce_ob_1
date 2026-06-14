@@ -11,17 +11,15 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   Sse,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { Observable, from, switchMap, throwError, tap } from 'rxjs';
+import { Observable, from, switchMap, throwError } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
-import type { Request } from 'express';
 import type IORedis from 'ioredis';
 import { ProductsService } from './products.service';
 import { StorageService } from '../storage/storage.service';
@@ -40,9 +38,9 @@ import {
   UpdateVariantStockDto,
 } from './dto/product.dto';
 
-const SSE_MAX_CONNS_PER_IP = 5;
+const SSE_MAX_CONNS_GLOBAL = 500;
 const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
-const SSE_CONN_KEY_TTL_SECONDS = 700;
+const SSE_CONN_KEY = 'sse:global:count';
 
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -78,28 +76,20 @@ export class ProductsController {
   @Sse('variants/stock-stream')
   streamVariantStock(
     @Query('ids') ids: string,
-    @Req() req: Request,
   ): Observable<MessageEvent> {
-    const ip =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ??
-      req.ip ??
-      'unknown';
-    const connKey = `sse:conn:${ip}`;
-
     const variantIds = (ids ?? '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 10);
 
-    return from(this.redis.incr(connKey)).pipe(
-      tap(() => { this.redis.expire(connKey, SSE_CONN_KEY_TTL_SECONDS).catch(() => {}); }),
+    return from(this.redis.incr(SSE_CONN_KEY)).pipe(
       switchMap((count) => {
-        if (count > SSE_MAX_CONNS_PER_IP) {
-          this.redis.decr(connKey).catch(() => {});
+        if (count > SSE_MAX_CONNS_GLOBAL) {
+          this.redis.decr(SSE_CONN_KEY).catch(() => {});
           return throwError(
             () => new HttpException(
-              'Too many concurrent stock stream connections from this IP. Reconnect later.',
+              'SSE connection limit reached. Try again later.',
               HttpStatus.TOO_MANY_REQUESTS,
             ),
           );
@@ -127,7 +117,7 @@ export class ProductsController {
           return () => {
             clearTimeout(idleTimer);
             innerSub.unsubscribe();
-            this.redis.decr(connKey).catch(() => {});
+            this.redis.decr(SSE_CONN_KEY).catch(() => {});
           };
         });
       }),

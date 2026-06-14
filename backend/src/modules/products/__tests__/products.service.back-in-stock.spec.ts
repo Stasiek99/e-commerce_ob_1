@@ -55,6 +55,7 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
     get: jest.fn().mockResolvedValue(null),
     setex: jest.fn().mockResolvedValue('OK'),
     incr: jest.fn().mockResolvedValue(1),
+    publish: jest.fn().mockResolvedValue(0),
   };
 
   beforeEach(async () => {

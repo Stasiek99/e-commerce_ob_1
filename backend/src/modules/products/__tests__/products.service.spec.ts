@@ -67,6 +67,7 @@ const mockPrisma = {
   },
   productVariant: {
     findUnique: jest.fn(),
+    findMany: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
@@ -96,6 +97,7 @@ const mockRedis = {
   get: jest.fn(),
   setex: jest.fn(),
   incr: jest.fn(),
+  publish: jest.fn().mockResolvedValue(0),
   scanStream: jest.fn(),
   pipeline: jest.fn(),
 };
@@ -1690,5 +1692,213 @@ describe('ProductsService — remove (variant cascade)', () => {
     const result = await service.remove('product-1') as any;
 
     expect(result.isActive).toBe(false);
+  });
+});
+
+// ─── createStockStream — event-driven push via Subject ────────────────────────
+// Regression guard: createStockStream must NOT poll Prisma on a timer. It must
+// (a) emit an initial snapshot from a single Prisma query on subscribe, then
+// (b) emit diffs pushed via the shared stockUpdates$ Subject.
+
+describe('ProductsService — createStockStream (push-based)', () => {
+  let service: ProductsService;
+
+  const makeLocalModule = async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+    return module.get(ProductsService);
+  };
+
+  beforeEach(async () => {
+    service = await makeLocalModule();
+    jest.clearAllMocks();
+    mockRedis.publish.mockResolvedValue(0);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  describe('initial snapshot', () => {
+    it('queries Prisma exactly once for the initial snapshot on subscribe', (done) => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: 'var-1', stock: 5 },
+        { id: 'var-2', stock: 0 },
+      ]);
+
+      const received: any[] = [];
+      const sub = service.createStockStream(['var-1', 'var-2']).subscribe({
+        next: (e) => { received.push(e); sub.unsubscribe(); },
+        error: done,
+      });
+
+      setImmediate(() => {
+        expect(mockPrisma.productVariant.findMany).toHaveBeenCalledTimes(1);
+        expect(mockPrisma.productVariant.findMany).toHaveBeenCalledWith({
+          where: { id: { in: ['var-1', 'var-2'] } },
+          select: { id: true, stock: true },
+        });
+        done();
+      });
+    });
+
+    it('emits the snapshot as the first event on subscribe', (done) => {
+      const rows = [{ id: 'var-1', stock: 7 }];
+      mockPrisma.productVariant.findMany.mockResolvedValue(rows);
+
+      const received: any[] = [];
+      const sub = service.createStockStream(['var-1']).subscribe({
+        next: (e) => { received.push(e); },
+        error: done,
+      });
+
+      setImmediate(() => {
+        expect(received.length).toBeGreaterThanOrEqual(1);
+        expect(received[0]).toMatchObject({ data: rows });
+        sub.unsubscribe();
+        done();
+      });
+    });
+  });
+
+  describe('push diff via Subject', () => {
+    it('emits a diff event when the Subject pushes a stock change for a watched variant', (done) => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([{ id: 'var-1', stock: 5 }]);
+
+      const received: any[] = [];
+      const sub = service.createStockStream(['var-1']).subscribe({
+        next: (e) => received.push(e),
+        error: done,
+      });
+
+      // Wait for initial snapshot, then push a diff
+      setImmediate(() => {
+        (service as any).stockUpdates$.next({ id: 'var-1', stock: 3 });
+
+        setImmediate(() => {
+          const diff = received.find((e: any) =>
+            Array.isArray(e.data) && e.data.some((d: any) => d.stock === 3),
+          );
+          expect(diff).toBeDefined();
+          sub.unsubscribe();
+          done();
+        });
+      });
+    });
+
+    it('does not emit when the Subject pushes the same stock value as the snapshot', (done) => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([{ id: 'var-1', stock: 5 }]);
+
+      const received: any[] = [];
+      const sub = service.createStockStream(['var-1']).subscribe({
+        next: (e) => received.push(e),
+        error: done,
+      });
+
+      setImmediate(() => {
+        const countAfterSnapshot = received.length;
+        (service as any).stockUpdates$.next({ id: 'var-1', stock: 5 }); // same stock
+
+        setImmediate(() => {
+          expect(received.length).toBe(countAfterSnapshot);
+          sub.unsubscribe();
+          done();
+        });
+      });
+    });
+
+    it('ignores Subject updates for variant IDs not in the requested set', (done) => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([{ id: 'var-1', stock: 5 }]);
+
+      const received: any[] = [];
+      const sub = service.createStockStream(['var-1']).subscribe({
+        next: (e) => received.push(e),
+        error: done,
+      });
+
+      setImmediate(() => {
+        const countAfterSnapshot = received.length;
+        (service as any).stockUpdates$.next({ id: 'OTHER-variant', stock: 99 });
+
+        setImmediate(() => {
+          expect(received.length).toBe(countAfterSnapshot);
+          sub.unsubscribe();
+          done();
+        });
+      });
+    });
+  });
+});
+
+// ─── updateVariantStock — Redis publish after DB write ────────────────────────
+// Regression guard: every admin stock update must publish to the `stock:updates`
+// Redis channel so connected SSE clients receive a push without polling.
+
+describe('ProductsService — updateVariantStock Redis publish', () => {
+  let service: ProductsService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+
+    mockRedis.incr.mockResolvedValue(1);
+    mockRedis.publish.mockResolvedValue(0);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('publishes to stock:updates channel with the new stock value after a set update', async () => {
+    const variant = makeVariant({ id: 'var-1', stock: 10 });
+    mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+    mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 25 });
+
+    await service.updateVariantStock('var-1', { set: 25 }, 'admin-1');
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockRedis.publish).toHaveBeenCalledWith(
+      'stock:updates',
+      JSON.stringify({ id: 'var-1', stock: 25 }),
+    );
+  });
+
+  it('publishes to stock:updates channel with the clamped stock value after an adjustment', async () => {
+    const variant = makeVariant({ id: 'var-2', stock: 3 });
+    mockPrisma.productVariant.findUnique.mockResolvedValue(variant);
+    mockPrisma.productVariant.update.mockResolvedValue({ ...variant, stock: 0 });
+
+    await service.updateVariantStock('var-2', { adjustment: -99 });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockRedis.publish).toHaveBeenCalledWith(
+      'stock:updates',
+      JSON.stringify({ id: 'var-2', stock: 0 }),
+    );
+  });
+
+  it('does not publish when variant is not found (NotFoundException before update)', async () => {
+    mockPrisma.productVariant.findUnique.mockResolvedValue(null);
+
+    await expect(service.updateVariantStock('missing', { set: 5 })).rejects.toThrow(NotFoundException);
+
+    expect(mockRedis.publish).not.toHaveBeenCalled();
   });
 });
