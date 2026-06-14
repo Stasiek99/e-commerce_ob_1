@@ -9,6 +9,16 @@ const DEFAULT_DESCRIPTION =
   'Perfumy, dyfuzory i żele pod prysznic premium. Starannie wyselekcjonowane zapachy dla wymagających.';
 const DEFAULT_IMAGE = `${SITE_URL}/assets/og-default.jpg`;
 
+export interface SellerInfo {
+  name: string;
+  legalName: string;
+  street: string;
+  postalCode: string;
+  city: string;
+  nip: string;
+  email: string;
+}
+
 export interface ProductSeoInput {
   name: string;
   brand?: string | null;
@@ -171,6 +181,48 @@ export class SeoService {
     this.upsertJsonLd({ '@context': 'https://schema.org', '@graph': graph });
   }
 
+  setOrganizationJsonLd(seller: SellerInfo): void {
+    const graph: unknown[] = [
+      {
+        '@type': 'Organization',
+        '@id': `${SITE_URL}/#organization`,
+        name: seller.name,
+        legalName: seller.legalName,
+        url: SITE_URL,
+        logo: {
+          '@type': 'ImageObject',
+          url: `${SITE_URL}/assets/logo.png`,
+        },
+        email: seller.email,
+        taxID: seller.nip,
+        address: {
+          '@type': 'PostalAddress',
+          streetAddress: seller.street,
+          postalCode: seller.postalCode,
+          addressLocality: seller.city,
+          addressCountry: 'PL',
+        },
+      },
+      {
+        '@type': 'WebSite',
+        '@id': `${SITE_URL}/#website`,
+        url: SITE_URL,
+        name: seller.name,
+        inLanguage: 'pl-PL',
+        potentialAction: {
+          '@type': 'SearchAction',
+          target: {
+            '@type': 'EntryPoint',
+            urlTemplate: `${SITE_URL}/products?q={search_term_string}`,
+          },
+          'query-input': 'required name=search_term_string',
+        },
+      },
+    ];
+
+    this.upsertJsonLd({ '@context': 'https://schema.org', '@graph': graph }, 'ld-organization');
+  }
+
   setRobotsTag(content: string): void {
     this.upsertName('robots', content);
   }
@@ -235,14 +287,12 @@ export class SeoService {
     link.setAttribute('href', url);
   }
 
-  private upsertJsonLd(data: Record<string, unknown>): void {
+  private upsertJsonLd(data: Record<string, unknown>, id = 'ld-product'): void {
     const head = this.document.head;
-    let script = this.document.getElementById(
-      'ld-product',
-    ) as HTMLScriptElement | null;
+    let script = this.document.getElementById(id) as HTMLScriptElement | null;
     if (!script) {
       script = this.document.createElement('script') as HTMLScriptElement;
-      script.id = 'ld-product';
+      script.id = id;
       script.type = 'application/ld+json';
       head.appendChild(script);
     }
