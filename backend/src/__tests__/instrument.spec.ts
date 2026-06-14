@@ -148,4 +148,93 @@ describe('instrument.ts', () => {
       expect(result).toBe(event);
     });
   });
+
+  describe('beforeSend — header redaction', () => {
+    let beforeSend: BeforeSend;
+
+    beforeEach(() => {
+      process.env.SENTRY_DSN = 'https://key@sentry.io/1';
+      beforeSend = loadInstrument()!;
+    });
+
+    it('removes the authorization header from the event', () => {
+      const event: Event = {
+        request: { headers: { authorization: 'Bearer eyJliveToken', 'content-type': 'application/json' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers).not.toHaveProperty('authorization');
+    });
+
+    it('preserves non-sensitive headers when removing authorization', () => {
+      const event: Event = {
+        request: { headers: { authorization: 'Bearer eyJliveToken', 'content-type': 'application/json' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers!['content-type']).toBe('application/json');
+    });
+
+    it('removes the cookie header from the event', () => {
+      const event: Event = {
+        request: { headers: { cookie: 'refreshToken=secret; session=abc', 'x-request-id': 'req-1' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers).not.toHaveProperty('cookie');
+    });
+
+    it('preserves non-sensitive headers when removing cookie', () => {
+      const event: Event = {
+        request: { headers: { cookie: 'refreshToken=secret', 'x-request-id': 'req-1' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers!['x-request-id']).toBe('req-1');
+    });
+
+    it('removes both authorization and cookie when both are present', () => {
+      const event: Event = {
+        request: {
+          headers: {
+            authorization: 'Bearer token',
+            cookie: 'refreshToken=r',
+            accept: 'application/json',
+          },
+        },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers).not.toHaveProperty('authorization');
+      expect(result!.request!.headers).not.toHaveProperty('cookie');
+      expect(result!.request!.headers!['accept']).toBe('application/json');
+    });
+
+    it('returns event unchanged when request has no headers', () => {
+      const event: Event = { request: { url: 'https://example.com' } };
+      const result = beforeSend(event);
+      expect(result).toBe(event);
+    });
+
+    it('strips authorization header AND redacts sensitive body in the same call', () => {
+      const event: Event = {
+        request: {
+          headers: { authorization: 'Bearer live-token', 'content-type': 'application/json' },
+          data: JSON.stringify({ token: 'refresh-jwt', amount: 99 }),
+        },
+      };
+
+      const result = beforeSend(event);
+      const body = JSON.parse(result!.request!.data as string);
+
+      expect(result!.request!.headers).not.toHaveProperty('authorization');
+      expect(body.token).toBe('[REDACTED]');
+      expect(body.amount).toBe(99);
+    });
+  });
 });

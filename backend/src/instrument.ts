@@ -23,6 +23,10 @@ if (dsn) {
     profilesSampleRate: Number(process.env.SENTRY_PROFILES_SAMPLE_RATE ?? '0.1'),
     sendDefaultPii: false,
     beforeSend(event) {
+      if (event.request?.headers) {
+        delete (event.request.headers as Record<string, unknown>)['authorization'];
+        delete (event.request.headers as Record<string, unknown>)['cookie'];
+      }
       if (event.request?.data) {
         try {
           const body =
