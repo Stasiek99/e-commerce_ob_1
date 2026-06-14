@@ -55,6 +55,15 @@ export class ReviewsController {
     return this.reviews.getMine(user.id);
   }
 
+  @Get('eligible-order')
+  @UseGuards(JwtAuthGuard)
+  getEligibleOrder(
+    @CurrentUser() user: User,
+    @Query('productId') productId: string,
+  ) {
+    return this.reviews.findEligibleOrder(user.id, productId);
+  }
+
   @Patch(':id/resubmit')
   @UseGuards(JwtAuthGuard)
   @Throttle({ default: { ttl: 60_000, limit: 5 } })

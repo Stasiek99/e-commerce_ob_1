@@ -52,4 +52,11 @@ export class ReviewsService {
   getMine() {
     return this.http.get<any[]>(`${environment.apiUrl}/reviews/mine`);
   }
+
+  getEligibleOrder(productId: string) {
+    return this.http.get<{ orderId: string | null }>(
+      `${environment.apiUrl}/reviews/eligible-order`,
+      { params: { productId } },
+    );
+  }
 }

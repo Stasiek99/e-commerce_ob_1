@@ -608,6 +608,141 @@ describe('ReviewsService', () => {
     });
   });
 
+  // ─── create — unverified review (no orderId) ─────────────────────────────
+  // Invariant: when orderId is absent the order lookup must be skipped and the
+  // review must be created with orderId=null (unverified purchase path).
+
+  describe('create — unverified review (no orderId)', () => {
+    const dto = { productId: 'product-1', rating: 4 };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(VERIFIED_USER);
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
+      prisma.review.create.mockResolvedValue(makeReview({ orderId: null }));
+    });
+
+    it('creates review with orderId=null when no orderId is provided', async () => {
+      await service.create('user-1', dto);
+
+      expect(prisma.review.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ orderId: null }),
+        }),
+      );
+    });
+
+    it('does not call order.findFirst when orderId is absent', async () => {
+      await service.create('user-1', dto);
+
+      expect(prisma.order.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('still validates product exists on the unverified path', async () => {
+      prisma.product.findUnique.mockResolvedValue(null);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('still validates product is active on the unverified path', async () => {
+      prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: false });
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('still enforces email verification on the unverified path', async () => {
+      prisma.user.findUnique.mockResolvedValue(UNVERIFIED_USER);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('does not fire the Sentry suspicious-activity alert when no orderId is provided', async () => {
+      const newUser = { isEmailVerified: true, createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000) };
+      prisma.user.findUnique.mockResolvedValue(newUser);
+      const sentrySpy = jest.spyOn(Sentry, 'captureMessage').mockReturnValue(undefined as any);
+
+      await service.create('user-1', dto);
+
+      expect(sentrySpy).not.toHaveBeenCalled();
+      sentrySpy.mockRestore();
+    });
+
+    it('throws ConflictException on duplicate review even without orderId', async () => {
+      const p2002 = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed',
+        { code: 'P2002', clientVersion: '5.0.0', meta: { target: ['userId', 'productId'] } },
+      );
+      prisma.review.create.mockRejectedValue(p2002);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ─── findEligibleOrder ───────────────────────────────────────────────────
+  // Invariant: returns the most-recent DELIVERED order for the user that
+  // contains the given product; returns null when none qualifies.
+
+  describe('findEligibleOrder', () => {
+    it('returns the orderId of the matching DELIVERED order', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'order-eligible' });
+
+      const result = await service.findEligibleOrder('user-1', 'product-1');
+
+      expect(result).toEqual({ orderId: 'order-eligible' });
+    });
+
+    it('returns { orderId: null } when no eligible order exists', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      const result = await service.findEligibleOrder('user-1', 'product-1');
+
+      expect(result).toEqual({ orderId: null });
+    });
+
+    it('queries with DELIVERED status filter', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await service.findEligibleOrder('user-1', 'product-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ status: OrderStatus.DELIVERED }),
+        }),
+      );
+    });
+
+    it('filters by userId', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await service.findEligibleOrder('user-42', 'product-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-42' }),
+        }),
+      );
+    });
+
+    it('orders by createdAt desc to return the most recent order first', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await service.findEligibleOrder('user-1', 'product-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+
+    it('selects only the id field to minimise data transfer', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await service.findEligibleOrder('user-1', 'product-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ select: { id: true } }),
+      );
+    });
+  });
+
   // ─── create (additional edge cases) ──────────────────────────────────────
 
   describe('create — additional edge cases', () => {

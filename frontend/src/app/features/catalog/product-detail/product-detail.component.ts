@@ -1138,6 +1138,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   readonly reviewSubmitting = signal(false);
   readonly reviewSubmitted = signal(false);
   readonly reviewError = signal<string | null>(null);
+  readonly reviewEligibleOrderId = signal<string | null>(null);
   reviewRating = 0;
   reviewTitle = '';
   reviewBody = '';
@@ -1269,6 +1270,16 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.loadRelatedProducts(p.slug);
           this.subscribeStockStream(p.variants.map((v) => v.id));
 
+          const queryOrderId = this.route.snapshot.queryParamMap.get('orderId');
+          if (queryOrderId) {
+            this.reviewEligibleOrderId.set(queryOrderId);
+          } else if (isPlatformBrowser(this.platformId) && this.auth.isAuthenticated()) {
+            this.reviewsService
+              .getEligibleOrder(p.id)
+              .pipe(takeUntilDestroyed(this.destroyRef))
+              .subscribe({ next: (res) => this.reviewEligibleOrderId.set(res.orderId) });
+          }
+
           if (this.route.snapshot.queryParamMap.get('review') === '1') {
             this.reviewFormOpen.set(true);
             if (isPlatformBrowser(this.platformId)) {
@@ -1359,9 +1370,11 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
     this.reviewSubmitting.set(true);
     this.reviewError.set(null);
 
+    const orderId = this.reviewEligibleOrderId() ?? undefined;
     this.reviewsService
       .submit({
         productId,
+        orderId,
         rating: this.reviewRating,
         title: this.reviewTitle.trim() || undefined,
         body: this.reviewBody.trim() || undefined,
