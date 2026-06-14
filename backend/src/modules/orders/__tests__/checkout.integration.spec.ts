@@ -400,6 +400,7 @@ describe('Checkout Integration Flow', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },

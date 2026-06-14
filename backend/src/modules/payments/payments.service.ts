@@ -567,6 +567,7 @@ export class PaymentsService {
       payment.order.items,
       `Stripe event: ${reasonType}`,
       eventId,
+      session.id,
     );
 
     const failedSessionCouponId = this.extractSessionCouponId(session);
@@ -1325,9 +1326,30 @@ export class PaymentsService {
     orderItems: Array<{ productVariantId: string; quantity: number }>,
     failureReason: string,
     eventId?: string,
+    sessionId?: string,
   ) {
     try {
       await this.prisma.$transaction(async (tx) => {
+        // Acquire a row-level exclusive lock before checking payment status.
+        // This serialises against a concurrent markSessionPaid: if completed arrives
+        // and commits first (COMPLETED), we see that under the lock and bail without
+        // cancelling the order and over-restoring stock.
+        const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT status FROM "payments" WHERE id = ${paymentId} FOR UPDATE
+        `;
+        if (locked?.status === PaymentStatus.COMPLETED) {
+          this.logger.warn(
+            `Payment ${paymentId} already COMPLETED — skipping failure event (session: ${sessionId ?? 'unknown'})`,
+          );
+          return;
+        }
+
+        // Session-scoped idempotency: prevents a second failure event for the same
+        // session (e.g. async_payment_failed arriving after expired) from double-processing.
+        if (sessionId) {
+          await tx.processedStripeEvent.create({ data: { eventId: `failed-${sessionId}` } });
+        }
+
         if (eventId) {
           await tx.processedStripeEvent.create({ data: { eventId } });
         }
@@ -1365,7 +1387,7 @@ export class PaymentsService {
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         this.logger.warn(
-          `Stripe event ${eventId} already processed — skipping duplicate failure event`,
+          `Stripe event ${eventId ?? sessionId} already processed — skipping duplicate failure event`,
         );
         return;
       }

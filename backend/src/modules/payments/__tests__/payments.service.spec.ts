@@ -176,6 +176,7 @@ describe('PaymentsService', () => {
     prisma.$transaction.mockImplementation(async (fn: any) => {
       if (typeof fn === 'function') {
         return fn({
+          $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
           processedStripeEvent: prisma.processedStripeEvent,
           payment: prisma.payment,
           order: prisma.order,
@@ -247,6 +248,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
@@ -269,6 +271,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
@@ -2568,6 +2571,130 @@ describe('PaymentsService', () => {
     });
   });
 
+  // ── handlePaymentFailure — SELECT FOR UPDATE race-condition guard ─────────
+  // Invariant: when expired arrives first and completed arrives second (out-of-order
+  // BLIK/P24 delivery), the SELECT FOR UPDATE lock inside handlePaymentFailure must
+  // see COMPLETED (set by the concurrent markSessionPaid) and bail — no double-cancel.
+  // Conversely, if expired arrives and the payment is still PENDING, it must proceed.
+
+  describe('handlePaymentFailure — SELECT FOR UPDATE serialisation guard', () => {
+    it('does NOT cancel the order when SELECT FOR UPDATE sees payment already COMPLETED (completed won the race)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.COMPLETED }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { update: txOrderUpdate },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.expired', mockSession),
+      );
+
+      expect(txOrderUpdate).not.toHaveBeenCalled();
+    });
+
+    it('DOES cancel the order when SELECT FOR UPDATE sees payment still PENDING (failure path wins)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { update: txOrderUpdate },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.expired', mockSession),
+      );
+
+      expect(txOrderUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: OrderStatus.CANCELLED } }),
+      );
+    });
+
+    it('inserts session-scoped failed-{session.id} idempotency key inside the transaction', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txProcessedCreate = jest.fn().mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: txProcessedCreate },
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      const event = buildEvent('checkout.session.expired', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(txProcessedCreate).toHaveBeenCalledWith({
+        data: { eventId: `failed-${mockSession.id}` },
+      });
+    });
+
+    it('inserts both failed-{session.id} and the webhook eventId when both are available', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txProcessedCreate = jest.fn().mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: txProcessedCreate },
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      const event = buildEvent('checkout.session.expired', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(txProcessedCreate).toHaveBeenCalledWith({
+        data: { eventId: `failed-${mockSession.id}` },
+      });
+      expect(txProcessedCreate).toHaveBeenCalledWith({
+        data: { eventId: event.id },
+      });
+    });
+
+    it('resolves without error when P2002 is thrown on failed-{session.id} key (duplicate expired delivery)', async () => {
+      const duplicateError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`event_id`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
+      );
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(duplicateError);
+
+      await expect(
+        service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession)),
+      ).resolves.not.toThrow();
+    });
+  });
+
   // ── pruneProcessedStripeEvents ─────────────────────────────────────────
   // Invariant: nightly cron must delete rows older than 7 days so the
   // dedup table does not grow unboundedly and cause Postgres disk exhaustion.
@@ -3179,6 +3306,7 @@ describe('PaymentsService', () => {
         prisma.$transaction.mockImplementation(async (fn: any) => {
           if (typeof fn === 'function') {
             await fn({
+              $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
               processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
               payment: { update: jest.fn() },
               order: { update: jest.fn() },
