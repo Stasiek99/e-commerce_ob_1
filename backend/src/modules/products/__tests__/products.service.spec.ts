@@ -74,6 +74,9 @@ const mockPrisma = {
   orderItem: {
     count: jest.fn(),
   },
+  cartItem: {
+    count: jest.fn(),
+  },
   productVariantPriceHistory: {
     create: jest.fn(),
     groupBy: jest.fn(),
@@ -1184,6 +1187,7 @@ describe('ProductsService — deleteVariant', () => {
 
   it('deletes the variant when no order items reference it', async () => {
     mockPrisma.orderItem.count.mockResolvedValue(0);
+    mockPrisma.cartItem.count.mockResolvedValue(0);
     mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-1' });
 
     await service.deleteVariant('var-1');
@@ -1193,6 +1197,7 @@ describe('ProductsService — deleteVariant', () => {
 
   it('resolves void on successful deletion', async () => {
     mockPrisma.orderItem.count.mockResolvedValue(0);
+    mockPrisma.cartItem.count.mockResolvedValue(0);
     mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-1' });
 
     await expect(service.deleteVariant('var-1')).resolves.toBeUndefined();
@@ -1200,12 +1205,65 @@ describe('ProductsService — deleteVariant', () => {
 
   it('queries orderItem count scoped to the given variantId', async () => {
     mockPrisma.orderItem.count.mockResolvedValue(0);
+    mockPrisma.cartItem.count.mockResolvedValue(0);
     mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-1' });
 
     await service.deleteVariant('var-1');
 
     expect(mockPrisma.orderItem.count).toHaveBeenCalledWith({
       where: { productVariantId: 'var-1' },
+    });
+  });
+
+  // ── cart item guard (new) ──────────────────────────────────────────────────
+  // Invariant: a variant sitting in a live cart must not be hard-deleted.
+  // The FK is now RESTRICT; this pre-check gives a 409 with a useful message
+  // instead of a raw DB error. It fires after the order-item guard.
+
+  describe('cart item guard', () => {
+    beforeEach(() => {
+      mockPrisma.orderItem.count.mockResolvedValue(0);
+    });
+
+    it('throws ConflictException when the variant is in one or more active carts', async () => {
+      mockPrisma.cartItem.count.mockResolvedValue(2);
+
+      await expect(service.deleteVariant('var-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('ConflictException message mentions soft-deactivate as the recommended alternative', async () => {
+      mockPrisma.cartItem.count.mockResolvedValue(1);
+
+      await expect(service.deleteVariant('var-1')).rejects.toThrow(
+        /soft-deactivate/i,
+      );
+    });
+
+    it('does not call productVariant.delete when cart items exist', async () => {
+      mockPrisma.cartItem.count.mockResolvedValue(1);
+
+      await expect(service.deleteVariant('var-1')).rejects.toThrow(ConflictException);
+
+      expect(mockPrisma.productVariant.delete).not.toHaveBeenCalled();
+    });
+
+    it('queries cartItem.count with the correct variantId', async () => {
+      mockPrisma.cartItem.count.mockResolvedValue(0);
+      mockPrisma.productVariant.delete.mockResolvedValue({ id: 'var-99' });
+
+      await service.deleteVariant('var-99');
+
+      expect(mockPrisma.cartItem.count).toHaveBeenCalledWith({
+        where: { productVariantId: 'var-99' },
+      });
+    });
+
+    it('does NOT check cartItem count when the order-item guard already fires', async () => {
+      mockPrisma.orderItem.count.mockResolvedValue(3);
+
+      await expect(service.deleteVariant('var-1')).rejects.toThrow(ConflictException);
+
+      expect(mockPrisma.cartItem.count).not.toHaveBeenCalled();
     });
   });
 });

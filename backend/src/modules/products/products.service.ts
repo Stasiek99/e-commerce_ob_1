@@ -504,6 +504,14 @@ export class ProductsService {
         `Variant ${variantId} is referenced by ${orderItemCount} order item(s) and cannot be deleted`,
       );
     }
+    const cartItemCount = await this.prisma.cartItem.count({
+      where: { productVariantId: variantId },
+    });
+    if (cartItemCount > 0) {
+      throw new ConflictException(
+        `Variant ${variantId} is in ${cartItemCount} active cart(s) — soft-deactivate instead of deleting`,
+      );
+    }
     await this.prisma.productVariant.delete({ where: { id: variantId } });
   }
 

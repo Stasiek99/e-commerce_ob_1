@@ -337,6 +337,7 @@ export async function setupAdmin(
             },
           },
           actions: {
+            delete: { isAccessible: false },
             list: {
               after: async (response: any) => {
                 // noinspection SqlNoDataSourceInspection
