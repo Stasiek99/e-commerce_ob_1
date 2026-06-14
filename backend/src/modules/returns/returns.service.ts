@@ -179,7 +179,6 @@ export class ReturnsService {
         items: dto.items,
         reason: request.reason ?? undefined,
         requestedResolution: request.requestedResolution ?? undefined,
-        bankAccount: plainIban ?? undefined,
       }),
     ]);
 

@@ -129,7 +129,6 @@ export type EmailJobData =
         items: Array<{ productName: string; quantity: number }>;
         reason?: string;
         requestedResolution?: string;
-        bankAccount?: string;
       };
     }
   | {

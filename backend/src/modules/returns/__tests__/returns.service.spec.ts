@@ -1215,13 +1215,13 @@ describe('ReturnsService', () => {
       );
     });
 
-    it('sends plaintext IBAN to the admin notification email, not the ciphertext', async () => {
+    it('does NOT include bankAccount in the admin notification payload (GDPR Art. 32 — IBAN must not transit Redis as plaintext)', async () => {
       await createModuleWithIbanKey(TEST_IBAN_KEY);
 
       await service.create(dtoWithIban as any, OWNER_ID);
 
       const adminCall = (emailService.sendReturnAdminNotification as jest.Mock).mock.calls[0][0];
-      expect(adminCall.bankAccount).toBe(SAMPLE_IBAN.trim().toUpperCase());
+      expect(adminCall).not.toHaveProperty('bankAccount');
     });
 
     it('produces a different ciphertext on each call (random IV)', async () => {

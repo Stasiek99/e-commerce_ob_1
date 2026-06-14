@@ -23,7 +23,6 @@ export function returnAdminNotificationTemplate(data: {
   items: ReturnItem[];
   reason?: string;
   requestedResolution?: string;
-  bankAccount?: string;
 }): { subject: string; html: string } {
   const typeLabelShort = data.type === 'WITHDRAWAL' ? 'Odstąpienie (art. 27)' : 'Reklamacja';
   const typeLabel =
@@ -152,18 +151,6 @@ export function returnAdminNotificationTemplate(data: {
                 <td style="font-size:14px;color:#1a1a1a;padding:8px 0;
                            border-bottom:1px solid #f0f0f0;">
                   ${escapeHtml(data.phone)}
-                </td>
-              </tr>` : ''}
-              ${data.bankAccount ? `
-              <tr>
-                <td style="font-size:12px;font-weight:600;color:#9b9b9b;
-                           text-transform:uppercase;letter-spacing:0.06em;
-                           padding:8px 0;border-bottom:1px solid #f0f0f0;">
-                  Nr konta (IBAN)
-                </td>
-                <td style="font-size:14px;color:#1a1a1a;padding:8px 0;
-                           border-bottom:1px solid #f0f0f0;font-family:monospace;">
-                  ${escapeHtml(data.bankAccount)}
                 </td>
               </tr>` : ''}
             </table>

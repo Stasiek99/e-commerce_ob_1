@@ -232,7 +232,6 @@ export class EmailService {
     items: Array<{ productName: string; quantity: number }>;
     reason?: string;
     requestedResolution?: string;
-    bankAccount?: string;
   }) {
     const { subject, html } = returnAdminNotificationTemplate(data);
     return this.send('return_admin_notification', data.to, subject, html, {
