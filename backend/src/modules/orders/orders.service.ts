@@ -227,10 +227,12 @@ export class OrdersService implements OnModuleInit {
       // Generate order number using raw SQL to avoid race conditions
       const orderNumber = await this.generateOrderNumber(tx);
 
-      // Reject checkout if any variant was deactivated after the cart was populated.
+      // Reject checkout if any variant or its parent product was deactivated
+      // after the cart was populated. product.isActive catches compliance-driven
+      // removals (e.g. CPNP pull) that don't individually deactivate every variant.
       const variantIds = cart.items.map((i: CartItem) => i.productVariantId);
       const activeVariants = await tx.productVariant.findMany({
-        where: { id: { in: variantIds }, isActive: true },
+        where: { id: { in: variantIds }, isActive: true, product: { isActive: true } },
         select: { id: true },
       });
       if (activeVariants.length !== variantIds.length) {

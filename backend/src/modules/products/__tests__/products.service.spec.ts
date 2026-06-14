@@ -1613,3 +1613,82 @@ describe('ProductsService — ProductStatus catalog filtering', () => {
     });
   });
 });
+
+// ─── remove — variant cascade deactivation ────────────────────────────────────
+// Invariant: soft-deleting a product must also deactivate all its variants in the
+// same transaction. Without this, a variant whose parent product is deactivated
+// still appears in findAll (via variant.isActive=true filter) and remains
+// checkout-eligible — a compliance risk when removal is CPNP/safety-driven.
+
+describe('ProductsService — remove (variant cascade)', () => {
+  let service: ProductsService;
+  let tx: Record<string, any>;
+
+  beforeEach(async () => {
+    tx = {
+      product: { update: jest.fn().mockResolvedValue(makeProduct({ isActive: false })) },
+      productVariant: { updateMany: jest.fn().mockResolvedValue({ count: 3 }) },
+    };
+
+    const localPrisma = {
+      ...mockPrisma,
+      product: {
+        ...mockPrisma.product,
+        findUnique: jest.fn().mockResolvedValue(makeProduct()),
+      },
+      $transaction: jest.fn().mockImplementation((fn: any) => fn(tx)),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ProductsService,
+        { provide: PrismaService, useValue: localPrisma },
+        { provide: EmailQueueService, useValue: mockEmailService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: StorageService, useValue: mockStorageService },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
+      ],
+    }).compile();
+
+    service = module.get(ProductsService);
+    jest.clearAllMocks();
+    tx.product.update.mockResolvedValue(makeProduct({ isActive: false }));
+    tx.productVariant.updateMany.mockResolvedValue({ count: 3 });
+    localPrisma.product.findUnique.mockResolvedValue(makeProduct());
+    mockRedis.incr.mockResolvedValue(1);
+    mockRedis.scanStream.mockReturnValue({ on: jest.fn() });
+    mockRedis.pipeline.mockReturnValue({ del: jest.fn(), exec: jest.fn().mockResolvedValue(null) });
+  });
+
+  it('calls productVariant.updateMany to deactivate all variants in the same transaction', async () => {
+    await service.remove('product-1');
+
+    expect(tx.productVariant.updateMany).toHaveBeenCalledWith({
+      where: { productId: 'product-1' },
+      data: { isActive: false },
+    });
+  });
+
+  it('deactivates the product itself (isActive: false) in the same transaction', async () => {
+    await service.remove('product-1');
+
+    expect(tx.product.update).toHaveBeenCalledWith({
+      where: { id: 'product-1' },
+      data: { isActive: false },
+    });
+  });
+
+  it('runs product update and variant updateMany inside a single $transaction call', async () => {
+    await service.remove('product-1');
+
+    // Both calls must have happened inside the one transaction
+    expect(tx.product.update).toHaveBeenCalledTimes(1);
+    expect(tx.productVariant.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the deactivated product record', async () => {
+    const result = await service.remove('product-1') as any;
+
+    expect(result.isActive).toBe(false);
+  });
+});

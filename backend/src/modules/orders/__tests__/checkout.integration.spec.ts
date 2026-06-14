@@ -510,5 +510,74 @@ describe('Checkout Integration Flow', () => {
       expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
       expect(prisma.payment.create).not.toHaveBeenCalled();
     });
+
+    // ── product.isActive checkout guard ──────────────────────────────────────
+    // Invariant: checkout must be rejected when the variant's parent product is
+    // soft-deleted (product.isActive = false), even if the variant itself is still
+    // active. This covers CPNP/compliance pulls where the product is removed but
+    // individual variant flags haven't been updated yet.
+
+    it('throws BadRequestException when variant parent product is deactivated (product.isActive = false)', async () => {
+      prisma.cart.findFirst.mockResolvedValue({
+        id: IDS.cartId,
+        items: [
+          {
+            id: 'ci-1',
+            productVariantId: IDS.variantId,
+            quantity: 1,
+            productVariant: {
+              priceInCents: 34900,
+              label: '100ml',
+              sku: 'DS-100',
+              stock: 10,
+              product: { name: 'Dior Sauvage', slug: 'dior-sauvage', images: [] },
+            },
+          },
+        ],
+      });
+
+      // productVariant.findMany returns empty: DB filtered out the variant because
+      // product.isActive = false matches the WHERE product: { isActive: true } clause.
+      prisma.$transaction.mockImplementation(
+        jest.fn().mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([]),
+            },
+            coupon: { findUnique: jest.fn().mockResolvedValue(null) },
+            order: { create: jest.fn().mockResolvedValue(mockOrder) },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: IDS.cartId }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          return fn(tx);
+        }),
+      );
+
+      await expect(
+        ordersService.createFromCart(
+          'user-1',
+          undefined,
+          'test@example.com',
+          {
+            newAddress: {
+              firstName: 'Jan',
+              lastName: 'K',
+              street: 'ul. Kwiatowa 1',
+              city: 'Kraków',
+              postalCode: '30-001',
+              phone: '+48123456789',
+            },
+            carrierCode: CarrierCode.DHL,
+          },
+        ),
+      ).rejects.toThrow('One or more items in your cart are no longer available');
+
+      expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+    });
   });
 });

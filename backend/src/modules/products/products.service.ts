@@ -449,9 +449,16 @@ export class ProductsService {
 
   async remove(id: string) {
     await this.ensureExists(id);
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: { isActive: false },
+    const product = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      await tx.productVariant.updateMany({
+        where: { productId: id },
+        data: { isActive: false },
+      });
+      return updated;
     });
     this.invalidateProductCaches();
     return product;
