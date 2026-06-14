@@ -199,15 +199,57 @@ describe('UsersService', () => {
       expect(call).toMatchObject({
         where: { userId: 'user-1' },
         data: expect.objectContaining({
-          snapshotFirstName: '[usunięto]',
-          snapshotLastName: '[usunięto]',
-          snapshotPhone: '',
-          snapshotNip: null,
+          snapshotFirstName:  '[usunięto]',
+          snapshotLastName:   '[usunięto]',
+          snapshotPhone:      '',
+          snapshotNip:        null,
+          snapshotStreet:     '[usunięto]',
+          snapshotCity:       '[usunięto]',
+          snapshotPostalCode: '[usunięto]',
         }),
       });
       // snapshotEmail must be an unguessable UUID-suffixed value, never the static sentinel
       expect(call.data.snapshotEmail).toMatch(/^deleted\+[0-9a-f-]{36}@deleted\.invalid$/);
       expect(call.data.snapshotEmail).not.toBe('deleted@deleted');
+    });
+
+    // ── GDPR Art. 17 — address PII erasure (snapshotStreet/City/PostalCode) ──
+    // These three fields were previously omitted from the erasure payload,
+    // leaving a full street address in the order row after an Art. 17 request.
+    // Combined with postalCode + city they uniquely identify a natural person.
+
+    describe('address PII erasure', () => {
+      it('erases snapshotStreet with the GDPR placeholder string', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data.snapshotStreet).toBe('[usunięto]');
+      });
+
+      it('erases snapshotCity with the GDPR placeholder string', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data.snapshotCity).toBe('[usunięto]');
+      });
+
+      it('erases snapshotPostalCode with the GDPR placeholder string', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data.snapshotPostalCode).toBe('[usunięto]');
+      });
+
+      it('erases all three address fields in the same updateMany call — no partial erasure', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data).toMatchObject({
+          snapshotStreet:     '[usunięto]',
+          snapshotCity:       '[usunięto]',
+          snapshotPostalCode: '[usunięto]',
+        });
+      });
     });
 
     it('generates a unique snapshotEmail sentinel on each deleteAccount call — prevents order enumeration', async () => {
