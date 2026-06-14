@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { generateOrderToken } from '../../common/utils/order-token.util';
-import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -13,6 +13,7 @@ import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
 import { InvoiceOrder } from '../invoice/invoice.service';
+import { CouponService } from '../coupons/coupon.service';
 
 @Injectable()
 export class PaymentsService {
@@ -24,6 +25,7 @@ export class PaymentsService {
     private readonly emailService: EmailQueueService,
     private readonly invoiceService: InvoiceService,
     private readonly configService: ConfigService,
+    private readonly couponService: CouponService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
@@ -32,6 +34,22 @@ export class PaymentsService {
       where: { id: orderId },
       include: { items: true },
     });
+
+    // Re-validate the coupon on every payment initiation (including retries) so that
+    // a coupon deactivated after order creation (flash sale ended, fraud detected) is
+    // not silently honoured on subsequent payment attempts.
+    if (order.couponId && order.couponCode) {
+      const couponCheck = await this.couponService.validate(
+        order.couponCode,
+        order.itemsTotalInCents,
+        order.userId ?? undefined,
+      );
+      if (!couponCheck.valid) {
+        throw new BadRequestException(
+          couponCheck.message ?? 'Kod rabatowy użyty w zamówieniu jest już nieważny.',
+        );
+      }
+    }
 
     // Pre-checkout velocity guard: BLIK/P24 settles before Stripe Radar can block,
     // so we rate-limit payment initiations per identity (userId for authenticated users,

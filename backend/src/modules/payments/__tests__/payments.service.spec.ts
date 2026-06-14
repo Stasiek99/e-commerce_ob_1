@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
@@ -10,6 +10,7 @@ import { StripeClient } from '../stripe.client';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
+import { CouponService } from '../../coupons/coupon.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -30,6 +31,7 @@ describe('PaymentsService', () => {
   let stripeClient: jest.Mocked<StripeClient>;
   let emailService: jest.Mocked<EmailQueueService>;
   let invoiceService: jest.Mocked<InvoiceService>;
+  let couponService: jest.Mocked<CouponService>;
   let redis: any;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
@@ -160,6 +162,12 @@ describe('PaymentsService', () => {
           provide: 'REDIS_CLIENT',
           useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
         },
+        {
+          provide: CouponService,
+          useValue: {
+            validate: jest.fn().mockResolvedValue({ valid: true }),
+          },
+        },
       ],
     }).compile();
 
@@ -169,6 +177,7 @@ describe('PaymentsService', () => {
     stripeClient = module.get(StripeClient);
     emailService = module.get(EmailQueueService);
     invoiceService = module.get(InvoiceService);
+    couponService = module.get(CouponService);
 
     // Default: pass prisma mock methods as tx so callback-form $transaction
     // executes the callback and tests can assert on prisma.* directly.
@@ -1042,6 +1051,120 @@ describe('PaymentsService', () => {
       )[1];
 
       expect(firstToken).not.toBe(secondToken);
+    });
+
+    // ── coupon re-validation on retry ────────────────────────────────────────
+    // Invariant: initiatePayment must re-validate the coupon every time it is
+    // called (including retryPayment). A coupon deactivated after the original
+    // order was placed must NOT be honoured on subsequent payment attempts.
+
+    const mockOrderWithCoupon = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      snapshotEmail: 'test@example.com',
+      userId: 'user-1',
+      totalInCents: 11999,
+      itemsTotalInCents: 13498,
+      shippingCostInCents: 1499,
+      discountInCents: 2000,
+      couponId: 'coupon-abc',
+      couponCode: 'SUMMER20',
+      carrierCode: 'INPOST',
+      items: [
+        { snapshotName: 'Dior 100ml', snapshotSku: 'DS-100', snapshotPrice: 13498, quantity: 1 },
+      ],
+    };
+
+    it('throws BadRequestException when the coupon has been deactivated since order creation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({
+        valid: false,
+        message: 'Kod rabatowy jest nieprawidłowy lub nieaktywny.',
+      });
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the coupon has expired since order creation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({
+        valid: false,
+        message: 'Ten kod wygasł.',
+      });
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('uses the coupon validation failure message in the thrown exception', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      const failureMessage = 'Ten kod osiągnął limit użyć.';
+      couponService.validate.mockResolvedValue({ valid: false, message: failureMessage });
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(failureMessage);
+    });
+
+    it('proceeds to Stripe checkout when the coupon is still valid on retry', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      const result = await service.initiatePayment('order-1');
+
+      expect(result.paymentUrl).toBe(mockSession.url);
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips coupon re-validation when the order has no couponId', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithCoupon,
+        couponId: null,
+        couponCode: null,
+        discountInCents: 0,
+      });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(couponService.validate).not.toHaveBeenCalled();
+    });
+
+    it('passes userId and itemsTotalInCents to couponService.validate for per-user limit checks', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(couponService.validate).toHaveBeenCalledWith(
+        'SUMMER20',
+        mockOrderWithCoupon.itemsTotalInCents,
+        mockOrderWithCoupon.userId,
+      );
+    });
+
+    it('passes undefined userId to couponService.validate for guest orders', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithCoupon,
+        userId: null,
+      });
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(couponService.validate).toHaveBeenCalledWith(
+        'SUMMER20',
+        mockOrderWithCoupon.itemsTotalInCents,
+        undefined,
+      );
     });
   });
 
@@ -2239,6 +2362,10 @@ describe('PaymentsService', () => {
           {
             provide: 'REDIS_CLIENT',
             useValue: { set: jest.fn().mockResolvedValue('OK') },
+          },
+          {
+            provide: CouponService,
+            useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
           },
         ],
       }).compile();
@@ -3489,6 +3616,10 @@ describe('PaymentsService', () => {
           {
             provide: 'REDIS_CLIENT',
             useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
+          },
+          {
+            provide: CouponService,
+            useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
           },
         ],
       }).compile();
