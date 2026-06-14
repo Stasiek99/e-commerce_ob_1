@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { CarrierCode, DiscountType, OrderStatus } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus, ReturnStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { OrdersService } from '../orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -84,8 +84,9 @@ describe('OrdersService', () => {
           useValue: {
             address: { findFirst: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn().mockResolvedValue({}) },
-            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
+            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn(), findMany: jest.fn() },
+            returnRequest: { count: jest.fn().mockResolvedValue(0) },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -1829,10 +1830,12 @@ describe('OrdersService', () => {
         items: [],
       });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
-      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early
+      // returnRequest.count defaults to 0 (no active returns) — stamp proceeds
+      // order.updateMany defaults to { count: 1 } — stamp succeeds
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early after stamp
 
       await service.updateStatus('o-1', OrderStatus.DELIVERED);
-      await Promise.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve)); // flush all microtasks
 
       expect(prisma.order.findUnique).toHaveBeenCalled();
     });
@@ -3888,6 +3891,210 @@ describe('OrdersService', () => {
       expect(prisma.user.update).not.toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
       );
+    });
+  });
+
+  // ─── dispatchReviewRequestEmail guards ───────────────────────────────────────
+  // Invariants enforced by the fix:
+  //   1. Return guard  — an order with any non-REJECTED ReturnRequest must NOT
+  //      receive a review-request email (customer is mid-return/complaint).
+  //   2. Idempotency guard — a replayed DELIVERED webhook or duplicate call must
+  //      NOT send a second email (reviewRequestSentAt compare-and-set stamp).
+
+  describe('dispatchReviewRequestEmail guards', () => {
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    const setupDelivery = () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          shipment: { updateMany: jest.fn() },
+        }),
+      );
+    };
+
+    // ── return guard ──────────────────────────────────────────────────────────
+
+    it('does not send email when a PENDING return request exists', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not send email when an APPROVED return request exists', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not send email when a COMPLETED return request exists', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not stamp reviewRequestSentAt when a return request suppresses the email', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('sends email when the only return is REJECTED (count query returns 0)', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0); // REJECTED returns excluded by query
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'jan@example.com', orderNumber: 'ORD-001' }),
+      );
+    });
+
+    it('queries returnRequest with status NOT REJECTED', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.returnRequest.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            orderId: 'o-1',
+            status: { not: ReturnStatus.REJECTED },
+          }),
+        }),
+      );
+    });
+
+    // ── idempotency guard ─────────────────────────────────────────────────────
+
+    it('does not send email when stamp returns count=0 (already sent by a prior call)', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 0 }); // already stamped
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not proceed to order lookup when stamp returns count=0', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 0 }); // already stamped
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.order.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('stamps reviewRequestSentAt with a where clause requiring null (compare-and-set)', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.order.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'o-1',
+            reviewRequestSentAt: null,
+          }),
+          data: expect.objectContaining({
+            reviewRequestSentAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('sends email on first call and skips on simulated second call', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+      expect(emailService.sendReviewRequest).toHaveBeenCalledTimes(1);
+
+      // Simulate replayed DELIVERED webhook — stamp already set
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+      expect(emailService.sendReviewRequest).toHaveBeenCalledTimes(1); // no second send
+    });
+
+    // ── review URL regression — orderId propagated from Task 1 fix ────────────
+
+    it('includes orderId query param in the review URL', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        items: [
+          {
+            productVariant: {
+              product: {
+                name: 'Dior Sauvage',
+                slug: 'dior-sauvage',
+                images: [],
+              },
+            },
+          },
+        ],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      const call = (emailService.sendReviewRequest as jest.Mock).mock.calls[0][0];
+      expect(call.products[0].reviewUrl).toContain('orderId=o-1');
     });
   });
 });

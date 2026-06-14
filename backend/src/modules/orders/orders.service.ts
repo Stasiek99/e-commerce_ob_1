@@ -16,7 +16,7 @@ import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
-import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
 import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
@@ -1168,6 +1168,22 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async dispatchReviewRequestEmail(orderId: string): Promise<void> {
+    // Skip if the customer has an active return/withdrawal on this order.
+    // Only REJECTED returns are excluded — pending, approved, and completed
+    // returns all indicate the customer is in a return flow.
+    const returnCount = await this.prisma.returnRequest.count({
+      where: { orderId, status: { not: ReturnStatus.REJECTED } },
+    });
+    if (returnCount > 0) return;
+
+    // Atomic idempotency guard: compare-and-set reviewRequestSentAt.
+    // Only the first caller wins; replayed DELIVERED webhooks are silently skipped.
+    const stamped = await this.prisma.order.updateMany({
+      where: { id: orderId, reviewRequestSentAt: null },
+      data: { reviewRequestSentAt: new Date() },
+    });
+    if (stamped.count === 0) return;
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
@@ -1208,7 +1224,7 @@ export class OrdersService implements OnModuleInit {
       .map((item) => ({
         name: item.productVariant.product.name,
         imageUrl: item.productVariant.product.images[0]?.url,
-        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1`,
+        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1&orderId=${orderId}`,
       }));
 
     await this.emailService.sendReviewRequest({
