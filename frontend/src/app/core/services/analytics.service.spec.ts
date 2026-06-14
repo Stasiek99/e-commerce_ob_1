@@ -29,7 +29,7 @@ describe('AnalyticsService', () => {
 
   afterEach(() => {
     document.querySelectorAll('script').forEach(el => {
-      if (el.textContent?.includes('googletagmanager.com')) el.remove();
+      if ((el as HTMLScriptElement).src?.includes('googletagmanager.com')) el.remove();
     });
     document.querySelectorAll('noscript').forEach(el => el.remove());
   });
@@ -62,20 +62,21 @@ describe('AnalyticsService', () => {
         const svc = setup('browser');
         svc.init('');
         const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
-          s => s.textContent?.includes('googletagmanager.com'),
+          s => (s as HTMLScriptElement).src?.includes('googletagmanager.com'),
         );
         expect(gtmScript).toBeUndefined();
       });
 
-      it('injects a <script> into <head> containing the GTM container ID', () => {
+      it('injects an external <script src> into <head> pointing at the GTM container ID', () => {
         const svc = setup('browser');
         svc.init('GTM-TEST123');
         const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
-          s => s.textContent?.includes('GTM-TEST123'),
-        );
+          s => (s as HTMLScriptElement).src?.includes('GTM-TEST123'),
+        ) as HTMLScriptElement | undefined;
         expect(gtmScript).toBeTruthy();
-        expect(gtmScript!.textContent).toContain('GTM-TEST123');
-        expect(gtmScript!.textContent).toContain('googletagmanager.com');
+        expect(gtmScript!.src).toContain('GTM-TEST123');
+        expect(gtmScript!.src).toContain('googletagmanager.com');
+        expect(gtmScript!.textContent).toBe('');
       });
 
       it('initialises window.dataLayer as an array', () => {
@@ -88,7 +89,7 @@ describe('AnalyticsService', () => {
         const svc = setup('browser', false);
         svc.init('GTM-BLOCKED');
         const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
-          s => s.textContent?.includes('GTM-BLOCKED'),
+          s => (s as HTMLScriptElement).src?.includes('GTM-BLOCKED'),
         );
         expect(gtmScript).toBeUndefined();
       });
@@ -103,7 +104,7 @@ describe('AnalyticsService', () => {
         svc.init('GTM-XXXXXXX');
 
         const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
-          s => s.textContent?.includes('googletagmanager.com'),
+          s => (s as HTMLScriptElement).src?.includes('googletagmanager.com'),
         );
         expect(gtmScript).toBeUndefined();
       });
@@ -114,7 +115,7 @@ describe('AnalyticsService', () => {
         svc.init('GTM-XXXABC');
 
         const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
-          s => s.textContent?.includes('googletagmanager.com'),
+          s => (s as HTMLScriptElement).src?.includes('googletagmanager.com'),
         );
         expect(gtmScript).toBeUndefined();
       });
@@ -125,7 +126,7 @@ describe('AnalyticsService', () => {
         svc.init('GTM-ABC1234');
 
         const gtmScript = Array.from(document.head.querySelectorAll('script')).find(
-          s => s.textContent?.includes('GTM-ABC1234'),
+          s => (s as HTMLScriptElement).src?.includes('GTM-ABC1234'),
         );
         expect(gtmScript).toBeDefined();
       });

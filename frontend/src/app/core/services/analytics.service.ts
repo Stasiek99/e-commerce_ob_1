@@ -174,9 +174,18 @@ export class AnalyticsService {
   private loadGtm(): void {
     this.gtmLoaded = true;
     window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+
     const script = document.createElement('script');
-    script.textContent = `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','${this.gtmId}');`;
-    document.head.appendChild(script);
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtm.js?id=${this.gtmId}`;
+    const firstScript = document.getElementsByTagName('script')[0];
+    if (firstScript?.parentNode) {
+      firstScript.parentNode.insertBefore(script, firstScript);
+    } else {
+      document.head.appendChild(script);
+    }
+
     const noscript = document.createElement('noscript');
     const iframe = document.createElement('iframe');
     iframe.src = `https://www.googletagmanager.com/ns.html?id=${this.gtmId}`;

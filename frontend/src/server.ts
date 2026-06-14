@@ -1,4 +1,5 @@
 import { APP_BASE_HREF } from '@angular/common';
+import { CSP_NONCE } from '@angular/core';
 import { CommonEngine } from '@angular/ssr/node';
 import express from 'express';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -65,6 +66,7 @@ export function app(opts: AppOptions = {}): express.Express {
           { provide: APP_BASE_HREF, useValue: req.baseUrl },
           { provide: LOCAL_STORAGE, useValue: createRequestStorageMock() },
           { provide: RESPONSE, useValue: res },
+          { provide: CSP_NONCE, useValue: res.locals['cspNonce'] as string },
         ],
       })
       .then(html => res.send(html))
