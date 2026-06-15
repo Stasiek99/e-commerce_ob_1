@@ -175,6 +175,13 @@ export class InvoiceService implements OnModuleInit {
    * Generates and persists a corrective invoice (faktura korygująca) per
    * Art. 106j Ustawy o VAT. Called after each successful partial refund.
    * Uses its own sequential series (FK/YYYY/NNNNNN).
+   *
+   * A SELECT FOR UPDATE lock on the order row ensures idempotency against
+   * BullMQ retries: only one caller can allocate the sequence and insert the
+   * InvoiceCorrection row; a retry sees the existing row and returns early,
+   * preventing gaps in the FK/YYYY/NNNNNN series (Art. 106e ust. 1 pkt 2
+   * Ustawy o VAT). The composite unique index on (orderId, correctedAmountInCents)
+   * is the DB-level backstop if two callers race past the application check.
    */
   async processCorrectiveInvoice(
     orderId: string,
@@ -182,6 +189,60 @@ export class InvoiceService implements OnModuleInit {
     refundAmountInCents: number,
     reasonCode: string,
   ): Promise<{ correctiveUrl: string; correctiveStoragePath: string; correctiveInvoiceNumber: string }> {
+    const correctedAmountInCents = -Math.abs(refundAmountInCents);
+    const year = new Date().getFullYear();
+
+    // TX1 — short lock: check idempotency and reserve the corrective invoice number.
+    // Lock-hold time is microseconds; PDF generation and upload happen outside.
+    const reserved = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, orderId);
+
+      const existing = await tx.invoiceCorrection.findFirst({
+        where: { orderId, correctedAmountInCents },
+        select: { correctiveInvoiceNumber: true, correctiveStoragePath: true },
+      });
+
+      if (existing?.correctiveStoragePath) {
+        return {
+          correctiveInvoiceNumber: existing.correctiveInvoiceNumber,
+          correctiveStoragePath: existing.correctiveStoragePath,
+          alreadyDone: true as const,
+        };
+      }
+
+      if (existing) {
+        // Number reserved but upload failed on a prior attempt — re-use to avoid gap
+        return {
+          correctiveInvoiceNumber: existing.correctiveInvoiceNumber,
+          correctiveStoragePath: null,
+          alreadyDone: false as const,
+        };
+      }
+
+      await tx.$executeRawUnsafe(
+        `CREATE SEQUENCE IF NOT EXISTS corrective_invoice_number_seq_${year} START 1 INCREMENT 1`,
+      );
+      const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+        `SELECT nextval('corrective_invoice_number_seq_${year}')`,
+      );
+      const correctiveInvoiceNumber = `FK/${year}/${Number(seqRows[0].nextval).toString().padStart(6, '0')}`;
+
+      // Insert with null storage path to reserve the number before the upload
+      await tx.invoiceCorrection.create({
+        data: { orderId, correctiveInvoiceNumber, correctedAmountInCents, refundReasonCode: reasonCode },
+      });
+
+      return { correctiveInvoiceNumber, correctiveStoragePath: null, alreadyDone: false as const };
+    });
+
+    if (reserved.alreadyDone) {
+      const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+      const correctiveUrl = await this.storage.getInvoiceSignedUrl(reserved.correctiveStoragePath, SEVEN_DAYS_SECONDS);
+      return { correctiveUrl, correctiveStoragePath: reserved.correctiveStoragePath, correctiveInvoiceNumber: reserved.correctiveInvoiceNumber };
+    }
+
+    // Outside any transaction: fetch order data, generate PDF and upload.
+    // No Postgres connection is held during this I/O.
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
       select: {
@@ -198,42 +259,28 @@ export class InvoiceService implements OnModuleInit {
       },
     });
 
-    const year = new Date().getFullYear();
-    await this.ensureCorrectiveSequence(year);
-    const seqName = `corrective_invoice_number_seq_${year}`;
-    const seqRows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
-      `SELECT nextval('${seqName}')`,
-    );
-    const seq = Number(seqRows[0].nextval);
-    const correctiveInvoiceNumber = `FK/${year}/${seq.toString().padStart(6, '0')}`;
-
     const pdf = await this.generateCorrectivePdf(
       order,
-      correctiveInvoiceNumber,
+      reserved.correctiveInvoiceNumber,
       originalInvoiceNumber,
       refundAmountInCents,
     );
-    const filename = `${correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
+    const filename = `${reserved.correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
     const correctiveStoragePath = await this.storage.uploadInvoice(pdf, filename);
 
-    await this.prisma.invoiceCorrection.create({
-      data: {
-        orderId,
-        correctiveInvoiceNumber,
-        correctiveStoragePath,
-        correctedAmountInCents: -Math.abs(refundAmountInCents),
-        refundReasonCode: reasonCode,
-      },
+    // TX2 — short write: persist the storage path now that upload succeeded
+    await this.prisma.invoiceCorrection.update({
+      where: { orderId_correctedAmountInCents: { orderId, correctedAmountInCents } },
+      data: { correctiveStoragePath },
     });
 
     this.logger.log(
-      `Corrective invoice ${correctiveInvoiceNumber} generated for order ${order.orderNumber} (refund: ${refundAmountInCents} gr)`,
+      `Corrective invoice ${reserved.correctiveInvoiceNumber} generated for order ${order.orderNumber} (refund: ${refundAmountInCents} gr)`,
     );
 
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
     const correctiveUrl = await this.storage.getInvoiceSignedUrl(correctiveStoragePath, SEVEN_DAYS_SECONDS);
-
-    return { correctiveUrl, correctiveStoragePath, correctiveInvoiceNumber };
+    return { correctiveUrl, correctiveStoragePath, correctiveInvoiceNumber: reserved.correctiveInvoiceNumber };
   }
 
   async getCorrectiveInvoiceUrl(orderId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string } | null> {
@@ -242,7 +289,7 @@ export class InvoiceService implements OnModuleInit {
       orderBy: { createdAt: 'desc' },
       select: { correctiveStoragePath: true, correctiveInvoiceNumber: true },
     });
-    if (!correction) return null;
+    if (!correction || !correction.correctiveStoragePath) return null;
     const correctiveInvoiceUrl = await this.storage.getInvoiceSignedUrl(correction.correctiveStoragePath);
     return { correctiveInvoiceUrl, correctiveInvoiceNumber: correction.correctiveInvoiceNumber };
   }
