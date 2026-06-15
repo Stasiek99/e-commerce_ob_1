@@ -521,6 +521,49 @@ describe('AuthService', () => {
         }),
       );
     });
+
+    // ─── account-hijack guard (fix: block silent OAuth takeover of password accounts) ─
+
+    it('throws ConflictException when Google email matches a password-protected account without a linked googleId', async () => {
+      // An attacker controls a Google account sharing the victim's email.
+      // Before the fix, findOrCreateGoogleUser() would silently link and issue a session.
+      const passwordAccount = { ...mockUser, passwordHash: '$2b$10$hashedpassword', googleId: null };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(passwordAccount as any);
+
+      await expect(
+        service.findOrCreateGoogleUser({ googleId: 'gid-attacker', email: 'test@example.com' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('does not link googleId or issue a session when the hijack guard fires', async () => {
+      const passwordAccount = { ...mockUser, passwordHash: '$2b$10$hashedpassword', googleId: null };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(passwordAccount as any);
+
+      await expect(
+        service.findOrCreateGoogleUser({ googleId: 'gid-attacker', email: 'test@example.com' }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(usersService.update).not.toHaveBeenCalled();
+      expect(usersService.create).not.toHaveBeenCalled();
+    });
+
+    it('links googleId when the existing email account has no password set (passwordless or invite account)', async () => {
+      // passwordHash=null means the account was created without a password
+      // (e.g., invited or via another OAuth provider). Linking is safe.
+      const passwordlessAccount = { ...mockUser, passwordHash: null, googleId: null };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(passwordlessAccount as any);
+      usersService.update.mockResolvedValue({ ...passwordlessAccount, googleId: 'gid-safe' } as any);
+
+      await service.findOrCreateGoogleUser({ googleId: 'gid-safe', email: 'test@example.com' });
+
+      expect(usersService.update).toHaveBeenCalledWith(
+        mockUser.id,
+        expect.objectContaining({ googleId: 'gid-safe', isEmailVerified: true }),
+      );
+    });
   });
 
   describe('logout', () => {

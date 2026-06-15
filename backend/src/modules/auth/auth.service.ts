@@ -136,6 +136,14 @@ export class AuthService {
 
     user = await this.usersService.findByEmail(profile.email);
     if (user) {
+      // Block silent hijack: if the account was created with a password, require
+      // the user to explicitly link Google from their account settings instead of
+      // allowing any Google identity with the same email to take over the account.
+      if (user.passwordHash && !user.googleId) {
+        throw new ConflictException(
+          'An account with this email already exists. Please log in with your password.',
+        );
+      }
       return this.usersService.update(user.id, {
         googleId: profile.googleId,
         isEmailVerified: true,
