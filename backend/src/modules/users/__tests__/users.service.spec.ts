@@ -471,24 +471,44 @@ describe('UsersService', () => {
   });
 
   describe('recordAnonymousConsent', () => {
-    it('creates a ConsentLog entry with the provided session hash and analytics value', async () => {
+    const CONSENT_UUID = 'a1b2c3d4-0000-0000-0000-000000000099';
+
+    it('creates a ConsentLog entry with the provided consent UUID and analytics: true', async () => {
       prisma.consentLog.create.mockResolvedValue({ id: 'log-1' });
 
-      await service.recordAnonymousConsent('abc123hash', true);
+      await service.recordAnonymousConsent(CONSENT_UUID, true);
 
-      expect(prisma.consentLog.create).toHaveBeenCalledWith({
-        data: { sessionHash: 'abc123hash', analytics: true },
-      });
+      expect(prisma.consentLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ consentId: CONSENT_UUID, analytics: true }),
+        }),
+      );
     });
 
     it('creates a ConsentLog entry with analytics: false when visitor rejects', async () => {
       prisma.consentLog.create.mockResolvedValue({ id: 'log-2' });
 
-      await service.recordAnonymousConsent('xyz789hash', false);
+      await service.recordAnonymousConsent(CONSENT_UUID, false);
 
-      expect(prisma.consentLog.create).toHaveBeenCalledWith({
-        data: { sessionHash: 'xyz789hash', analytics: false },
-      });
+      expect(prisma.consentLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ consentId: CONSENT_UUID, analytics: false }),
+        }),
+      );
+    });
+
+    it('sets expiresAt approximately 5 years in the future', async () => {
+      prisma.consentLog.create.mockResolvedValue({ id: 'log-3' });
+
+      await service.recordAnonymousConsent(CONSENT_UUID, true);
+
+      const { expiresAt } = prisma.consentLog.create.mock.calls[0][0].data as { expiresAt: Date };
+      // setFullYear adds 5 calendar years (may include leap days) — allow ±2 days tolerance
+      const now = Date.now();
+      const fiveYearsMinMs = 5 * 365 * 24 * 60 * 60 * 1000 - 2 * 86400 * 1000;
+      const fiveYearsMaxMs = 5 * 366 * 24 * 60 * 60 * 1000 + 2 * 86400 * 1000;
+      expect(expiresAt.getTime()).toBeGreaterThanOrEqual(now + fiveYearsMinMs);
+      expect(expiresAt.getTime()).toBeLessThanOrEqual(now + fiveYearsMaxMs);
     });
   });
 });

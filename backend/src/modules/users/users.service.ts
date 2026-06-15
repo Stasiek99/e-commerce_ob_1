@@ -261,9 +261,11 @@ export class UsersService {
     });
   }
 
-  async recordAnonymousConsent(sessionHash: string, analytics: boolean): Promise<void> {
+  async recordAnonymousConsent(consentId: string, analytics: boolean): Promise<void> {
+    const expiresAt = new Date();
+    expiresAt.setFullYear(expiresAt.getFullYear() + 5);
     await this.prisma.consentLog.create({
-      data: { sessionHash, analytics },
+      data: { consentId, analytics, expiresAt },
     });
   }
 }
