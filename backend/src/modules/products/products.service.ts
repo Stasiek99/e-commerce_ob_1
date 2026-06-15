@@ -433,12 +433,19 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     sortOrder?: number;
   }) {
     const { categoryId, ...rest } = data;
-    const product = await this.prisma.product.create({
-      data: { ...rest, category: { connect: { id: categoryId } } },
-      select: PRODUCT_SELECT,
-    });
-    this.invalidateProductCaches();
-    return product;
+    try {
+      const product = await this.prisma.product.create({
+        data: { ...rest, category: { connect: { id: categoryId } } },
+        select: PRODUCT_SELECT,
+      });
+      this.invalidateProductCaches();
+      return product;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Slug already in use');
+      }
+      throw err;
+    }
   }
 
   async update(id: string, data: {
@@ -467,9 +474,16 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     if (categoryId) {
       prismaData.category = { connect: { id: categoryId } };
     }
-    const product = await this.prisma.product.update({ where: { id }, data: prismaData, select: PRODUCT_SELECT });
-    this.invalidateProductCaches();
-    return product;
+    try {
+      const product = await this.prisma.product.update({ where: { id }, data: prismaData, select: PRODUCT_SELECT });
+      this.invalidateProductCaches();
+      return product;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Slug already in use');
+      }
+      throw err;
+    }
   }
 
   async remove(id: string) {
