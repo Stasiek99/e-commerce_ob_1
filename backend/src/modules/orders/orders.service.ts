@@ -1,6 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -13,10 +16,12 @@ import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
-import { CarrierCode, DiscountType, OrderStatus, Prisma } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
 import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
+import type IORedis from 'ioredis';
+import { randomUUID } from 'node:crypto';
 
 
 interface CartItem {
@@ -68,21 +73,40 @@ export class OrdersService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly invoiceService: InvoiceService,
     private readonly shippingRatesService: ShippingRatesService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   async onModuleInit(): Promise<void> {
+    const maxAttempts = 6;
+    const baseDelayMs = 3_000;
     const year = new Date().getFullYear();
     // CREATE SEQUENCE IF NOT EXISTS is idempotent — concurrent pod startups
     // are safe without an advisory lock. pg_advisory_xact_lock is ineffective
     // here because DATABASE_URL goes through pgbouncer in transaction mode,
     // which may route statements within the same $transaction to different
     // physical connections, defeating the lock entirely.
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-    );
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
-    );
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.prisma.$executeRawUnsafe(
+          `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+        );
+        await this.prisma.$executeRawUnsafe(
+          `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+        );
+        this.logger.log('Order number sequences ensured');
+        return;
+      } catch (err) {
+        if (attempt === maxAttempts) {
+          this.logger.error('Failed to create order number sequences after all retries — giving up');
+          throw err;
+        }
+        const delay = baseDelayMs * 2 ** (attempt - 1); // 3s, 6s, 12s, 24s, 48s
+        this.logger.warn(
+          `Sequence DDL failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms…`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   async createFromCart(
@@ -126,6 +150,19 @@ export class OrdersService implements OnModuleInit {
         throw new ConflictException('Order already placed for this checkout session');
       }
     }
+
+    // Distributed lock: prevents two concurrent requests (double-click, two tabs, network retry)
+    // from both reading the same cart and creating duplicate orders / double-charges.
+    // Key is per-user (authenticated) or per-session (guest). TTL 30 s covers the full
+    // checkout flow including the Stripe API call; lock is released early in the finally block.
+    const lockKey = `checkout-lock:${userId ?? sessionId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException('Checkout already in progress — please wait a moment before trying again', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    try {
 
     let cart = await this.cartService.getOrCreate(userId, sessionId);
     // Fallback: if userId cart is empty, check sessionId cart (items added before merge)
@@ -208,10 +245,12 @@ export class OrdersService implements OnModuleInit {
       // Generate order number using raw SQL to avoid race conditions
       const orderNumber = await this.generateOrderNumber(tx);
 
-      // Reject checkout if any variant was deactivated after the cart was populated.
+      // Reject checkout if any variant or its parent product was deactivated
+      // after the cart was populated. product.isActive catches compliance-driven
+      // removals (e.g. CPNP pull) that don't individually deactivate every variant.
       const variantIds = cart.items.map((i: CartItem) => i.productVariantId);
       const activeVariants = await tx.productVariant.findMany({
-        where: { id: { in: variantIds }, isActive: true },
+        where: { id: { in: variantIds }, isActive: true, product: { isActive: true } },
         select: { id: true },
       });
       if (activeVariants.length !== variantIds.length) {
@@ -423,6 +462,16 @@ export class OrdersService implements OnModuleInit {
     ).catch((err) => this.logger.warn('sendStockAlertIfNeeded failed', err));
 
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
+
+    } finally {
+      // Release the lock only if we still own it (Lua script is atomic).
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
   }
 
   async findAllForUser(userId: string, query: { page?: number; limit?: number } = {}) {
@@ -567,24 +616,48 @@ export class OrdersService implements OnModuleInit {
   }
 
   async trackByEmailAndNumber(email: string, orderNumber: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Per-email lockout: block enumeration after 5 missed attempts (GDPR Art. 5(1)(f)).
+    // Lockout key lives for 1h; checked before the DB query to prevent any enumeration.
+    const lockoutKey = `track:lockout:${normalizedEmail}`;
+    if (await this.redis.get(lockoutKey)) {
+      throw new HttpException(
+        'Too many failed attempts. Please try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const order = await this.prisma.order.findFirst({
       where: {
         orderNumber: orderNumber.trim().toUpperCase(),
-        snapshotEmail: { equals: email.trim(), mode: 'insensitive' },
+        snapshotEmail: { equals: normalizedEmail, mode: 'insensitive' },
       },
-      include: {
-        items: { select: { snapshotName: true, quantity: true, snapshotPrice: true } },
+      select: {
+        status: true,
         shipment: { select: { trackingNumber: true, carrierCode: true } },
       },
     });
-    if (!order) throw new NotFoundException('Order not found');
 
+    if (!order) {
+      const failKey = `track:fail:${normalizedEmail}`;
+      const fails = await this.redis.incr(failKey);
+      if (fails === 1) await this.redis.expire(failKey, 3600);
+      if (fails >= 5) {
+        await this.redis.set(lockoutKey, '1', 'EX', 3600);
+        await this.redis.del(failKey);
+      }
+      throw new NotFoundException('Order not found');
+    }
+
+    // Reset failure counter on a successful lookup
+    await this.redis.del(`track:fail:${normalizedEmail}`);
+
+    // Unauthenticated endpoint — return status and tracking only.
+    // Omitting items/prices/dates prevents enumeration of purchase history
+    // via sequential order numbers (GDPR Art. 5(1)(f)).
     return {
-      orderNumber: order.orderNumber,
       status: order.status,
-      createdAt: order.createdAt,
-      totalInCents: order.totalInCents,
-      items: order.items,
       trackingNumber: order.shipment?.trackingNumber ?? null,
       carrier: order.shipment?.carrierCode ?? null,
     };
@@ -1137,6 +1210,22 @@ export class OrdersService implements OnModuleInit {
   }
 
   private async dispatchReviewRequestEmail(orderId: string): Promise<void> {
+    // Skip if the customer has an active return/withdrawal on this order.
+    // Only REJECTED returns are excluded — pending, approved, and completed
+    // returns all indicate the customer is in a return flow.
+    const returnCount = await this.prisma.returnRequest.count({
+      where: { orderId, status: { not: ReturnStatus.REJECTED } },
+    });
+    if (returnCount > 0) return;
+
+    // Atomic idempotency guard: compare-and-set reviewRequestSentAt.
+    // Only the first caller wins; replayed DELIVERED webhooks are silently skipped.
+    const stamped = await this.prisma.order.updateMany({
+      where: { id: orderId, reviewRequestSentAt: null },
+      data: { reviewRequestSentAt: new Date() },
+    });
+    if (stamped.count === 0) return;
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
@@ -1177,7 +1266,7 @@ export class OrdersService implements OnModuleInit {
       .map((item) => ({
         name: item.productVariant.product.name,
         imageUrl: item.productVariant.product.images[0]?.url,
-        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1`,
+        reviewUrl: `${frontendUrl}/products/${item.productVariant.product.slug}?review=1&orderId=${orderId}`,
       }));
 
     await this.emailService.sendReviewRequest({

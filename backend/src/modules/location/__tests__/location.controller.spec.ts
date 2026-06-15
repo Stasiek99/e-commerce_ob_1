@@ -6,6 +6,11 @@ import { LocationController } from '../location.controller';
 const THROTTLER_TTL   = 'THROTTLER:TTL';
 const THROTTLER_LIMIT = 'THROTTLER:LIMIT';
 
+const mockRedis = {
+  get: jest.fn().mockResolvedValue(null),
+  setex: jest.fn().mockResolvedValue('OK'),
+};
+
 describe('LocationController', () => {
   let controller: LocationController;
   let fetchSpy: jest.SpyInstance;
@@ -13,10 +18,14 @@ describe('LocationController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [LocationController],
+      providers: [{ provide: 'REDIS_CLIENT', useValue: mockRedis }],
     }).compile();
 
     controller = module.get(LocationController);
     fetchSpy = jest.spyOn(global, 'fetch');
+    jest.clearAllMocks();
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
   });
 
   afterEach(() => {
@@ -24,9 +33,6 @@ describe('LocationController', () => {
   });
 
   // ─── Fix #55 — throttle metadata verification ─────────────────────────────
-  // Invariant: both endpoints must carry @Throttle metadata so the global
-  // ThrottlerGuard enforces rate limits and prevents Nominatim/Zippopotam
-  // from banning the backend IP.
 
   describe('throttle metadata — checkStreet (Nominatim ToU: 1 req/s)', () => {
     it('has THROTTLER:LIMITdefault = 1 on the method prototype', () => {
@@ -75,10 +81,32 @@ describe('LocationController', () => {
       await expect(controller.getCitiesByPostalCode('ABC-DE')).rejects.toThrow(NotFoundException);
     });
 
-    it('throws NotFoundException when Zippopotam returns non-OK', async () => {
+    it('returns [] when Zippopotam returns non-OK (no exception)', async () => {
       fetchSpy.mockResolvedValue({ ok: false } as Response);
 
-      await expect(controller.getCitiesByPostalCode('00-001')).rejects.toThrow(NotFoundException);
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when fetch throws (network error)', async () => {
+      fetchSpy.mockRejectedValue(new Error('Network error'));
+
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when fetch is aborted by the 3s timeout', async () => {
+      fetchSpy.mockImplementation(() =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new DOMException('The operation was aborted.', 'AbortError')), 10),
+        ),
+      );
+
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual([]);
     });
 
     it('returns deduplicated city names from Zippopotam response', async () => {
@@ -98,7 +126,7 @@ describe('LocationController', () => {
       expect(result).toEqual(['Warszawa', 'Śródmieście']);
     });
 
-    it('calls Zippopotam API with correct URL', async () => {
+    it('calls Zippopotam API with correct URL and passes AbortSignal', async () => {
       fetchSpy.mockResolvedValue({
         ok: true,
         json: async () => ({ places: [{ 'place name': 'Kraków' }] }),
@@ -106,7 +134,58 @@ describe('LocationController', () => {
 
       await controller.getCitiesByPostalCode('30-001');
 
-      expect(fetchSpy).toHaveBeenCalledWith('https://api.zippopotam.us/pl/30-001');
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://api.zippopotam.us/pl/30-001',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    // ── Redis cache ───────────────────────────────────────────────────────────
+
+    it('returns cached cities without calling Zippopotam on cache hit', async () => {
+      mockRedis.get.mockResolvedValue(JSON.stringify(['Warszawa', 'Śródmieście']));
+
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual(['Warszawa', 'Śródmieście']);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('caches result in Redis with 24h TTL on cache miss', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => ({ places: [{ 'place name': 'Gdańsk' }] }),
+      } as unknown as Response);
+
+      await controller.getCitiesByPostalCode('80-001');
+
+      expect(mockRedis.setex).toHaveBeenCalledWith(
+        'postal:80-001',
+        86_400,
+        JSON.stringify(['Gdańsk']),
+      );
+    });
+
+    it('uses postal:<code> as the cache key', async () => {
+      mockRedis.get.mockResolvedValue(JSON.stringify(['Kraków']));
+
+      await controller.getCitiesByPostalCode('30-001');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('postal:30-001');
+    });
+
+    it('falls through to fetch when Redis.get throws (Redis is down)', async () => {
+      mockRedis.get.mockRejectedValue(new Error('Redis ECONNREFUSED'));
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => ({ places: [{ 'place name': 'Wrocław' }] }),
+      } as unknown as Response);
+
+      const result = await controller.getCitiesByPostalCode('50-001');
+
+      expect(result).toEqual(['Wrocław']);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -114,17 +193,22 @@ describe('LocationController', () => {
 
   describe('checkStreet', () => {
     it('returns { exists: false } when street is empty', async () => {
-      const result = await controller.checkStreet('', 'Warszawa');
+      const result = await controller.checkStreet({ street: '', city: 'Warszawa' });
       expect(result).toEqual({ exists: false });
     });
 
     it('returns { exists: false } when city is empty', async () => {
-      const result = await controller.checkStreet('ul. Marszałkowska', '');
+      const result = await controller.checkStreet({ street: 'ul. Marszałkowska', city: '' });
       expect(result).toEqual({ exists: false });
     });
 
     it('returns { exists: false } when city is whitespace-only', async () => {
-      const result = await controller.checkStreet('ul. Marszałkowska', '   ');
+      const result = await controller.checkStreet({ street: 'ul. Marszałkowska', city: '   ' });
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('returns { exists: false } when street is absent', async () => {
+      const result = await controller.checkStreet({ city: 'Warszawa' });
       expect(result).toEqual({ exists: false });
     });
 
@@ -134,7 +218,7 @@ describe('LocationController', () => {
         json: async () => [{ display_name: 'ul. Marszałkowska, Warszawa', lat: '52.2', lon: '21.0' }],
       } as unknown as Response);
 
-      const result = await controller.checkStreet('ul. Marszałkowska', 'Warszawa');
+      const result = await controller.checkStreet({ street: 'ul. Marszałkowska', city: 'Warszawa' });
 
       expect(result).toEqual({ exists: true });
     });
@@ -145,7 +229,7 @@ describe('LocationController', () => {
         json: async () => [],
       } as unknown as Response);
 
-      const result = await controller.checkStreet('ul. Nieistniejąca', 'Kraków');
+      const result = await controller.checkStreet({ street: 'ul. Nieistniejąca', city: 'Kraków' });
 
       expect(result).toEqual({ exists: false });
     });
@@ -153,7 +237,7 @@ describe('LocationController', () => {
     it('returns { exists: false } when Nominatim returns non-OK response', async () => {
       fetchSpy.mockResolvedValue({ ok: false } as Response);
 
-      const result = await controller.checkStreet('ul. Testowa', 'Gdańsk');
+      const result = await controller.checkStreet({ street: 'ul. Testowa', city: 'Gdańsk' });
 
       expect(result).toEqual({ exists: false });
     });
@@ -161,7 +245,7 @@ describe('LocationController', () => {
     it('returns { exists: false } when fetch throws (network error)', async () => {
       fetchSpy.mockRejectedValue(new Error('Network error'));
 
-      const result = await controller.checkStreet('ul. Testowa', 'Gdańsk');
+      const result = await controller.checkStreet({ street: 'ul. Testowa', city: 'Gdańsk' });
 
       expect(result).toEqual({ exists: false });
     });
@@ -172,11 +256,105 @@ describe('LocationController', () => {
         json: async () => [{ display_name: 'result', lat: '0', lon: '0' }],
       } as unknown as Response);
 
-      await controller.checkStreet('  ul. Testowa  ', '  Kraków  ');
+      await controller.checkStreet({ street: '  ul. Testowa  ', city: '  Kraków  ' });
 
       const calledUrl = fetchSpy.mock.calls[0][0] as string;
       expect(calledUrl).toContain('ul.+Testowa');
       expect(calledUrl).toContain('Krak%C3%B3w'); // URL-encoded 'ó'
+    });
+
+    // ── AbortController timeout ───────────────────────────────────────────────
+
+    it('returns { exists: false } when fetch is aborted by the 3s timeout', async () => {
+      fetchSpy.mockImplementation(() =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new DOMException('The operation was aborted.', 'AbortError')), 10),
+        ),
+      );
+
+      const result = await controller.checkStreet({ street: 'ul. Testowa', city: 'Warszawa' });
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    // ── Redis cache ───────────────────────────────────────────────────────────
+
+    it('returns cached { exists: true } without calling Nominatim when cache hit is "1"', async () => {
+      mockRedis.get.mockResolvedValue('1');
+
+      const result = await controller.checkStreet({ street: 'ul. Marszałkowska', city: 'Warszawa' });
+
+      expect(result).toEqual({ exists: true });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('returns cached { exists: false } without calling Nominatim when cache hit is "0"', async () => {
+      mockRedis.get.mockResolvedValue('0');
+
+      const result = await controller.checkStreet({ street: 'ul. Nieistniejąca', city: 'Kraków' });
+
+      expect(result).toEqual({ exists: false });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls Nominatim and caches result when cache misses', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => [{ display_name: 'ul. Marszałkowska, Warszawa', lat: '52.2', lon: '21.0' }],
+      } as unknown as Response);
+
+      const result = await controller.checkStreet({ street: 'ul. Marszałkowska', city: 'Warszawa' });
+
+      expect(result).toEqual({ exists: true });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(mockRedis.setex).toHaveBeenCalledWith(
+        expect.stringMatching(/^location:street:/),
+        3_600,
+        '1',
+      );
+    });
+
+    it('caches "0" for a street that does not exist in Nominatim', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => [],
+      } as unknown as Response);
+
+      await controller.checkStreet({ street: 'ul. Fantazyjna', city: 'Kraków' });
+
+      expect(mockRedis.setex).toHaveBeenCalledWith(
+        expect.stringMatching(/^location:street:/),
+        3_600,
+        '0',
+      );
+    });
+
+    it('still returns a result when Redis.get throws (Redis is down)', async () => {
+      mockRedis.get.mockRejectedValue(new Error('Redis ECONNREFUSED'));
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => [{ display_name: 'ul. Testowa, Gdańsk', lat: '54.3', lon: '18.6' }],
+      } as unknown as Response);
+
+      const result = await controller.checkStreet({ street: 'ul. Testowa', city: 'Gdańsk' });
+
+      expect(result).toEqual({ exists: true });
+    });
+
+    it('uses the same cache key for the same street+city regardless of input case', async () => {
+      mockRedis.get.mockResolvedValue('1');
+
+      const r1 = await controller.checkStreet({ street: 'ul. Testowa', city: 'Gdańsk' });
+      const r2 = await controller.checkStreet({ street: 'UL. TESTOWA', city: 'GDAŃSK' });
+
+      expect(r1).toEqual({ exists: true });
+      expect(r2).toEqual({ exists: true });
+
+      // Both calls must look up the same cache key
+      expect(mockRedis.get).toHaveBeenCalledTimes(2);
+      expect(mockRedis.get.mock.calls[0][0]).toBe(mockRedis.get.mock.calls[1][0]);
     });
   });
 });

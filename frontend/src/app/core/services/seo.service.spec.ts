@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { DOCUMENT } from '@angular/common';
-import { SeoService, ProductSeoInput } from './seo.service';
+import { SeoService, ProductSeoInput, SellerInfo } from './seo.service';
 
 function getRobotsMeta(doc: Document): string | null {
   return doc.querySelector('meta[name="robots"]')?.getAttribute('content') ?? null;
@@ -17,6 +17,17 @@ function getJsonLd(doc: Document): Record<string, unknown> | null {
   return JSON.parse(el.textContent ?? 'null') as Record<string, unknown>;
 }
 
+function getOrgJsonLd(doc: Document): Record<string, unknown> | null {
+  const el = doc.getElementById('ld-organization');
+  if (!el) return null;
+  return JSON.parse(el.textContent ?? 'null') as Record<string, unknown>;
+}
+
+function getOrgGraph(doc: Document): Record<string, unknown>[] {
+  const ld = getOrgJsonLd(doc);
+  return (ld?.['@graph'] as Record<string, unknown>[]) ?? [];
+}
+
 function getGraph(doc: Document): Record<string, unknown>[] {
   const ld = getJsonLd(doc);
   return (ld?.['@graph'] as Record<string, unknown>[]) ?? [];
@@ -29,6 +40,16 @@ function getProductNode(doc: Document): Record<string, unknown> | undefined {
 function getBreadcrumbNode(doc: Document): Record<string, unknown> | undefined {
   return getGraph(doc).find((n) => n['@type'] === 'BreadcrumbList');
 }
+
+const SELLER: SellerInfo = {
+  name: 'Aromaterie',
+  legalName: 'Aromaterie Sp. z o.o.',
+  street: 'Kwiatowa 1',
+  postalCode: '00-001',
+  city: 'Warszawa',
+  nip: '1234567890',
+  email: 'kontakt@aromaterie.pl',
+};
 
 const PERFUME: ProductSeoInput = {
   name: 'Rose Oud',
@@ -66,6 +87,7 @@ describe('SeoService', () => {
     doc.querySelectorAll('meta[name="robots"]').forEach(el => el.remove());
     doc.querySelectorAll('link[rel="canonical"]').forEach(el => el.remove());
     doc.querySelectorAll('#ld-product').forEach(el => el.remove());
+    doc.querySelectorAll('#ld-organization').forEach(el => el.remove());
   });
 
   // ── robots tag default ────────────────────────────────────────────────────
@@ -280,7 +302,7 @@ describe('SeoService', () => {
       setup().setProductJsonLd(PERFUME);
 
       const items = getBreadcrumbNode(doc)?.['itemListElement'] as Array<Record<string, unknown>>;
-      expect(items[1]['item']).toBe('https://aromaterie.pl/products/perfume');
+      expect(items[1]['item']).toBe('https://aromaterie.pl/category/perfume');
       expect(items[1]['name']).toBe('Perfumy');
     });
 
@@ -342,6 +364,77 @@ describe('SeoService', () => {
       expect(offer['@type']).toBe('AggregateOffer');
       expect(offer['lowPrice']).toBe('129.00');
       expect(offer['highPrice']).toBe('189.00');
+    });
+  });
+
+  // ── setOrganizationJsonLd ─────────────────────────────────────────────────
+
+  describe('setOrganizationJsonLd', () => {
+    it('emits a single #ld-organization script tag', () => {
+      setup().setOrganizationJsonLd(SELLER);
+
+      expect(doc.querySelectorAll('#ld-organization')).toHaveLength(1);
+    });
+
+    it('does not overwrite #ld-product when called', () => {
+      const svc = setup();
+      svc.setProductJsonLd(PERFUME);
+      svc.setOrganizationJsonLd(SELLER);
+
+      expect(doc.querySelectorAll('#ld-product')).toHaveLength(1);
+      expect(doc.querySelectorAll('#ld-organization')).toHaveLength(1);
+    });
+
+    it('uses @graph as the top-level structure with @context schema.org', () => {
+      setup().setOrganizationJsonLd(SELLER);
+
+      const ld = getOrgJsonLd(doc);
+      expect(ld?.['@context']).toBe('https://schema.org');
+      expect(Array.isArray(ld?.['@graph'])).toBe(true);
+    });
+
+    it('includes an Organization node with correct name and taxID', () => {
+      setup().setOrganizationJsonLd(SELLER);
+
+      const orgNode = getOrgGraph(doc).find((n) => n['@type'] === 'Organization');
+      expect(orgNode).toBeDefined();
+      expect(orgNode?.['name']).toBe('Aromaterie');
+      expect(orgNode?.['taxID']).toBe('1234567890');
+    });
+
+    it('Organization node includes a PostalAddress with all required fields', () => {
+      setup().setOrganizationJsonLd(SELLER);
+
+      const orgNode = getOrgGraph(doc).find((n) => n['@type'] === 'Organization');
+      const address = orgNode?.['address'] as Record<string, unknown>;
+      expect(address['@type']).toBe('PostalAddress');
+      expect(address['streetAddress']).toBe('Kwiatowa 1');
+      expect(address['postalCode']).toBe('00-001');
+      expect(address['addressLocality']).toBe('Warszawa');
+      expect(address['addressCountry']).toBe('PL');
+    });
+
+    it('includes a WebSite node with a SearchAction pointing to /products', () => {
+      setup().setOrganizationJsonLd(SELLER);
+
+      const webNode = getOrgGraph(doc).find((n) => n['@type'] === 'WebSite');
+      expect(webNode).toBeDefined();
+      expect(webNode?.['url']).toBe('https://aromaterie.pl');
+
+      const action = webNode?.['potentialAction'] as Record<string, unknown>;
+      expect(action['@type']).toBe('SearchAction');
+      const target = action['target'] as Record<string, unknown>;
+      expect(target['urlTemplate']).toContain('/products?q={search_term_string}');
+    });
+
+    it('replaces existing #ld-organization on re-call without duplicating', () => {
+      const svc = setup();
+      svc.setOrganizationJsonLd(SELLER);
+      svc.setOrganizationJsonLd({ ...SELLER, name: 'Updated Name' });
+
+      expect(doc.querySelectorAll('#ld-organization')).toHaveLength(1);
+      const orgNode = getOrgGraph(doc).find((n) => n['@type'] === 'Organization');
+      expect(orgNode?.['name']).toBe('Updated Name');
     });
   });
 });

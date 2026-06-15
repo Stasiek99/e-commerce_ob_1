@@ -17,6 +17,7 @@ import { CheckoutSuccessComponent } from '../checkout-success.component';
 import { CartService } from '../../../../core/services/cart.service';
 import { AuthService } from '../../../../core/services/auth.service';
 import { AnalyticsService } from '../../../../core/services/analytics.service';
+import { SeoService } from '../../../../core/services/seo.service';
 
 function setup(orderId: string | null = 'order-1') {
   const mockCart     = { clear: jest.fn() };
@@ -55,6 +56,53 @@ function setup(orderId: string | null = 'order-1') {
 
 const statusUrl = (id = 'order-1') => (req: { url: string }) =>
   req.url.includes(`/payments/${id}/status`);
+
+// ── robots meta tag ───────────────────────────────────────────────────────────
+
+describe('CheckoutSuccessComponent — robots meta tag', () => {
+  let fixture: ComponentFixture<CheckoutSuccessComponent>;
+  let mockSeo: { setRobotsTag: jest.Mock; updatePageMeta: jest.Mock };
+  let httpMock: HttpTestingController;
+
+  beforeEach(() => {
+    mockSeo = { setRobotsTag: jest.fn(), updatePageMeta: jest.fn() };
+
+    TestBed.configureTestingModule({
+      imports: [CheckoutSuccessComponent],
+      schemas: [NO_ERRORS_SCHEMA],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: { get: () => null } } },
+        },
+        { provide: CartService,      useValue: { clear: jest.fn() } },
+        { provide: AuthService,      useValue: { currentUser: jest.fn().mockReturnValue(null) } },
+        { provide: AnalyticsService, useValue: { trackPurchase: jest.fn(), push: jest.fn() } },
+        { provide: SeoService,       useValue: mockSeo },
+      ],
+    });
+
+    fixture = TestBed.createComponent(CheckoutSuccessComponent);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('sets noindex,nofollow on init so order IDs are never crawled by Googlebot', () => {
+    fixture.detectChanges();
+
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,nofollow');
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── payment status polling ────────────────────────────────────────────────────
 
 describe('CheckoutSuccessComponent — payment status polling', () => {
   afterEach(() => {
@@ -215,5 +263,150 @@ describe('CheckoutSuccessComponent — payment status polling', () => {
     httpMock.expectOne(statusUrl('abc-123')).flush({ status: 'COMPLETED', orderId: 'abc-123' });
 
     expect(component.orderId()).toBe('abc-123');
+  }));
+});
+
+// ── firePurchaseEvent — backend-sourced GA4 data ──────────────────────────────
+
+describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+    sessionStorage.removeItem('_pending_purchase');
+  });
+
+  it('calls trackPurchase with backend items and computed total when response includes items and shippingInCents', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-001',
+      shippingInCents: 1200,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
+        { productVariantId: 'pv-2', productName: 'Rose', variantLabel: 'EDT 30ml', priceInCents: 8500, quantity: 1 },
+      ],
+    });
+
+    // total = 15000*2 + 8500*1 + 1200 = 39700
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith({
+      transactionId: 'order-1',
+      totalInCents: 39700,
+      shippingInCents: 1200,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
+        { productVariantId: 'pv-2', productName: 'Rose', variantLabel: 'EDT 30ml', priceInCents: 8500, quantity: 1 },
+      ],
+    });
+    expect(mockAnalytics.push).not.toHaveBeenCalled();
+  }));
+
+  it('correctly computes totalInCents when shipping is zero', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-002',
+      shippingInCents: 0,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Sample', variantLabel: '5ml', priceInCents: 500, quantity: 3 },
+      ],
+    });
+
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({ totalInCents: 1500, shippingInCents: 0 }),
+    );
+  }));
+
+  it('falls back to push with only transaction_id when response lacks items', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({ status: 'COMPLETED', orderNumber: 'ORD-003' });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+  }));
+
+  it('falls back to push when items array is empty', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-004',
+      shippingInCents: 0,
+      items: [],
+    });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+  }));
+
+  it('falls back to push when shippingInCents is absent even if items are present', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-005',
+      items: [{ productVariantId: 'pv-1', productName: 'X', variantLabel: 'Y', priceInCents: 100, quantity: 1 }],
+    });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+  }));
+
+  it('does not read _pending_purchase from sessionStorage even when it contains stale data', fakeAsync(() => {
+    // Populate sessionStorage with data from the old code path
+    sessionStorage.setItem('_pending_purchase', JSON.stringify({
+      items: [{ productVariantId: 'pv-stale', productName: 'Stale', variantLabel: 'old', priceInCents: 99999, quantity: 5 }],
+      shippingInCents: 9999,
+    }));
+
+    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem');
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-006',
+      shippingInCents: 500,
+      items: [{ productVariantId: 'pv-real', productName: 'Real', variantLabel: 'real', priceInCents: 10000, quantity: 1 }],
+    });
+
+    // sessionStorage must not have been read for this key
+    const pendingPurchaseReads = getItemSpy.mock.calls.filter(([key]) => key === '_pending_purchase');
+    expect(pendingPurchaseReads).toHaveLength(0);
+
+    // The real backend data (not stale sessionStorage) was used
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({ totalInCents: 10500, shippingInCents: 500 }),
+    );
+
+    getItemSpy.mockRestore();
   }));
 });

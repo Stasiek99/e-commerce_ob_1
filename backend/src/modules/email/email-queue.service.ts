@@ -5,10 +5,12 @@ import { EmailJobData } from './email-queue.types';
 import { PrismaService } from '../prisma/prisma.service';
 
 const JOB_OPTIONS = {
-  attempts: 3,
+  attempts: 12,
+  // Exponential: 5s → 10s → 20s → … → ~43min per attempt.
+  // 12 attempts cover a ~2-hour outage window before the job is declared dead.
   backoff: { type: 'exponential' as const, delay: 5_000 },
   removeOnComplete: { age: 86_400 },
-  removeOnFail: { age: 604_800 },
+  removeOnFail: false,
 } as const;
 
 type Payload<T extends EmailJobData['type']> = Extract<EmailJobData, { type: T }>['payload'];

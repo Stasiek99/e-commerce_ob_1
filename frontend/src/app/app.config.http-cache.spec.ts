@@ -14,6 +14,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { TestBed } from '@angular/core/testing';
 import {
   FetchBackend,
@@ -27,19 +28,16 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { makeStateKey, TransferState } from '@angular/core';
 
 // ── Mirrors Angular's internal cache key algorithm (common/fesm2022/http.mjs) ─
-
-function computeAngularDjb2Hash(value: string): string {
-  let hash = 0;
-  for (const char of value) {
-    hash = (Math.imul(31, hash) + char.charCodeAt(0)) << 0;
-  }
-  hash += 2147483647 + 1;
-  return hash.toString();
-}
+//
+// Angular 20 replaced the DJB2 hash (used through Angular 19) with SHA-256 to
+// prevent cache-key collision attacks. The output is a 64-character hex string,
+// identical to Node's crypto.createHash('sha256'). We use Node crypto here to
+// avoid duplicating the 100-line pure-JS SHA-256 implementation verbatim.
 
 function makeHttpCacheKey(method: string, url: string, params = '', body = '', responseType = 'json') {
   const raw = [method, responseType, url, body, params].join('|');
-  return makeStateKey<unknown>(computeAngularDjb2Hash(raw));
+  const hash = createHash('sha256').update(raw).digest('hex');
+  return makeStateKey<unknown>(hash);
 }
 
 // Mirrors Angular's internal cached-response field constants (common/fesm2022/http.mjs)

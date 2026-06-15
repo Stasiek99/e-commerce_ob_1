@@ -372,7 +372,7 @@ model CartItem {
   cartId           String
   cart             Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
   productVariantId String
-  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
   quantity         Int
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
@@ -428,6 +428,8 @@ model Order {
   isRead        Boolean @default(false)
 
   invoiceCorrections InvoiceCorrection[]
+
+  reviewRequestSentAt DateTime? @map("review_request_sent_at")
 
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -719,10 +721,11 @@ model ShippingRate {
 }
 
 model ConsentLog {
-  id           String   @id @default(uuid())
-  sessionHash  String   @map("session_hash")
-  analytics    Boolean
-  consentedAt  DateTime @default(now()) @map("consented_at")
+  id          String   @id @default(uuid())
+  consentId   String   @map("consent_id")
+  analytics   Boolean
+  consentedAt DateTime @default(now()) @map("consented_at")
+  expiresAt   DateTime @map("expires_at")
 
   @@map("consent_logs")
 }

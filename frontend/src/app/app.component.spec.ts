@@ -23,7 +23,7 @@ const makeRouterStub = (events$: Subject<unknown>) => ({
   url: '/',
 });
 
-const makeSeoStub = () => ({ applyDefaults: jest.fn() });
+const makeSeoStub = () => ({ applyDefaults: jest.fn(), setOrganizationJsonLd: jest.fn() });
 
 const makeToastStub = () => ({ info: jest.fn(), success: jest.fn(), error: jest.fn() });
 

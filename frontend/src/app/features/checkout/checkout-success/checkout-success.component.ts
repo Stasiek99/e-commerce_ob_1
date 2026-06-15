@@ -8,10 +8,21 @@ import { environment } from '../../../../environments/environment';
 import { AnalyticsService } from '../../../core/services/analytics.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { CartService } from '../../../core/services/cart.service';
+import { SeoService } from '../../../core/services/seo.service';
+
+interface PaymentStatusItem {
+  productVariantId: string;
+  productName: string;
+  variantLabel: string;
+  priceInCents: number;
+  quantity: number;
+}
 
 interface PaymentStatusResponse {
   status: string;
   orderNumber: string;
+  shippingInCents?: number;
+  items?: PaymentStatusItem[];
 }
 
 @Component({
@@ -220,6 +231,7 @@ export class CheckoutSuccessComponent implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly auth = inject(AuthService);
+  private readonly seo = inject(SeoService);
 
   readonly loading = signal(true);
   readonly paid = signal(false);
@@ -229,6 +241,8 @@ export class CheckoutSuccessComponent implements OnInit {
   readonly newsletterSubscribed = signal(false);
 
   ngOnInit(): void {
+    this.seo.setRobotsTag('noindex,nofollow');
+
     const id = this.route.snapshot.queryParamMap.get('orderId');
     const token = this.route.snapshot.queryParamMap.get('token');
     this.orderId.set(id);
@@ -264,7 +278,7 @@ export class CheckoutSuccessComponent implements OnInit {
           this.paid.set(true);
           this.orderNumber.set(res.orderNumber ?? null);
           this.cart.clear();
-          this.firePurchaseEvent(id);
+          this.firePurchaseEvent(id, res);
           this.loading.set(false);
         }
       },
@@ -284,20 +298,12 @@ export class CheckoutSuccessComponent implements OnInit {
     });
   }
 
-  private firePurchaseEvent(orderId: string): void {
-    try {
-      const raw = sessionStorage.getItem('_pending_purchase');
-      if (raw) {
-        const data = JSON.parse(raw) as {
-          items: Array<{ productVariantId: string; productName: string; variantLabel: string; priceInCents: number; quantity: number }>;
-          shippingInCents: number;
-        };
-        const totalInCents = data.items.reduce((s, i) => s + i.priceInCents * i.quantity, 0) + data.shippingInCents;
-        this.analytics.trackPurchase({ transactionId: orderId, totalInCents, shippingInCents: data.shippingInCents, items: data.items });
-        sessionStorage.removeItem('_pending_purchase');
-        return;
-      }
-    } catch { /* sessionStorage unavailable */ }
-    this.analytics.push({ event: 'purchase', ecommerce: { transaction_id: orderId, currency: 'PLN' } });
+  private firePurchaseEvent(orderId: string, res: PaymentStatusResponse): void {
+    if (res.items?.length && res.shippingInCents !== undefined) {
+      const totalInCents = res.items.reduce((s, i) => s + i.priceInCents * i.quantity, 0) + res.shippingInCents;
+      this.analytics.trackPurchase({ transactionId: orderId, totalInCents, shippingInCents: res.shippingInCents, items: res.items });
+    } else {
+      this.analytics.push({ event: 'purchase', ecommerce: { transaction_id: orderId, currency: 'PLN' } });
+    }
   }
 }

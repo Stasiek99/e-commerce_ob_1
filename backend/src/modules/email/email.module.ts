@@ -12,6 +12,7 @@ import { StorageModule } from '../storage/storage.module';
     PrismaModule,
     StorageModule,
     BullModule.registerQueue({ name: 'email' }),
+    BullModule.registerQueue({ name: 'email-dlq' }),
   ],
   controllers: [EmailWebhookController],
   providers: [EmailService, EmailQueueService, EmailQueueProcessor],

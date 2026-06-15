@@ -3,17 +3,19 @@
  *
  * Invariants:
  *  - Content-Security-Policy is set on every response, restricting script/connect/frame sources
+ *  - CSP script-src uses a per-request nonce instead of 'unsafe-inline'
+ *  - The nonce is stored on res.locals.cspNonce for downstream SSR render use
  *  - frame-ancestors 'none' prevents clickjacking of SSR-rendered pages
  *  - X-Content-Type-Options: nosniff prevents MIME-type sniffing
  *  - Referrer-Policy limits referrer leakage to cross-origin navigations
  *  - next() is always called so the SSR pipeline continues
  */
 
-import { ssrSecurityHeaders } from '../ssr-security-headers';
+import { ssrSecurityHeaders, buildCsp, generateNonce } from '../ssr-security-headers';
 import type { Request, Response, NextFunction } from 'express';
 
-function makeResMock(): { setHeader: jest.Mock } {
-  return { setHeader: jest.fn() };
+function makeResMock(): { setHeader: jest.Mock; locals: Record<string, unknown> } {
+  return { setHeader: jest.fn(), locals: {} };
 }
 
 function makeReq(path = '/'): Pick<Request, 'path'> {
@@ -34,6 +36,33 @@ describe('ssrSecurityHeaders middleware', () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
+  // ── Per-request nonce ─────────────────────────────────────────────────────
+
+  it('stores a nonce in res.locals.cspNonce for the render handler', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    expect(typeof res.locals['cspNonce']).toBe('string');
+    expect((res.locals['cspNonce'] as string).length).toBeGreaterThan(0);
+  });
+
+  it('generates a different nonce for each request', () => {
+    const res1 = makeResMock();
+    const res2 = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res1 as unknown as Response, jest.fn());
+    ssrSecurityHeaders(makeReq() as Request, res2 as unknown as Response, jest.fn());
+
+    expect(res1.locals['cspNonce']).not.toBe(res2.locals['cspNonce']);
+  });
+
+  it('generateNonce returns a non-empty base64 string', () => {
+    const nonce = generateNonce();
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]+=*$/);
+    expect(nonce.length).toBeGreaterThanOrEqual(20);
+  });
+
   // ── Content-Security-Policy ───────────────────────────────────────────────
 
   it('sets Content-Security-Policy header on every response', () => {
@@ -51,6 +80,27 @@ describe('ssrSecurityHeaders middleware', () => {
 
     const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
     expect(csp).toContain("default-src 'self'");
+  });
+
+  it('CSP script-src uses nonce instead of unsafe-inline', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const nonce = res.locals['cspNonce'] as string;
+    const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src')) ?? '';
+
+    expect(scriptSrc).toContain(`'nonce-${nonce}'`);
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+  });
+
+  it('buildCsp embeds the provided nonce in script-src and omits unsafe-inline from that directive', () => {
+    const nonce = 'test-nonce-abc123';
+    const csp = buildCsp(nonce);
+    const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src')) ?? '';
+    expect(scriptSrc).toContain(`'nonce-${nonce}'`);
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
   });
 
   it('CSP script-src includes GTM and InPost GeoWidget', () => {
@@ -79,6 +129,16 @@ describe('ssrSecurityHeaders middleware', () => {
 
     const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
     expect(csp).toContain('https://backend-production-c004.up.railway.app');
+  });
+
+  it('CSP frame-src includes the DPD pickup widget origin so the iframe loads on checkout', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq('/checkout/summary') as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const frameSrc = csp.split(';').find((d) => d.trim().startsWith('frame-src')) ?? '';
+    expect(frameSrc).toContain('https://api.dpd.cz');
   });
 
   it('CSP frame-ancestors none prevents this page from being embedded in iframes', () => {

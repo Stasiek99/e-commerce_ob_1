@@ -142,25 +142,23 @@ describe('returnAdminNotificationTemplate()', () => {
   // ── HTML — optional fields ────────────────────────────────────────
 
   describe('HTML — optional fields', () => {
-    it('shows IBAN when bankAccount is provided', () => {
-      const { html } = returnAdminNotificationTemplate({
-        ...BASE_WITHDRAWAL,
-        bankAccount: 'PL61109010140000071219812874',
-      });
-      expect(html).toContain('PL61109010140000071219812874');
-    });
-
-    it('omits IBAN row when bankAccount is absent', () => {
+    it('omits IBAN row entirely (IBAN no longer included in email — retrieve from AdminJS)', () => {
       const { html } = returnAdminNotificationTemplate(BASE_WITHDRAWAL);
       expect(html).not.toContain('Nr konta (IBAN)');
     });
 
-    it('shows phone when provided', () => {
+    it('shows admin link when adminUrl is provided', () => {
       const { html } = returnAdminNotificationTemplate({
         ...BASE_WITHDRAWAL,
-        phone: '+48600123456',
+        adminUrl: 'https://store.pl/admin/returns/ret-1',
       });
-      expect(html).toContain('+48600123456');
+      expect(html).toContain('https://store.pl/admin/returns/ret-1');
+      expect(html).toContain('Otwórz zgłoszenie w panelu');
+    });
+
+    it('omits admin link when adminUrl is absent', () => {
+      const { html } = returnAdminNotificationTemplate(BASE_WITHDRAWAL);
+      expect(html).not.toContain('Otwórz zgłoszenie w panelu');
     });
   });
 
@@ -221,24 +219,6 @@ describe('returnAdminNotificationTemplate()', () => {
       });
       expect(html).not.toContain('<img');
       expect(html).toContain('&lt;img');
-    });
-
-    it('escapes HTML in phone number', () => {
-      const { html } = returnAdminNotificationTemplate({
-        ...BASE_WITHDRAWAL,
-        phone: '"><svg/onload=alert(1)>',
-      });
-      expect(html).not.toContain('<svg');
-      expect(html).toContain('&lt;svg');
-    });
-
-    it('escapes HTML in bankAccount', () => {
-      const { html } = returnAdminNotificationTemplate({
-        ...BASE_WITHDRAWAL,
-        bankAccount: '<b>not-an-iban</b>',
-      });
-      expect(html).not.toContain('<b>');
-      expect(html).toContain('&lt;b&gt;');
     });
 
     it('escapes HTML in item productName', () => {

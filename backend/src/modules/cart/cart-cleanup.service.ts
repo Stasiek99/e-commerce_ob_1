@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type IORedis from 'ioredis';
+import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 const STALE_CART_DAYS = 30;
@@ -56,11 +57,30 @@ export class CartCleanupService {
     const cutoff = new Date();
     cutoff.setHours(cutoff.getHours() - AUTH_CART_ITEM_TTL_HOURS);
 
+    // Skip deletion for users with a PENDING_PAYMENT order from the last 24 hours.
+    // Stripe Checkout Sessions stay open for 24h; purging items mid-session leaves
+    // the cart visually empty if the customer returns to pay 5+ hours later.
+    const pendingPaymentCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const usersWithPendingCheckout = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.PENDING_PAYMENT,
+        createdAt: { gt: pendingPaymentCutoff },
+        userId: { not: null },
+      },
+      select: { userId: true },
+    });
+    const protectedUserIds = usersWithPendingCheckout.map((o) => o.userId as string);
+
     // Find cart items in authenticated carts that haven't been touched in 4 hours.
     // Stock is not held at the DB level during cart reservation, so no stock
     // restoration is needed — we only clean up the stale items.
     const staleCarts = await this.prisma.cart.findMany({
-      where: { userId: { not: null } },
+      where: {
+        userId: { not: null },
+        ...(protectedUserIds.length > 0 && {
+          NOT: { userId: { in: protectedUserIds } },
+        }),
+      },
       select: { id: true },
     });
 

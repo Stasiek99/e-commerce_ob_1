@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { CarrierCode, DiscountType, OrderStatus } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus, ReturnStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { OrdersService } from '../orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -31,6 +31,7 @@ describe('OrdersService', () => {
   let paymentsService: jest.Mocked<PaymentsService>;
   let invoiceService: jest.Mocked<InvoiceService>;
   let emailService: jest.Mocked<EmailQueueService>;
+  let redisClient: { set: jest.Mock; eval: jest.Mock };
 
   const mockAddress = {
     firstName: 'Jan',
@@ -83,8 +84,9 @@ describe('OrdersService', () => {
           useValue: {
             address: { findFirst: jest.fn() },
             user: { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn().mockResolvedValue({}) },
-            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn() },
+            order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn(), findMany: jest.fn() },
+            returnRequest: { count: jest.fn().mockResolvedValue(0) },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -149,10 +151,22 @@ describe('OrdersService', () => {
           provide: ShippingRatesService,
           useValue: mockShippingRatesService,
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'), // NX acquired by default
+            eval: jest.fn().mockResolvedValue(1),   // lock released
+            get: jest.fn().mockResolvedValue(null), // not locked out by default
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            del: jest.fn().mockResolvedValue(1),
+          },
+        },
       ],
     }).compile();
 
     service = module.get(OrdersService);
+    redisClient = module.get('REDIS_CLIENT');
     prisma = module.get(PrismaService);
     cartService = module.get(CartService);
     paymentsService = module.get(PaymentsService);
@@ -201,9 +215,74 @@ describe('OrdersService', () => {
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
+
+    describe('retry behaviour', () => {
+      beforeEach(() => {
+        jest.useFakeTimers();
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('succeeds after one transient DDL failure without propagating the error', async () => {
+        prisma.$executeRawUnsafe
+          .mockRejectedValueOnce(new Error('connection refused')) // attempt 1 fails
+          .mockResolvedValue(undefined);                          // attempt 2 succeeds
+
+        const initPromise = service.onModuleInit();
+        await jest.runAllTimersAsync();
+        await initPromise;
+
+        // attempt 1: 1 failing call; attempt 2: 2 successful calls → 3 total
+        expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(3);
+      });
+
+      it('throws after all 6 attempts are exhausted', async () => {
+        prisma.$executeRawUnsafe.mockRejectedValue(new Error('Supabase unavailable'));
+
+        const initPromise = service.onModuleInit();
+
+        // Attach the rejection handler before advancing timers to avoid unhandled-rejection noise.
+        const rejectionCheck = expect(initPromise).rejects.toThrow('Supabase unavailable');
+        await jest.runAllTimersAsync();
+        await rejectionCheck;
+
+        // 6 attempts × 1 failing call each (rejects before the second sequence DDL)
+        expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(6);
+      });
+    });
   });
 
   describe('createFromCart', () => {
+    it('throws 429 when the checkout lock is already held by a concurrent request', async () => {
+      redisClient.set.mockResolvedValue(null); // SET NX returns null = not acquired
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toMatchObject({ status: 429 });
+    });
+
+    it('releases the checkout lock in the finally block even when checkout fails', async () => {
+      redisClient.set.mockResolvedValue('OK');
+      cartService.getOrCreate.mockResolvedValue({ id: 'cart-1', items: [], totalInCents: 0 } as any);
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.INPOST,
+          inpostLockerCode: 'KRA001',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
     it('should throw if cart is empty', async () => {
       cartService.getOrCreate.mockResolvedValue({ id: 'cart-1', items: [], totalInCents: 0 } as any);
 
@@ -1792,10 +1871,12 @@ describe('OrdersService', () => {
         items: [],
       });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
-      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early
+      // returnRequest.count defaults to 0 (no active returns) — stamp proceeds
+      // order.updateMany defaults to { count: 1 } — stamp succeeds
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early after stamp
 
       await service.updateStatus('o-1', OrderStatus.DELIVERED);
-      await Promise.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve)); // flush all microtasks
 
       expect(prisma.order.findUnique).toHaveBeenCalled();
     });
@@ -2096,31 +2177,29 @@ describe('OrdersService', () => {
   });
 
   describe('trackByEmailAndNumber', () => {
-    it('returns tracking info when order matches email and number', async () => {
-      const order = {
-        orderNumber: 'ORD-2026-000001',
+    it('returns only status, trackingNumber, carrier — no items, prices, or dates', async () => {
+      prisma.order.findFirst.mockResolvedValue({
         status: OrderStatus.PROCESSING,
-        createdAt: new Date(),
-        totalInCents: 10000,
-        items: [{ snapshotName: 'Dior', quantity: 1, snapshotPrice: 10000 }],
         shipment: { trackingNumber: 'TRK123', carrierCode: CarrierCode.INPOST },
-      };
-      prisma.order.findFirst.mockResolvedValue(order);
+      });
 
       const result = await service.trackByEmailAndNumber('test@example.com', 'ORD-2026-000001');
 
-      expect(result.orderNumber).toBe('ORD-2026-000001');
-      expect(result.trackingNumber).toBe('TRK123');
-      expect(result.carrier).toBe(CarrierCode.INPOST);
+      expect(result).toEqual({
+        status: OrderStatus.PROCESSING,
+        trackingNumber: 'TRK123',
+        carrier: CarrierCode.INPOST,
+      });
+      // Sensitive fields must be absent (GDPR Art. 5(1)(f) — enumeration guard)
+      expect(result).not.toHaveProperty('orderNumber');
+      expect(result).not.toHaveProperty('items');
+      expect(result).not.toHaveProperty('totalInCents');
+      expect(result).not.toHaveProperty('createdAt');
     });
 
     it('returns null tracking when no shipment exists yet', async () => {
       prisma.order.findFirst.mockResolvedValue({
-        orderNumber: 'ORD-2026-000001',
         status: OrderStatus.PENDING_PAYMENT,
-        createdAt: new Date(),
-        totalInCents: 10000,
-        items: [],
         shipment: null,
       });
 
@@ -3236,6 +3315,10 @@ describe('OrdersService', () => {
           },
           { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
           { provide: ShippingRatesService, useValue: mockShippingRatesService },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK'), eval: jest.fn().mockResolvedValue(1) },
+          },
         ],
       }).compile();
 
@@ -3847,6 +3930,210 @@ describe('OrdersService', () => {
       expect(prisma.user.update).not.toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ marketingConsent: true }) }),
       );
+    });
+  });
+
+  // ─── dispatchReviewRequestEmail guards ───────────────────────────────────────
+  // Invariants enforced by the fix:
+  //   1. Return guard  — an order with any non-REJECTED ReturnRequest must NOT
+  //      receive a review-request email (customer is mid-return/complaint).
+  //   2. Idempotency guard — a replayed DELIVERED webhook or duplicate call must
+  //      NOT send a second email (reviewRequestSentAt compare-and-set stamp).
+
+  describe('dispatchReviewRequestEmail guards', () => {
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    const setupDelivery = () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          shipment: { updateMany: jest.fn() },
+        }),
+      );
+    };
+
+    // ── return guard ──────────────────────────────────────────────────────────
+
+    it('does not send email when a PENDING return request exists', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not send email when an APPROVED return request exists', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not send email when a COMPLETED return request exists', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not stamp reviewRequestSentAt when a return request suppresses the email', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(1);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('sends email when the only return is REJECTED (count query returns 0)', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0); // REJECTED returns excluded by query
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'jan@example.com', orderNumber: 'ORD-001' }),
+      );
+    });
+
+    it('queries returnRequest with status NOT REJECTED', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.returnRequest.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            orderId: 'o-1',
+            status: { not: ReturnStatus.REJECTED },
+          }),
+        }),
+      );
+    });
+
+    // ── idempotency guard ─────────────────────────────────────────────────────
+
+    it('does not send email when stamp returns count=0 (already sent by a prior call)', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 0 }); // already stamped
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(emailService.sendReviewRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not proceed to order lookup when stamp returns count=0', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 0 }); // already stamped
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.order.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('stamps reviewRequestSentAt with a where clause requiring null (compare-and-set)', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      expect(prisma.order.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'o-1',
+            reviewRequestSentAt: null,
+          }),
+          data: expect.objectContaining({
+            reviewRequestSentAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('sends email on first call and skips on simulated second call', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        items: [],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+      expect(emailService.sendReviewRequest).toHaveBeenCalledTimes(1);
+
+      // Simulate replayed DELIVERED webhook — stamp already set
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+      expect(emailService.sendReviewRequest).toHaveBeenCalledTimes(1); // no second send
+    });
+
+    // ── review URL regression — orderId propagated from Task 1 fix ────────────
+
+    it('includes orderId query param in the review URL', async () => {
+      setupDelivery();
+      prisma.returnRequest.count.mockResolvedValue(0);
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUnique.mockResolvedValue({
+        orderNumber: 'ORD-001',
+        snapshotEmail: 'jan@example.com',
+        snapshotFirstName: 'Jan',
+        items: [
+          {
+            productVariant: {
+              product: {
+                name: 'Dior Sauvage',
+                slug: 'dior-sauvage',
+                images: [],
+              },
+            },
+          },
+        ],
+      });
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+      await flush();
+
+      const call = (emailService.sendReviewRequest as jest.Mock).mock.calls[0][0];
+      expect(call.products[0].reviewUrl).toContain('orderId=o-1');
     });
   });
 });

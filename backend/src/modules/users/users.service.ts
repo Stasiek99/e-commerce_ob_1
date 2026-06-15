@@ -224,11 +224,14 @@ export class UsersService {
       this.prisma.order.updateMany({
         where: { userId },
         data: {
-          snapshotFirstName: '[usunięto]',
-          snapshotLastName:  '[usunięto]',
-          snapshotEmail:     `deleted+${randomUUID()}@deleted.invalid`,
-          snapshotPhone:     '',
-          snapshotNip:       null,
+          snapshotFirstName:  '[usunięto]',
+          snapshotLastName:   '[usunięto]',
+          snapshotEmail:      `deleted+${randomUUID()}@deleted.invalid`,
+          snapshotPhone:      '',
+          snapshotNip:        null,
+          snapshotStreet:     '[usunięto]',
+          snapshotCity:       '[usunięto]',
+          snapshotPostalCode: '[usunięto]',
         },
       }),
       // GDPR Art. 17 — scrub PII from ReturnRequest records that have no FK to
@@ -258,9 +261,11 @@ export class UsersService {
     });
   }
 
-  async recordAnonymousConsent(sessionHash: string, analytics: boolean): Promise<void> {
+  async recordAnonymousConsent(consentId: string, analytics: boolean): Promise<void> {
+    const expiresAt = new Date();
+    expiresAt.setFullYear(expiresAt.getFullYear() + 5);
     await this.prisma.consentLog.create({
-      data: { sessionHash, analytics },
+      data: { consentId, analytics, expiresAt },
     });
   }
 }

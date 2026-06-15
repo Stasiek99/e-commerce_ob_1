@@ -31,25 +31,44 @@ export class ReviewsService {
       );
     }
 
-    const order = await this.prisma.order.findFirst({
-      where: { id: dto.orderId, userId },
-      include: {
-        items: { include: { productVariant: { select: { productId: true } } } },
-      },
-    });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.status !== OrderStatus.DELIVERED) {
-      throw new BadRequestException(
-        'Możesz ocenić produkt tylko po jego dostarczeniu.',
+    let verifiedOrderId: string | undefined;
+
+    if (dto.orderId) {
+      const order = await this.prisma.order.findFirst({
+        where: { id: dto.orderId, userId },
+        include: {
+          items: { include: { productVariant: { select: { productId: true } } } },
+        },
+      });
+      if (!order) throw new NotFoundException('Order not found');
+      if (order.status !== OrderStatus.DELIVERED) {
+        throw new BadRequestException(
+          'Możesz ocenić produkt tylko po jego dostarczeniu.',
+        );
+      }
+      const hasProduct = order.items.some(
+        (i) => i.productVariant.productId === dto.productId,
       );
-    }
-    const hasProduct = order.items.some(
-      (i) => i.productVariant.productId === dto.productId,
-    );
-    if (!hasProduct) {
-      throw new BadRequestException(
-        'Ten produkt nie znajduje się w wybranym zamówieniu.',
-      );
+      if (!hasProduct) {
+        throw new BadRequestException(
+          'Ten produkt nie znajduje się w wybranym zamówieniu.',
+        );
+      }
+
+      // Detect accounts that register, order, and review all within 24 hours —
+      // a pattern consistent with coordinated review bombing.
+      const windowMs = SUSPICIOUS_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000;
+      const now = Date.now();
+      if (
+        now - user.createdAt.getTime() < windowMs &&
+        now - order.createdAt.getTime() < windowMs
+      ) {
+        const msg = `Suspicious review activity: user ${userId} registered, ordered, and reviewed within ${SUSPICIOUS_ACTIVITY_WINDOW_HOURS}h`;
+        this.logger.warn(msg);
+        Sentry.captureMessage(msg, 'warning');
+      }
+
+      verifiedOrderId = order.id;
     }
 
     const product = await this.prisma.product.findUnique({
@@ -57,25 +76,12 @@ export class ReviewsService {
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
 
-    // Detect accounts that register, order, and review all within 24 hours —
-    // a pattern consistent with coordinated review bombing.
-    const windowMs = SUSPICIOUS_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000;
-    const now = Date.now();
-    if (
-      now - user.createdAt.getTime() < windowMs &&
-      now - order.createdAt.getTime() < windowMs
-    ) {
-      const msg = `Suspicious review activity: user ${userId} registered, ordered, and reviewed within ${SUSPICIOUS_ACTIVITY_WINDOW_HOURS}h`;
-      this.logger.warn(msg);
-      Sentry.captureMessage(msg, 'warning');
-    }
-
     try {
       return await this.prisma.review.create({
         data: {
           productId: dto.productId,
           userId,
-          orderId: dto.orderId,
+          orderId: verifiedOrderId ?? null,
           rating: dto.rating,
           title: dto.title?.trim() ?? null,
           body: dto.body?.trim() ?? null,
@@ -88,6 +94,23 @@ export class ReviewsService {
       }
       throw err;
     }
+  }
+
+  async findEligibleOrder(userId: string, productId: string): Promise<{ orderId: string | null }> {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        userId,
+        status: OrderStatus.DELIVERED,
+        items: {
+          some: {
+            productVariant: { productId },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    return { orderId: order?.id ?? null };
   }
 
   async getByProduct(
@@ -116,7 +139,7 @@ export class ReviewsService {
           helpfulCount: true,
           createdAt: true,
           orderId: true,
-          user: { select: { firstName: true, lastName: true } },
+          user: { select: { firstName: true } },
         },
       }),
       this.prisma.review.count({ where: { productId, status: 'APPROVED' } }),
@@ -132,11 +155,7 @@ export class ReviewsService {
         helpfulCount: r.helpfulCount,
         createdAt: r.createdAt,
         verifiedPurchase: r.orderId !== null,
-        authorName:
-          [r.user.firstName, r.user.lastName?.charAt(0).concat('.')]
-            .filter(Boolean)
-            .join(' ')
-            .trim() || 'Klient',
+        authorName: r.user.firstName || 'Klient',
       })),
       meta: {
         total,

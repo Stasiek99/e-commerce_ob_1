@@ -47,8 +47,12 @@ jobs:
           SENTRY_RELEASE: ${{ github.sha }}
         run: |
           [ -z "$SENTRY_AUTH_TOKEN" ] && echo "SENTRY_AUTH_TOKEN not configured — skipping sourcemaps upload" && exit 0
+          # tsconfig.build.json sets sourceMap:false to reduce image size; re-emit maps only for this upload
+          npx tsc -p backend/tsconfig.build.json --sourceMap
           npx --yes @sentry/cli@2 sourcemaps inject ./backend/dist
           npx --yes @sentry/cli@2 sourcemaps upload --release="$SENTRY_RELEASE" ./backend/dist
+          # Strip maps so they don't ship in the Railway container image
+          find ./backend/dist -name '*.js.map' -delete
 
       - name: Build frontend
         run: pnpm build:frontend

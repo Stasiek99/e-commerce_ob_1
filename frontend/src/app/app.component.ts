@@ -11,6 +11,7 @@ import { CookieConsentComponent } from './shared/components/cookie-consent/cooki
 import { AnnouncementBannerComponent } from './shared/components/announcement-banner/announcement-banner.component';
 import { SeoService } from './core/services/seo.service';
 import { ToastService } from './core/services/toast.service';
+import { environment } from '../environments/environment';
 
 @Component({
   selector: 'app-root',
@@ -64,6 +65,7 @@ export class AppComponent {
 
   constructor() {
     this.seo.applyDefaults(this.router.url || '/');
+    this.seo.setOrganizationJsonLd(environment.seller);
 
     if (this.swUpdate.isEnabled) {
       this.swUpdate.versionUpdates

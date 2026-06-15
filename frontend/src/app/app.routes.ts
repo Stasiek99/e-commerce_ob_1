@@ -13,6 +13,7 @@ export const routes: Routes = [
   {
     path: 'products',
     title: 'Sklep',
+    data: { preload: true },
     loadComponent: () =>
       import('./features/catalog/product-list/product-list.component').then(
         (m) => m.ProductListComponent,
@@ -21,6 +22,7 @@ export const routes: Routes = [
   {
     path: 'products/:slug',
     title: 'Produkt',
+    data: { preload: true },
     loadComponent: () =>
       import('./features/catalog/product-detail/product-detail.component').then(
         (m) => m.ProductDetailComponent,
@@ -29,6 +31,7 @@ export const routes: Routes = [
   {
     path: 'category/:slug',
     title: 'Kategoria',
+    data: { preload: true },
     loadComponent: () =>
       import('./features/catalog/product-list/product-list.component').then(
         (m) => m.ProductListComponent,
@@ -37,6 +40,7 @@ export const routes: Routes = [
   {
     path: 'cart',
     title: 'Koszyk',
+    data: { preload: true },
     loadComponent: () =>
       import('./features/cart/cart-page/cart-page.component').then(
         (m) => m.CartPageComponent,

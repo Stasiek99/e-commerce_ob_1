@@ -6,7 +6,14 @@ export class TurnstileGuard implements CanActivate {
   private readonly secretKey = process.env['CLOUDFLARE_TURNSTILE_SECRET_KEY'];
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    if (!this.secretKey) return true;
+    if (!this.secretKey) {
+      if (process.env['NODE_ENV'] === 'production') {
+        // config.validation.ts requires this key in production, so reaching here
+        // means the app bypassed config validation. Fail-closed rather than passing bots.
+        throw new ForbiddenException('Bot protection is not configured');
+      }
+      return true; // dev: skip challenge
+    }
 
     const req = context.switchToHttp().getRequest<Request>();
     const token = req.headers['cf-turnstile-response'] as string | undefined;

@@ -76,6 +76,10 @@ export class AuthService {
   }
 
   loginWithGoogle() {
+    const buf = new Uint8Array(16);
+    crypto.getRandomValues(buf);
+    const state = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+    sessionStorage.setItem('oauth_state', state);
     window.location.href = `${environment.apiUrl}/auth/google`;
   }
 

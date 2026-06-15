@@ -7,6 +7,11 @@
 
 ---
 
+Done:
+- fix(reviews): accept reviews without orderId and auto-populate from DELIVERED orders (commit b1cc986)
+- fix(orders): suppress review-request email for returned orders and guard duplicate sends (commit 5293b7e)
+
+
 ## 🔴 CRITICAL — Cloudflare Turnstile disabled in production — no bot protection on cart/checkout *(Frontend agent)*
 
 **File:** `frontend/src/environments/environment.prod.ts:5`
@@ -73,6 +78,7 @@ A customer who placed an order during a 36-second Resend outage **permanently ne
 
 ---
 
+
 ## 🔴 CRITICAL — AdminJS: password not validated as bcrypt hash — authentication bypass on plaintext password *(API Attack Surface agent)*
 
 **File:** `backend/src/modules/admin/admin.setup.ts:1077`
@@ -116,6 +122,7 @@ Both `/products` and `/category/:slug` load `ProductListComponent`. Inside, `upd
 **Fix:** Use the actual Angular Router URL or the matched route in `updateSeo()`. Alternatively, unify all category traffic on `/category/:slug` and emit canonical pointing to that real URL.
 
 ---
+
 
 ## 🟠 HIGH — DHL, GLS, DPD silently enter mock mode when env var is missing (InPost fix not propagated) *(Infrastructure agent · 2/5 agents)*
 
@@ -161,8 +168,6 @@ cookie: {
 },
 ```
 
----
-
 ## 🟠 HIGH — Stripe webhook out-of-order: `expired` before `completed` → paid order cancelled *(Infrastructure agent)*
 
 **File:** `backend/src/modules/payments/payments.service.ts:535–573`
@@ -197,6 +202,7 @@ productVariant ProductVariant @relation(..., onDelete: Cascade)
 
 ---
 
+
 ## 🟠 HIGH — Coupon not re-validated on `retryPayment` — deactivated/expired coupons honoured indefinitely *(Business Logic agent)*
 
 **File:** `backend/src/modules/orders/orders.service.ts:765–773`
@@ -223,8 +229,6 @@ AND NOT EXISTS (
 )
 ```
 
----
-
 ## 🟠 HIGH — Review form silently fails — `orderId` never passed to backend *(Frontend agent)*
 
 **File:** `frontend/src/app/features/catalog/product-detail/product-detail.component.ts:1363–1368`
@@ -249,8 +253,8 @@ The backend `ReviewsService.create()` throws `NotFoundException('Order not found
 `dispatchReviewRequestEmail` fires immediately on transition to `DELIVERED` with no check for existing return requests. Customers who receive a replacement or file a withdrawal receive "Tell us what you think!" for an item they returned. Additionally, there is no `reviewRequestSentAt` guard on `Order` — a re-sync from a carrier webhook that replays the `DELIVERED` transition sends duplicate review request emails.
 
 **Fix:** Add `reviewRequestSentAt DateTime?` to `Order`. Set it atomically when dispatching; skip if already set. Check for non-REJECTED `ReturnRequest` on this order before dispatching.
-
 ---
+
 
 ## 🟠 HIGH — Sentry captures `Authorization` header (live JWT) in error events *(Privacy agent)*
 
@@ -287,7 +291,6 @@ The SQL procedure blanks `snapshotFirstName`, `snapshotLastName`, `snapshotEmail
 "snapshotCity"        = NULL,
 "snapshotPostalCode"  = NULL,
 ```
-
 ---
 
 ## 🟠 HIGH — Customer IBAN placed unencrypted in BullMQ/Redis job payload *(Privacy agent)*
@@ -311,6 +314,7 @@ The `return_admin_notification` job payload type includes `bankAccount?: string`
 **Fix:** Before `auth.loginWithGoogle()`, generate a random `state`, store it in `sessionStorage('oauth_state')`. In the callback, read `queryParamMap.get('state')`, compare with stored value, reject on mismatch.
 
 ---
+
 
 ## 🟠 HIGH — SSE stock stream: O(n) polling saturates Prisma pool under 1,000 connections *(Infrastructure agent)*
 
@@ -355,6 +359,7 @@ The SSE handler polls Prisma every 5 seconds per connection. 1,000 concurrent co
 
 ---
 
+
 ## 🟡 MEDIUM — Admin `adminPassword` bcrypt hash used as session secret fallback *(API agent)*
 
 **File:** `backend/src/modules/admin/admin.setup.ts:237`
@@ -378,6 +383,7 @@ The bcrypt hash (a known-format 60-char string starting with `$2b$`) is used as 
 **Fix:** Override the AdminJS `ProductVariant` delete action to call `productsService.deleteVariant()`, or set `delete: { isAccessible: false }` on that resource.
 
 ---
+
 
 ## 🟡 MEDIUM — Guest order tracking endpoint exposes full purchase history via sequential order numbers *(Business Logic + Privacy agents — 2/5 agents)*
 
@@ -456,6 +462,7 @@ The SSE connection counter uses `redis.incr(connKey)` on connect and `redis.decr
 
 ---
 
+
 ## 🟡 MEDIUM — DPD pickup widget iframe blocked by CSP — `frame-src` missing DPD domain *(Infrastructure agent)*
 
 **File:** `vercel.json:27` and `frontend/src/ssr-security-headers.ts:8`
@@ -511,6 +518,7 @@ Neither component calls `seo.setRobotsTag('noindex,nofollow')`. `AppComponent` s
 **Fix:** Call `this.seo.setRobotsTag('noindex,nofollow')` in `ngOnInit` of both components.
 
 ---
+
 
 ## 🟡 MEDIUM — BreadcrumbList JSON-LD points to wrong category URL *(Frontend agent)*
 
@@ -645,7 +653,6 @@ A hanging Slack API response during a Railway rolling deploy holds the `onApplic
 **Fix:** Add `{ timeout: 3_000 }` to the `axios.post` call.
 
 ---
-
 ## Legend
 
 | Label | Meaning |

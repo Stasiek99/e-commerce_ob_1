@@ -25,6 +25,7 @@ export class ReviewsController {
   constructor(private readonly reviews: ReviewsService) {}
 
   @Get('product/:productId')
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
   getByProduct(
     @Param('productId') productId: string,
     @Query('page') page = '1',
@@ -53,6 +54,15 @@ export class ReviewsController {
   @UseGuards(JwtAuthGuard)
   getMine(@CurrentUser() user: User) {
     return this.reviews.getMine(user.id);
+  }
+
+  @Get('eligible-order')
+  @UseGuards(JwtAuthGuard)
+  getEligibleOrder(
+    @CurrentUser() user: User,
+    @Query('productId') productId: string,
+  ) {
+    return this.reviews.findEligibleOrder(user.id, productId);
   }
 
   @Patch(':id/resubmit')

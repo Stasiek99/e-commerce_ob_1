@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { generateOrderToken } from '../../common/utils/order-token.util';
-import { ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -13,6 +13,7 @@ import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { StripeClient } from './stripe.client';
 import { InvoiceOrder } from '../invoice/invoice.service';
+import { CouponService } from '../coupons/coupon.service';
 
 @Injectable()
 export class PaymentsService {
@@ -24,6 +25,7 @@ export class PaymentsService {
     private readonly emailService: EmailQueueService,
     private readonly invoiceService: InvoiceService,
     private readonly configService: ConfigService,
+    private readonly couponService: CouponService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
@@ -32,6 +34,22 @@ export class PaymentsService {
       where: { id: orderId },
       include: { items: true },
     });
+
+    // Re-validate the coupon on every payment initiation (including retries) so that
+    // a coupon deactivated after order creation (flash sale ended, fraud detected) is
+    // not silently honoured on subsequent payment attempts.
+    if (order.couponId && order.couponCode) {
+      const couponCheck = await this.couponService.validate(
+        order.couponCode,
+        order.itemsTotalInCents,
+        order.userId ?? undefined,
+      );
+      if (!couponCheck.valid) {
+        throw new BadRequestException(
+          couponCheck.message ?? 'Kod rabatowy użyty w zamówieniu jest już nieważny.',
+        );
+      }
+    }
 
     // Pre-checkout velocity guard: BLIK/P24 settles before Stripe Radar can block,
     // so we rate-limit payment initiations per identity (userId for authenticated users,
@@ -567,6 +585,7 @@ export class PaymentsService {
       payment.order.items,
       `Stripe event: ${reasonType}`,
       eventId,
+      session.id,
     );
 
     const failedSessionCouponId = this.extractSessionCouponId(session);
@@ -747,7 +766,20 @@ export class PaymentsService {
   async getPaymentStatus(orderId: string, requestingUserId: string) {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { status: true, paidAt: true, order: { select: { userId: true, orderNumber: true } } },
+      select: {
+        status: true,
+        paidAt: true,
+        order: {
+          select: {
+            userId: true,
+            orderNumber: true,
+            shippingCostInCents: true,
+            items: {
+              select: { productVariantId: true, snapshotName: true, snapshotSku: true, snapshotPrice: true, quantity: true },
+            },
+          },
+        },
+      },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -756,14 +788,26 @@ export class PaymentsService {
       throw new ForbiddenException('You do not have access to this order');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
+    return this.formatStatusResponse(payment);
   }
 
   async getPaymentStatusByToken(orderId: string, token: string) {
     const [payment, storedToken] = await Promise.all([
       this.prisma.payment.findUnique({
         where: { orderId },
-        select: { status: true, paidAt: true, order: { select: { orderNumber: true } } },
+        select: {
+          status: true,
+          paidAt: true,
+          order: {
+            select: {
+              orderNumber: true,
+              shippingCostInCents: true,
+              items: {
+                select: { productVariantId: true, snapshotName: true, snapshotSku: true, snapshotPrice: true, quantity: true },
+              },
+            },
+          },
+        },
       }),
       this.redis.get(`order-token:${orderId}`),
     ]);
@@ -774,7 +818,32 @@ export class PaymentsService {
       throw new UnauthorizedException('Invalid order token');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
+    return this.formatStatusResponse(payment);
+  }
+
+  private formatStatusResponse(payment: {
+    status: string;
+    paidAt: Date | null;
+    order: {
+      orderNumber: string;
+      shippingCostInCents: number;
+      items: Array<{ productVariantId: string; snapshotName: string; snapshotSku: string; snapshotPrice: number; quantity: number }>;
+      userId?: string | null;
+    };
+  }) {
+    return {
+      status: payment.status,
+      paidAt: payment.paidAt,
+      orderNumber: payment.order.orderNumber,
+      shippingInCents: payment.order.shippingCostInCents,
+      items: payment.order.items.map((i) => ({
+        productVariantId: i.productVariantId,
+        productName: i.snapshotName,
+        variantLabel: i.snapshotSku,
+        priceInCents: i.snapshotPrice,
+        quantity: i.quantity,
+      })),
+    };
   }
 
   /**
@@ -1325,9 +1394,30 @@ export class PaymentsService {
     orderItems: Array<{ productVariantId: string; quantity: number }>,
     failureReason: string,
     eventId?: string,
+    sessionId?: string,
   ) {
     try {
       await this.prisma.$transaction(async (tx) => {
+        // Acquire a row-level exclusive lock before checking payment status.
+        // This serialises against a concurrent markSessionPaid: if completed arrives
+        // and commits first (COMPLETED), we see that under the lock and bail without
+        // cancelling the order and over-restoring stock.
+        const [locked] = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT status FROM "payments" WHERE id = ${paymentId} FOR UPDATE
+        `;
+        if (locked?.status === PaymentStatus.COMPLETED) {
+          this.logger.warn(
+            `Payment ${paymentId} already COMPLETED — skipping failure event (session: ${sessionId ?? 'unknown'})`,
+          );
+          return;
+        }
+
+        // Session-scoped idempotency: prevents a second failure event for the same
+        // session (e.g. async_payment_failed arriving after expired) from double-processing.
+        if (sessionId) {
+          await tx.processedStripeEvent.create({ data: { eventId: `failed-${sessionId}` } });
+        }
+
         if (eventId) {
           await tx.processedStripeEvent.create({ data: { eventId } });
         }
@@ -1365,7 +1455,7 @@ export class PaymentsService {
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
         this.logger.warn(
-          `Stripe event ${eventId} already processed — skipping duplicate failure event`,
+          `Stripe event ${eventId ?? sessionId} already processed — skipping duplicate failure event`,
         );
         return;
       }
@@ -1382,8 +1472,10 @@ export class PaymentsService {
     order: { orderNumber: string; snapshotEmail: string; totalInCents: number },
   ): Promise<void> {
     const total = (order.totalInCents / 100).toFixed(2);
-    await axios.post(webhookUrl, {
-      text: `🛍️ New paid order *#${order.orderNumber}* — ${total} PLN — ${order.snapshotEmail}`,
-    });
+    await axios.post(
+      webhookUrl,
+      { text: `🛍️ New paid order *#${order.orderNumber}* — ${total} PLN — ${order.snapshotEmail}` },
+      { timeout: 3_000 },
+    );
   }
 }

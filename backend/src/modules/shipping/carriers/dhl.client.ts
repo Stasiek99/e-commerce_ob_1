@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 
@@ -36,9 +36,7 @@ export class DhlClient {
   private readonly shipperEmail: string;
 
   constructor(configService: ConfigService) {
-    this.mockEnabled =
-      configService.get<string>('DHL_MOCK_ENABLED') === 'true' ||
-      !configService.get<string>('DHL_ACCOUNT_NUMBER');
+    this.mockEnabled = configService.get<string>('DHL_MOCK_ENABLED') === 'true';
 
     const sandbox = configService.get<string>('DHL_SANDBOX') === 'true';
     const baseURL = sandbox
@@ -49,6 +47,7 @@ export class DhlClient {
 
     this.client = axios.create({
       baseURL,
+      timeout: 15_000,
       auth: {
         username: this.mockEnabled ? '' : configService.getOrThrow<string>('DHL_API_KEY'),
         password: this.mockEnabled ? '' : configService.getOrThrow<string>('DHL_API_SECRET'),
@@ -114,7 +113,15 @@ export class DhlClient {
       },
     };
 
-    const response = await this.client.post<any>('/shipments', payload);
+    let response: Awaited<ReturnType<typeof this.client.post<any>>>;
+    try {
+      response = await this.client.post<any>('/shipments', payload);
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('DHL API timed out');
+      }
+      throw err;
+    }
     const result = response.data;
 
     this.logger.log(`DHL shipment created: ${result.shipmentTrackingNumber}`);

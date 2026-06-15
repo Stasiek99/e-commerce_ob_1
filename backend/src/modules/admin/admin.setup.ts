@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import { Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import * as bcrypt from 'bcrypt';
@@ -28,6 +29,24 @@ export async function logAdminAction(
   } catch (err) {
     logger.error(`AdminLog write failed: ${(err as Error).message}`);
   }
+}
+
+/** Exported for unit testing. Precomputes a dummy hash once so bcrypt.compare
+ *  always runs on every login attempt regardless of email match, preventing
+ *  timing-based email enumeration. */
+export async function buildAdminAuthenticator(
+  adminEmail: string,
+  adminPassword: string,
+): Promise<(email: string, password: string) => Promise<{ email: string } | null>> {
+  const dummyHash = await bcrypt.hash('timing-guard', 10);
+  return async (email: string, password: string) => {
+    if (email !== adminEmail) {
+      await bcrypt.compare(password, dummyHash);
+      return null;
+    }
+    const valid = await bcrypt.compare(password, adminPassword);
+    return valid ? { email } : null;
+  };
 }
 
 async function generatePicklistHtml(prisma: PrismaService): Promise<string> {
@@ -241,10 +260,16 @@ export async function setupAdmin(
     if (process.env.NODE_ENV === 'production') {
       throw new Error('ADMIN_SESSION_SECRET must be set in production — refusing to boot');
     }
-    // Dev fallback: use password (acceptable for local only, never in prod).
-    process.env.ADMIN_SESSION_SECRET = adminPassword;
+    // Dev fallback: random ephemeral secret (avoids using the bcrypt hash as an HMAC key).
+    // Sessions will not survive server restarts — set ADMIN_SESSION_SECRET in .env to persist them.
+    process.env.ADMIN_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+    logger.warn('ADMIN_SESSION_SECRET not set — using a random ephemeral secret for this dev session');
   }
-  const resolvedSessionSecret = sessionSecret ?? adminPassword;
+  // After the guard above, ADMIN_SESSION_SECRET is guaranteed to be set
+  // (either already present or overwritten with the dev fallback). Read from
+  // the env var rather than the captured `sessionSecret` variable (which is
+  // undefined when the dev-fallback branch ran).
+  const resolvedSessionSecret = process.env.ADMIN_SESSION_SECRET!;
 
   // @adminjs/* packages are ESM-only (no "require" export condition).
   // TypeScript compiles `await import()` to `require()` in commonjs mode, which
@@ -330,6 +355,7 @@ export async function setupAdmin(
             },
           },
           actions: {
+            delete: { isAccessible: false },
             list: {
               after: async (response: any) => {
                 // noinspection SqlNoDataSourceInspection
@@ -688,6 +714,10 @@ export async function setupAdmin(
                   }),
                   prisma.customerNote.count({ where: { userId } }),
                 ]);
+                await logAdminAction(
+                  prisma, 'viewProfile', 'User', userId,
+                  context.currentAdmin?.email ?? adminEmail,
+                );
                 const totalPln = ((stats._sum.totalInCents ?? 0) / 100).toFixed(2);
                 response.notice = {
                   message: `Zamówień: ${stats._count} | Wartość: ${totalPln} PLN | Notatki CS: ${noteCount}`,
@@ -1047,6 +1077,12 @@ export async function setupAdmin(
     saveUninitialized: false,
     secret: resolvedSessionSecret,
     name: 'adminjs', // must match the cookie name set by buildAuthenticatedRouter
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict' as const,
+      maxAge: 8 * 60 * 60 * 1000,
+    },
   };
 
   // Printer-friendly pick list — session-protected, registered before the AdminJS
@@ -1082,11 +1118,7 @@ export async function setupAdmin(
   const router = AdminJSExpress.buildAuthenticatedRouter(
     admin,
     {
-      authenticate: async (email: string, password: string) => {
-        if (email !== adminEmail) return null;
-        const valid = await bcrypt.compare(password, adminPassword);
-        return valid ? { email } : null;
-      },
+      authenticate: await buildAdminAuthenticator(adminEmail, adminPassword),
       cookieName: 'adminjs',
       cookiePassword: resolvedSessionSecret,
     },
@@ -1100,11 +1132,11 @@ export async function setupAdmin(
   // login. Without this, an attacker who plants a known session ID before login
   // inherits the authenticated session after the admin logs in.
   expressApp.use('/admin', (req: any, res: any, next: any) => {
-    if (req.session?.adminUser && !req.session._regenerated) {
-      const adminUser = req.session.adminUser;
+    if (req.session?.passport?.user && !req.session._regenerated) {
+      const passportUser = req.session.passport.user;
       req.session.regenerate((err: Error | null) => {
         if (err) return next(err);
-        req.session.adminUser = adminUser;
+        req.session.passport = { user: passportUser };
         req.session._regenerated = true;
         next();
       });
