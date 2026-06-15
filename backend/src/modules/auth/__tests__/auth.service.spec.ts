@@ -284,6 +284,95 @@ describe('AuthService', () => {
         expect(redis.del).not.toHaveBeenCalled();
       });
     });
+
+    // ─── Redis outage safety valve ────────────────────────────────────────────
+    // IORedis with maxRetriesPerRequest: null queues calls forever on outage,
+    // hanging every login until TimeoutInterceptor fires. The fix wraps every
+    // Redis call in try/catch: on error, skip the rate-limit and allow login
+    // to proceed (fail-open). UnauthorizedException from valid lockouts or bad
+    // credentials must still propagate — Redis errors must not suppress them.
+
+    describe('Redis outage safety valve', () => {
+      const redisError = new Error('Redis connection refused');
+
+      it('allows login to succeed when redis.exists() throws during lockout check', async () => {
+        redis.exists.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.del.mockResolvedValue(1);
+
+        const result = await service.login('test@example.com', 'correctpass');
+
+        expect(result).toHaveProperty('accessToken', 'mock-access-token');
+      });
+
+      it('still throws UnauthorizedException for bad password when redis.exists() throws', async () => {
+        redis.exists.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+      });
+
+      it('still throws UnauthorizedException for missing user when redis.incr() throws', async () => {
+        redis.exists.mockResolvedValue(0);
+        redis.incr.mockRejectedValue(redisError);
+        usersService.findByEmail.mockResolvedValue(null);
+
+        await expect(service.login('missing@example.com', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+      });
+
+      it('still throws UnauthorizedException for wrong password when redis.incr() throws', async () => {
+        redis.exists.mockResolvedValue(0);
+        redis.incr.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+      });
+
+      it('returns token pair when redis.del() throws on successful login', async () => {
+        redis.exists.mockResolvedValue(0);
+        redis.del.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        const result = await service.login('test@example.com', 'correctpass');
+
+        expect(result).toHaveProperty('accessToken', 'mock-access-token');
+      });
+
+      it('re-throws the UnauthorizedException from an active lockout even inside the try/catch', async () => {
+        redis.exists.mockResolvedValue(1); // account is locked
+
+        await expect(service.login('victim@example.com', 'anypass')).rejects.toThrow(
+          'Account temporarily locked',
+        );
+      });
+
+      it('does not call usersService.findByEmail when the lockout check is skipped on Redis error', async () => {
+        redis.exists.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.del.mockResolvedValue(1);
+
+        await service.login('test@example.com', 'correctpass');
+
+        // findByEmail is called once for credential resolution, not blocked by Redis error
+        expect(usersService.findByEmail).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   describe('validateRefreshTokenByRaw', () => {

@@ -80,27 +80,48 @@ export class AuthService {
     const failKey = `auth:login-failures:${normalizedEmail}`;
     const lockKey = `auth:login-locked:${normalizedEmail}`;
 
-    if (await this.redis.exists(lockKey)) {
-      throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
+    // IORedis queues calls indefinitely when maxRetriesPerRequest is null.
+    // Any Redis outage would hang every login until the TimeoutInterceptor fires.
+    // Wrap all Redis calls so the rate-limit is advisory: skip it on outage,
+    // log to Sentry, and allow login to proceed — same pattern as JwtStrategy.
+    try {
+      if (await this.redis.exists(lockKey)) {
+        throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
+      }
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
+      this.logger.error('Redis unavailable in login() — skipping lockout check', (err as Error).message);
     }
 
     const user = await this.usersService.findByEmail(email);
     if (!user || !user.passwordHash) {
-      const failures = await this.redis.incr(failKey);
-      if (failures === 1) await this.redis.expire(failKey, 900);
-      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      try {
+        const failures = await this.redis.incr(failKey);
+        if (failures === 1) await this.redis.expire(failKey, 900);
+        if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      } catch (err) {
+        this.logger.error('Redis unavailable in login() — skipping failure tracking', (err as Error).message);
+      }
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
-      const failures = await this.redis.incr(failKey);
-      if (failures === 1) await this.redis.expire(failKey, 900);
-      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      try {
+        const failures = await this.redis.incr(failKey);
+        if (failures === 1) await this.redis.expire(failKey, 900);
+        if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      } catch (err) {
+        this.logger.error('Redis unavailable in login() — skipping failure tracking', (err as Error).message);
+      }
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    await this.redis.del(failKey);
+    try {
+      await this.redis.del(failKey);
+    } catch (err) {
+      this.logger.error('Redis unavailable in login() — skipping failure counter reset', (err as Error).message);
+    }
     return this.generateTokenPair(user);
   }
 
