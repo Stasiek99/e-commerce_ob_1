@@ -215,6 +215,43 @@ describe('OrdersService', () => {
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
+
+    describe('retry behaviour', () => {
+      beforeEach(() => {
+        jest.useFakeTimers();
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('succeeds after one transient DDL failure without propagating the error', async () => {
+        prisma.$executeRawUnsafe
+          .mockRejectedValueOnce(new Error('connection refused')) // attempt 1 fails
+          .mockResolvedValue(undefined);                          // attempt 2 succeeds
+
+        const initPromise = service.onModuleInit();
+        await jest.runAllTimersAsync();
+        await initPromise;
+
+        // attempt 1: 1 failing call; attempt 2: 2 successful calls → 3 total
+        expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(3);
+      });
+
+      it('throws after all 6 attempts are exhausted', async () => {
+        prisma.$executeRawUnsafe.mockRejectedValue(new Error('Supabase unavailable'));
+
+        const initPromise = service.onModuleInit();
+
+        // Attach the rejection handler before advancing timers to avoid unhandled-rejection noise.
+        const rejectionCheck = expect(initPromise).rejects.toThrow('Supabase unavailable');
+        await jest.runAllTimersAsync();
+        await rejectionCheck;
+
+        // 6 attempts × 1 failing call each (rejects before the second sequence DDL)
+        expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(6);
+      });
+    });
   });
 
   describe('createFromCart', () => {

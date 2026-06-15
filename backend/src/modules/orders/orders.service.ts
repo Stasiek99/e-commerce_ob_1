@@ -77,18 +77,36 @@ export class OrdersService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    const maxAttempts = 6;
+    const baseDelayMs = 3_000;
     const year = new Date().getFullYear();
     // CREATE SEQUENCE IF NOT EXISTS is idempotent — concurrent pod startups
     // are safe without an advisory lock. pg_advisory_xact_lock is ineffective
     // here because DATABASE_URL goes through pgbouncer in transaction mode,
     // which may route statements within the same $transaction to different
     // physical connections, defeating the lock entirely.
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
-    );
-    await this.prisma.$executeRawUnsafe(
-      `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
-    );
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.prisma.$executeRawUnsafe(
+          `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year} START 1`,
+        );
+        await this.prisma.$executeRawUnsafe(
+          `CREATE SEQUENCE IF NOT EXISTS order_number_seq_${year + 1} START 1`,
+        );
+        this.logger.log('Order number sequences ensured');
+        return;
+      } catch (err) {
+        if (attempt === maxAttempts) {
+          this.logger.error('Failed to create order number sequences after all retries — giving up');
+          throw err;
+        }
+        const delay = baseDelayMs * 2 ** (attempt - 1); // 3s, 6s, 12s, 24s, 48s
+        this.logger.warn(
+          `Sequence DDL failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms…`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   async createFromCart(
