@@ -139,7 +139,7 @@ export class ReviewsService {
           helpfulCount: true,
           createdAt: true,
           orderId: true,
-          user: { select: { firstName: true, lastName: true } },
+          user: { select: { firstName: true } },
         },
       }),
       this.prisma.review.count({ where: { productId, status: 'APPROVED' } }),
@@ -155,11 +155,7 @@ export class ReviewsService {
         helpfulCount: r.helpfulCount,
         createdAt: r.createdAt,
         verifiedPurchase: r.orderId !== null,
-        authorName:
-          [r.user.firstName, r.user.lastName?.charAt(0).concat('.')]
-            .filter(Boolean)
-            .join(' ')
-            .trim() || 'Klient',
+        authorName: r.user.firstName || 'Klient',
       })),
       meta: {
         total,

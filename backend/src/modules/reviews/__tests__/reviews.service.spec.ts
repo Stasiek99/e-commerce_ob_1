@@ -326,10 +326,11 @@ describe('ReviewsService', () => {
       expect(result.data[0].verifiedPurchase).toBe(false);
     });
 
-    it('formats authorName as "FirstName L."', async () => {
+    it('returns first name only — never includes last name initial (GDPR re-identification guard)', async () => {
       const result = await service.getByProduct('product-1');
 
-      expect(result.data[0].authorName).toBe('Jan K.');
+      expect(result.data[0].authorName).toBe('Jan');
+      expect(result.data[0].authorName).not.toContain('K.');
     });
 
     it('falls back to "Klient" when user has no firstName and no lastName', async () => {
@@ -811,7 +812,7 @@ describe('ReviewsService', () => {
       expect(result.meta.total).toBe(0);
     });
 
-    it('formats authorName as "L." when firstName is null but lastName exists', async () => {
+    it('falls back to "Klient" when firstName is null (lastName is never used)', async () => {
       prisma.review.findMany.mockResolvedValue([
         {
           id: 'r-1',
@@ -822,15 +823,29 @@ describe('ReviewsService', () => {
           helpfulCount: 0,
           createdAt: new Date(),
           orderId: null,
-          user: { firstName: null, lastName: 'Smith' },
+          user: { firstName: null },
         },
       ]);
       prisma.review.count.mockResolvedValue(1);
 
       const result = await service.getByProduct('product-1');
 
-      // Only last-name initial with no first name — documents actual behavior.
-      expect(result.data[0].authorName).toBe('S.');
+      expect(result.data[0].authorName).toBe('Klient');
+    });
+
+    it('does not select lastName from the database', async () => {
+      prisma.review.findMany.mockResolvedValue([]);
+      prisma.review.count.mockResolvedValue(0);
+
+      await service.getByProduct('product-1');
+
+      expect(prisma.review.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            user: { select: { firstName: true } },
+          }),
+        }),
+      );
     });
   });
 

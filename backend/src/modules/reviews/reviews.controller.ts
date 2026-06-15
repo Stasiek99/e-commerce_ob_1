@@ -25,6 +25,7 @@ export class ReviewsController {
   constructor(private readonly reviews: ReviewsService) {}
 
   @Get('product/:productId')
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
   getByProduct(
     @Param('productId') productId: string,
     @Query('page') page = '1',
