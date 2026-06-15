@@ -1422,6 +1422,8 @@ describe('PaymentsService', () => {
       id: 'payment-1',
       status: PaymentStatus.COMPLETED,
       stripePaymentIntentId: 'pi_test_abc123',
+      amountInCents: 200000,
+      refundedAmountInCents: 0,
       order: { orderNumber: 'ORD-2026-000001' },
     };
 
@@ -1798,6 +1800,72 @@ describe('PaymentsService', () => {
       expect(capturedEventData.fromStatus).toBe(OrderStatus.PAID);
       expect(capturedEventData.note).toContain('114700');
       expect(capturedEventData.note).toContain('2 item line(s)');
+    });
+
+    // ─── available-balance cap (fix: prevent over-refund on second partial cancel) ─
+
+    it('throws Error when no refundable balance remains', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 50000,
+        refundedAmountInCents: 50000,
+      });
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow('No refundable balance remaining for order order-1');
+    });
+
+    it('caps Stripe refund at available balance when raw items sum exceeds remaining amount', async () => {
+      // Raw sum = 2×34900 + 1×44900 = 114700, but only 90000 remain refundable.
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 150000,
+        refundedAmountInCents: 60000,
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(stripeClient.createPartialRefund).toHaveBeenCalledWith(
+        'pi_test_abc123',
+        90000,
+        expect.any(String),
+      );
+    });
+
+    it('increments refundedAmountInCents by the capped amount when raw sum exceeds available', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 150000,
+        refundedAmountInCents: 60000,
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedPaymentData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedPaymentData = args.data;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedPaymentData.refundedAmountInCents).toEqual({ increment: 90000 });
     });
   });
 

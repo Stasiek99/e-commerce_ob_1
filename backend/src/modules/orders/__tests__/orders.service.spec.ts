@@ -3281,6 +3281,57 @@ describe('OrdersService', () => {
       );
     });
 
+    // ─── alreadyCancelledDiscount guard (fix: prevent discount compounding on second partial cancel) ─
+
+    it('uses only remaining discount budget on second partial cancel of the same item', async () => {
+      // snapshotPrice=33, qty=2, itemsTotalInCents=66, discountInCents=5
+      // discountFraction = 5/66. First cancel consumed discount=round(33*5/66*1)=round(2.5)=3.
+      // Second cancel (cancelledQuantity=1): maxItemDiscount=round(33*5/66*2)=round(5)=5,
+      // alreadyCancelledDiscount=3, remaining=2 → appliedDiscount=min(3,2)=2 → priceInCents=33-2=31.
+      // Without the fix, the old formula would apply discount=3 again → priceInCents=30 (under-refund
+      // and total would be 30+30=60 while customer paid 66-5=61).
+      const partiallyRefundedOrder = {
+        ...mockPaidOrder,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+        itemsTotalInCents: 66,
+        discountInCents: 5,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 1,
+            snapshotName: 'Test Item',
+            snapshotSku: 'T-1',
+            snapshotPrice: 33,
+          },
+          {
+            // item-2 still has remaining quantity so the order is not fully cancelled
+            // and partialRefund() — not refundPayment() — is invoked.
+            id: 'item-2',
+            productVariantId: 'pv-2',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Other Item',
+            snapshotSku: 'O-1',
+            snapshotPrice: 33,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(partiallyRefundedOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31 })],
+        OrderStatus.PARTIALLY_REFUNDED,
+        'CUSTOMER',
+      );
+    });
+
     // ─── full-withdrawal shipping refund (fix: Art. 32 UoK compliance) ──────────
     // When ALL remaining items are cancelled, refundPayment() must be called instead
     // of partialRefund() so the shipping cost (shippingCostInCents) is included in

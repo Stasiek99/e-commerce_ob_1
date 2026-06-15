@@ -1019,7 +1019,14 @@ export class PaymentsService {
   ): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { id: true, status: true, stripePaymentIntentId: true, order: { select: { orderNumber: true } } },
+      select: {
+        id: true,
+        status: true,
+        stripePaymentIntentId: true,
+        amountInCents: true,
+        refundedAmountInCents: true,
+        order: { select: { orderNumber: true } },
+      },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -1030,7 +1037,14 @@ export class PaymentsService {
       throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
     }
 
-    const refundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const rawRefundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const available = payment.amountInCents - payment.refundedAmountInCents;
+    if (available <= 0) {
+      throw new Error(`No refundable balance remaining for order ${orderId}`);
+    }
+    // Cap against the remaining balance to prevent over-refund from rounding accumulation
+    // across multiple partial cancels of the same order.
+    const refundAmountInCents = Math.min(rawRefundAmountInCents, available);
     const idempotencyKey = `${orderId}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
 
     await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);

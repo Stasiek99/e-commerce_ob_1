@@ -921,7 +921,18 @@ export class OrdersService implements OnModuleInit {
     if (order.discountInCents > 0 && order.itemsTotalInCents > 0) {
       const discountFraction = order.discountInCents / order.itemsTotalInCents;
       for (const item of resolvedItems) {
-        item.priceInCents = Math.round(item.priceInCents * (1 - discountFraction));
+        const orderItem = order.items.find(i => i.id === item.orderItemId)!;
+        // Max discount this item can ever yield (based on all units)
+        const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
+        // Discount already consumed by prior partial cancels, derived from cancelledQuantity
+        // so we don't re-apply the fraction on subsequent partial cancels of the same item.
+        const alreadyCancelledDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.cancelledQuantity);
+        const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyCancelledDiscount);
+        // Proportional discount we'd ideally apply to the qty being cancelled now
+        const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
+        const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
+        // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
+        item.priceInCents = item.priceInCents - Math.floor(appliedDiscount / item.quantity);
       }
     }
 
