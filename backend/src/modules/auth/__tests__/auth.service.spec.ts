@@ -568,6 +568,7 @@ describe('AuthService', () => {
 
   describe('logout', () => {
     it('revokes the refresh token by hash', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
       prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
 
       await service.logout('some-raw-token');
@@ -575,6 +576,48 @@ describe('AuthService', () => {
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({ data: { revokedAt: expect.any(Date) } }),
       );
+    });
+
+    it('writes the access-token revocation fence to Redis when the refresh token exists in the database', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.logout('some-raw-token');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        900,
+      );
+    });
+
+    it('does not write the revocation fence when the refresh token is not found in the database', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue(null);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.logout('unknown-raw-token');
+
+      expect(redis.set).not.toHaveBeenCalled();
+    });
+
+    it('looks up the refresh token by its SHA-256 hash to obtain the userId before revoking', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.logout('some-raw-token');
+
+      expect(prisma.refreshToken.findUnique).toHaveBeenCalledWith({
+        where: { tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        select: { userId: true },
+      });
+    });
+
+    it('resolves without throwing when called with an unrecognised token', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue(null);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.logout('totally-unknown-token')).resolves.toBeUndefined();
     });
   });
 

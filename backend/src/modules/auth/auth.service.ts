@@ -222,10 +222,17 @@ export class AuthService {
 
   async logout(rawRefreshToken: string) {
     const tokenHash = createHash('sha256').update(rawRefreshToken).digest('hex');
+    const token = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+      select: { userId: true },
+    });
     await this.prisma.refreshToken.updateMany({
       where: { tokenHash },
       data: { revokedAt: new Date() },
     });
+    if (token) {
+      await this.revokeAccessTokensForUser(token.userId);
+    }
   }
 
   private async rotateToken(
