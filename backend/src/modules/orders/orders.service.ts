@@ -210,7 +210,6 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Address is required');
     }
 
-    const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
     const itemsTotalInCents = cart.totalInCents;
 
     // Validate coupon before the transaction so the user gets an early error.
@@ -284,6 +283,12 @@ export class OrdersService implements OnModuleInit {
       const txItemsTotalInCents = cart.items.reduce((sum: number, item: CartItem) => {
         return sum + (freshPriceMap.get(item.productVariantId) ?? item.priceInCents) * item.quantity;
       }, 0);
+
+      // Fetch shipping rate inside the transaction so it is consistent with the
+      // price snapshot and stock decrement committed in the same atomic unit.
+      // Outside the transaction a Redis cache update between the fetch and the
+      // DB write could produce a stale rate in the Stripe session total.
+      const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
 
       // Recompute coupon discount against the fresh items total
       let txDiscountInCents = 0;

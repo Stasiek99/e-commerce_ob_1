@@ -1121,6 +1121,141 @@ describe('OrdersService', () => {
         expect(tx.order.create).toHaveBeenCalled();
       });
     });
+
+    // ─── shipping rate atomicity — inside $transaction ─────────────────────────
+    // getRateForCarrier() must be called INSIDE the $transaction callback so the
+    // shipping cost is consistent with the price snapshot and stock decrement that
+    // are committed in the same atomic unit. Moving it outside the transaction
+    // opens a window where an admin rate update or Redis-key invalidation between
+    // the rate fetch and the DB write silently charges the customer the stale value.
+
+    describe('shipping rate atomicity — getRateForCarrier inside $transaction', () => {
+      it('calls getRateForCarrier inside the $transaction callback, not before it', async () => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+        const callOrder: string[] = [];
+
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([
+                { id: 'pv-1', priceInCents: 34900 },
+                { id: 'pv-2', priceInCents: 44900 },
+              ]),
+            },
+            order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 116699 }) },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          callOrder.push('transaction:start');
+          const result = await fn(tx);
+          callOrder.push('transaction:end');
+          return result;
+        });
+
+        mockShippingRatesService.getRateForCarrier.mockImplementation(async () => {
+          callOrder.push('getRateForCarrier');
+          return 1999;
+        });
+
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        const txStart = callOrder.indexOf('transaction:start');
+        const rateCall = callOrder.indexOf('getRateForCarrier');
+        const txEnd = callOrder.indexOf('transaction:end');
+
+        expect(rateCall).toBeGreaterThan(txStart); // called AFTER $transaction opens
+        expect(rateCall).toBeLessThan(txEnd);       // called BEFORE $transaction closes
+      });
+
+      it('uses the rate returned by getRateForCarrier when computing shippingCostInCents', async () => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+        // Simulate a rate change: admin bumped DHL to 2499 after cart was loaded
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(2499);
+
+        let capturedShipping: number | undefined;
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([
+                { id: 'pv-1', priceInCents: 34900 },
+                { id: 'pv-2', priceInCents: 44900 },
+              ]),
+            },
+            order: {
+              create: jest.fn().mockImplementation((args: any) => {
+                capturedShipping = args.data.shippingCostInCents;
+                return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 117199 };
+              }),
+            },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          return fn(tx);
+        });
+
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        expect(capturedShipping).toBe(2499);
+      });
+
+      it('calls getRateForCarrier exactly once per checkout', async () => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+        let rateCallCount = 0;
+        mockShippingRatesService.getRateForCarrier.mockImplementation(async (code: CarrierCode) => {
+          rateCallCount++;
+          return MOCK_RATES[code] ?? 1999;
+        });
+
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([
+                { id: 'pv-1', priceInCents: 34900 },
+                { id: 'pv-2', priceInCents: 44900 },
+              ]),
+            },
+            order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 116699 }) },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          return fn(tx);
+        });
+
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        expect(rateCallCount).toBe(1);
+      });
+    });
   });
 
   describe('findAllForUser', () => {
