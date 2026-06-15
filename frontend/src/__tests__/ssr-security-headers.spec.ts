@@ -131,6 +131,16 @@ describe('ssrSecurityHeaders middleware', () => {
     expect(csp).toContain('https://backend-production-c004.up.railway.app');
   });
 
+  it('CSP frame-src includes the DPD pickup widget origin so the iframe loads on checkout', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq('/checkout/summary') as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const frameSrc = csp.split(';').find((d) => d.trim().startsWith('frame-src')) ?? '';
+    expect(frameSrc).toContain('https://api.dpd.cz');
+  });
+
   it('CSP frame-ancestors none prevents this page from being embedded in iframes', () => {
     const res = makeResMock();
 
