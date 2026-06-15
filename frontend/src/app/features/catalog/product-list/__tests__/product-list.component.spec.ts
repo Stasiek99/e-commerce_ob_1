@@ -300,6 +300,98 @@ describe('ProductListComponent — canonical URL (updateSeo)', () => {
   }));
 });
 
+// ── hasFilters includes sort — non-default sort triggers noindex ──────────────
+// FIX: sort !== 'relevance' was missing from hasFilters. /products?sort=price_asc
+// was indexable as a separate page despite having the same canonical as /products.
+// The fix treats any non-default sort value as a filtering condition.
+
+describe('ProductListComponent — hasFilters includes sort', () => {
+  function setupWithQueryParams(params: Record<string, string | null>) {
+    const mockRoute = {
+      paramMap: of(makeParamMap({})),
+      queryParamMap: of(makeParamMap(params)),
+    };
+    const mockRouter = { navigate: jest.fn() };
+    const mockSeo = { updatePageMeta: jest.fn(), setRobotsTag: jest.fn() };
+
+    TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ActivatedRoute, useValue: mockRoute },
+        { provide: Router, useValue: mockRouter },
+        { provide: SeoService, useValue: mockSeo },
+        { provide: PLATFORM_ID, useValue: 'browser' },
+      ],
+      schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
+    });
+
+    TestBed.overrideComponent(ProductListComponent, {
+      set: { imports: [], schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA] },
+    });
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    const httpMock = TestBed.inject(HttpTestingController);
+
+    return { fixture, httpMock, mockSeo };
+  }
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('calls setRobotsTag noindex,follow when sort=price_asc', fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({ sort: 'price_asc' });
+
+    fixture.detectChanges();
+    tick(0);
+
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,follow');
+
+    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+      .flush({ data: [], meta: { totalPages: 1 } });
+    httpMock.verify();
+  }));
+
+  it('calls setRobotsTag noindex,follow when sort=price_desc', fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({ sort: 'price_desc' });
+
+    fixture.detectChanges();
+    tick(0);
+
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,follow');
+
+    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+      .flush({ data: [], meta: { totalPages: 1 } });
+    httpMock.verify();
+  }));
+
+  it('does not call setRobotsTag when sort=relevance with no other filters', fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({ sort: 'relevance' });
+
+    fixture.detectChanges();
+    tick(0);
+
+    expect(mockSeo.setRobotsTag).not.toHaveBeenCalled();
+
+    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+      .flush({ data: [], meta: { totalPages: 1 } });
+    httpMock.verify();
+  }));
+
+  it('does not call setRobotsTag when no sort param is present (defaults to relevance)', fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({});
+
+    fixture.detectChanges();
+    tick(0);
+
+    expect(mockSeo.setRobotsTag).not.toHaveBeenCalled();
+
+    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+      .flush({ data: [], meta: { totalPages: 1 } });
+    httpMock.verify();
+  }));
+});
+
 // ── loadFacets subscription lifecycle ─────────────────────────────────────────
 // Invariant: takeUntilDestroyed must cancel the in-flight facets HTTP request
 // when the component is destroyed, so facets.set(res) never executes on a dead

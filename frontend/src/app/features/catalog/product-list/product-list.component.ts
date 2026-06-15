@@ -626,7 +626,7 @@ export class ProductListComponent implements OnInit {
 
         const hasFilters = q.length > 0 || inStock || page > 1 ||
           gender.length > 0 || scentFamily.length > 0 ||
-          line.length > 0 || volume.length > 0;
+          line.length > 0 || volume.length > 0 || sort !== 'relevance';
         this.updateSeo(slug, featured, hasFilters);
         this.loadFacets(slug);
         this.loading.set(true);
