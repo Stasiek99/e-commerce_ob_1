@@ -156,6 +156,10 @@ describe('OrdersService', () => {
           useValue: {
             set: jest.fn().mockResolvedValue('OK'), // NX acquired by default
             eval: jest.fn().mockResolvedValue(1),   // lock released
+            get: jest.fn().mockResolvedValue(null), // not locked out by default
+            incr: jest.fn().mockResolvedValue(1),
+            expire: jest.fn().mockResolvedValue(1),
+            del: jest.fn().mockResolvedValue(1),
           },
         },
       ],
@@ -2136,31 +2140,29 @@ describe('OrdersService', () => {
   });
 
   describe('trackByEmailAndNumber', () => {
-    it('returns tracking info when order matches email and number', async () => {
-      const order = {
-        orderNumber: 'ORD-2026-000001',
+    it('returns only status, trackingNumber, carrier — no items, prices, or dates', async () => {
+      prisma.order.findFirst.mockResolvedValue({
         status: OrderStatus.PROCESSING,
-        createdAt: new Date(),
-        totalInCents: 10000,
-        items: [{ snapshotName: 'Dior', quantity: 1, snapshotPrice: 10000 }],
         shipment: { trackingNumber: 'TRK123', carrierCode: CarrierCode.INPOST },
-      };
-      prisma.order.findFirst.mockResolvedValue(order);
+      });
 
       const result = await service.trackByEmailAndNumber('test@example.com', 'ORD-2026-000001');
 
-      expect(result.orderNumber).toBe('ORD-2026-000001');
-      expect(result.trackingNumber).toBe('TRK123');
-      expect(result.carrier).toBe(CarrierCode.INPOST);
+      expect(result).toEqual({
+        status: OrderStatus.PROCESSING,
+        trackingNumber: 'TRK123',
+        carrier: CarrierCode.INPOST,
+      });
+      // Sensitive fields must be absent (GDPR Art. 5(1)(f) — enumeration guard)
+      expect(result).not.toHaveProperty('orderNumber');
+      expect(result).not.toHaveProperty('items');
+      expect(result).not.toHaveProperty('totalInCents');
+      expect(result).not.toHaveProperty('createdAt');
     });
 
     it('returns null tracking when no shipment exists yet', async () => {
       prisma.order.findFirst.mockResolvedValue({
-        orderNumber: 'ORD-2026-000001',
         status: OrderStatus.PENDING_PAYMENT,
-        createdAt: new Date(),
-        totalInCents: 10000,
-        items: [],
         shipment: null,
       });
 

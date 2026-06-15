@@ -598,24 +598,48 @@ export class OrdersService implements OnModuleInit {
   }
 
   async trackByEmailAndNumber(email: string, orderNumber: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Per-email lockout: block enumeration after 5 missed attempts (GDPR Art. 5(1)(f)).
+    // Lockout key lives for 1h; checked before the DB query to prevent any enumeration.
+    const lockoutKey = `track:lockout:${normalizedEmail}`;
+    if (await this.redis.get(lockoutKey)) {
+      throw new HttpException(
+        'Too many failed attempts. Please try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const order = await this.prisma.order.findFirst({
       where: {
         orderNumber: orderNumber.trim().toUpperCase(),
-        snapshotEmail: { equals: email.trim(), mode: 'insensitive' },
+        snapshotEmail: { equals: normalizedEmail, mode: 'insensitive' },
       },
-      include: {
-        items: { select: { snapshotName: true, quantity: true, snapshotPrice: true } },
+      select: {
+        status: true,
         shipment: { select: { trackingNumber: true, carrierCode: true } },
       },
     });
-    if (!order) throw new NotFoundException('Order not found');
 
+    if (!order) {
+      const failKey = `track:fail:${normalizedEmail}`;
+      const fails = await this.redis.incr(failKey);
+      if (fails === 1) await this.redis.expire(failKey, 3600);
+      if (fails >= 5) {
+        await this.redis.set(lockoutKey, '1', 'EX', 3600);
+        await this.redis.del(failKey);
+      }
+      throw new NotFoundException('Order not found');
+    }
+
+    // Reset failure counter on a successful lookup
+    await this.redis.del(`track:fail:${normalizedEmail}`);
+
+    // Unauthenticated endpoint — return status and tracking only.
+    // Omitting items/prices/dates prevents enumeration of purchase history
+    // via sequential order numbers (GDPR Art. 5(1)(f)).
     return {
-      orderNumber: order.orderNumber,
       status: order.status,
-      createdAt: order.createdAt,
-      totalInCents: order.totalInCents,
-      items: order.items,
       trackingNumber: order.shipment?.trackingNumber ?? null,
       carrier: order.shipment?.carrierCode ?? null,
     };
