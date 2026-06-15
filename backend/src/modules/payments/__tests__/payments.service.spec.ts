@@ -1000,19 +1000,34 @@ describe('PaymentsService', () => {
     // An HMAC/JWT in the URL leaks via Referer headers to analytics providers and
     // exposes the master JWT_ACCESS_SECRET if the token is ever decoded.
 
-    it('stores an opaque random token in Redis under the order-token key', async () => {
+    it('stores an opaque random token in Redis under the order-token key with a 7-day TTL', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
       prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
+      // TTL must be 7 days (604800s) — P24 bank transfers can take up to 5
+      // business days; a 1-hour TTL locked out guests before payment settled.
       expect(redis.set).toHaveBeenCalledWith(
         'order-token:order-1',
         expect.stringMatching(/^[0-9a-f]{64}$/),
         'EX',
-        3600,
+        604800,
       );
+    });
+
+    it('does NOT use a 1-hour TTL for the guest order token (P24/BLIK regression guard)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const setCall = redis.set.mock.calls.find((c: any[]) => c[0] === 'order-token:order-1');
+      const ttl: number = setCall[3];
+      expect(ttl).not.toBe(3600);
+      expect(ttl).toBe(7 * 24 * 3600);
     });
 
     it('embeds the stored Redis token in the success URL', async () => {

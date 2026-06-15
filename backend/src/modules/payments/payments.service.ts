@@ -164,7 +164,10 @@ export class PaymentsService {
     }
 
     const guestToken = randomBytes(32).toString('hex');
-    await this.redis.set(`order-token:${order.id}`, guestToken, 'EX', 3600);
+    // P24 bank transfers can take up to 5 business days; 7-day window covers the
+    // full async settlement period plus Stripe's retry window so guest customers
+    // can check payment status after returning from their bank's confirmation page.
+    await this.redis.set(`order-token:${order.id}`, guestToken, 'EX', 7 * 24 * 3600);
 
     let session: Awaited<ReturnType<StripeClient['createCheckoutSession']>>;
     try {
