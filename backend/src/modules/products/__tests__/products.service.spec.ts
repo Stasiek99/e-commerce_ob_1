@@ -83,6 +83,13 @@ describe('ProductsService — slug P2002 conflict handling', () => {
     incr: jest.fn().mockResolvedValue(1),
     get: jest.fn().mockResolvedValue(null),
     setex: jest.fn().mockResolvedValue('OK'),
+    publish: jest.fn().mockResolvedValue(0),
+  };
+
+  const mockSseSubscriber = {
+    on: jest.fn(),
+    subscribe: jest.fn().mockResolvedValue(undefined),
+    quit: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -97,6 +104,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
           useValue: { get: jest.fn().mockReturnValue('redis://localhost:6379') },
         },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
+        { provide: 'STOCK_SSE_REDIS_SUBSCRIBER', useValue: mockSseSubscriber },
       ],
     }).compile();
 

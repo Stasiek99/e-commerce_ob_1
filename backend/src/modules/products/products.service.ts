@@ -65,7 +65,6 @@ type FindAllQuery = {
 export class ProductsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ProductsService.name);
   private readonly stockUpdates$ = new Subject<{ id: string; stock: number }>();
-  private redisSubscriber: IORedis | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -73,15 +72,10 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+    @Inject('STOCK_SSE_REDIS_SUBSCRIBER') private readonly redisSubscriber: IORedis,
   ) {}
 
   onModuleInit() {
-    const url = this.configService.get<string>('REDIS_URL', 'redis://localhost:6379');
-    this.redisSubscriber = new IORedis(url, {
-      maxRetriesPerRequest: null,
-      retryStrategy: (times) => Math.min(times * 500, 5_000),
-    });
-    this.redisSubscriber.on('error', () => {});
     // Fire-and-forget: subscribe queues in IORedis and resolves when Redis connects.
     // Not awaited so NestJS bootstrap never blocks on Redis availability.
     this.redisSubscriber.subscribe('stock:updates').catch(() => {});
@@ -95,7 +89,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy() {
     this.stockUpdates$.complete();
-    await this.redisSubscriber?.quit().catch(() => {});
+    await this.redisSubscriber.quit().catch(() => {});
   }
 
   async findAll(query: FindAllQuery) {

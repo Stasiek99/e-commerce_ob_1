@@ -11,15 +11,14 @@ import { EmailModule } from '../email/email.module';
   providers: [
     ProductsService,
     {
-      provide: 'REDIS_CLIENT',
+      provide: 'STOCK_SSE_REDIS_SUBSCRIBER',
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const client = new IORedis(config.get<string>('REDIS_URL', 'redis://localhost:6379'), {
-          maxRetriesPerRequest: 1,
-          enableOfflineQueue: false,
-          retryStrategy: () => null,
+          maxRetriesPerRequest: null,
+          retryStrategy: (times) => Math.min(times * 500, 5_000),
         });
-        client.on('error', () => {});
+        client.on('error', (err: Error) => console.warn(`[Redis SSE] ${err.message}`));
         return client;
       },
     },
