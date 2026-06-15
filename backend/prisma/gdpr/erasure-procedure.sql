@@ -37,6 +37,9 @@ UPDATE orders SET
   "snapshotPhone"      = 'DELETED',
   "snapshotCompany"    = NULL,
   "snapshotNip"        = NULL,
+  "snapshotStreet"     = 'DELETED',
+  "snapshotCity"       = 'DELETED',
+  "snapshotPostalCode" = 'DELETED',
   "updatedAt"          = now()
 WHERE "userId" = :user_id;
 

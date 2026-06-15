@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { DhlClient } from '../carriers/dhl.client';
 
 jest.mock('axios');
@@ -61,13 +62,23 @@ describe('DhlClient', () => {
       expect(mockPost).not.toHaveBeenCalled();
     });
 
-    it('falls back to mock mode when DHL_ACCOUNT_NUMBER is absent', async () => {
-      const client = buildClient({ DHL_MOCK_ENABLED: 'false', DHL_ACCOUNT_NUMBER: undefined });
+    // FIX: missing DHL_ACCOUNT_NUMBER must NOT silently activate mock mode.
+    // Before the fix the OR clause `|| !configService.get('DHL_ACCOUNT_NUMBER')` caused
+    // real customers to receive MOCK_DHL_* tracking numbers when the env var was absent.
+    it('throws at construction when DHL_ACCOUNT_NUMBER is absent and DHL_MOCK_ENABLED is false', () => {
+      expect(() =>
+        buildClient({ DHL_MOCK_ENABLED: 'false', DHL_ACCOUNT_NUMBER: undefined }),
+      ).toThrow();
+    });
+
+    it('does NOT activate mock mode when DHL_MOCK_ENABLED is explicitly "false" and credentials are present', async () => {
+      const client = buildClient({ DHL_MOCK_ENABLED: 'false' });
+      mockPost.mockResolvedValue({ data: { shipmentTrackingNumber: 'JD-REAL', documents: [] } });
 
       const result = await client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Perfumy' });
 
-      expect(result.trackingNumber).toMatch(/^MOCK_DHL_/);
-      expect(mockPost).not.toHaveBeenCalled();
+      expect(result.trackingNumber).not.toMatch(/^MOCK_DHL_/);
+      expect(mockPost).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -202,6 +213,46 @@ describe('DhlClient', () => {
 
       expect(url).toContain('JD014600006060060058');
       expect(url).toContain('dhl.com');
+    });
+  });
+
+  // ── HTTP timeout handling ─────────────────────────────────────────────────
+
+  describe('HTTP timeout handling', () => {
+    it('passes timeout: 15_000 to axios.create()', () => {
+      buildClient();
+      const createCall = mockedAxios.create.mock.calls[0][0];
+      expect(createCall?.timeout).toBe(15_000);
+    });
+
+    it('throws ServiceUnavailableException when DHL API returns ECONNABORTED', async () => {
+      const client = buildClient();
+      mockedAxios.isAxiosError.mockReturnValue(true);
+      mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+
+      await expect(
+        client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
+      ).rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it('throws ServiceUnavailableException when DHL API returns ETIMEDOUT', async () => {
+      const client = buildClient();
+      mockedAxios.isAxiosError.mockReturnValue(true);
+      mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+      await expect(
+        client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
+      ).rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it('re-throws non-timeout Axios errors without converting them', async () => {
+      const client = buildClient();
+      mockedAxios.isAxiosError.mockReturnValue(true);
+      mockPost.mockRejectedValue(Object.assign(new Error('DHL 401 Unauthorized'), { code: 'ERR_BAD_REQUEST' }));
+
+      await expect(
+        client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
+      ).rejects.toThrow('DHL 401 Unauthorized');
     });
   });
 });

@@ -38,6 +38,8 @@ describe('UsersController', () => {
             createAddress: jest.fn(),
             updateAddress: jest.fn(),
             deleteAddress: jest.fn(),
+            recordConsent: jest.fn(),
+            recordAnonymousConsent: jest.fn(),
           },
         },
         {
@@ -154,6 +156,83 @@ describe('UsersController', () => {
 
       await expect(controller.deleteMe(mockUser as any, res)).rejects.toThrow('DB failure');
       expect(res.clearCookie).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── POST /users/consent ─────────────────────────────────────────────────
+
+  describe('recordConsent', () => {
+    function makeReq(cookies: Record<string, string> = {}) {
+      return { cookies } as any;
+    }
+
+    function makeRes() {
+      return { cookie: jest.fn() } as any;
+    }
+
+    it('delegates to UsersService.recordConsent for authenticated users', async () => {
+      usersService.recordConsent.mockResolvedValue(undefined);
+      const req = makeReq();
+      const res = makeRes();
+
+      await controller.recordConsent({ analytics: true }, mockUser as any, req, res);
+
+      expect(usersService.recordConsent).toHaveBeenCalledWith('user-1', true);
+      expect(usersService.recordAnonymousConsent).not.toHaveBeenCalled();
+    });
+
+    it('does not set a cookie for authenticated users', async () => {
+      usersService.recordConsent.mockResolvedValue(undefined);
+      const res = makeRes();
+
+      await controller.recordConsent({ analytics: true }, mockUser as any, makeReq(), res);
+
+      expect(res.cookie).not.toHaveBeenCalled();
+    });
+
+    it('issues a consent_id cookie for anonymous visitors with no existing cookie', async () => {
+      usersService.recordAnonymousConsent.mockResolvedValue(undefined);
+      const res = makeRes();
+
+      await controller.recordConsent({ analytics: true }, undefined, makeReq(), res);
+
+      expect(res.cookie).toHaveBeenCalledTimes(1);
+      const [name, , opts] = res.cookie.mock.calls[0] as [string, string, Record<string, unknown>];
+      expect(name).toBe('consent_id');
+      expect(opts.httpOnly).toBe(true);
+      expect(opts.sameSite).toBe('lax');
+      expect(typeof opts.maxAge).toBe('number');
+    });
+
+    it('stores the issued UUID in consent_logs for anonymous visitors', async () => {
+      usersService.recordAnonymousConsent.mockResolvedValue(undefined);
+      const res = makeRes();
+
+      await controller.recordConsent({ analytics: false }, undefined, makeReq(), res);
+
+      const [consentId, analytics] = usersService.recordAnonymousConsent.mock.calls[0] as [string, boolean];
+      expect(consentId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(analytics).toBe(false);
+    });
+
+    it('reuses an existing consent_id cookie without issuing a new one', async () => {
+      usersService.recordAnonymousConsent.mockResolvedValue(undefined);
+      const existingId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+      const req = makeReq({ consent_id: existingId });
+      const res = makeRes();
+
+      await controller.recordConsent({ analytics: true }, undefined, req, res);
+
+      expect(res.cookie).not.toHaveBeenCalled();
+      expect(usersService.recordAnonymousConsent).toHaveBeenCalledWith(existingId, true);
+    });
+
+    it('does not call recordConsent for anonymous visitors', async () => {
+      usersService.recordAnonymousConsent.mockResolvedValue(undefined);
+
+      await controller.recordConsent({ analytics: true }, undefined, makeReq(), makeRes());
+
+      expect(usersService.recordConsent).not.toHaveBeenCalled();
     });
   });
 

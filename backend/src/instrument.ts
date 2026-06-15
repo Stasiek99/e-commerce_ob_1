@@ -11,7 +11,23 @@ import { nodeProfilingIntegration } from '@sentry/profiling-node';
 
 const dsn = process.env.SENTRY_DSN;
 
-const SENSITIVE_KEYS = ['password', 'newPassword', 'nip', 'bankAccount', 'token'];
+const SENSITIVE_KEYS = new Set(['password', 'newPassword', 'nip', 'bankAccount', 'token']);
+
+export function redactDeep(value: unknown): void {
+  if (value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) redactDeep(item);
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (SENSITIVE_KEYS.has(key)) {
+      obj[key] = '[REDACTED]';
+    } else {
+      redactDeep(obj[key]);
+    }
+  }
+}
 
 if (dsn) {
   Sentry.init({
@@ -23,15 +39,17 @@ if (dsn) {
     profilesSampleRate: Number(process.env.SENTRY_PROFILES_SAMPLE_RATE ?? '0.1'),
     sendDefaultPii: false,
     beforeSend(event) {
+      if (event.request?.headers) {
+        delete (event.request.headers as Record<string, unknown>)['authorization'];
+        delete (event.request.headers as Record<string, unknown>)['cookie'];
+      }
       if (event.request?.data) {
         try {
           const body =
             typeof event.request.data === 'string'
               ? (JSON.parse(event.request.data) as Record<string, unknown>)
               : (event.request.data as Record<string, unknown>);
-          for (const key of SENSITIVE_KEYS) {
-            if (key in body) body[key] = '[REDACTED]';
-          }
+          redactDeep(body);
           event.request.data = JSON.stringify(body);
         } catch {
           // Non-JSON body — drop it entirely to avoid leaking raw form data

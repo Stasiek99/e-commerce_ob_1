@@ -15,7 +15,6 @@ import { catchError } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { AnalyticsService } from './core/services/analytics.service';
 import {
-  PreloadAllModules,
   Router,
   TitleStrategy,
   provideRouter,
@@ -24,6 +23,7 @@ import {
   withPreloading,
   withViewTransitions,
 } from '@angular/router';
+import { SelectivePreloadStrategy } from './core/strategies/selective-preload.strategy';
 import { AppTitleStrategy } from './core/strategies/title.strategy';
 import {
   provideHttpClient,
@@ -36,6 +36,7 @@ import * as Sentry from '@sentry/angular';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
+import { ssrTimeoutInterceptor } from './core/interceptors/ssr-timeout.interceptor';
 import { environment } from '../environments/environment';
 import { LOCAL_STORAGE } from './core/tokens/storage.tokens';
 
@@ -58,11 +59,11 @@ export const appConfig: ApplicationConfig = {
       withComponentInputBinding(),
       withViewTransitions(),
       withInMemoryScrolling({ scrollPositionRestoration: 'enabled' }),
-      withPreloading(PreloadAllModules),
+      withPreloading(SelectivePreloadStrategy),
     ),
     provideHttpClient(
       withFetch(),
-      withInterceptors([authInterceptor, errorInterceptor]),
+      withInterceptors([authInterceptor, errorInterceptor, ssrTimeoutInterceptor]),
     ),
     provideAnimationsAsync(),
     NG_EVENT_PLUGINS,

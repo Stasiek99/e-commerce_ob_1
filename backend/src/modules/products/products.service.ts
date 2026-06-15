@@ -1,8 +1,8 @@
 import { createHash } from 'crypto';
-import { ConflictException, Inject, Injectable, Logger, MessageEvent, NotFoundException } from '@nestjs/common';
-import { Observable } from 'rxjs';
+import { ConflictException, Inject, Injectable, Logger, MessageEvent, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Observable, Subject, Subscription, filter } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
-import type IORedis from 'ioredis';
+import IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
@@ -62,8 +62,10 @@ type FindAllQuery = {
 };
 
 @Injectable()
-export class ProductsService {
+export class ProductsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ProductsService.name);
+  private readonly stockUpdates$ = new Subject<{ id: string; stock: number }>();
+  private redisSubscriber: IORedis | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -72,6 +74,29 @@ export class ProductsService {
     private readonly storageService: StorageService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
+
+  onModuleInit() {
+    const url = this.configService.get<string>('REDIS_URL', 'redis://localhost:6379');
+    this.redisSubscriber = new IORedis(url, {
+      maxRetriesPerRequest: null,
+      retryStrategy: (times) => Math.min(times * 500, 5_000),
+    });
+    this.redisSubscriber.on('error', () => {});
+    // Fire-and-forget: subscribe queues in IORedis and resolves when Redis connects.
+    // Not awaited so NestJS bootstrap never blocks on Redis availability.
+    this.redisSubscriber.subscribe('stock:updates').catch(() => {});
+    this.redisSubscriber.on('message', (_channel: string, message: string) => {
+      try {
+        const update = JSON.parse(message) as { id: string; stock: number };
+        this.stockUpdates$.next(update);
+      } catch {}
+    });
+  }
+
+  async onModuleDestroy() {
+    this.stockUpdates$.complete();
+    await this.redisSubscriber?.quit().catch(() => {});
+  }
 
   async findAll(query: FindAllQuery) {
     const version = await this.getCacheVersion();
@@ -408,12 +433,19 @@ export class ProductsService {
     sortOrder?: number;
   }) {
     const { categoryId, ...rest } = data;
-    const product = await this.prisma.product.create({
-      data: { ...rest, category: { connect: { id: categoryId } } },
-      select: PRODUCT_SELECT,
-    });
-    this.invalidateProductCaches();
-    return product;
+    try {
+      const product = await this.prisma.product.create({
+        data: { ...rest, category: { connect: { id: categoryId } } },
+        select: PRODUCT_SELECT,
+      });
+      this.invalidateProductCaches();
+      return product;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Slug already in use');
+      }
+      throw err;
+    }
   }
 
   async update(id: string, data: {
@@ -442,16 +474,30 @@ export class ProductsService {
     if (categoryId) {
       prismaData.category = { connect: { id: categoryId } };
     }
-    const product = await this.prisma.product.update({ where: { id }, data: prismaData, select: PRODUCT_SELECT });
-    this.invalidateProductCaches();
-    return product;
+    try {
+      const product = await this.prisma.product.update({ where: { id }, data: prismaData, select: PRODUCT_SELECT });
+      this.invalidateProductCaches();
+      return product;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Slug already in use');
+      }
+      throw err;
+    }
   }
 
   async remove(id: string) {
     await this.ensureExists(id);
-    const product = await this.prisma.product.update({
-      where: { id },
-      data: { isActive: false },
+    const product = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      await tx.productVariant.updateMany({
+        where: { productId: id },
+        data: { isActive: false },
+      });
+      return updated;
     });
     this.invalidateProductCaches();
     return product;
@@ -504,6 +550,14 @@ export class ProductsService {
         `Variant ${variantId} is referenced by ${orderItemCount} order item(s) and cannot be deleted`,
       );
     }
+    const cartItemCount = await this.prisma.cartItem.count({
+      where: { productVariantId: variantId },
+    });
+    if (cartItemCount > 0) {
+      throw new ConflictException(
+        `Variant ${variantId} is in ${cartItemCount} active cart(s) — soft-deactivate instead of deleting`,
+      );
+    }
     await this.prisma.productVariant.delete({ where: { id: variantId } });
   }
 
@@ -527,6 +581,7 @@ export class ProductsService {
       this.dispatchBackInStockNotifications(variant.productId, variant.label).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
     }
 
+    this.redis.publish('stock:updates', JSON.stringify({ id: variantId, stock: newStock })).catch(() => {});
     this.invalidateProductCaches();
     return updated;
   }
@@ -676,34 +731,36 @@ export class ProductsService {
 
   createStockStream(variantIds: string[]): Observable<MessageEvent> {
     return new Observable((subscriber) => {
+      const idSet = new Set(variantIds);
       const seen = new Map<string, number>();
-      let timer: ReturnType<typeof setTimeout>;
+      let innerSub: Subscription | null = null;
 
-      const poll = async () => {
-        try {
-          const rows = await this.prisma.productVariant.findMany({
-            where: { id: { in: variantIds } },
-            select: { id: true, stock: true },
-          });
+      // Fetch current snapshot first, then subscribe to push updates.
+      // Ordering: snapshot before Subject subscription avoids emitting stale
+      // pre-snapshot state; any updates missed during the query are tolerable
+      // (the client reconnects on idle timeout or page reload).
+      this.prisma.productVariant.findMany({
+        where: { id: { in: variantIds } },
+        select: { id: true, stock: true },
+      }).then((rows) => {
+        if (subscriber.closed) return;
+        for (const r of rows) seen.set(r.id, r.stock);
+        subscriber.next({ data: rows } as MessageEvent);
 
-          const updates = rows.filter(
-            (r) => !seen.has(r.id) || seen.get(r.id) !== r.stock,
-          );
+        innerSub = this.stockUpdates$.pipe(
+          filter((u) => idSet.has(u.id)),
+        ).subscribe({
+          next: (u) => {
+            if (seen.get(u.id) !== u.stock) {
+              seen.set(u.id, u.stock);
+              subscriber.next({ data: [u] } as MessageEvent);
+            }
+          },
+          error: (err) => subscriber.error(err),
+        });
+      }).catch((err) => subscriber.error(err));
 
-          if (updates.length) {
-            for (const r of updates) seen.set(r.id, r.stock);
-            subscriber.next({ data: updates } as MessageEvent);
-          }
-        } catch (err) {
-          this.logger.warn(`stock-stream poll error: ${(err as Error).message}`);
-        }
-
-        timer = setTimeout(poll, 5_000);
-      };
-
-      poll();
-
-      return () => clearTimeout(timer);
+      return () => { innerSub?.unsubscribe(); };
     });
   }
 

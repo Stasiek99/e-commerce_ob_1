@@ -1,6 +1,8 @@
 import { APP_BASE_HREF } from '@angular/common';
+import { CSP_NONCE } from '@angular/core';
 import { CommonEngine } from '@angular/ssr/node';
 import express from 'express';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import bootstrap from './main.server';
@@ -8,6 +10,8 @@ import { LOCAL_STORAGE } from './app/core/tokens/storage.tokens';
 import { RESPONSE } from './app/core/tokens/ssr.tokens';
 import { ssrCacheHeaders } from './ssr-cache-headers';
 import { ssrSecurityHeaders } from './ssr-security-headers';
+
+const SSR_RENDER_TIMEOUT_MS = 10_000;
 
 export interface AppOptions {
   browserDistFolder?: string;
@@ -36,6 +40,10 @@ export function app(opts: AppOptions = {}): express.Express {
 
   const commonEngine = new CommonEngine();
 
+  // Pre-read the CSR shell once at startup so it's available instantly for
+  // timeout fallbacks without a synchronous fs call per request.
+  const csrShell = readFileSync(join(browserDistFolder, 'index.html'), 'utf-8');
+
   server.set('view engine', 'html');
   server.set('views', browserDistFolder);
 
@@ -52,23 +60,51 @@ export function app(opts: AppOptions = {}): express.Express {
     }),
   );
 
-  // All HTML routes: server-side render via Angular CommonEngine
+  // All HTML routes: server-side render via Angular CommonEngine.
+  // A 10s Promise.race guards against Railway cold-start cascades: if the
+  // backend is slow to respond during SSR ngOnInit calls, we fall back to the
+  // CSR shell so the Lambda doesn't reach Vercel's 30s hard cut and return 504.
   server.get('**', (req, res, next) => {
     const { protocol, originalUrl, headers } = req;
-    commonEngine
-      .render({
-        bootstrap,
-        documentFilePath: indexHtml,
-        url: `${protocol}://${headers.host}${originalUrl}`,
-        publicPath: browserDistFolder,
-        providers: [
-          { provide: APP_BASE_HREF, useValue: req.baseUrl },
-          { provide: LOCAL_STORAGE, useValue: createRequestStorageMock() },
-          { provide: RESPONSE, useValue: res },
-        ],
+
+    let timeoutHandle: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        const err = new Error('SSR render timed out') as Error & { name: string };
+        err.name = 'SSRTimeoutError';
+        reject(err);
+      }, SSR_RENDER_TIMEOUT_MS);
+    });
+
+    const renderPromise = commonEngine.render({
+      bootstrap,
+      documentFilePath: indexHtml,
+      url: `${protocol}://${headers.host}${originalUrl}`,
+      publicPath: browserDistFolder,
+      providers: [
+        { provide: APP_BASE_HREF, useValue: req.baseUrl },
+        { provide: LOCAL_STORAGE, useValue: createRequestStorageMock() },
+        { provide: RESPONSE, useValue: res },
+        { provide: CSP_NONCE, useValue: res.locals['cspNonce'] as string },
+      ],
+    });
+
+    Promise.race([renderPromise, timeoutPromise])
+      .then(html => {
+        clearTimeout(timeoutHandle);
+        res.send(html);
       })
-      .then(html => res.send(html))
-      .catch(err => next(err));
+      .catch(err => {
+        clearTimeout(timeoutHandle);
+        if ((err as Error & { name?: string }).name === 'SSRTimeoutError') {
+          console.error(`[SSR timeout] ${SSR_RENDER_TIMEOUT_MS}ms exceeded for ${req.url} — serving CSR shell`);
+          res.set('X-SSR-Fallback', 'timeout');
+          res.set('Cache-Control', 'no-store');
+          res.send(csrShell);
+          return;
+        }
+        next(err);
+      });
   });
 
   // SSR error handler — logs and falls back to a bare 500 rather than hanging

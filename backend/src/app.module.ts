@@ -32,7 +32,7 @@ import { ReturnsModule } from './modules/returns/returns.module';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { RedisModule } from './modules/redis/redis.module';
-import { PINO_REDACT_PATHS } from './logger-redact-paths';
+import { PINO_REDACT_PATHS, PINO_SERIALIZERS } from './logger-redact-paths';
 
 export { PINO_REDACT_PATHS };
 
@@ -46,6 +46,7 @@ export { PINO_REDACT_PATHS };
           : undefined,
         level: process.env.LOG_LEVEL ?? 'info',
         redact: [...PINO_REDACT_PATHS],
+        serializers: PINO_SERIALIZERS,
         mixin: () => {
           const correlationId = getCorrelationId();
           return correlationId ? { correlationId } : {};

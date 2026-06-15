@@ -14,6 +14,7 @@ import {
 import { ActivatedRoute, Router, provideRouter } from '@angular/router';
 import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { CheckoutFailureComponent } from '../checkout-failure.component';
+import { SeoService } from '../../../../core/services/seo.service';
 
 function setup(opts: { orderId?: string | null; guestToken?: string | null } = {}) {
   const { orderId = 'order-1', guestToken = null } = opts;
@@ -53,6 +54,50 @@ function setup(opts: { orderId?: string | null; guestToken?: string | null } = {
 
   return { fixture, component, httpMock, navigateSpy };
 }
+
+// ── robots meta tag ───────────────────────────────────────────────────────────
+
+describe('CheckoutFailureComponent — robots meta tag', () => {
+  let fixture: ComponentFixture<CheckoutFailureComponent>;
+  let mockSeo: { setRobotsTag: jest.Mock };
+  let httpMock: HttpTestingController;
+
+  beforeEach(() => {
+    mockSeo = { setRobotsTag: jest.fn() };
+
+    TestBed.configureTestingModule({
+      imports: [CheckoutFailureComponent],
+      schemas: [NO_ERRORS_SCHEMA],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: { get: () => null } } },
+        },
+        { provide: SeoService, useValue: mockSeo },
+      ],
+    });
+
+    fixture = TestBed.createComponent(CheckoutFailureComponent);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('sets noindex,nofollow on init so failure pages are never crawled by Googlebot', () => {
+    fixture.detectChanges();
+
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,nofollow');
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── guest cancel token ────────────────────────────────────────────────────────
 
 describe('CheckoutFailureComponent — guest cancel token', () => {
   afterEach(() => {

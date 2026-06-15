@@ -226,13 +226,12 @@ export class EmailService {
     orderNumber: string;
     customerName: string;
     email: string;
-    phone?: string;
+    adminUrl?: string;
     type: 'WITHDRAWAL' | 'COMPLAINT';
     deliveryDate?: string;
     items: Array<{ productName: string; quantity: number }>;
     reason?: string;
     requestedResolution?: string;
-    bankAccount?: string;
   }) {
     const { subject, html } = returnAdminNotificationTemplate(data);
     return this.send('return_admin_notification', data.to, subject, html, {

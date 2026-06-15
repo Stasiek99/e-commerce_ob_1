@@ -1,10 +1,11 @@
 import { TestBed } from '@angular/core/testing';
-import { PreloadAllModules, PreloadingStrategy, TitleStrategy } from '@angular/router';
+import { PreloadingStrategy, TitleStrategy } from '@angular/router';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { of } from 'rxjs';
 
 import { appConfig } from './app.config';
 import { AppTitleStrategy } from './core/strategies/title.strategy';
+import { SelectivePreloadStrategy } from './core/strategies/selective-preload.strategy';
 import { AuthService } from './core/services/auth.service';
 import { AnalyticsService } from './core/services/analytics.service';
 
@@ -22,12 +23,12 @@ describe('appConfig', () => {
     });
   });
 
-  // Regression guard: withPreloading(PreloadAllModules) must remain in provideRouter.
+  // Regression guard: withPreloading(SelectivePreloadStrategy) must remain in provideRouter.
   // Removing it reverts the PreloadingStrategy token to NoPreloading, failing this test.
-  it('registers PreloadAllModules as the router preloading strategy', () => {
+  it('registers SelectivePreloadStrategy as the router preloading strategy', () => {
     const strategy = TestBed.inject(PreloadingStrategy);
 
-    expect(strategy).toBeInstanceOf(PreloadAllModules);
+    expect(strategy).toBeInstanceOf(SelectivePreloadStrategy);
   });
 
   // Regression guard: AppTitleStrategy must be wired as the TitleStrategy so screen

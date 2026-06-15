@@ -19,6 +19,7 @@ import { StripeClient } from '../stripe.client';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
+import { CouponService } from '../../coupons/coupon.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -141,6 +142,10 @@ describe('PaymentsService — orphaned coupon cleanup on payment retry', () => {
         {
           provide: 'REDIS_CLIENT',
           useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
+        },
+        {
+          provide: CouponService,
+          useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
         },
       ],
     }).compile();

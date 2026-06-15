@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { OrderStatus } from '@prisma/client';
 import { CartCleanupService } from '../cart-cleanup.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -21,6 +22,9 @@ describe('CartCleanupService', () => {
             },
             cartItem: {
               deleteMany: jest.fn(),
+            },
+            order: {
+              findMany: jest.fn().mockResolvedValue([]),
             },
           },
         },
@@ -176,6 +180,88 @@ describe('CartCleanupService', () => {
 
       const call = prisma.cartItem.deleteMany.mock.calls[0][0];
       expect(call.where.cartId).toEqual({ in: ['auth-cart-1'] });
+    });
+
+    // ── PENDING_PAYMENT guard (Stripe session 24h window) ─────────────────────
+    // Invariant: cart items must NOT be deleted for users who have a
+    // PENDING_PAYMENT order placed within the last 24 hours. Stripe Checkout
+    // Sessions are valid for 24h; deleting items mid-session leaves the cart
+    // empty if the customer returns to pay after the 4h TTL has elapsed.
+
+    it('does not delete cart items for a user with a PENDING_PAYMENT order from the last 24h', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findMany.mockResolvedValue([{ userId: 'user-with-pending' }]);
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      const cartQuery = prisma.cart.findMany.mock.calls[0][0];
+      expect(cartQuery.where).toMatchObject({
+        NOT: { userId: { in: ['user-with-pending'] } },
+      });
+    });
+
+    it('excludes PENDING_PAYMENT users from the cart query using NOT/in filter', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findMany.mockResolvedValue([
+        { userId: 'user-a' },
+        { userId: 'user-b' },
+      ]);
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      const cartQuery = prisma.cart.findMany.mock.calls[0][0];
+      expect(cartQuery.where.NOT).toEqual({ userId: { in: ['user-a', 'user-b'] } });
+    });
+
+    it('does not add a NOT filter when no users have a PENDING_PAYMENT order', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findMany.mockResolvedValue([]);
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      const cartQuery = prisma.cart.findMany.mock.calls[0][0];
+      expect(cartQuery.where.NOT).toBeUndefined();
+    });
+
+    it('queries PENDING_PAYMENT orders created within the last 24 hours only', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2025-06-01T12:00:00Z'));
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findMany.mockResolvedValue([]);
+      prisma.cart.findMany.mockResolvedValue([]);
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: OrderStatus.PENDING_PAYMENT,
+            createdAt: { gt: new Date('2025-05-31T12:00:00Z') },
+            userId: { not: null },
+          }),
+        }),
+      );
+
+      jest.useRealTimers();
+    });
+
+    it('still deletes cart items for users without a PENDING_PAYMENT order', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.order.findMany.mockResolvedValue([{ userId: 'pending-user' }]);
+      prisma.cart.findMany.mockResolvedValue([{ id: 'cart-normal-user' }]);
+      prisma.cartItem.deleteMany.mockResolvedValue({ count: 2 });
+
+      await service.expireAuthenticatedCartItems();
+
+      expect(prisma.cartItem.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            cartId: { in: ['cart-normal-user'] },
+          }),
+        }),
+      );
     });
   });
 

@@ -5,24 +5,20 @@ import {
   Get,
   HttpException,
   HttpStatus,
-  Inject,
   MessageEvent,
   Param,
   Patch,
   Post,
   Query,
-  Req,
   Sse,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { Observable, from, switchMap, throwError, tap } from 'rxjs';
+import { Observable, throwError } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
-import type { Request } from 'express';
-import type IORedis from 'ioredis';
 import { ProductsService } from './products.service';
 import { StorageService } from '../storage/storage.service';
 import { validateImageMagicBytes } from '../storage/image-file-filter';
@@ -40,17 +36,19 @@ import {
   UpdateVariantStockDto,
 } from './dto/product.dto';
 
-const SSE_MAX_CONNS_PER_IP = 5;
+const SSE_MAX_CONNS_GLOBAL = 500;
 const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
-const SSE_CONN_KEY_TTL_SECONDS = 700;
 
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ProductsController {
+  // Server-local counter — resets to 0 on every restart, so a crash can never
+  // leave stale Redis keys that lock users out until a TTL expires.
+  private sseConnCount = 0;
+
   constructor(
     private readonly productsService: ProductsService,
     private readonly storageService: StorageService,
-    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   @Public()
@@ -78,60 +76,49 @@ export class ProductsController {
   @Sse('variants/stock-stream')
   streamVariantStock(
     @Query('ids') ids: string,
-    @Req() req: Request,
   ): Observable<MessageEvent> {
-    const ip =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ??
-      req.ip ??
-      'unknown';
-    const connKey = `sse:conn:${ip}`;
-
     const variantIds = (ids ?? '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 10);
 
-    return from(this.redis.incr(connKey)).pipe(
-      tap(() => { this.redis.expire(connKey, SSE_CONN_KEY_TTL_SECONDS).catch(() => {}); }),
-      switchMap((count) => {
-        if (count > SSE_MAX_CONNS_PER_IP) {
-          this.redis.decr(connKey).catch(() => {});
-          return throwError(
-            () => new HttpException(
-              'Too many concurrent stock stream connections from this IP. Reconnect later.',
-              HttpStatus.TOO_MANY_REQUESTS,
-            ),
-          );
-        }
+    if (this.sseConnCount >= SSE_MAX_CONNS_GLOBAL) {
+      return throwError(
+        () => new HttpException(
+          'SSE connection limit reached. Try again later.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        ),
+      );
+    }
 
-        return new Observable<MessageEvent>((subscriber) => {
-          let idleTimer: ReturnType<typeof setTimeout>;
+    this.sseConnCount++;
 
-          const resetIdle = () => {
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => {
-              subscriber.next({ data: { reconnect: true } } as unknown as MessageEvent);
-              subscriber.complete();
-            }, SSE_IDLE_TIMEOUT_MS);
-          };
+    return new Observable<MessageEvent>((subscriber) => {
+      let idleTimer: ReturnType<typeof setTimeout>;
 
-          resetIdle();
+      const resetIdle = () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          subscriber.next({ data: { reconnect: true } } as unknown as MessageEvent);
+          subscriber.complete();
+        }, SSE_IDLE_TIMEOUT_MS);
+      };
 
-          const innerSub = this.productsService.createStockStream(variantIds).subscribe({
-            next: (event) => { resetIdle(); subscriber.next(event); },
-            error: (err) => subscriber.error(err),
-            complete: () => subscriber.complete(),
-          });
+      resetIdle();
 
-          return () => {
-            clearTimeout(idleTimer);
-            innerSub.unsubscribe();
-            this.redis.decr(connKey).catch(() => {});
-          };
-        });
-      }),
-    );
+      const innerSub = this.productsService.createStockStream(variantIds).subscribe({
+        next: (event) => { resetIdle(); subscriber.next(event); },
+        error: (err) => subscriber.error(err),
+        complete: () => subscriber.complete(),
+      });
+
+      return () => {
+        clearTimeout(idleTimer);
+        innerSub.unsubscribe();
+        this.sseConnCount--;
+      };
+    });
   }
 
   @Public()

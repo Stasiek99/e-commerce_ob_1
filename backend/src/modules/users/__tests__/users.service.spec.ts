@@ -199,15 +199,57 @@ describe('UsersService', () => {
       expect(call).toMatchObject({
         where: { userId: 'user-1' },
         data: expect.objectContaining({
-          snapshotFirstName: '[usunięto]',
-          snapshotLastName: '[usunięto]',
-          snapshotPhone: '',
-          snapshotNip: null,
+          snapshotFirstName:  '[usunięto]',
+          snapshotLastName:   '[usunięto]',
+          snapshotPhone:      '',
+          snapshotNip:        null,
+          snapshotStreet:     '[usunięto]',
+          snapshotCity:       '[usunięto]',
+          snapshotPostalCode: '[usunięto]',
         }),
       });
       // snapshotEmail must be an unguessable UUID-suffixed value, never the static sentinel
       expect(call.data.snapshotEmail).toMatch(/^deleted\+[0-9a-f-]{36}@deleted\.invalid$/);
       expect(call.data.snapshotEmail).not.toBe('deleted@deleted');
+    });
+
+    // ── GDPR Art. 17 — address PII erasure (snapshotStreet/City/PostalCode) ──
+    // These three fields were previously omitted from the erasure payload,
+    // leaving a full street address in the order row after an Art. 17 request.
+    // Combined with postalCode + city they uniquely identify a natural person.
+
+    describe('address PII erasure', () => {
+      it('erases snapshotStreet with the GDPR placeholder string', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data.snapshotStreet).toBe('[usunięto]');
+      });
+
+      it('erases snapshotCity with the GDPR placeholder string', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data.snapshotCity).toBe('[usunięto]');
+      });
+
+      it('erases snapshotPostalCode with the GDPR placeholder string', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data.snapshotPostalCode).toBe('[usunięto]');
+      });
+
+      it('erases all three address fields in the same updateMany call — no partial erasure', async () => {
+        await service.deleteAccount('user-1');
+
+        const [[call]] = prisma.order.updateMany.mock.calls;
+        expect(call.data).toMatchObject({
+          snapshotStreet:     '[usunięto]',
+          snapshotCity:       '[usunięto]',
+          snapshotPostalCode: '[usunięto]',
+        });
+      });
     });
 
     it('generates a unique snapshotEmail sentinel on each deleteAccount call — prevents order enumeration', async () => {
@@ -429,24 +471,44 @@ describe('UsersService', () => {
   });
 
   describe('recordAnonymousConsent', () => {
-    it('creates a ConsentLog entry with the provided session hash and analytics value', async () => {
+    const CONSENT_UUID = 'a1b2c3d4-0000-0000-0000-000000000099';
+
+    it('creates a ConsentLog entry with the provided consent UUID and analytics: true', async () => {
       prisma.consentLog.create.mockResolvedValue({ id: 'log-1' });
 
-      await service.recordAnonymousConsent('abc123hash', true);
+      await service.recordAnonymousConsent(CONSENT_UUID, true);
 
-      expect(prisma.consentLog.create).toHaveBeenCalledWith({
-        data: { sessionHash: 'abc123hash', analytics: true },
-      });
+      expect(prisma.consentLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ consentId: CONSENT_UUID, analytics: true }),
+        }),
+      );
     });
 
     it('creates a ConsentLog entry with analytics: false when visitor rejects', async () => {
       prisma.consentLog.create.mockResolvedValue({ id: 'log-2' });
 
-      await service.recordAnonymousConsent('xyz789hash', false);
+      await service.recordAnonymousConsent(CONSENT_UUID, false);
 
-      expect(prisma.consentLog.create).toHaveBeenCalledWith({
-        data: { sessionHash: 'xyz789hash', analytics: false },
-      });
+      expect(prisma.consentLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ consentId: CONSENT_UUID, analytics: false }),
+        }),
+      );
+    });
+
+    it('sets expiresAt approximately 5 years in the future', async () => {
+      prisma.consentLog.create.mockResolvedValue({ id: 'log-3' });
+
+      await service.recordAnonymousConsent(CONSENT_UUID, true);
+
+      const { expiresAt } = prisma.consentLog.create.mock.calls[0][0].data as { expiresAt: Date };
+      // setFullYear adds 5 calendar years (may include leap days) — allow ±2 days tolerance
+      const now = Date.now();
+      const fiveYearsMinMs = 5 * 365 * 24 * 60 * 60 * 1000 - 2 * 86400 * 1000;
+      const fiveYearsMaxMs = 5 * 366 * 24 * 60 * 60 * 1000 + 2 * 86400 * 1000;
+      expect(expiresAt.getTime()).toBeGreaterThanOrEqual(now + fiveYearsMinMs);
+      expect(expiresAt.getTime()).toBeLessThanOrEqual(now + fiveYearsMaxMs);
     });
   });
 });

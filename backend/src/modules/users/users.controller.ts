@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { createHash } from 'crypto';
+import { randomUUID } from 'crypto';
 import { UsersService } from './users.service';
 import { AuthService } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -97,13 +97,22 @@ export class UsersController {
     @Body() body: { analytics: boolean },
     @CurrentUser() user: User | undefined,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     if (user) {
       await this.usersService.recordConsent(user.id, body.analytics);
     } else {
-      const raw = `${req.ip}|${req.headers['user-agent'] ?? ''}`;
-      const sessionHash = createHash('sha256').update(raw).digest('hex');
-      await this.usersService.recordAnonymousConsent(sessionHash, body.analytics);
+      const existingId = (req.cookies as Record<string, string>)?.['consent_id'];
+      const consentId = existingId ?? randomUUID();
+      if (!existingId) {
+        res.cookie('consent_id', consentId, {
+          httpOnly: true,
+          sameSite: 'lax',
+          maxAge: 5 * 365 * 24 * 60 * 60 * 1000,
+          secure: process.env.NODE_ENV === 'production',
+        });
+      }
+      await this.usersService.recordAnonymousConsent(consentId, body.analytics);
     }
   }
 

@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
@@ -10,6 +10,7 @@ import { StripeClient } from '../stripe.client';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
+import { CouponService } from '../../coupons/coupon.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -30,6 +31,7 @@ describe('PaymentsService', () => {
   let stripeClient: jest.Mocked<StripeClient>;
   let emailService: jest.Mocked<EmailQueueService>;
   let invoiceService: jest.Mocked<InvoiceService>;
+  let couponService: jest.Mocked<CouponService>;
   let redis: any;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
@@ -160,6 +162,12 @@ describe('PaymentsService', () => {
           provide: 'REDIS_CLIENT',
           useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
         },
+        {
+          provide: CouponService,
+          useValue: {
+            validate: jest.fn().mockResolvedValue({ valid: true }),
+          },
+        },
       ],
     }).compile();
 
@@ -169,6 +177,7 @@ describe('PaymentsService', () => {
     stripeClient = module.get(StripeClient);
     emailService = module.get(EmailQueueService);
     invoiceService = module.get(InvoiceService);
+    couponService = module.get(CouponService);
 
     // Default: pass prisma mock methods as tx so callback-form $transaction
     // executes the callback and tests can assert on prisma.* directly.
@@ -176,6 +185,7 @@ describe('PaymentsService', () => {
     prisma.$transaction.mockImplementation(async (fn: any) => {
       if (typeof fn === 'function') {
         return fn({
+          $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
           processedStripeEvent: prisma.processedStripeEvent,
           payment: prisma.payment,
           order: prisma.order,
@@ -247,6 +257,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
@@ -269,6 +280,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
@@ -1040,6 +1052,120 @@ describe('PaymentsService', () => {
 
       expect(firstToken).not.toBe(secondToken);
     });
+
+    // ── coupon re-validation on retry ────────────────────────────────────────
+    // Invariant: initiatePayment must re-validate the coupon every time it is
+    // called (including retryPayment). A coupon deactivated after the original
+    // order was placed must NOT be honoured on subsequent payment attempts.
+
+    const mockOrderWithCoupon = {
+      id: 'order-1',
+      orderNumber: 'ORD-2026-000001',
+      snapshotEmail: 'test@example.com',
+      userId: 'user-1',
+      totalInCents: 11999,
+      itemsTotalInCents: 13498,
+      shippingCostInCents: 1499,
+      discountInCents: 2000,
+      couponId: 'coupon-abc',
+      couponCode: 'SUMMER20',
+      carrierCode: 'INPOST',
+      items: [
+        { snapshotName: 'Dior 100ml', snapshotSku: 'DS-100', snapshotPrice: 13498, quantity: 1 },
+      ],
+    };
+
+    it('throws BadRequestException when the coupon has been deactivated since order creation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({
+        valid: false,
+        message: 'Kod rabatowy jest nieprawidłowy lub nieaktywny.',
+      });
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the coupon has expired since order creation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({
+        valid: false,
+        message: 'Ten kod wygasł.',
+      });
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(BadRequestException);
+
+      expect(stripeClient.createCheckoutSession).not.toHaveBeenCalled();
+    });
+
+    it('uses the coupon validation failure message in the thrown exception', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      const failureMessage = 'Ten kod osiągnął limit użyć.';
+      couponService.validate.mockResolvedValue({ valid: false, message: failureMessage });
+
+      await expect(service.initiatePayment('order-1')).rejects.toThrow(failureMessage);
+    });
+
+    it('proceeds to Stripe checkout when the coupon is still valid on retry', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      const result = await service.initiatePayment('order-1');
+
+      expect(result.paymentUrl).toBe(mockSession.url);
+      expect(stripeClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips coupon re-validation when the order has no couponId', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithCoupon,
+        couponId: null,
+        couponCode: null,
+        discountInCents: 0,
+      });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(couponService.validate).not.toHaveBeenCalled();
+    });
+
+    it('passes userId and itemsTotalInCents to couponService.validate for per-user limit checks', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(couponService.validate).toHaveBeenCalledWith(
+        'SUMMER20',
+        mockOrderWithCoupon.itemsTotalInCents,
+        mockOrderWithCoupon.userId,
+      );
+    });
+
+    it('passes undefined userId to couponService.validate for guest orders', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...mockOrderWithCoupon,
+        userId: null,
+      });
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      expect(couponService.validate).toHaveBeenCalledWith(
+        'SUMMER20',
+        mockOrderWithCoupon.itemsTotalInCents,
+        undefined,
+      );
+    });
   });
 
   describe('getPaymentStatus', () => {
@@ -1049,7 +1175,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { userId: 'user-1', orderNumber: 'ORD-2026-000001' },
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000001', shippingCostInCents: 0, items: [] },
       });
 
       const result = await service.getPaymentStatus('order-1', 'user-1');
@@ -1058,6 +1184,8 @@ describe('PaymentsService', () => {
         status: PaymentStatus.COMPLETED,
         paidAt: now,
         orderNumber: 'ORD-2026-000001',
+        shippingInCents: 0,
+        items: [],
       });
     });
 
@@ -1065,7 +1193,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { userId: 'user-1', orderNumber: 'ORD-2026-000042' },
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000042', shippingCostInCents: 0, items: [] },
       });
 
       const result = await service.getPaymentStatus('order-1', 'user-1');
@@ -1105,7 +1233,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001', shippingCostInCents: 0, items: [] },
       });
       redis.get.mockResolvedValue(VALID_TOKEN);
 
@@ -1115,6 +1243,8 @@ describe('PaymentsService', () => {
         status: PaymentStatus.COMPLETED,
         paidAt: now,
         orderNumber: 'ORD-2026-000001',
+        shippingInCents: 0,
+        items: [],
       });
     });
 
@@ -1122,7 +1252,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { orderNumber: 'ORD-2026-000042' },
+        order: { orderNumber: 'ORD-2026-000042', shippingCostInCents: 0, items: [] },
       });
       redis.get.mockResolvedValue(VALID_TOKEN);
 
@@ -1135,7 +1265,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001', shippingCostInCents: 0, items: [] },
       });
       redis.get.mockResolvedValue(VALID_TOKEN);
 
@@ -2237,6 +2367,10 @@ describe('PaymentsService', () => {
             provide: 'REDIS_CLIENT',
             useValue: { set: jest.fn().mockResolvedValue('OK') },
           },
+          {
+            provide: CouponService,
+            useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
+          },
         ],
       }).compile();
 
@@ -2362,11 +2496,25 @@ describe('PaymentsService', () => {
         expect.objectContaining({
           text: expect.stringContaining('ORD-2026-000099'),
         }),
+        { timeout: 3_000 },
       );
       expect(axios.post).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ text: expect.stringContaining('299.00') }),
+        { timeout: 3_000 },
       );
+    });
+
+    it('passes a 3-second timeout to axios.post to prevent graceful-shutdown stall', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'MERCHANT_SLACK_WEBHOOK_URL') return 'https://hooks.slack.com/services/T00/B00/yyy';
+        return undefined;
+      });
+
+      await triggerPaid();
+
+      const [, , config] = (axios.post as jest.Mock).mock.calls[0];
+      expect(config).toEqual({ timeout: 3_000 });
     });
 
     it('does not POST to Slack when MERCHANT_SLACK_WEBHOOK_URL is absent', async () => {
@@ -2565,6 +2713,130 @@ describe('PaymentsService', () => {
 
       expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
       expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── handlePaymentFailure — SELECT FOR UPDATE race-condition guard ─────────
+  // Invariant: when expired arrives first and completed arrives second (out-of-order
+  // BLIK/P24 delivery), the SELECT FOR UPDATE lock inside handlePaymentFailure must
+  // see COMPLETED (set by the concurrent markSessionPaid) and bail — no double-cancel.
+  // Conversely, if expired arrives and the payment is still PENDING, it must proceed.
+
+  describe('handlePaymentFailure — SELECT FOR UPDATE serialisation guard', () => {
+    it('does NOT cancel the order when SELECT FOR UPDATE sees payment already COMPLETED (completed won the race)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.COMPLETED }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { update: txOrderUpdate },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.expired', mockSession),
+      );
+
+      expect(txOrderUpdate).not.toHaveBeenCalled();
+    });
+
+    it('DOES cancel the order when SELECT FOR UPDATE sees payment still PENDING (failure path wins)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txOrderUpdate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { update: txOrderUpdate },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      await service.handleWebhookEvent(
+        buildEvent('checkout.session.expired', mockSession),
+      );
+
+      expect(txOrderUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: OrderStatus.CANCELLED } }),
+      );
+    });
+
+    it('inserts session-scoped failed-{session.id} idempotency key inside the transaction', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txProcessedCreate = jest.fn().mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: txProcessedCreate },
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      const event = buildEvent('checkout.session.expired', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(txProcessedCreate).toHaveBeenCalledWith({
+        data: { eventId: `failed-${mockSession.id}` },
+      });
+    });
+
+    it('inserts both failed-{session.id} and the webhook eventId when both are available', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+
+      const txProcessedCreate = jest.fn().mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: txProcessedCreate },
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn() },
+          });
+        }
+      });
+
+      const event = buildEvent('checkout.session.expired', mockSession);
+      await service.handleWebhookEvent(event);
+
+      expect(txProcessedCreate).toHaveBeenCalledWith({
+        data: { eventId: `failed-${mockSession.id}` },
+      });
+      expect(txProcessedCreate).toHaveBeenCalledWith({
+        data: { eventId: event.id },
+      });
+    });
+
+    it('resolves without error when P2002 is thrown on failed-{session.id} key (duplicate expired delivery)', async () => {
+      const duplicateError = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`event_id`)',
+        { code: 'P2002', clientVersion: '6.0.0', meta: { target: ['event_id'] } },
+      );
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockRejectedValue(duplicateError);
+
+      await expect(
+        service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession)),
+      ).resolves.not.toThrow();
     });
   });
 
@@ -3179,6 +3451,7 @@ describe('PaymentsService', () => {
         prisma.$transaction.mockImplementation(async (fn: any) => {
           if (typeof fn === 'function') {
             await fn({
+              $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
               processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
               payment: { update: jest.fn() },
               order: { update: jest.fn() },
@@ -3361,6 +3634,10 @@ describe('PaymentsService', () => {
           {
             provide: 'REDIS_CLIENT',
             useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
+          },
+          {
+            provide: CouponService,
+            useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
           },
         ],
       }).compile();

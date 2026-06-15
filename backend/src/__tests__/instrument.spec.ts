@@ -136,6 +136,68 @@ describe('instrument.ts', () => {
       expect(result!.request!.data).toBe('[REDACTED]');
     });
 
+    it('redacts sensitive keys nested inside an address object', () => {
+      const event: Event = {
+        request: {
+          data: {
+            firstName: 'Jan',
+            address: { street: 'ul. Główna 1', nip: '9876543210', phone: '+48123456789' },
+          },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.address.nip).toBe('[REDACTED]');
+      expect(parsed.address.street).toBe('ul. Główna 1');
+      expect(parsed.firstName).toBe('Jan');
+    });
+
+    it('redacts password two levels deep inside a nested object', () => {
+      const event: Event = {
+        request: {
+          data: { user: { profile: { password: 'deep-secret', email: 'x@y.com' } } },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.user.profile.password).toBe('[REDACTED]');
+      expect(parsed.user.profile.email).toBe('x@y.com');
+    });
+
+    it('redacts sensitive keys inside array elements', () => {
+      const event: Event = {
+        request: {
+          data: {
+            items: [
+              { quantity: 1, token: 'tkn-a' },
+              { quantity: 2, token: 'tkn-b' },
+            ],
+          },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.items[0].token).toBe('[REDACTED]');
+      expect(parsed.items[0].quantity).toBe(1);
+      expect(parsed.items[1].token).toBe('[REDACTED]');
+    });
+
+    it('redacts both top-level and nested sensitive keys in one pass', () => {
+      const event: Event = {
+        request: {
+          data: {
+            nip: 'top-nip',
+            address: { bankAccount: 'nested-bank', city: 'Warsaw' },
+          },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.nip).toBe('[REDACTED]');
+      expect(parsed.address.bankAccount).toBe('[REDACTED]');
+      expect(parsed.address.city).toBe('Warsaw');
+    });
+
     it('returns event unchanged when request.data is absent', () => {
       const event: Event = { request: { url: 'https://example.com' } };
       const result = beforeSend(event);
@@ -146,6 +208,95 @@ describe('instrument.ts', () => {
       const event: Event = { level: 'error' };
       const result = beforeSend(event);
       expect(result).toBe(event);
+    });
+  });
+
+  describe('beforeSend — header redaction', () => {
+    let beforeSend: BeforeSend;
+
+    beforeEach(() => {
+      process.env.SENTRY_DSN = 'https://key@sentry.io/1';
+      beforeSend = loadInstrument()!;
+    });
+
+    it('removes the authorization header from the event', () => {
+      const event: Event = {
+        request: { headers: { authorization: 'Bearer eyJliveToken', 'content-type': 'application/json' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers).not.toHaveProperty('authorization');
+    });
+
+    it('preserves non-sensitive headers when removing authorization', () => {
+      const event: Event = {
+        request: { headers: { authorization: 'Bearer eyJliveToken', 'content-type': 'application/json' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers!['content-type']).toBe('application/json');
+    });
+
+    it('removes the cookie header from the event', () => {
+      const event: Event = {
+        request: { headers: { cookie: 'refreshToken=secret; session=abc', 'x-request-id': 'req-1' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers).not.toHaveProperty('cookie');
+    });
+
+    it('preserves non-sensitive headers when removing cookie', () => {
+      const event: Event = {
+        request: { headers: { cookie: 'refreshToken=secret', 'x-request-id': 'req-1' } },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers!['x-request-id']).toBe('req-1');
+    });
+
+    it('removes both authorization and cookie when both are present', () => {
+      const event: Event = {
+        request: {
+          headers: {
+            authorization: 'Bearer token',
+            cookie: 'refreshToken=r',
+            accept: 'application/json',
+          },
+        },
+      };
+
+      const result = beforeSend(event);
+
+      expect(result!.request!.headers).not.toHaveProperty('authorization');
+      expect(result!.request!.headers).not.toHaveProperty('cookie');
+      expect(result!.request!.headers!['accept']).toBe('application/json');
+    });
+
+    it('returns event unchanged when request has no headers', () => {
+      const event: Event = { request: { url: 'https://example.com' } };
+      const result = beforeSend(event);
+      expect(result).toBe(event);
+    });
+
+    it('strips authorization header AND redacts sensitive body in the same call', () => {
+      const event: Event = {
+        request: {
+          headers: { authorization: 'Bearer live-token', 'content-type': 'application/json' },
+          data: JSON.stringify({ token: 'refresh-jwt', amount: 99 }),
+        },
+      };
+
+      const result = beforeSend(event);
+      const body = JSON.parse(result!.request!.data as string);
+
+      expect(result!.request!.headers).not.toHaveProperty('authorization');
+      expect(body.token).toBe('[REDACTED]');
+      expect(body.amount).toBe(99);
     });
   });
 });

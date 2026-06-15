@@ -189,8 +189,23 @@ export const envValidationSchema = Joi.object({
 
   // ── Admin ──
   // ADMIN_DEFAULT_PASSWORD must be a bcrypt hash (bcrypt.hash('yourpassword', 10)).
+  // The pattern enforces the format at boot so a plaintext password is rejected
+  // before bcrypt.compare() silently fails and makes the panel unloginnable.
   ADMIN_DEFAULT_EMAIL: requiredInProd(Joi.string().email()),
-  ADMIN_DEFAULT_PASSWORD: requiredInProd(Joi.string().min(10)),
+  ADMIN_DEFAULT_PASSWORD: requiredInProd(
+    Joi.string()
+      .min(10)
+      .when('NODE_ENV', {
+        is: 'production',
+        then: Joi.string()
+          .pattern(/^\$2[ab]\$\d{2}\$.{53}$/)
+          .required()
+          .messages({
+            'string.pattern.base':
+              'ADMIN_DEFAULT_PASSWORD must be a bcrypt hash (run: node -e "require(\'bcrypt\').hash(\'yourpassword\',12).then(console.log)")',
+          }),
+      }),
+  ),
   // Separate secret for signing the admin session cookie. Falls back to
   // ADMIN_DEFAULT_PASSWORD in dev, but should be set explicitly in prod.
   ADMIN_SESSION_SECRET: requiredInProd(Joi.string().min(16)),

@@ -1072,12 +1072,6 @@ export class CheckoutPageComponent implements OnInit {
           const isDefault = this.savedAddresses().length === 0;
           this.http.post(`${environment.apiUrl}/users/me/addresses`, { ...addrPayload, isDefault }).subscribe();
         }
-        try {
-          sessionStorage.setItem('_pending_purchase', JSON.stringify({
-            items: this.cart.items(),
-            shippingInCents: this.selectedCarrier()?.price ?? 0,
-          }));
-        } catch { /* sessionStorage unavailable (private browsing quota) */ }
         this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
         this.cart.clear();
         window.location.href = res.paymentUrl;
