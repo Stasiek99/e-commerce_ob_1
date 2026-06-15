@@ -335,11 +335,20 @@ export class AuthService {
       throw new BadRequestException('Invalid or expired verification link');
     }
 
-    // Idempotent double-click for normal registration verification
-    if (stored?.user?.isEmailVerified && !stored?.user?.pendingEmail) return;
-
     if (!stored || stored.usedAt || stored.expiresAt < new Date()) {
       throw new BadRequestException('Invalid or expired verification link');
+    }
+
+    // Idempotent double-click: only for EMAIL_VERIFICATION tokens on an
+    // already-verified account with no pending change. Must run AFTER the
+    // usedAt/expiresAt guards so expired or stolen tokens cannot silently
+    // bypass validation by exploiting this shortcut.
+    if (
+      stored.type === EmailTokenType.EMAIL_VERIFICATION &&
+      stored.user.isEmailVerified &&
+      !stored.user.pendingEmail
+    ) {
+      return;
     }
 
     if (stored.user.pendingEmail) {

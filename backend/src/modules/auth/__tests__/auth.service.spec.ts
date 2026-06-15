@@ -903,12 +903,43 @@ describe('AuthService', () => {
         userId: 'user-1',
         usedAt: null,
         expiresAt: new Date(Date.now() + 60_000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
         user: { ...mockUser, isEmailVerified: true },
       });
 
       await service.verifyEmail('already-verified-token');
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException for an expired EMAIL_VERIFICATION token even when the account is already verified', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue({
+        id: 'vt-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() - 1000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
+        user: { ...mockUser, isEmailVerified: true },
+      });
+
+      await expect(service.verifyEmail('expired-already-verified-token')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException for a used EMAIL_VERIFICATION token even when the account is already verified', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue({
+        id: 'vt-1',
+        userId: 'user-1',
+        usedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
+        user: { ...mockUser, isEmailVerified: true },
+      });
+
+      await expect(service.verifyEmail('used-already-verified-token')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws BadRequestException when token does not exist', async () => {
