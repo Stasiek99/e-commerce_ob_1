@@ -2492,11 +2492,25 @@ describe('PaymentsService', () => {
         expect.objectContaining({
           text: expect.stringContaining('ORD-2026-000099'),
         }),
+        { timeout: 3_000 },
       );
       expect(axios.post).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ text: expect.stringContaining('299.00') }),
+        { timeout: 3_000 },
       );
+    });
+
+    it('passes a 3-second timeout to axios.post to prevent graceful-shutdown stall', async () => {
+      notifConfigGet.mockImplementation((key: string) => {
+        if (key === 'MERCHANT_SLACK_WEBHOOK_URL') return 'https://hooks.slack.com/services/T00/B00/yyy';
+        return undefined;
+      });
+
+      await triggerPaid();
+
+      const [, , config] = (axios.post as jest.Mock).mock.calls[0];
+      expect(config).toEqual({ timeout: 3_000 });
     });
 
     it('does not POST to Slack when MERCHANT_SLACK_WEBHOOK_URL is absent', async () => {

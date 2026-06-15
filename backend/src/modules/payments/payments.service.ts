@@ -1472,8 +1472,10 @@ export class PaymentsService {
     order: { orderNumber: string; snapshotEmail: string; totalInCents: number },
   ): Promise<void> {
     const total = (order.totalInCents / 100).toFixed(2);
-    await axios.post(webhookUrl, {
-      text: `🛍️ New paid order *#${order.orderNumber}* — ${total} PLN — ${order.snapshotEmail}`,
-    });
+    await axios.post(
+      webhookUrl,
+      { text: `🛍️ New paid order *#${order.orderNumber}* — ${total} PLN — ${order.snapshotEmail}` },
+      { timeout: 3_000 },
+    );
   }
 }
