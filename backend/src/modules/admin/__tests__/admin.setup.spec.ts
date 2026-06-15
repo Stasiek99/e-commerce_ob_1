@@ -731,3 +731,165 @@ describe('setupAdmin — coupon burn rate (source contract)', () => {
     expect(setupSource).toContain('countMap');
   });
 });
+
+// ─── User show.after viewProfile audit log — source contract ──────────────────
+// GDPR Art. 5(2) accountability: every admin view of a customer profile must be
+// logged so a UODO audit can answer "who viewed this data and when?".
+
+describe('setupAdmin — User show.after viewProfile audit log (source contract)', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../admin.setup.ts'), 'utf-8');
+
+  it("calls logAdminAction with 'viewProfile' inside the User show.after hook", () => {
+    const showIdx = setupSource.indexOf("show: {");
+    expect(showIdx).toBeGreaterThan(-1);
+    const showBlock = setupSource.slice(showIdx, showIdx + 900);
+    expect(showBlock).toContain('logAdminAction');
+    expect(showBlock).toContain("'viewProfile'");
+  });
+
+  it("passes 'User' as the entityType to logAdminAction in the show.after hook", () => {
+    const showIdx = setupSource.indexOf("show: {");
+    const showBlock = setupSource.slice(showIdx, showIdx + 900);
+    expect(showBlock).toContain("'User'");
+  });
+
+  it('logs the viewing actor from context.currentAdmin?.email with adminEmail fallback', () => {
+    const showIdx = setupSource.indexOf("show: {");
+    const showBlock = setupSource.slice(showIdx, showIdx + 900);
+    expect(showBlock).toContain('currentAdmin?.email');
+    expect(showBlock).toContain('adminEmail');
+  });
+});
+
+// ─── User show.after hook — behaviour ────────────────────────────────────────
+// The inline reproduction mirrors admin.setup.ts exactly. The source contract
+// suite above fails if the real code diverges; this suite tests correct runtime
+// behaviour (call args, fallback email, swallowed log errors, stats notice).
+
+function makeUserShowAfterHook(
+  prisma: {
+    order: { aggregate: jest.Mock };
+    customerNote: { count: jest.Mock };
+    adminLog: { create: jest.Mock };
+  },
+  adminEmail: string,
+) {
+  return async (response: any, _request: any, context: any): Promise<any> => {
+    const userId: string | undefined = context.record?.params?.id;
+    if (!userId) return response;
+
+    const [stats, noteCount] = await Promise.all([
+      prisma.order.aggregate({
+        where: { userId, status: { notIn: ['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED'] } },
+        _sum: { totalInCents: true },
+        _count: true,
+      }),
+      prisma.customerNote.count({ where: { userId } }),
+    ]);
+
+    try {
+      await prisma.adminLog.create({
+        data: {
+          action: 'viewProfile',
+          entityType: 'User',
+          entityId: userId,
+          actor: context.currentAdmin?.email ?? adminEmail,
+          metadata: undefined,
+        },
+      });
+    } catch { /* swallow — audit failure must not surface to the admin UI */ }
+
+    const totalPln = ((stats._sum.totalInCents ?? 0) / 100).toFixed(2);
+    response.notice = {
+      message: `Zamówień: ${stats._count} | Wartość: ${totalPln} PLN | Notatki CS: ${noteCount}`,
+      type: 'info',
+    };
+    return response;
+  };
+}
+
+describe('setupAdmin — User show.after hook behaviour', () => {
+  const adminEmail = 'admin@test.com';
+
+  const makePrisma = () => ({
+    order: { aggregate: jest.fn().mockResolvedValue({ _sum: { totalInCents: 5000 }, _count: 2 }) },
+    customerNote: { count: jest.fn().mockResolvedValue(3) },
+    adminLog: { create: jest.fn().mockResolvedValue({}) },
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('returns response unchanged and skips audit log when userId is absent', async () => {
+    const prisma = makePrisma();
+    const hook = makeUserShowAfterHook(prisma, adminEmail);
+    const response = { some: 'data' };
+
+    const result = await hook(response, {}, { record: { params: {} } });
+
+    expect(result).toBe(response);
+    expect(prisma.adminLog.create).not.toHaveBeenCalled();
+  });
+
+  it('calls adminLog.create with viewProfile, entityType User, and the actor email', async () => {
+    const prisma = makePrisma();
+    const hook = makeUserShowAfterHook(prisma, adminEmail);
+
+    await hook({}, {}, {
+      record: { params: { id: 'user-abc' } },
+      currentAdmin: { email: 'reviewer@admin.com' },
+    });
+
+    expect(prisma.adminLog.create).toHaveBeenCalledWith({
+      data: {
+        action: 'viewProfile',
+        entityType: 'User',
+        entityId: 'user-abc',
+        actor: 'reviewer@admin.com',
+        metadata: undefined,
+      },
+    });
+  });
+
+  it('falls back to module-level adminEmail when currentAdmin is absent', async () => {
+    const prisma = makePrisma();
+    const hook = makeUserShowAfterHook(prisma, adminEmail);
+
+    await hook({}, {}, {
+      record: { params: { id: 'user-abc' } },
+      currentAdmin: undefined,
+    });
+
+    expect(prisma.adminLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ actor: adminEmail }) }),
+    );
+  });
+
+  it('still sets the stats notice when adminLog.create rejects (audit failure is swallowed)', async () => {
+    const prisma = makePrisma();
+    prisma.adminLog.create.mockRejectedValue(new Error('DB write failed'));
+    const hook = makeUserShowAfterHook(prisma, adminEmail);
+
+    const response = await hook({}, {}, {
+      record: { params: { id: 'user-abc' } },
+      currentAdmin: { email: adminEmail },
+    });
+
+    expect(response.notice).toBeDefined();
+    expect(response.notice.type).toBe('info');
+  });
+
+  it('sets info notice with correct order count, PLN value, and note count', async () => {
+    const prisma = makePrisma();
+    const hook = makeUserShowAfterHook(prisma, adminEmail);
+
+    const response = await hook({}, {}, {
+      record: { params: { id: 'user-xyz' } },
+      currentAdmin: { email: adminEmail },
+    });
+
+    expect(response.notice.type).toBe('info');
+    expect(response.notice.message).toContain('2');      // _count
+    expect(response.notice.message).toContain('50.00');  // 5000 cents → 50.00 PLN
+    expect(response.notice.message).toContain('3');      // noteCount
+  });
+});

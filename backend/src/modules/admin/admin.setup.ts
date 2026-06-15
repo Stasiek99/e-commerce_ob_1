@@ -696,6 +696,10 @@ export async function setupAdmin(
                   }),
                   prisma.customerNote.count({ where: { userId } }),
                 ]);
+                await logAdminAction(
+                  prisma, 'viewProfile', 'User', userId,
+                  context.currentAdmin?.email ?? adminEmail,
+                );
                 const totalPln = ((stats._sum.totalInCents ?? 0) / 100).toFixed(2);
                 response.notice = {
                   message: `Zamówień: ${stats._count} | Wartość: ${totalPln} PLN | Notatki CS: ${noteCount}`,
