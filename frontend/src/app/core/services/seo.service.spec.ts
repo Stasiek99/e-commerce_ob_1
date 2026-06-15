@@ -302,7 +302,7 @@ describe('SeoService', () => {
       setup().setProductJsonLd(PERFUME);
 
       const items = getBreadcrumbNode(doc)?.['itemListElement'] as Array<Record<string, unknown>>;
-      expect(items[1]['item']).toBe('https://aromaterie.pl/products/perfume');
+      expect(items[1]['item']).toBe('https://aromaterie.pl/category/perfume');
       expect(items[1]['name']).toBe('Perfumy');
     });
 

@@ -171,7 +171,7 @@ export class SeoService {
           '@type': 'ListItem',
           position: 2,
           name: product.category.name,
-          item: `${SITE_URL}/products/${product.category.slug}`,
+          item: `${SITE_URL}/category/${product.category.slug}`,
         },
         { '@type': 'ListItem', position: 3, name: product.name },
       ];
