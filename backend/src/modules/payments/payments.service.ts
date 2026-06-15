@@ -766,7 +766,20 @@ export class PaymentsService {
   async getPaymentStatus(orderId: string, requestingUserId: string) {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { status: true, paidAt: true, order: { select: { userId: true, orderNumber: true } } },
+      select: {
+        status: true,
+        paidAt: true,
+        order: {
+          select: {
+            userId: true,
+            orderNumber: true,
+            shippingCostInCents: true,
+            items: {
+              select: { productVariantId: true, snapshotName: true, snapshotSku: true, snapshotPrice: true, quantity: true },
+            },
+          },
+        },
+      },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -775,14 +788,26 @@ export class PaymentsService {
       throw new ForbiddenException('You do not have access to this order');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
+    return this.formatStatusResponse(payment);
   }
 
   async getPaymentStatusByToken(orderId: string, token: string) {
     const [payment, storedToken] = await Promise.all([
       this.prisma.payment.findUnique({
         where: { orderId },
-        select: { status: true, paidAt: true, order: { select: { orderNumber: true } } },
+        select: {
+          status: true,
+          paidAt: true,
+          order: {
+            select: {
+              orderNumber: true,
+              shippingCostInCents: true,
+              items: {
+                select: { productVariantId: true, snapshotName: true, snapshotSku: true, snapshotPrice: true, quantity: true },
+              },
+            },
+          },
+        },
       }),
       this.redis.get(`order-token:${orderId}`),
     ]);
@@ -793,7 +818,32 @@ export class PaymentsService {
       throw new UnauthorizedException('Invalid order token');
     }
 
-    return { status: payment.status, paidAt: payment.paidAt, orderNumber: payment.order.orderNumber };
+    return this.formatStatusResponse(payment);
+  }
+
+  private formatStatusResponse(payment: {
+    status: string;
+    paidAt: Date | null;
+    order: {
+      orderNumber: string;
+      shippingCostInCents: number;
+      items: Array<{ productVariantId: string; snapshotName: string; snapshotSku: string; snapshotPrice: number; quantity: number }>;
+      userId?: string | null;
+    };
+  }) {
+    return {
+      status: payment.status,
+      paidAt: payment.paidAt,
+      orderNumber: payment.order.orderNumber,
+      shippingInCents: payment.order.shippingCostInCents,
+      items: payment.order.items.map((i) => ({
+        productVariantId: i.productVariantId,
+        productName: i.snapshotName,
+        variantLabel: i.snapshotSku,
+        priceInCents: i.snapshotPrice,
+        quantity: i.quantity,
+      })),
+    };
   }
 
   /**

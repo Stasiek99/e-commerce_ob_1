@@ -265,3 +265,148 @@ describe('CheckoutSuccessComponent — payment status polling', () => {
     expect(component.orderId()).toBe('abc-123');
   }));
 });
+
+// ── firePurchaseEvent — backend-sourced GA4 data ──────────────────────────────
+
+describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+    sessionStorage.removeItem('_pending_purchase');
+  });
+
+  it('calls trackPurchase with backend items and computed total when response includes items and shippingInCents', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-001',
+      shippingInCents: 1200,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
+        { productVariantId: 'pv-2', productName: 'Rose', variantLabel: 'EDT 30ml', priceInCents: 8500, quantity: 1 },
+      ],
+    });
+
+    // total = 15000*2 + 8500*1 + 1200 = 39700
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith({
+      transactionId: 'order-1',
+      totalInCents: 39700,
+      shippingInCents: 1200,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
+        { productVariantId: 'pv-2', productName: 'Rose', variantLabel: 'EDT 30ml', priceInCents: 8500, quantity: 1 },
+      ],
+    });
+    expect(mockAnalytics.push).not.toHaveBeenCalled();
+  }));
+
+  it('correctly computes totalInCents when shipping is zero', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-002',
+      shippingInCents: 0,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Sample', variantLabel: '5ml', priceInCents: 500, quantity: 3 },
+      ],
+    });
+
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({ totalInCents: 1500, shippingInCents: 0 }),
+    );
+  }));
+
+  it('falls back to push with only transaction_id when response lacks items', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({ status: 'COMPLETED', orderNumber: 'ORD-003' });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+  }));
+
+  it('falls back to push when items array is empty', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-004',
+      shippingInCents: 0,
+      items: [],
+    });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+  }));
+
+  it('falls back to push when shippingInCents is absent even if items are present', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-005',
+      items: [{ productVariantId: 'pv-1', productName: 'X', variantLabel: 'Y', priceInCents: 100, quantity: 1 }],
+    });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+  }));
+
+  it('does not read _pending_purchase from sessionStorage even when it contains stale data', fakeAsync(() => {
+    // Populate sessionStorage with data from the old code path
+    sessionStorage.setItem('_pending_purchase', JSON.stringify({
+      items: [{ productVariantId: 'pv-stale', productName: 'Stale', variantLabel: 'old', priceInCents: 99999, quantity: 5 }],
+      shippingInCents: 9999,
+    }));
+
+    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem');
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-006',
+      shippingInCents: 500,
+      items: [{ productVariantId: 'pv-real', productName: 'Real', variantLabel: 'real', priceInCents: 10000, quantity: 1 }],
+    });
+
+    // sessionStorage must not have been read for this key
+    const pendingPurchaseReads = getItemSpy.mock.calls.filter(([key]) => key === '_pending_purchase');
+    expect(pendingPurchaseReads).toHaveLength(0);
+
+    // The real backend data (not stale sessionStorage) was used
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({ totalInCents: 10500, shippingInCents: 500 }),
+    );
+
+    getItemSpy.mockRestore();
+  }));
+});
