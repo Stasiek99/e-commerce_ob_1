@@ -31,6 +31,24 @@ export async function logAdminAction(
   }
 }
 
+/** Exported for unit testing. Precomputes a dummy hash once so bcrypt.compare
+ *  always runs on every login attempt regardless of email match, preventing
+ *  timing-based email enumeration. */
+export async function buildAdminAuthenticator(
+  adminEmail: string,
+  adminPassword: string,
+): Promise<(email: string, password: string) => Promise<{ email: string } | null>> {
+  const dummyHash = await bcrypt.hash('timing-guard', 10);
+  return async (email: string, password: string) => {
+    if (email !== adminEmail) {
+      await bcrypt.compare(password, dummyHash);
+      return null;
+    }
+    const valid = await bcrypt.compare(password, adminPassword);
+    return valid ? { email } : null;
+  };
+}
+
 async function generatePicklistHtml(prisma: PrismaService): Promise<string> {
   const esc = (s: unknown) =>
     String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1100,11 +1118,7 @@ export async function setupAdmin(
   const router = AdminJSExpress.buildAuthenticatedRouter(
     admin,
     {
-      authenticate: async (email: string, password: string) => {
-        if (email !== adminEmail) return null;
-        const valid = await bcrypt.compare(password, adminPassword);
-        return valid ? { email } : null;
-      },
+      authenticate: await buildAdminAuthenticator(adminEmail, adminPassword),
       cookieName: 'adminjs',
       cookiePassword: resolvedSessionSecret,
     },
