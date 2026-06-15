@@ -7,18 +7,9 @@ import { StorageService } from '../../storage/storage.service';
 
 describe('ProductsController — streamVariantStock global connection cap', () => {
   let controller: ProductsController;
-  let redis: {
-    incr: jest.Mock;
-    decr: jest.Mock;
-  };
   let productsService: jest.Mocked<Pick<ProductsService, 'createStockStream'>>;
 
   beforeEach(async () => {
-    redis = {
-      incr: jest.fn().mockResolvedValue(1),
-      decr: jest.fn().mockResolvedValue(0),
-    };
-
     productsService = {
       createStockStream: jest.fn().mockReturnValue(EMPTY),
     };
@@ -28,7 +19,6 @@ describe('ProductsController — streamVariantStock global connection cap', () =
       providers: [
         { provide: ProductsService, useValue: productsService },
         { provide: StorageService, useValue: {} },
-        { provide: 'REDIS_CLIENT', useValue: redis },
       ],
     }).compile();
 
@@ -37,10 +27,24 @@ describe('ProductsController — streamVariantStock global connection cap', () =
 
   afterEach(() => jest.clearAllMocks());
 
+  // ── server-local counter — crash-safe by design ───────────────────────────
+
+  it('initialises sseConnCount at 0 so a prior crash leaves no stale state', () => {
+    expect((controller as any).sseConnCount).toBe(0);
+  });
+
+  it('increments sseConnCount synchronously when a connection is established', () => {
+    const subject = new Subject<any>();
+    productsService.createStockStream.mockReturnValue(subject.asObservable());
+
+    controller.streamVariantStock('pv-1').subscribe();
+
+    expect((controller as any).sseConnCount).toBe(1);
+  });
+
   // ── happy path: connection within global cap ──────────────────────────────
 
   it('creates the stock stream when global connection count is within the cap', (done) => {
-    redis.incr.mockResolvedValue(1);
     productsService.createStockStream.mockReturnValue(EMPTY);
 
     controller.streamVariantStock('pv-1,pv-2').subscribe({
@@ -52,8 +56,8 @@ describe('ProductsController — streamVariantStock global connection cap', () =
     });
   });
 
-  it('allows a connection when the global counter is exactly at the cap (count === 500)', (done) => {
-    redis.incr.mockResolvedValue(500);
+  it('allows a connection when the in-process counter is exactly one below the cap (499)', (done) => {
+    (controller as any).sseConnCount = 499;
     productsService.createStockStream.mockReturnValue(EMPTY);
 
     controller.streamVariantStock('pv-1').subscribe({
@@ -64,8 +68,8 @@ describe('ProductsController — streamVariantStock global connection cap', () =
 
   // ── blocked path: global cap exceeded ─────────────────────────────────────
 
-  it('errors with HttpException(429) when global connection count exceeds 500', (done) => {
-    redis.incr.mockResolvedValue(501);
+  it('errors with HttpException(429) when sseConnCount equals or exceeds 500', (done) => {
+    (controller as any).sseConnCount = 500;
 
     controller.streamVariantStock('pv-1').subscribe({
       next: () => done(new Error('should not emit a value')),
@@ -79,7 +83,7 @@ describe('ProductsController — streamVariantStock global connection cap', () =
   });
 
   it('does not call createStockStream when the global cap is exceeded', (done) => {
-    redis.incr.mockResolvedValue(501);
+    (controller as any).sseConnCount = 500;
 
     controller.streamVariantStock('pv-1').subscribe({
       error: () => {
@@ -89,55 +93,34 @@ describe('ProductsController — streamVariantStock global connection cap', () =
     });
   });
 
-  it('decrements the global Redis counter when the connection is rejected', (done) => {
-    redis.incr.mockResolvedValue(501);
+  it('does not increment the counter when the connection is rejected', (done) => {
+    (controller as any).sseConnCount = 500;
 
     controller.streamVariantStock('pv-1').subscribe({
-      error: async () => {
-        await Promise.resolve();
-        expect(redis.decr).toHaveBeenCalledWith('sse:global:count');
+      error: () => {
+        expect((controller as any).sseConnCount).toBe(500);
         done();
       },
-    });
-  });
-
-  it('uses the shared sse:global:count key, not a per-IP key', (done) => {
-    redis.incr.mockResolvedValue(1);
-    productsService.createStockStream.mockReturnValue(EMPTY);
-
-    controller.streamVariantStock('pv-1').subscribe({
-      complete: () => {
-        expect(redis.incr).toHaveBeenCalledWith('sse:global:count');
-        done();
-      },
-      error: done,
     });
   });
 
   // ── teardown: counter decremented on unsubscribe ─────────────────────────
 
-  it('decrements the global Redis counter when the subscriber unsubscribes', async () => {
-    redis.incr.mockResolvedValue(1);
+  it('decrements sseConnCount synchronously when the subscriber unsubscribes', () => {
     const subject = new Subject<any>();
     productsService.createStockStream.mockReturnValue(subject.asObservable());
 
     const subscription = controller.streamVariantStock('pv-1').subscribe();
-
-    // Flush promise microtasks so the incr resolves and the inner Observable starts
-    await Promise.resolve();
-    await Promise.resolve();
+    expect((controller as any).sseConnCount).toBe(1);
 
     subscription.unsubscribe();
-    await Promise.resolve();
-
-    expect(redis.decr).toHaveBeenCalledWith('sse:global:count');
+    expect((controller as any).sseConnCount).toBe(0);
   });
 
   // ── idle timeout: stream closes after inactivity ──────────────────────────
 
   it('sends a reconnect hint and completes the stream after the idle timeout fires', async () => {
     jest.useFakeTimers();
-    redis.incr.mockResolvedValue(1);
 
     const subject = new Subject<any>();
     productsService.createStockStream.mockReturnValue(subject.asObservable());
@@ -161,7 +144,6 @@ describe('ProductsController — streamVariantStock global connection cap', () =
 
   it('resets the idle timer when a stock update event arrives', async () => {
     jest.useFakeTimers();
-    redis.incr.mockResolvedValue(1);
 
     const subject = new Subject<any>();
     productsService.createStockStream.mockReturnValue(subject.asObservable());
@@ -187,7 +169,6 @@ describe('ProductsController — streamVariantStock global connection cap', () =
   // ── variant ID parsing ─────────────────────────────────────────────────────
 
   it('passes up to 10 parsed variant IDs to createStockStream', (done) => {
-    redis.incr.mockResolvedValue(1);
     const ids = Array.from({ length: 15 }, (_, i) => `pv-${i + 1}`).join(',');
     productsService.createStockStream.mockReturnValue(EMPTY);
 

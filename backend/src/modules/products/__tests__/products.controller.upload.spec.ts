@@ -59,7 +59,6 @@ describe('ProductsController — uploadImage (magic-byte validation)', () => {
       providers: [
         { provide: ProductsService, useValue: mockProductsService },
         { provide: StorageService, useValue: mockStorageService },
-        { provide: 'REDIS_CLIENT', useValue: {} },
       ],
     })
       .overrideGuard(JwtAuthGuard)

@@ -5,7 +5,6 @@ import {
   Get,
   HttpException,
   HttpStatus,
-  Inject,
   MessageEvent,
   Param,
   Patch,
@@ -16,11 +15,10 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { Observable, from, switchMap, throwError } from 'rxjs';
+import { Observable, throwError } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { Role } from '@prisma/client';
-import type IORedis from 'ioredis';
 import { ProductsService } from './products.service';
 import { StorageService } from '../storage/storage.service';
 import { validateImageMagicBytes } from '../storage/image-file-filter';
@@ -40,15 +38,17 @@ import {
 
 const SSE_MAX_CONNS_GLOBAL = 500;
 const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
-const SSE_CONN_KEY = 'sse:global:count';
 
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ProductsController {
+  // Server-local counter — resets to 0 on every restart, so a crash can never
+  // leave stale Redis keys that lock users out until a TTL expires.
+  private sseConnCount = 0;
+
   constructor(
     private readonly productsService: ProductsService,
     private readonly storageService: StorageService,
-    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   @Public()
@@ -83,45 +83,42 @@ export class ProductsController {
       .filter(Boolean)
       .slice(0, 10);
 
-    return from(this.redis.incr(SSE_CONN_KEY)).pipe(
-      switchMap((count) => {
-        if (count > SSE_MAX_CONNS_GLOBAL) {
-          this.redis.decr(SSE_CONN_KEY).catch(() => {});
-          return throwError(
-            () => new HttpException(
-              'SSE connection limit reached. Try again later.',
-              HttpStatus.TOO_MANY_REQUESTS,
-            ),
-          );
-        }
+    if (this.sseConnCount >= SSE_MAX_CONNS_GLOBAL) {
+      return throwError(
+        () => new HttpException(
+          'SSE connection limit reached. Try again later.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        ),
+      );
+    }
 
-        return new Observable<MessageEvent>((subscriber) => {
-          let idleTimer: ReturnType<typeof setTimeout>;
+    this.sseConnCount++;
 
-          const resetIdle = () => {
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => {
-              subscriber.next({ data: { reconnect: true } } as unknown as MessageEvent);
-              subscriber.complete();
-            }, SSE_IDLE_TIMEOUT_MS);
-          };
+    return new Observable<MessageEvent>((subscriber) => {
+      let idleTimer: ReturnType<typeof setTimeout>;
 
-          resetIdle();
+      const resetIdle = () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          subscriber.next({ data: { reconnect: true } } as unknown as MessageEvent);
+          subscriber.complete();
+        }, SSE_IDLE_TIMEOUT_MS);
+      };
 
-          const innerSub = this.productsService.createStockStream(variantIds).subscribe({
-            next: (event) => { resetIdle(); subscriber.next(event); },
-            error: (err) => subscriber.error(err),
-            complete: () => subscriber.complete(),
-          });
+      resetIdle();
 
-          return () => {
-            clearTimeout(idleTimer);
-            innerSub.unsubscribe();
-            this.redis.decr(SSE_CONN_KEY).catch(() => {});
-          };
-        });
-      }),
-    );
+      const innerSub = this.productsService.createStockStream(variantIds).subscribe({
+        next: (event) => { resetIdle(); subscriber.next(event); },
+        error: (err) => subscriber.error(err),
+        complete: () => subscriber.complete(),
+      });
+
+      return () => {
+        clearTimeout(idleTimer);
+        innerSub.unsubscribe();
+        this.sseConnCount--;
+      };
+    });
   }
 
   @Public()
