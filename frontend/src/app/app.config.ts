@@ -15,7 +15,6 @@ import { catchError } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { AnalyticsService } from './core/services/analytics.service';
 import {
-  PreloadAllModules,
   Router,
   TitleStrategy,
   provideRouter,
@@ -24,6 +23,7 @@ import {
   withPreloading,
   withViewTransitions,
 } from '@angular/router';
+import { SelectivePreloadStrategy } from './core/strategies/selective-preload.strategy';
 import { AppTitleStrategy } from './core/strategies/title.strategy';
 import {
   provideHttpClient,
@@ -59,7 +59,7 @@ export const appConfig: ApplicationConfig = {
       withComponentInputBinding(),
       withViewTransitions(),
       withInMemoryScrolling({ scrollPositionRestoration: 'enabled' }),
-      withPreloading(PreloadAllModules),
+      withPreloading(SelectivePreloadStrategy),
     ),
     provideHttpClient(
       withFetch(),
