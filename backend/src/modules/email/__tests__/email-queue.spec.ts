@@ -452,6 +452,20 @@ describe('EmailQueueService', () => {
       expect(firstJobId).not.toBe(secondJobId);
     });
 
+    it('sets jobId = back_in_stock-{wishlistItemId} to deduplicate concurrent restock triggers', async () => {
+      await service.sendBackInStock({
+        to: 'alice@example.com',
+        firstName: 'Alice',
+        productName: 'Rose Oud',
+        variantLabel: '50ml',
+        productUrl: 'https://store.pl/products/rose-oud',
+        wishlistItemId: 'wl-uuid-1234',
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('back_in_stock-wl-uuid-1234');
+    });
+
     it('does NOT set jobId for email_verification (user-level, no dedup risk)', async () => {
       await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
 
@@ -671,7 +685,7 @@ describe('EmailQueueProcessor', () => {
         {
           provide: PrismaService,
           useValue: {
-            wishlistItem: { update: jest.fn().mockResolvedValue({}) },
+            wishlistItem: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           },
         },
       ],

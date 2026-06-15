@@ -103,11 +103,14 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
 
       case 'back_in_stock': {
         const { wishlistItemId, ...emailPayload } = payload;
-        await this.emailService.sendBackInStock(emailPayload);
-        await this.prisma.wishlistItem.update({
-          where: { id: wishlistItemId },
+        // Flag-first idempotency: atomically clear notifyOnRestock only if still true.
+        // On BullMQ retry after a failed send, count === 0 and we skip the duplicate.
+        const { count } = await this.prisma.wishlistItem.updateMany({
+          where: { id: wishlistItemId, notifyOnRestock: true },
           data: { notifyOnRestock: false },
         });
+        if (count === 0) break;
+        await this.emailService.sendBackInStock(emailPayload);
         break;
       }
 
