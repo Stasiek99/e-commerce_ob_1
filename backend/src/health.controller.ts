@@ -1,9 +1,11 @@
 import { Controller, Get, HttpException, HttpStatus, Inject, Query, UnauthorizedException } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { PrismaService } from './modules/prisma/prisma.service';
 
+@SkipThrottle({ burst: true, sustained: true, 'coupon-anon': true, 'coupon-auth': true })
 @Controller('health')
 export class HealthController {
   constructor(
@@ -25,7 +27,10 @@ export class HealthController {
       this.checkDb(),
       this.checkRedis(),
       this.checkEmailQueue(),
-      this.redis.get('cron:reconcile-payments:lastRun').catch(() => null),
+      Promise.race([
+        this.redis.get('cron:reconcile-payments:lastRun').catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
+      ]),
     ]);
 
     const healthy = db === 'connected' && redis === 'connected';
