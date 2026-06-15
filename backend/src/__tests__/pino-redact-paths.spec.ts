@@ -8,7 +8,7 @@
  *
  * GDPR Art. 32 / PCI-DSS concern: Railway logs are stored and searchable.
  */
-import { PINO_REDACT_PATHS } from '../logger-redact-paths';
+import { PINO_REDACT_PATHS, PINO_SERIALIZERS } from '../logger-redact-paths';
 
 describe('PINO_REDACT_PATHS — all sensitive fields are covered', () => {
   // ── Headers ───────────────────────────────────────────────────────────────
@@ -49,5 +49,57 @@ describe('PINO_REDACT_PATHS — all sensitive fields are covered', () => {
 
   it('covers at least 7 sensitive paths (headers + auth body + financial body)', () => {
     expect(PINO_REDACT_PATHS.length).toBeGreaterThanOrEqual(7);
+  });
+});
+
+describe('PINO_SERIALIZERS.req — query parameters are stripped from logged URLs', () => {
+  // ── Blocked path: PII in query string must not appear in the log ──────────
+
+  it('omits query string from URL with a single query param (email leak prevention)', () => {
+    const result = PINO_SERIALIZERS.req({
+      method: 'GET',
+      url: '/orders/track?email=jan.kowalski%40gmail.com&orderNumber=ORD-2026-000001',
+    });
+
+    expect(result.url).toBe('/orders/track');
+    expect(result.url).not.toContain('email=');
+    expect(result.url).not.toContain('orderNumber=');
+  });
+
+  it('omits query string from URLs with multiple query params', () => {
+    const result = PINO_SERIALIZERS.req({
+      method: 'GET',
+      url: '/products?category=perfumes&page=2&limit=20',
+    });
+
+    expect(result.url).toBe('/products');
+  });
+
+  // ── Happy path: path-only URLs are unchanged ──────────────────────────────
+
+  it('preserves the URL path when there is no query string', () => {
+    const result = PINO_SERIALIZERS.req({ method: 'GET', url: '/orders/track' });
+
+    expect(result.url).toBe('/orders/track');
+  });
+
+  // ── Preserves required fields ─────────────────────────────────────────────
+
+  it('preserves the HTTP method in the serialized output', () => {
+    const result = PINO_SERIALIZERS.req({ method: 'POST', url: '/auth/login?foo=bar' });
+
+    expect(result.method).toBe('POST');
+  });
+
+  it('preserves the request id when provided', () => {
+    const result = PINO_SERIALIZERS.req({ method: 'GET', url: '/health', id: 'req-abc-123' });
+
+    expect(result.id).toBe('req-abc-123');
+  });
+
+  it('sets id to undefined when not provided', () => {
+    const result = PINO_SERIALIZERS.req({ method: 'GET', url: '/health' });
+
+    expect(result.id).toBeUndefined();
   });
 });
