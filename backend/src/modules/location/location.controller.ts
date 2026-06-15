@@ -18,6 +18,8 @@ interface NominatimResult {
 const NOMINATIM_UA = 'FragranceStore/1.0 (contact@fragrancestore.pl)';
 const NOMINATIM_TIMEOUT_MS = 3_000;
 const STREET_CACHE_TTL_SECONDS = 3_600;
+const POSTAL_CACHE_TTL_SECONDS = 86_400;
+const POSTAL_TIMEOUT_MS = 3_000;
 
 @Controller('location')
 export class LocationController {
@@ -30,11 +32,30 @@ export class LocationController {
       throw new NotFoundException('Invalid postal code format');
     }
 
-    const res = await fetch(`https://api.zippopotam.us/pl/${code}`);
-    if (!res.ok) throw new NotFoundException('Postal code not found');
+    const cacheKey = `postal:${code}`;
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached !== null) return JSON.parse(cached) as string[];
+    } catch {}
 
-    const data = (await res.json()) as ZippopotamResponse;
-    return [...new Set(data.places.map((p) => p['place name']))];
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), POSTAL_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(`https://api.zippopotam.us/pl/${code}`, {
+        signal: abortController.signal,
+      });
+      if (!res.ok) return [];
+
+      const data = (await res.json()) as ZippopotamResponse;
+      const cities = [...new Set(data.places.map((p) => p['place name']))];
+      this.redis.setex(cacheKey, POSTAL_CACHE_TTL_SECONDS, JSON.stringify(cities)).catch(() => {});
+      return cities;
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   @Get('street-check')

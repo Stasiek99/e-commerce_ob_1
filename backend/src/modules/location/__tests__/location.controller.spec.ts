@@ -81,10 +81,32 @@ describe('LocationController', () => {
       await expect(controller.getCitiesByPostalCode('ABC-DE')).rejects.toThrow(NotFoundException);
     });
 
-    it('throws NotFoundException when Zippopotam returns non-OK', async () => {
+    it('returns [] when Zippopotam returns non-OK (no exception)', async () => {
       fetchSpy.mockResolvedValue({ ok: false } as Response);
 
-      await expect(controller.getCitiesByPostalCode('00-001')).rejects.toThrow(NotFoundException);
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when fetch throws (network error)', async () => {
+      fetchSpy.mockRejectedValue(new Error('Network error'));
+
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when fetch is aborted by the 3s timeout', async () => {
+      fetchSpy.mockImplementation(() =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new DOMException('The operation was aborted.', 'AbortError')), 10),
+        ),
+      );
+
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual([]);
     });
 
     it('returns deduplicated city names from Zippopotam response', async () => {
@@ -104,7 +126,7 @@ describe('LocationController', () => {
       expect(result).toEqual(['Warszawa', 'Śródmieście']);
     });
 
-    it('calls Zippopotam API with correct URL', async () => {
+    it('calls Zippopotam API with correct URL and passes AbortSignal', async () => {
       fetchSpy.mockResolvedValue({
         ok: true,
         json: async () => ({ places: [{ 'place name': 'Kraków' }] }),
@@ -112,7 +134,58 @@ describe('LocationController', () => {
 
       await controller.getCitiesByPostalCode('30-001');
 
-      expect(fetchSpy).toHaveBeenCalledWith('https://api.zippopotam.us/pl/30-001');
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://api.zippopotam.us/pl/30-001',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
+    // ── Redis cache ───────────────────────────────────────────────────────────
+
+    it('returns cached cities without calling Zippopotam on cache hit', async () => {
+      mockRedis.get.mockResolvedValue(JSON.stringify(['Warszawa', 'Śródmieście']));
+
+      const result = await controller.getCitiesByPostalCode('00-001');
+
+      expect(result).toEqual(['Warszawa', 'Śródmieście']);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('caches result in Redis with 24h TTL on cache miss', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => ({ places: [{ 'place name': 'Gdańsk' }] }),
+      } as unknown as Response);
+
+      await controller.getCitiesByPostalCode('80-001');
+
+      expect(mockRedis.setex).toHaveBeenCalledWith(
+        'postal:80-001',
+        86_400,
+        JSON.stringify(['Gdańsk']),
+      );
+    });
+
+    it('uses postal:<code> as the cache key', async () => {
+      mockRedis.get.mockResolvedValue(JSON.stringify(['Kraków']));
+
+      await controller.getCitiesByPostalCode('30-001');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('postal:30-001');
+    });
+
+    it('falls through to fetch when Redis.get throws (Redis is down)', async () => {
+      mockRedis.get.mockRejectedValue(new Error('Redis ECONNREFUSED'));
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => ({ places: [{ 'place name': 'Wrocław' }] }),
+      } as unknown as Response);
+
+      const result = await controller.getCitiesByPostalCode('50-001');
+
+      expect(result).toEqual(['Wrocław']);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 
