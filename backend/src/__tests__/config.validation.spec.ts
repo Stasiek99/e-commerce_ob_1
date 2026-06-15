@@ -204,3 +204,67 @@ describe('envValidationSchema — InPost production credential guard', () => {
     });
   });
 });
+
+// ── SELLER_NIP production validation guard ───────────────────────────────────
+// FIX: SELLER_NIP previously used requiredInProd(Joi.string(), '') which let
+// '' pass .required() in production. An empty NIP silently omits the seller
+// tax ID from every invoice, voiding them per Art. 106e ust. 1 pkt 4 Ustawy
+// o VAT. The fix inlines a full Joi.when() with .min(1).pattern(/^\d{10}$/)
+// in the production branch and .allow('').optional().default('') in dev,
+// allowing dev to boot without a NIP while blocking production deployments.
+
+const hasSellerNipError = (error: ReturnType<typeof validate>['error']): boolean =>
+  error?.details.some(
+    (d) => d.context?.key === 'SELLER_NIP' || d.message.includes('SELLER_NIP'),
+  ) ?? false;
+
+describe('envValidationSchema — SELLER_NIP production guard', () => {
+  describe('production environment', () => {
+    it('rejects an empty string SELLER_NIP in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '' });
+      expect(hasSellerNipError(error)).toBe(true);
+    });
+
+    it('rejects a missing SELLER_NIP in production', () => {
+      const { error } = validate({ NODE_ENV: 'production' });
+      expect(hasSellerNipError(error)).toBe(true);
+    });
+
+    it('rejects a 9-digit NIP (too short) in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '123456789' });
+      expect(hasSellerNipError(error)).toBe(true);
+    });
+
+    it('rejects an 11-digit NIP (too long) in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '12345678901' });
+      expect(hasSellerNipError(error)).toBe(true);
+    });
+
+    it('rejects a NIP containing non-digit characters in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '123-456-789' });
+      expect(hasSellerNipError(error)).toBe(true);
+    });
+
+    it('accepts a valid 10-digit NIP in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '1234567890' });
+      expect(hasSellerNipError(error)).toBe(false);
+    });
+  });
+
+  describe('development environment', () => {
+    it('accepts an empty string SELLER_NIP in development', () => {
+      const { error } = validate({ NODE_ENV: 'development', SELLER_NIP: '' });
+      expect(hasSellerNipError(error)).toBe(false);
+    });
+
+    it('accepts a missing SELLER_NIP in development (dev default applies)', () => {
+      const { error } = validate({ NODE_ENV: 'development' });
+      expect(hasSellerNipError(error)).toBe(false);
+    });
+
+    it('applies empty string as default when SELLER_NIP is absent in development', () => {
+      const { value } = validate({ NODE_ENV: 'development' });
+      expect(value.SELLER_NIP).toBe('');
+    });
+  });
+});

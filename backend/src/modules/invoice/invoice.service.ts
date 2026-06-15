@@ -55,6 +55,11 @@ export class InvoiceService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    if (this.config.get<string>('NODE_ENV') === 'production' && !this.sellerNip) {
+      throw new Error(
+        'SELLER_NIP is required in production — Polish VAT invoices cannot be issued without the seller NIP (Art. 106e ust. 1 pkt 4 Ustawy o VAT)',
+      );
+    }
     const year = new Date().getFullYear();
     await this.ensureSequence(year);
   }

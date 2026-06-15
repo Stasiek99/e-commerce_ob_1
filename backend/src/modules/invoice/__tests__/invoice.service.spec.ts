@@ -916,6 +916,65 @@ describe('InvoiceService', () => {
       expect(calls[vat23Idx + 1]).toBe('0.19 zl');
     });
   });
+  // ── onModuleInit — SELLER_NIP production guard ────────────────────────────
+  // FIX: onModuleInit now throws when NODE_ENV=production and SELLER_NIP is
+  // empty, providing a second line of defence after the Joi schema check.
+  // Dev environments (no NIP yet) must continue to boot unimpeded.
+
+  describe('onModuleInit — SELLER_NIP production guard', () => {
+    async function invokeOnModuleInit(cfg: { NODE_ENV: string; SELLER_NIP: string }): Promise<void> {
+      const localPrisma = { $executeRawUnsafe: jest.fn().mockResolvedValue(undefined) };
+      const mod = await Test.createTestingModule({
+        providers: [
+          InvoiceService,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn((key: string, fallback?: string) =>
+                cfg[key as keyof typeof cfg] ?? fallback ?? '',
+              ),
+            },
+          },
+          { provide: PrismaService, useValue: localPrisma },
+          {
+            provide: StorageService,
+            useValue: { uploadInvoice: jest.fn(), getInvoiceSignedUrl: jest.fn() },
+          },
+        ],
+      }).compile();
+      return mod.get(InvoiceService).onModuleInit();
+    }
+
+    it('throws when NODE_ENV is production and SELLER_NIP is empty', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'production', SELLER_NIP: '' }),
+      ).rejects.toThrow('SELLER_NIP is required in production');
+    });
+
+    it('error message includes the VAT law reference (Art. 106e ust. 1 pkt 4)', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'production', SELLER_NIP: '' }),
+      ).rejects.toThrow('Art. 106e');
+    });
+
+    it('does not throw when NODE_ENV is production and SELLER_NIP is a valid 10-digit NIP', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'production', SELLER_NIP: '1234567890' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('does not throw when NODE_ENV is development and SELLER_NIP is empty', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'development', SELLER_NIP: '' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('does not throw when NODE_ENV is absent and SELLER_NIP is empty', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: '', SELLER_NIP: '' }),
+      ).resolves.toBeUndefined();
+    });
+  });
 });
 
 // ── helpers used only in proration algorithm tests ───────────────────────────

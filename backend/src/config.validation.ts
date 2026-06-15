@@ -143,7 +143,17 @@ export const envValidationSchema = Joi.object({
   // Required in production to generate legally-compliant Polish VAT invoices.
   // SELLER_NIP is the seller's Polish tax ID (10 digits, no spaces).
   SELLER_NAME: requiredInProd(Joi.string(), 'Aromaterie'),
-  SELLER_NIP: requiredInProd(Joi.string(), ''),
+  // In production: must be a valid 10-digit Polish NIP (Art. 106e ust. 1 pkt 4 Ustawy o VAT).
+  // requiredInProd() cannot express "allow '' in dev, reject '' in prod" with a shared base
+  // schema, so we inline a full when(). InvoiceService.onModuleInit adds a second guard.
+  SELLER_NIP: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(1).pattern(/^\d{10}$/).required().messages({
+      'string.pattern.base': 'SELLER_NIP must be exactly 10 digits (Polish NIP)',
+      'string.min': 'SELLER_NIP must not be empty in production',
+    }),
+    otherwise: Joi.string().allow('').optional().default(''),
+  }),
   SELLER_STREET: requiredInProd(Joi.string(), ''),
   SELLER_CITY: requiredInProd(Joi.string(), ''),
   SELLER_POSTAL_CODE: requiredInProd(Joi.string(), ''),
