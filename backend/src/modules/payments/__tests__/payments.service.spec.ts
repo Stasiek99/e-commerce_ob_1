@@ -1175,7 +1175,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { userId: 'user-1', orderNumber: 'ORD-2026-000001' },
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000001', shippingCostInCents: 0, items: [] },
       });
 
       const result = await service.getPaymentStatus('order-1', 'user-1');
@@ -1184,6 +1184,8 @@ describe('PaymentsService', () => {
         status: PaymentStatus.COMPLETED,
         paidAt: now,
         orderNumber: 'ORD-2026-000001',
+        shippingInCents: 0,
+        items: [],
       });
     });
 
@@ -1191,7 +1193,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { userId: 'user-1', orderNumber: 'ORD-2026-000042' },
+        order: { userId: 'user-1', orderNumber: 'ORD-2026-000042', shippingCostInCents: 0, items: [] },
       });
 
       const result = await service.getPaymentStatus('order-1', 'user-1');
@@ -1231,7 +1233,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: now,
-        order: { orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001', shippingCostInCents: 0, items: [] },
       });
       redis.get.mockResolvedValue(VALID_TOKEN);
 
@@ -1241,6 +1243,8 @@ describe('PaymentsService', () => {
         status: PaymentStatus.COMPLETED,
         paidAt: now,
         orderNumber: 'ORD-2026-000001',
+        shippingInCents: 0,
+        items: [],
       });
     });
 
@@ -1248,7 +1252,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { orderNumber: 'ORD-2026-000042' },
+        order: { orderNumber: 'ORD-2026-000042', shippingCostInCents: 0, items: [] },
       });
       redis.get.mockResolvedValue(VALID_TOKEN);
 
@@ -1261,7 +1265,7 @@ describe('PaymentsService', () => {
       prisma.payment.findUnique.mockResolvedValue({
         status: PaymentStatus.COMPLETED,
         paidAt: new Date(),
-        order: { orderNumber: 'ORD-2026-000001' },
+        order: { orderNumber: 'ORD-2026-000001', shippingCostInCents: 0, items: [] },
       });
       redis.get.mockResolvedValue(VALID_TOKEN);
 
