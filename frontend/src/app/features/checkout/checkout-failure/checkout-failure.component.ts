@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
+import { SeoService } from '../../../core/services/seo.service';
 
 @Component({
   selector: 'app-checkout-failure',
@@ -94,16 +95,21 @@ import { environment } from '../../../../environments/environment';
     }
   `],
 })
-export class CheckoutFailureComponent {
+export class CheckoutFailureComponent implements OnInit {
   private readonly route  = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly http   = inject(HttpClient);
+  private readonly seo    = inject(SeoService);
 
   readonly orderId    = signal<string | null>(this.route.snapshot.queryParamMap.get('orderId'));
   readonly guestToken = signal<string | null>(this.route.snapshot.queryParamMap.get('guestToken'));
   readonly retrying   = signal(false);
   readonly cancelling = signal(false);
   readonly cancelError = signal<string | null>(null);
+
+  ngOnInit(): void {
+    this.seo.setRobotsTag('noindex,nofollow');
+  }
 
   retryPayment(): void {
     const id = this.orderId();

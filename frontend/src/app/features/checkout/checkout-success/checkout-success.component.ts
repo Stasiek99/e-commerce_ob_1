@@ -8,6 +8,7 @@ import { environment } from '../../../../environments/environment';
 import { AnalyticsService } from '../../../core/services/analytics.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { CartService } from '../../../core/services/cart.service';
+import { SeoService } from '../../../core/services/seo.service';
 
 interface PaymentStatusResponse {
   status: string;
@@ -220,6 +221,7 @@ export class CheckoutSuccessComponent implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
 
   readonly auth = inject(AuthService);
+  private readonly seo = inject(SeoService);
 
   readonly loading = signal(true);
   readonly paid = signal(false);
@@ -229,6 +231,8 @@ export class CheckoutSuccessComponent implements OnInit {
   readonly newsletterSubscribed = signal(false);
 
   ngOnInit(): void {
+    this.seo.setRobotsTag('noindex,nofollow');
+
     const id = this.route.snapshot.queryParamMap.get('orderId');
     const token = this.route.snapshot.queryParamMap.get('token');
     this.orderId.set(id);

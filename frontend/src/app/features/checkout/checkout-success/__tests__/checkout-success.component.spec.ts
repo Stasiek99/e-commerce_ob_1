@@ -17,6 +17,7 @@ import { CheckoutSuccessComponent } from '../checkout-success.component';
 import { CartService } from '../../../../core/services/cart.service';
 import { AuthService } from '../../../../core/services/auth.service';
 import { AnalyticsService } from '../../../../core/services/analytics.service';
+import { SeoService } from '../../../../core/services/seo.service';
 
 function setup(orderId: string | null = 'order-1') {
   const mockCart     = { clear: jest.fn() };
@@ -55,6 +56,53 @@ function setup(orderId: string | null = 'order-1') {
 
 const statusUrl = (id = 'order-1') => (req: { url: string }) =>
   req.url.includes(`/payments/${id}/status`);
+
+// ── robots meta tag ───────────────────────────────────────────────────────────
+
+describe('CheckoutSuccessComponent — robots meta tag', () => {
+  let fixture: ComponentFixture<CheckoutSuccessComponent>;
+  let mockSeo: { setRobotsTag: jest.Mock; updatePageMeta: jest.Mock };
+  let httpMock: HttpTestingController;
+
+  beforeEach(() => {
+    mockSeo = { setRobotsTag: jest.fn(), updatePageMeta: jest.fn() };
+
+    TestBed.configureTestingModule({
+      imports: [CheckoutSuccessComponent],
+      schemas: [NO_ERRORS_SCHEMA],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: { get: () => null } } },
+        },
+        { provide: CartService,      useValue: { clear: jest.fn() } },
+        { provide: AuthService,      useValue: { currentUser: jest.fn().mockReturnValue(null) } },
+        { provide: AnalyticsService, useValue: { trackPurchase: jest.fn(), push: jest.fn() } },
+        { provide: SeoService,       useValue: mockSeo },
+      ],
+    });
+
+    fixture = TestBed.createComponent(CheckoutSuccessComponent);
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('sets noindex,nofollow on init so order IDs are never crawled by Googlebot', () => {
+    fixture.detectChanges();
+
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,nofollow');
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── payment status polling ────────────────────────────────────────────────────
 
 describe('CheckoutSuccessComponent — payment status polling', () => {
   afterEach(() => {
