@@ -136,6 +136,68 @@ describe('instrument.ts', () => {
       expect(result!.request!.data).toBe('[REDACTED]');
     });
 
+    it('redacts sensitive keys nested inside an address object', () => {
+      const event: Event = {
+        request: {
+          data: {
+            firstName: 'Jan',
+            address: { street: 'ul. Główna 1', nip: '9876543210', phone: '+48123456789' },
+          },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.address.nip).toBe('[REDACTED]');
+      expect(parsed.address.street).toBe('ul. Główna 1');
+      expect(parsed.firstName).toBe('Jan');
+    });
+
+    it('redacts password two levels deep inside a nested object', () => {
+      const event: Event = {
+        request: {
+          data: { user: { profile: { password: 'deep-secret', email: 'x@y.com' } } },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.user.profile.password).toBe('[REDACTED]');
+      expect(parsed.user.profile.email).toBe('x@y.com');
+    });
+
+    it('redacts sensitive keys inside array elements', () => {
+      const event: Event = {
+        request: {
+          data: {
+            items: [
+              { quantity: 1, token: 'tkn-a' },
+              { quantity: 2, token: 'tkn-b' },
+            ],
+          },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.items[0].token).toBe('[REDACTED]');
+      expect(parsed.items[0].quantity).toBe(1);
+      expect(parsed.items[1].token).toBe('[REDACTED]');
+    });
+
+    it('redacts both top-level and nested sensitive keys in one pass', () => {
+      const event: Event = {
+        request: {
+          data: {
+            nip: 'top-nip',
+            address: { bankAccount: 'nested-bank', city: 'Warsaw' },
+          },
+        },
+      };
+      const result = beforeSend(event);
+      const parsed = JSON.parse(result!.request!.data as string);
+      expect(parsed.nip).toBe('[REDACTED]');
+      expect(parsed.address.bankAccount).toBe('[REDACTED]');
+      expect(parsed.address.city).toBe('Warsaw');
+    });
+
     it('returns event unchanged when request.data is absent', () => {
       const event: Event = { request: { url: 'https://example.com' } };
       const result = beforeSend(event);
