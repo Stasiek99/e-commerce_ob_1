@@ -173,7 +173,9 @@ export class ReturnsService {
         orderNumber: request.orderNumber,
         customerName: `${request.firstName} ${request.lastName}`,
         email: request.email,
-        phone: request.phone ?? undefined,
+        adminUrl: this.config.get<string>('FRONTEND_URL')
+          ? `${this.config.get<string>('FRONTEND_URL')}/admin/returns/${request.id}`
+          : undefined,
         type: request.type as 'WITHDRAWAL' | 'COMPLAINT',
         deliveryDate: dto.deliveryDate,
         items: dto.items,

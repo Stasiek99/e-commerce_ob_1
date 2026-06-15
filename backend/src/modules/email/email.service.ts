@@ -226,7 +226,7 @@ export class EmailService {
     orderNumber: string;
     customerName: string;
     email: string;
-    phone?: string;
+    adminUrl?: string;
     type: 'WITHDRAWAL' | 'COMPLAINT';
     deliveryDate?: string;
     items: Array<{ productName: string; quantity: number }>;

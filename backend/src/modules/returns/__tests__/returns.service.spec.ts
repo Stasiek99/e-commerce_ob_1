@@ -1215,6 +1215,13 @@ describe('ReturnsService', () => {
       );
     });
 
+    it('does NOT include phone in the admin notification payload (GDPR Art. 5 — phone must not transit Redis unencrypted)', async () => {
+      await createModule();
+      await service.create(WITHDRAWAL_DTO as any, OWNER_ID);
+      const adminCall = (emailService.sendReturnAdminNotification as jest.Mock).mock.calls[0][0];
+      expect(adminCall).not.toHaveProperty('phone');
+    });
+
     it('does NOT include bankAccount in the admin notification payload (GDPR Art. 32 — IBAN must not transit Redis as plaintext)', async () => {
       await createModuleWithIbanKey(TEST_IBAN_KEY);
 

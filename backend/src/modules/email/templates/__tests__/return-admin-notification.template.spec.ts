@@ -147,12 +147,18 @@ describe('returnAdminNotificationTemplate()', () => {
       expect(html).not.toContain('Nr konta (IBAN)');
     });
 
-    it('shows phone when provided', () => {
+    it('shows admin link when adminUrl is provided', () => {
       const { html } = returnAdminNotificationTemplate({
         ...BASE_WITHDRAWAL,
-        phone: '+48600123456',
+        adminUrl: 'https://store.pl/admin/returns/ret-1',
       });
-      expect(html).toContain('+48600123456');
+      expect(html).toContain('https://store.pl/admin/returns/ret-1');
+      expect(html).toContain('Otwórz zgłoszenie w panelu');
+    });
+
+    it('omits admin link when adminUrl is absent', () => {
+      const { html } = returnAdminNotificationTemplate(BASE_WITHDRAWAL);
+      expect(html).not.toContain('Otwórz zgłoszenie w panelu');
     });
   });
 
@@ -213,15 +219,6 @@ describe('returnAdminNotificationTemplate()', () => {
       });
       expect(html).not.toContain('<img');
       expect(html).toContain('&lt;img');
-    });
-
-    it('escapes HTML in phone number', () => {
-      const { html } = returnAdminNotificationTemplate({
-        ...BASE_WITHDRAWAL,
-        phone: '"><svg/onload=alert(1)>',
-      });
-      expect(html).not.toContain('<svg');
-      expect(html).toContain('&lt;svg');
     });
 
     it('escapes HTML in item productName', () => {

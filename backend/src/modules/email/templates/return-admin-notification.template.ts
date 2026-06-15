@@ -17,7 +17,7 @@ export function returnAdminNotificationTemplate(data: {
   orderNumber: string;
   customerName: string;
   email: string;
-  phone?: string;
+  adminUrl?: string;
   type: 'WITHDRAWAL' | 'COMPLAINT';
   deliveryDate?: string;
   items: ReturnItem[];
@@ -141,18 +141,6 @@ export function returnAdminNotificationTemplate(data: {
                   ${data.type === 'WITHDRAWAL' ? ` — termin zwrotu: <strong>${new Date(new Date(data.deliveryDate).getTime() + 14 * 86400000).toLocaleDateString('pl-PL')}</strong>` : ''}
                 </td>
               </tr>` : ''}
-              ${data.phone ? `
-              <tr>
-                <td style="font-size:12px;font-weight:600;color:#9b9b9b;
-                           text-transform:uppercase;letter-spacing:0.06em;
-                           padding:8px 0;border-bottom:1px solid #f0f0f0;">
-                  Telefon
-                </td>
-                <td style="font-size:14px;color:#1a1a1a;padding:8px 0;
-                           border-bottom:1px solid #f0f0f0;">
-                  ${escapeHtml(data.phone)}
-                </td>
-              </tr>` : ''}
             </table>
 
             <!-- Items -->
@@ -185,6 +173,16 @@ export function returnAdminNotificationTemplate(data: {
                         font-size:14px;color:#1a1a1a;line-height:1.6;white-space:pre-line;">
               ${escapeHtml(data.reason)}
             </div>` : ''}
+
+            ${data.adminUrl ? `
+            <p style="margin-top:20px;">
+              <a href="${data.adminUrl}"
+                 style="background:#1a1a1a;color:#fff;padding:10px 20px;
+                        border-radius:6px;text-decoration:none;
+                        font-size:14px;font-weight:600;">
+                Otwórz zgłoszenie w panelu →
+              </a>
+            </p>` : ''}
 
           </td>
         </tr>
