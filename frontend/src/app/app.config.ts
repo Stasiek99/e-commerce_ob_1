@@ -36,6 +36,7 @@ import * as Sentry from '@sentry/angular';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
+import { ssrTimeoutInterceptor } from './core/interceptors/ssr-timeout.interceptor';
 import { environment } from '../environments/environment';
 import { LOCAL_STORAGE } from './core/tokens/storage.tokens';
 
@@ -62,7 +63,7 @@ export const appConfig: ApplicationConfig = {
     ),
     provideHttpClient(
       withFetch(),
-      withInterceptors([authInterceptor, errorInterceptor]),
+      withInterceptors([authInterceptor, errorInterceptor, ssrTimeoutInterceptor]),
     ),
     provideAnimationsAsync(),
     NG_EVENT_PLUGINS,
