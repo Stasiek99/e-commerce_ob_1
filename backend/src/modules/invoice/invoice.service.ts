@@ -102,56 +102,69 @@ export class InvoiceService implements OnModuleInit {
       throw new Error(`Invalid invoice year: ${year}`);
     }
 
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        const rows = await tx.$queryRawUnsafe<
-          Array<{ invoice_storage_path: string | null; invoice_number: string | null }>
-        >(
-          `SELECT invoice_storage_path, invoice_number FROM orders WHERE id = $1 FOR UPDATE`,
-          order.id,
-        );
+    // TX1 — short lock: check idempotency and reserve the invoice number.
+    // Lock-hold time is microseconds; PDF generation and upload happen outside.
+    const reserved = await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ invoice_storage_path: string | null; invoice_number: string | null }>
+      >(
+        `SELECT invoice_storage_path, invoice_number FROM orders WHERE id = $1 FOR UPDATE`,
+        order.id,
+      );
 
-        if (rows[0]?.invoice_storage_path && rows[0]?.invoice_number) {
-          return {
-            storagePath: rows[0].invoice_storage_path,
-            invoiceNumber: rows[0].invoice_number,
-            pdf: null as Buffer | null,
-          };
-        }
+      if (rows[0]?.invoice_storage_path && rows[0]?.invoice_number) {
+        return {
+          invoiceNumber: rows[0].invoice_number,
+          storagePath: rows[0].invoice_storage_path as string,
+          alreadyDone: true as const,
+        };
+      }
 
-        await tx.$executeRawUnsafe(
-          `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
-        );
-        const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
-          `SELECT nextval('invoice_number_seq_${year}')`,
-        );
-        const seq = Number(seqRows[0].nextval);
-        const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+      // invoice_number may already be set if a previous attempt was interrupted
+      // after TX1 but before TX2 — re-use it to avoid a gap in the legal sequence.
+      if (rows[0]?.invoice_number) {
+        return { invoiceNumber: rows[0].invoice_number, storagePath: null, alreadyDone: false as const };
+      }
 
-        const pdf = await this.generatePdf(order, invoiceNumber);
-        const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
-        const storagePath = await this.storage.uploadInvoice(pdf, filename);
+      await tx.$executeRawUnsafe(
+        `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
+      );
+      const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+        `SELECT nextval('invoice_number_seq_${year}')`,
+      );
+      const invoiceNumber = `FV/${year}/${Number(seqRows[0].nextval).toString().padStart(6, '0')}`;
 
-        await tx.order.update({
-          where: { id: order.id },
-          data: { invoiceStoragePath: storagePath, invoiceNumber },
-        });
+      // Persist the reserved number so concurrent callers see it and skip TX1
+      await tx.order.update({ where: { id: order.id }, data: { invoiceNumber } });
 
-        this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
-        return { storagePath, invoiceNumber, pdf };
-      },
-      { timeout: 30_000 },
-    );
+      return { invoiceNumber, storagePath: null, alreadyDone: false as const };
+    });
+
+    if (reserved.alreadyDone) {
+      const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+      const url = await this.storage.getInvoiceSignedUrl(reserved.storagePath, SEVEN_DAYS_SECONDS);
+      return { url, storagePath: reserved.storagePath, pdf: Buffer.alloc(0), invoiceNumber: reserved.invoiceNumber };
+    }
+
+    // Outside any transaction: generate PDF and upload to Supabase.
+    // No Postgres connection is held during this I/O, eliminating the lock that
+    // could exhaust pgBouncer under concurrent invoice generation.
+    const { invoiceNumber } = reserved;
+    const pdf = await this.generatePdf(order, invoiceNumber);
+    const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
+    const storagePath = await this.storage.uploadInvoice(pdf, filename);
+
+    // TX2 — short write: persist the storage path now that upload succeeded
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { invoiceStoragePath: storagePath },
+    });
+
+    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
 
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
-    const url = await this.storage.getInvoiceSignedUrl(result.storagePath, SEVEN_DAYS_SECONDS);
-
-    return {
-      url,
-      storagePath: result.storagePath,
-      pdf: result.pdf ?? Buffer.alloc(0),
-      invoiceNumber: result.invoiceNumber,
-    };
+    const url = await this.storage.getInvoiceSignedUrl(storagePath, SEVEN_DAYS_SECONDS);
+    return { url, storagePath, pdf, invoiceNumber };
   }
 
   async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {

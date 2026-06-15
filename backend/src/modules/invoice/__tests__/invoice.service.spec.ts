@@ -37,7 +37,7 @@ describe('InvoiceService', () => {
   let service: InvoiceService;
   let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
   let mockTx: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
-  let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock };
+  let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock; order: { update: jest.Mock } };
 
   beforeEach(async () => {
     mockStorage = {
@@ -59,6 +59,8 @@ describe('InvoiceService', () => {
       $transaction: jest.fn().mockImplementation(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),
       // $executeRawUnsafe is still present on the outer client (called by onModuleInit via ensureSequence)
       $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+      // TX2: persists invoiceStoragePath after the upload completes (outside the transaction)
+      order: { update: jest.fn().mockResolvedValue({}) },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -117,16 +119,24 @@ describe('InvoiceService', () => {
       );
     });
 
-    it('persists invoiceStoragePath (raw path) — never stores a signed URL in the DB', async () => {
+    it('TX1 reserves invoiceNumber, TX2 persists invoiceStoragePath — never stores a signed URL in the DB', async () => {
       await service.processInvoice(buildOrder());
 
+      // TX1: reserve the invoice number so concurrent callers see it and bail out
       expect(mockTx.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
-        data: { invoiceStoragePath: MOCK_PATH, invoiceNumber: 'FV/2026/000001' },
+        data: { invoiceNumber: 'FV/2026/000001' },
       });
-      // The DB update must NOT contain invoiceUrl — that would break on key rotation
-      const [call] = mockTx.order.update.mock.calls;
-      expect(call[0].data).not.toHaveProperty('invoiceUrl');
+      // TX2: persist the raw storage path (not a signed URL) after upload succeeds
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { invoiceStoragePath: MOCK_PATH },
+      });
+      // Neither update must contain invoiceUrl — that would break on key rotation
+      const [tx1Call] = mockTx.order.update.mock.calls;
+      const [tx2Call] = mockPrisma.order.update.mock.calls;
+      expect(tx1Call[0].data).not.toHaveProperty('invoiceUrl');
+      expect(tx2Call[0].data).not.toHaveProperty('invoiceUrl');
     });
 
     it('calls getInvoiceSignedUrl with a 7-day TTL for the returned email URL', async () => {
@@ -164,7 +174,13 @@ describe('InvoiceService', () => {
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
 
-      expect(mockTx.order.update).not.toHaveBeenCalled();
+      // TX1 still reserves the invoiceNumber (idempotency marker)
+      expect(mockTx.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { invoiceNumber: 'FV/2026/000001' },
+      });
+      // TX2 must not run — invoiceStoragePath is never written when upload fails
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
     it('propagates storage errors without swallowing them', async () => {
@@ -212,6 +228,66 @@ describe('InvoiceService', () => {
       await service.processInvoice(buildOrder());
 
       expect(mockStorage.uploadInvoice).not.toHaveBeenCalled();
+      expect(mockTx.order.update).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── two-transaction lock-release fix ─────────────────────────────────────────
+  // processInvoice previously held a SELECT FOR UPDATE lock for the entire duration
+  // of the Supabase upload (up to 30s), exhausting pgBouncer's 10-connection pool.
+  // The fix: TX1 releases the lock after reserving the invoice number, the upload
+  // runs outside any transaction, then TX2 commits the storage path.
+
+  describe('processInvoice — upload outside transaction (lock-release fix)', () => {
+    it('upload happens after $transaction resolves, not inside the callback', async () => {
+      let txResolved = false;
+      mockPrisma.$transaction.mockImplementation(
+        async (fn: (tx: typeof mockTx) => Promise<unknown>) => {
+          const result = await fn(mockTx);
+          txResolved = true;
+          return result;
+        },
+      );
+
+      let uploadCalledAfterTxResolve = false;
+      mockStorage.uploadInvoice.mockImplementation(async () => {
+        uploadCalledAfterTxResolve = txResolved;
+        return MOCK_PATH;
+      });
+
+      await service.processInvoice(buildOrder());
+
+      expect(uploadCalledAfterTxResolve).toBe(true);
+    });
+
+    it('reuses existing invoiceNumber when a previous attempt was interrupted between TX1 and TX2', async () => {
+      const INTERRUPTED_NUMBER = 'FV/2026/000099';
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValueOnce([
+        { invoice_storage_path: null, invoice_number: INTERRUPTED_NUMBER },
+      ]);
+      mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2026-000099.pdf');
+
+      const result = await service.processInvoice(buildOrder());
+
+      expect(result.invoiceNumber).toBe(INTERRUPTED_NUMBER);
+      expect(mockStorage.uploadInvoice).toHaveBeenCalledWith(expect.any(Buffer), 'FV-2026-000099.pdf');
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { invoiceStoragePath: 'invoices/FV-2026-000099.pdf' },
+      });
+    });
+
+    it('does not consume a new sequence number when recovering from an interrupted attempt', async () => {
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValueOnce([
+        { invoice_storage_path: null, invoice_number: 'FV/2026/000099' },
+      ]);
+
+      await service.processInvoice(buildOrder());
+
+      // CREATE SEQUENCE and nextval must not be called — existing number is re-used
+      expect(mockTx.$executeRawUnsafe).not.toHaveBeenCalled();
+      // tx.order.update in TX1 must not be called — no new number to reserve
       expect(mockTx.order.update).not.toHaveBeenCalled();
     });
   });
