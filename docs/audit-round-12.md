@@ -24,7 +24,6 @@ This is exactly the failure mode the now-fixed `.gitignore` issue was supposed t
 
 
 
-
 Not yet:
 
 ## 🔴 CRITICAL — Corrective-invoice idempotency key collides on refund amount, not correction identity — silently swallows distinct partial cancellations *(Skeptic)*
