@@ -22,17 +22,17 @@ export function backInStockTemplate(data: {
         Cześć${data.firstName ? `, ${data.firstName}` : ''}!
       </p>
       <h2 style="font-size:22px;font-weight:700;color:#111827;margin:0 0 16px;">
-        Twój produkt wrócił do sklepu
+        Jeden z obserwowanych produktów wrócił do sklepu
       </h2>
       <p style="font-size:15px;color:#4b5563;margin:0 0 24px;line-height:1.6;">
-        Produkt, który obserwowałeś(-aś), jest znowu dostępny:
+        Co najmniej jeden wariant produktu, który obserwujesz, jest znowu dostępny. Sprawdź na stronie produktu, czy to wariant, którego szukasz:
       </p>
 
       <div style="background:#f3f4f6;border-radius:8px;padding:20px 24px;margin-bottom:28px;">
         <p style="margin:0;font-size:17px;font-weight:700;color:#111827;">
           ${data.productName}
         </p>
-        <p style="margin:4px 0 0;font-size:14px;color:#6b7280;">${data.variantLabel}</p>
+        <p style="margin:4px 0 0;font-size:14px;color:#6b7280;">Dostępny wariant: ${data.variantLabel}</p>
       </div>
 
       <a href="${data.productUrl}"
