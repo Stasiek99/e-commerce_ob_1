@@ -12,10 +12,43 @@ import {
   MaxLength,
   Validate,
   ValidateNested,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CarrierCode } from '@prisma/client';
 import { NipChecksumConstraint } from '../../users/dto/update-profile.dto';
+
+// Must be kept in sync with TERMS_VERSION in
+// frontend/src/app/features/checkout/checkout-page/checkout-page.component.ts
+export const CURRENT_TERMS_VERSION = '1.0';
+
+const TERMS_ACCEPTANCE_MAX_AGE_MS = 10 * 60 * 1000;
+
+@ValidatorConstraint({ name: 'currentTermsVersion', async: false })
+class CurrentTermsVersionConstraint implements ValidatorConstraintInterface {
+  validate(value: string): boolean {
+    return value === CURRENT_TERMS_VERSION;
+  }
+
+  defaultMessage(): string {
+    return `termsVersion must match the current published version (${CURRENT_TERMS_VERSION})`;
+  }
+}
+
+@ValidatorConstraint({ name: 'recentTermsAcceptance', async: false })
+class RecentTermsAcceptanceConstraint implements ValidatorConstraintInterface {
+  validate(value: string): boolean {
+    const acceptedAt = new Date(value).getTime();
+    if (Number.isNaN(acceptedAt)) return false;
+    const ageMs = Date.now() - acceptedAt;
+    return ageMs >= 0 && ageMs <= TERMS_ACCEPTANCE_MAX_AGE_MS;
+  }
+
+  defaultMessage(): string {
+    return 'termsAcceptedAt must be a timestamp within the last 10 minutes';
+  }
+}
 
 class NewAddressDto {
   @IsString()
@@ -91,14 +124,14 @@ export class CreateOrderDto {
   @MaxLength(254)
   guestEmail?: string;
 
-  @IsOptional()
   @IsString()
   @MaxLength(10)
-  termsVersion?: string;
+  @Validate(CurrentTermsVersionConstraint)
+  termsVersion!: string;
 
-  @IsOptional()
   @IsDateString()
-  termsAcceptedAt?: string;
+  @Validate(RecentTermsAcceptanceConstraint)
+  termsAcceptedAt!: string;
 
   @IsOptional()
   @IsString()

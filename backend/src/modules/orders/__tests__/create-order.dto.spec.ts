@@ -116,6 +116,63 @@ async function getNipErrors(nip: unknown) {
   return errors.filter((e) => e.property === 'nip');
 }
 
+// ── CreateOrderDto — termsVersion / termsAcceptedAt validation ───────────────
+// Guards the fix: both fields are required and must reflect a genuine, recent
+// acceptance, so an order row can never be created with NULL proof of T&C
+// acceptance (UŚUDE Art. 8 ust. 1 pkt 2 / UoK Art. 12 ust. 1 pkt 4).
+
+async function getTermsErrors(overrides: Record<string, unknown>) {
+  const dto = plainToInstance(CreateOrderDto, { ...BASE_PLAIN, ...overrides });
+  const errors = await validate(dto);
+  return errors.filter((e) => e.property === 'termsVersion' || e.property === 'termsAcceptedAt');
+}
+
+describe('CreateOrderDto — termsVersion / termsAcceptedAt validation', () => {
+  it('fails when both fields are absent', async () => {
+    const errors = await getTermsErrors({});
+
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('fails when termsVersion does not match the current published version', async () => {
+    const errors = await getTermsErrors({
+      termsVersion: '0.9',
+      termsAcceptedAt: new Date().toISOString(),
+    });
+
+    expect(errors.some((e) => e.property === 'termsVersion')).toBe(true);
+  });
+
+  it('passes when termsVersion matches the current published version and termsAcceptedAt is fresh', async () => {
+    const errors = await getTermsErrors({
+      termsVersion: '1.0',
+      termsAcceptedAt: new Date().toISOString(),
+    });
+
+    expect(errors).toHaveLength(0);
+  });
+
+  it('fails when termsAcceptedAt is older than 10 minutes (stale consent replay)', async () => {
+    const elevenMinutesAgo = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    const errors = await getTermsErrors({ termsVersion: '1.0', termsAcceptedAt: elevenMinutesAgo });
+
+    expect(errors.some((e) => e.property === 'termsAcceptedAt')).toBe(true);
+  });
+
+  it('fails when termsAcceptedAt is in the future', async () => {
+    const inTheFuture = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const errors = await getTermsErrors({ termsVersion: '1.0', termsAcceptedAt: inTheFuture });
+
+    expect(errors.some((e) => e.property === 'termsAcceptedAt')).toBe(true);
+  });
+
+  it('fails when termsAcceptedAt is not a valid date string', async () => {
+    const errors = await getTermsErrors({ termsVersion: '1.0', termsAcceptedAt: 'not-a-date' });
+
+    expect(errors.some((e) => e.property === 'termsAcceptedAt')).toBe(true);
+  });
+});
+
 describe('CreateOrderDto — nip checksum validation', () => {
   it('passes when nip is absent (field is optional)', async () => {
     const errors = await getNipErrors(undefined);
