@@ -2988,7 +2988,7 @@ describe('PaymentsService', () => {
   // Invariants enforced by the fix:
   //   1. charge.dispute.created → order → DISPUTE_HOLD, admin email + Sentry alert
   //   2. charge.dispute.closed (won) → order restored to pre-dispute status
-  //   3. charge.dispute.closed (lost) → CANCELLED; stock restored only if not shipped
+  //   3. charge.dispute.closed (lost) → CANCELLED; stock always restored (no labelUrl heuristic)
   //   4. Duplicate events (P2002) are swallowed; non-P2002 errors are re-thrown
 
   describe('dispute webhook handlers', () => {
@@ -3373,12 +3373,11 @@ describe('PaymentsService', () => {
       expect(capturedOrderStatus).toBe(OrderStatus.CANCELLED);
     });
 
-    it('restores stock when dispute is lost and no shipment label was generated', async () => {
+    it('restores stock when dispute is lost', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
           ...mockPaymentForDisputeClosed.order,
-          shipment: null,
           items: [
             { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 },
             { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 },
@@ -3412,7 +3411,9 @@ describe('PaymentsService', () => {
       );
     });
 
-    it('does NOT restore stock when dispute is lost and goods were already shipped (labelUrl set)', async () => {
+    it('still restores stock when dispute is lost even though a shipping label was generated (labelUrl set)', async () => {
+      // Regression guard: a generated label only proves a label was created, not that the
+      // parcel was delivered — the old labelUrl heuristic incorrectly skipped stock restore here.
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
@@ -3429,7 +3430,7 @@ describe('PaymentsService', () => {
           order: { update: jest.fn() },
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
-              stockUpdates.push(args);
+              stockUpdates.push({ id: args.where.id, increment: args.data.stock.increment });
             }),
           },
           orderEvent: { create: jest.fn() },
@@ -3440,7 +3441,7 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(stockUpdates).toHaveLength(0);
+      expect(stockUpdates).toEqual([{ id: 'pv-1', increment: 2 }]);
     });
 
     it('captures a Sentry fatal event when dispute is lost', async () => {

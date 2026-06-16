@@ -1229,7 +1229,7 @@ export class PaymentsService {
 
     const payment = await this.prisma.payment.findUnique({
       where: { stripePaymentIntentId: paymentIntentId },
-      include: { order: { include: { items: true, shipment: true } } },
+      include: { order: { include: { items: true } } },
     });
 
     if (!payment) {
@@ -1282,9 +1282,9 @@ export class PaymentsService {
         `Dispute ${dispute.id} WON: order ${payment.order.orderNumber} restored to ${restoreStatus}`,
       );
     } else if (dispute.status === 'lost') {
-      // Funds already taken by Stripe. Restore stock only if label was never generated.
-      const goodsShipped = !!payment.order.shipment?.labelUrl;
-
+      // Funds already taken by Stripe. A generated shipping label only proves a label was
+      // created, not that the parcel was delivered — restore stock by default and let an
+      // admin manually adjust if goods are provably delivered.
       try {
         await this.prisma.$transaction(async (tx) => {
           if (eventId) {
@@ -1294,15 +1294,13 @@ export class PaymentsService {
             where: { id: payment.orderId },
             data: { status: OrderStatus.CANCELLED },
           });
-          if (!goodsShipped) {
-            for (const item of payment.order.items) {
-              const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-              if (activeQty > 0) {
-                await tx.productVariant.update({
-                  where: { id: item.productVariantId },
-                  data: { stock: { increment: activeQty } },
-                });
-              }
+          for (const item of payment.order.items) {
+            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+            if (activeQty > 0) {
+              await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQty } },
+              });
             }
           }
           await tx.orderEvent.create({
@@ -1311,7 +1309,7 @@ export class PaymentsService {
               fromStatus: OrderStatus.DISPUTE_HOLD,
               toStatus: OrderStatus.CANCELLED,
               actor: 'SYSTEM:stripe-webhook',
-              note: `Dispute ${dispute.id} closed LOST${goodsShipped ? ' — goods shipped, stock not restored' : ' — stock restored'}`,
+              note: `Dispute ${dispute.id} closed LOST — stock restored`,
             },
           });
         });
@@ -1324,7 +1322,7 @@ export class PaymentsService {
       }
 
       this.logger.error(
-        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled. Goods shipped: ${goodsShipped}`,
+        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled, stock restored.`,
       );
       Sentry.withScope((scope) => {
         scope.setLevel('fatal');
@@ -1333,7 +1331,6 @@ export class PaymentsService {
           disputeId: dispute.id,
           orderNumber: payment.order.orderNumber,
           amount: dispute.amount,
-          goodsShipped,
         });
         Sentry.captureMessage(
           `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed`,
