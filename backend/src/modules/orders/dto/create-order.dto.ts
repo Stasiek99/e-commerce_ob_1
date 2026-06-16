@@ -17,11 +17,8 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CarrierCode } from '@prisma/client';
+import { CURRENT_TERMS_VERSION } from '@fragrance-store/shared-types';
 import { NipChecksumConstraint } from '../../users/dto/update-profile.dto';
-
-// Must be kept in sync with TERMS_VERSION in
-// frontend/src/app/features/checkout/checkout-page/checkout-page.component.ts
-export const CURRENT_TERMS_VERSION = '1.0';
 
 const TERMS_ACCEPTANCE_MAX_AGE_MS = 10 * 60 * 1000;
 
