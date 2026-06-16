@@ -6,6 +6,7 @@
 > **Excludes** Phase 7 (pre-launch checklist) items in ROADMAP.md.
 
 ---
+Done:
 
 ## 🔴 CRITICAL — `SELLER_NIP` boots with empty string — every invoice is legally void *(Tax agent)*
 
@@ -82,12 +83,10 @@ if (user) {
   });
 }
 ```
-
 No check for existing `googleId`, no password re-authentication, no opt-in confirmation. An attacker who creates a Google account with a victim's email (or gets access to any Google Workspace account with that email) gains full authenticated access to the victim's store account including their saved addresses, order history, and the ability to place orders on saved payment methods.
 
 **Fix:** When linking a Google identity to an existing password account, either (a) require current-password proof before linking, or (b) send a verification email to the existing address and gate the link on that click. At minimum, throw `ConflictException` if the found user already has a `passwordHash` and no `googleId`.
 
----
 
 ## 🔴 CRITICAL — `logout()` does not revoke the current access token — 15-minute account takeover window *(API Auth agent)*
 
@@ -335,7 +334,6 @@ prisma.emailLog.deleteMany({
   where: { createdAt: { lt: subYears(new Date(), 1) } }
 });
 ```
-
 ---
 
 ## 🟡 MEDIUM — EU Omnibus price history not populated via seed/bulk import — "lowest price in 30 days" shows promotional price *(GDPR agent)*
@@ -364,7 +362,6 @@ await this.prisma.consentLog.deleteMany({
   where: { expiresAt: { lt: new Date() } },
 });
 ```
-
 ---
 
 ## 🟡 MEDIUM — `requestEmailChange` does not revoke the current access token — stale email claim persists *(API Auth agent)*
@@ -396,7 +393,6 @@ The 30-second grace window on `validateRefreshTokenByRaw()` allows a recently-ro
 **Fix:** Confirm the Angular `errorInterceptor` uses a `BehaviorSubject`/`ReplaySubject` to queue all concurrent 401s behind a single in-flight refresh. If two-tab scenarios are possible, add a `usedAt` flag to the grace-window path to prevent the replacement token from being rotated a second time within the grace period.
 
 ---
-
 ## Agent Agreement Summary
 
 | Finding | Agents |
