@@ -87,6 +87,7 @@ describe('OrdersService', () => {
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn(), findMany: jest.fn() },
             returnRequest: { count: jest.fn().mockResolvedValue(0) },
+            coupon: { findUnique: jest.fn().mockResolvedValue(null) },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -3328,6 +3329,84 @@ describe('OrdersService', () => {
         'order-1',
         [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31 })],
         OrderStatus.PARTIALLY_REFUNDED,
+        'CUSTOMER',
+      );
+    });
+
+    // ─── FREE_SHIPPING coupon proration guard (fix: shipping discount must not ──
+    // ─── be divided into item prices) ────────────────────────────────────────
+    // discountInCents on a FREE_SHIPPING order equals shippingCostInCents, which is
+    // unrelated to itemsTotalInCents. Prorating it across item prices would refund
+    // the customer less than they paid for the items themselves.
+
+    it('does not reduce item priceInCents when the order used a FREE_SHIPPING coupon', async () => {
+      // discountInCents (1499, the shipping cost) would otherwise be misread as a
+      // ~7.5% items discount against itemsTotalInCents=20000.
+      const freeShippingOrder = {
+        ...mockPaidOrder,
+        couponId: 'coupon-free-shipping',
+        itemsTotalInCents: 20000,
+        discountInCents: 1499,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 10000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(freeShippingOrder);
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.FREE_SHIPPING });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(prisma.coupon.findUnique).toHaveBeenCalledWith({
+        where: { id: 'coupon-free-shipping' },
+        select: { discountType: true },
+      });
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 10000 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('still prorates item priceInCents when a non-FREE_SHIPPING coupon is applied', async () => {
+      const percentageOrder = {
+        ...mockPaidOrder,
+        couponId: 'coupon-percentage',
+        itemsTotalInCents: 20000,
+        discountInCents: 4000,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 20000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(percentageOrder);
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
+        OrderStatus.PAID,
         'CUSTOMER',
       );
     });

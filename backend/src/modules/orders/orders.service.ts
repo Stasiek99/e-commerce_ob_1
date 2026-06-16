@@ -918,7 +918,19 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    if (order.discountInCents > 0 && order.itemsTotalInCents > 0) {
+    let isFreeShippingCoupon = false;
+    if (order.couponId) {
+      const coupon = await this.prisma.coupon.findUnique({
+        where: { id: order.couponId },
+        select: { discountType: true },
+      });
+      isFreeShippingCoupon = coupon?.discountType === DiscountType.FREE_SHIPPING;
+    }
+
+    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+    // items-total discount — prorating it across item prices here would refund
+    // less than the customer paid for the items themselves.
+    if (!isFreeShippingCoupon && order.discountInCents > 0 && order.itemsTotalInCents > 0) {
       const discountFraction = order.discountInCents / order.itemsTotalInCents;
       for (const item of resolvedItems) {
         const orderItem = order.items.find(i => i.id === item.orderItemId)!;
