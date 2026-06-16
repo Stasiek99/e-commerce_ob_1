@@ -162,6 +162,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `EMAIL_FROM` | must be an address on a **verified** domain | see Resend domain verification below |
 | `REDIS_URL` | required — **hard gate**: BullMQ email queue (order confirmation, invoice, payment failure, shipping notification) silently never processes without a real Redis instance; `redis://localhost:6379` is the dev default but does not exist on Railway | Railway Dashboard → New Service → Redis → copy the connection URL |
 | `PAYMENTS_RECONCILE_SECRET` | required (≥16 chars) — without it `POST /payments/reconcile` always returns 401 and the external-cron reconciliation path is silently broken | generate with `openssl rand -hex 32` |
+| `ORDER_CANCEL_SECRET` | required (≥32 chars) — dedicated HMAC key for guest order cancel-link tokens, kept separate from `JWT_ACCESS_SECRET` so JWT rotation doesn't invalidate outstanding cancel links | generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
 | `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
 
