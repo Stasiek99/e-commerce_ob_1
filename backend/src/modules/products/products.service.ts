@@ -65,7 +65,6 @@ type FindAllQuery = {
 export class ProductsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ProductsService.name);
   private readonly stockUpdates$ = new Subject<{ id: string; stock: number }>();
-  private redisSubscriber: IORedis | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -73,15 +72,10 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+    @Inject('STOCK_SSE_REDIS_SUBSCRIBER') private readonly redisSubscriber: IORedis,
   ) {}
 
   onModuleInit() {
-    const url = this.configService.get<string>('REDIS_URL', 'redis://localhost:6379');
-    this.redisSubscriber = new IORedis(url, {
-      maxRetriesPerRequest: null,
-      retryStrategy: (times) => Math.min(times * 500, 5_000),
-    });
-    this.redisSubscriber.on('error', () => {});
     // Fire-and-forget: subscribe queues in IORedis and resolves when Redis connects.
     // Not awaited so NestJS bootstrap never blocks on Redis availability.
     this.redisSubscriber.subscribe('stock:updates').catch(() => {});
@@ -95,7 +89,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy() {
     this.stockUpdates$.complete();
-    await this.redisSubscriber?.quit().catch(() => {});
+    await this.redisSubscriber.quit().catch(() => {});
   }
 
   async findAll(query: FindAllQuery) {
@@ -794,10 +788,15 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     return related;
   }
 
-  // EU Omnibus Directive (2019/2161) — compute the lowest price charged in the
-  // preceding 30 days for variants that have an active promotional price.
-  // Returns the same product objects enriched with `lowestPrice30dInCents` on
-  // every variant. Falls back to the current price when no history exists yet.
+  // EU Omnibus Directive (2019/2161) Art. 6a — compute the lowest price charged
+  // in the preceding 30 days for variants that have an active promotional price.
+  // A variant only qualifies for the promo display once its price history
+  // actually spans the full 30-day window (i.e. has a row recorded at or before
+  // the window start) — otherwise the "lowest price in 30 days" claim can't be
+  // backed by real data (e.g. seed/bulk-imported variants with no history),
+  // and showing the current promotional price as the verified minimum would be
+  // misleading under UOKiK guidance. Such variants have their promo fields
+  // suppressed until 30 days of history accumulate.
   private async attachOmnibusData<T extends {
     avgRating?: Prisma.Decimal | number | null;
     variants: Array<{ id: string; priceInCents: number; compareAtPriceInCents?: number | null }>;
@@ -807,25 +806,40 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     );
 
     const minMap = new Map<string, number>();
+    const verifiedVariantIds = new Set<string>();
     if (promoVariantIds.length) {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const mins = await this.prisma.productVariantPriceHistory.groupBy({
-        by: ['variantId'],
-        where: { variantId: { in: promoVariantIds }, recordedAt: { gte: thirtyDaysAgo } },
-        _min: { priceInCents: true },
+
+      const earliestRows = await this.prisma.productVariantPriceHistory.findMany({
+        where: { variantId: { in: promoVariantIds }, recordedAt: { lte: thirtyDaysAgo } },
+        select: { variantId: true },
+        distinct: ['variantId'],
       });
-      for (const m of mins) {
-        if (m._min.priceInCents != null) minMap.set(m.variantId, m._min.priceInCents);
+      for (const r of earliestRows) verifiedVariantIds.add(r.variantId);
+
+      if (verifiedVariantIds.size) {
+        const mins = await this.prisma.productVariantPriceHistory.groupBy({
+          by: ['variantId'],
+          where: { variantId: { in: Array.from(verifiedVariantIds) }, recordedAt: { gte: thirtyDaysAgo } },
+          _min: { priceInCents: true },
+        });
+        for (const m of mins) {
+          if (m._min.priceInCents != null) minMap.set(m.variantId, m._min.priceInCents);
+        }
       }
     }
 
     return products.map(p => ({
       ...p,
       avgRating: p.avgRating != null ? Number(p.avgRating) : null,
-      variants: p.variants.map(v => ({
-        ...v,
-        lowestPrice30dInCents: minMap.get(v.id) ?? v.priceInCents,
-      })),
+      variants: p.variants.map(v => {
+        const hasVerifiedHistory = verifiedVariantIds.has(v.id);
+        return {
+          ...v,
+          compareAtPriceInCents: hasVerifiedHistory ? v.compareAtPriceInCents : null,
+          lowestPrice30dInCents: hasVerifiedHistory ? (minMap.get(v.id) ?? v.priceInCents) : null,
+        };
+      }),
     })) as unknown as T[];
   }
 

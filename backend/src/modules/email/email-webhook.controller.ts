@@ -99,7 +99,11 @@ export class EmailWebhookController {
       if (to) {
         await this.prisma.user.updateMany({
           where: { email: to },
-          data: { emailBounced: true, emailBouncedAt: new Date() },
+          data: {
+            emailBounced: true,
+            emailBouncedAt: new Date(),
+            emailBouncedReason: data.bounce?.subType ?? data.bounce?.type ?? null,
+          },
         });
       }
     }

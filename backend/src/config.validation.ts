@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { isValidNipChecksum } from './common/utils/nip-checksum.util';
 
 // Joi helper: field is required in production, optional (or has a dev default)
 // otherwise. Keeps dev/test ergonomic without letting prod boot in an unsafe
@@ -34,6 +35,13 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_SECRET: Joi.string().min(16).required(),
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  // Dedicated HMAC key for guest order cancel-link tokens (orders.service.ts
+  // cancelByToken / generateOrderToken). Kept separate from JWT_ACCESS_SECRET so
+  // JWT secret rotation doesn't silently invalidate outstanding cancel links
+  // embedded in emails and Stripe redirect URLs, and so a leaked cancel token
+  // cannot be used to forge access JWTs. Generate with:
+  //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  ORDER_CANCEL_SECRET: requiredInProd(Joi.string().min(32), 'dev-order-cancel-secret'),
 
   // ── Google OAuth (always required) ──
   GOOGLE_CLIENT_ID: Joi.string().required(),
@@ -143,7 +151,28 @@ export const envValidationSchema = Joi.object({
   // Required in production to generate legally-compliant Polish VAT invoices.
   // SELLER_NIP is the seller's Polish tax ID (10 digits, no spaces).
   SELLER_NAME: requiredInProd(Joi.string(), 'Aromaterie'),
-  SELLER_NIP: requiredInProd(Joi.string(), ''),
+  // In production: must be a valid 10-digit Polish NIP (Art. 106e ust. 1 pkt 4 Ustawy o VAT)
+  // with a correct modulo-11 checksum — a transposed digit is syntactically valid but
+  // produces legally defective invoices that only surface when a B2B customer's
+  // VIES/KSeF lookup fails on their VAT deduction.
+  // requiredInProd() cannot express "allow '' in dev, reject '' in prod" with a shared base
+  // schema, so we inline a full when(). InvoiceService.onModuleInit adds a second guard.
+  SELLER_NIP: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string()
+      .min(1)
+      .pattern(/^\d{10}$/)
+      .custom((value: string, helpers: Joi.CustomHelpers) =>
+        isValidNipChecksum(value) ? value : helpers.error('any.invalid'),
+      )
+      .required()
+      .messages({
+        'string.pattern.base': 'SELLER_NIP must be exactly 10 digits (Polish NIP)',
+        'string.min': 'SELLER_NIP must not be empty in production',
+        'any.invalid': 'SELLER_NIP checksum is invalid (Polish NIP modulo-11 check failed)',
+      }),
+    otherwise: Joi.string().allow('').optional().default(''),
+  }),
   SELLER_STREET: requiredInProd(Joi.string(), ''),
   SELLER_CITY: requiredInProd(Joi.string(), ''),
   SELLER_POSTAL_CODE: requiredInProd(Joi.string(), ''),

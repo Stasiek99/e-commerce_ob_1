@@ -270,9 +270,9 @@ export class ReturnsService {
     this.logger.log(`Return tracking recorded: ${id} → ${trackingNumber}`);
   }
 
-  // Marks the return as COMPLETED: issues the Stripe refund, restores stock,
-  // then flips the return request status. Calling order matters — if the Stripe
-  // refund fails the return stays APPROVED so the admin can retry.
+  // Marks the return as COMPLETED: issues a Stripe partial refund for the
+  // returned items only, restores their stock, then flips the request status.
+  // Calling order matters — if the Stripe refund fails the return stays APPROVED.
   async markRefunded(id: string, adminNote?: string): Promise<void> {
     const req = await this.prisma.returnRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Return request ${id} not found`);
@@ -296,9 +296,72 @@ export class ReturnsService {
       );
     }
 
-    // Issues Stripe refund, restores stock, sets order.status → REFUNDED.
+    // Fetch order status and all line items so we can compute the partial refund.
+    const [order, orderItems] = await Promise.all([
+      this.prisma.order.findUniqueOrThrow({
+        where: { id: req.orderId },
+        select: { status: true },
+      }),
+      this.prisma.orderItem.findMany({
+        where: { orderId: req.orderId },
+        select: {
+          id: true,
+          productVariantId: true,
+          snapshotName: true,
+          snapshotPrice: true,
+          quantity: true,
+          cancelledQuantity: true,
+        },
+      }),
+    ]);
+
+    // Match each returned product name against the snapshot names on the order items.
+    // req.items is the JSON blob stored at request creation time (ReturnItemDto[]).
+    const returnedItems = req.items as Array<{ productName: string; quantity: number }>;
+    const refundItems: Array<{
+      orderItemId: string;
+      productVariantId: string;
+      quantity: number;
+      priceInCents: number;
+    }> = [];
+
+    for (const ri of returnedItems) {
+      const orderItem = orderItems.find(
+        (oi) => oi.snapshotName.trim().toLowerCase() === ri.productName.trim().toLowerCase(),
+      );
+      if (!orderItem) {
+        this.logger.warn(
+          `markRefunded: no order item matching "${ri.productName}" for return ${id} — skipping`,
+        );
+        continue;
+      }
+      // Clamp to the still-refundable quantity so a second admin click can't over-refund.
+      const refundQty = Math.min(ri.quantity, orderItem.quantity - orderItem.cancelledQuantity);
+      if (refundQty <= 0) continue;
+      refundItems.push({
+        orderItemId: orderItem.id,
+        productVariantId: orderItem.productVariantId,
+        quantity: refundQty,
+        priceInCents: orderItem.snapshotPrice,
+      });
+    }
+
+    if (refundItems.length === 0) {
+      throw new BadRequestException(
+        `No refundable items found for return request ${id}. ` +
+        'All returned items may already be refunded or the product names do not match order line items.',
+      );
+    }
+
+    // Issues Stripe partial refund for the returned items, restores their stock,
+    // and sets order.status → PARTIALLY_REFUNDED or REFUNDED.
     // Throws on Stripe error — intentionally propagated so the return stays APPROVED.
-    await this.payments.refundPayment(req.orderId, 'RETURN_APPROVAL');
+    await this.payments.partialRefund(
+      req.orderId,
+      refundItems,
+      order.status as OrderStatus,
+      'RETURN_APPROVAL',
+    );
 
     await this.prisma.returnRequest.update({
       where: { id },

@@ -210,7 +210,6 @@ export class OrdersService implements OnModuleInit {
       throw new BadRequestException('Address is required');
     }
 
-    const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
     const itemsTotalInCents = cart.totalInCents;
 
     // Validate coupon before the transaction so the user gets an early error.
@@ -284,6 +283,12 @@ export class OrdersService implements OnModuleInit {
       const txItemsTotalInCents = cart.items.reduce((sum: number, item: CartItem) => {
         return sum + (freshPriceMap.get(item.productVariantId) ?? item.priceInCents) * item.quantity;
       }, 0);
+
+      // Fetch shipping rate inside the transaction so it is consistent with the
+      // price snapshot and stock decrement committed in the same atomic unit.
+      // Outside the transaction a Redis cache update between the fetch and the
+      // DB write could produce a stale rate in the Stripe session total.
+      const shippingCostInCents = await this.shippingRatesService.getRateForCarrier(dto.carrierCode);
 
       // Recompute coupon discount against the fresh items total
       let txDiscountInCents = 0;
@@ -436,8 +441,8 @@ export class OrdersService implements OnModuleInit {
     // durable confirmation on a durable medium, even if they close the browser before paying.
     // The payment-confirmed + invoice email is still sent from markSessionPaid() as the second email.
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
-    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
-    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
+    const cancelSecret = this.configService.get<string>('ORDER_CANCEL_SECRET', '');
+    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, cancelSecret);
     const cancelUrl = `${frontendUrl}/orders/${order.id}/cancel?token=${cancelToken}`;
     this.emailService
       .sendOrderAcknowledgement({
@@ -805,7 +810,7 @@ export class OrdersService implements OnModuleInit {
     });
     if (!order) throw new NotFoundException('Order not found');
 
-    const secret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    const secret = this.configService.get<string>('ORDER_CANCEL_SECRET', '');
     if (!verifyOrderToken(token, orderId, order.snapshotEmail, secret)) {
       throw new UnauthorizedException('Invalid cancel token');
     }
@@ -892,6 +897,7 @@ export class OrdersService implements OnModuleInit {
       productVariantId: string;
       quantity: number;
       priceInCents: number;
+      vatRate: number;
     }> = [];
 
     for (const line of dto.items) {
@@ -910,13 +916,37 @@ export class OrdersService implements OnModuleInit {
         productVariantId: item.productVariantId,
         quantity: line.quantity,
         priceInCents: item.snapshotPrice,
+        vatRate: item.snapshotVatRate,
       });
     }
 
-    if (order.discountInCents > 0 && order.itemsTotalInCents > 0) {
+    let isFreeShippingCoupon = false;
+    if (order.couponId) {
+      const coupon = await this.prisma.coupon.findUnique({
+        where: { id: order.couponId },
+        select: { discountType: true },
+      });
+      isFreeShippingCoupon = coupon?.discountType === DiscountType.FREE_SHIPPING;
+    }
+
+    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+    // items-total discount — prorating it across item prices here would refund
+    // less than the customer paid for the items themselves.
+    if (!isFreeShippingCoupon && order.discountInCents > 0 && order.itemsTotalInCents > 0) {
       const discountFraction = order.discountInCents / order.itemsTotalInCents;
       for (const item of resolvedItems) {
-        item.priceInCents = Math.round(item.priceInCents * (1 - discountFraction));
+        const orderItem = order.items.find(i => i.id === item.orderItemId)!;
+        // Max discount this item can ever yield (based on all units)
+        const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
+        // Discount already consumed by prior partial cancels, derived from cancelledQuantity
+        // so we don't re-apply the fraction on subsequent partial cancels of the same item.
+        const alreadyCancelledDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.cancelledQuantity);
+        const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyCancelledDiscount);
+        // Proportional discount we'd ideally apply to the qty being cancelled now
+        const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
+        const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
+        // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
+        item.priceInCents = item.priceInCents - Math.floor(appliedDiscount / item.quantity);
       }
     }
 
@@ -949,7 +979,13 @@ export class OrdersService implements OnModuleInit {
 
     if (order.invoiceNumber) {
       this.invoiceService
-        .processCorrectiveInvoice(orderId, order.invoiceNumber, refundAmountInCents, 'PARTIAL_CANCELLATION')
+        .processCorrectiveInvoice(
+          orderId,
+          order.invoiceNumber,
+          refundAmountInCents,
+          'PARTIAL_CANCELLATION',
+          resolvedItems.map((i) => ({ quantity: i.quantity, priceInCents: i.priceInCents, vatRate: i.vatRate })),
+        )
         .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
     }
 

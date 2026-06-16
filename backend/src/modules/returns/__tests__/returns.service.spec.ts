@@ -74,6 +74,8 @@ function buildPrismaMock(
   return {
     order: {
       findFirst: jest.fn().mockResolvedValue(orderRow),
+      // Used by markRefunded() to fetch current order status for partialRefund()
+      findUniqueOrThrow: jest.fn().mockResolvedValue({ status: 'SHIPPED' }),
     },
     user: {
       findUnique: jest.fn().mockResolvedValue({ email: USER_ACCOUNT_EMAIL }),
@@ -83,6 +85,10 @@ function buildPrismaMock(
       findFirst: jest.fn().mockResolvedValue(null),
       findUnique: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue(record),
+    },
+    // Used by markRefunded() to match returned product names to order items
+    orderItem: {
+      findMany: jest.fn().mockResolvedValue(DEFAULT_ORDER_ITEMS),
     },
   };
 }
@@ -103,9 +109,24 @@ function buildReturnRecord(overrides: Record<string, unknown> = {}) {
     bankAccount: null,
     adminNote: null,
     returnTrackingNumber: null,
+    // Default items matches buildPrismaMock's default orderItem so markRefunded can compute the refund
+    items: [{ productName: 'Perfumy Gold 50ml', quantity: 1 }],
     ...overrides,
   };
 }
+
+// Default order items returned by prisma.orderItem.findMany in markRefunded() tests.
+// productName matches buildReturnRecord's default items so the name lookup succeeds.
+const DEFAULT_ORDER_ITEMS = [
+  {
+    id: 'item-uuid-1',
+    productVariantId: 'variant-uuid-1',
+    snapshotName: 'Perfumy Gold 50ml',
+    snapshotPrice: 34900,
+    quantity: 1,
+    cancelledQuantity: 0,
+  },
+];
 
 describe('ReturnsService', () => {
   let service: ReturnsService;
@@ -116,7 +137,7 @@ describe('ReturnsService', () => {
       'sendReturnConfirmation' | 'sendReturnAdminNotification' | 'sendReturnStatusUpdate'
     >
   >;
-  let paymentsService: jest.Mocked<Pick<PaymentsService, 'refundPayment'>>;
+  let paymentsService: jest.Mocked<Pick<PaymentsService, 'refundPayment' | 'partialRefund'>>;
 
   async function createModule(prismaMock = buildPrismaMock()) {
     prisma = prismaMock;
@@ -125,7 +146,10 @@ describe('ReturnsService', () => {
       sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
       sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
     };
-    paymentsService = { refundPayment: jest.fn().mockResolvedValue(undefined) };
+    paymentsService = {
+      refundPayment: jest.fn().mockResolvedValue(undefined),
+      partialRefund: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -153,7 +177,10 @@ describe('ReturnsService', () => {
       sendReturnAdminNotification: jest.fn().mockResolvedValue(undefined),
       sendReturnStatusUpdate: jest.fn().mockResolvedValue(undefined),
     };
-    paymentsService = { refundPayment: jest.fn().mockResolvedValue(undefined) };
+    paymentsService = {
+      refundPayment: jest.fn().mockResolvedValue(undefined),
+      partialRefund: jest.fn().mockResolvedValue(undefined),
+    };
 
     const configGetMock = jest.fn().mockImplementation((key: string, fallback?: unknown) => {
       if (key === 'IBAN_ENCRYPTION_KEY') return ibanKey;
@@ -1004,7 +1031,7 @@ describe('ReturnsService', () => {
       await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
     });
 
-    it('calls paymentsService.refundPayment with orderId and RETURN_APPROVAL actor', async () => {
+    it('calls paymentsService.partialRefund with orderId, matched items, current status, and RETURN_APPROVAL actor', async () => {
       const mock = buildPrismaMock();
       mock.returnRequest.findUnique.mockResolvedValue(
         buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
@@ -1013,10 +1040,34 @@ describe('ReturnsService', () => {
 
       await service.markRefunded('return-id-001');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-uuid-1', 'RETURN_APPROVAL');
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            orderItemId: 'item-uuid-1',
+            productVariantId: 'variant-uuid-1',
+            quantity: 1,
+            priceInCents: 34900,
+          }),
+        ]),
+        'SHIPPED',
+        'RETURN_APPROVAL',
+      );
     });
 
-    it('updates return status to COMPLETED after refundPayment succeeds', async () => {
+    it('does NOT call refundPayment — partial refund replaces the full refund path', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('updates return status to COMPLETED after partialRefund succeeds', async () => {
       const mock = buildPrismaMock();
       mock.returnRequest.findUnique.mockResolvedValue(
         buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
@@ -1030,19 +1081,19 @@ describe('ReturnsService', () => {
       );
     });
 
-    it('does not update return status when refundPayment throws — leaves it APPROVED for retry', async () => {
+    it('does not update return status when partialRefund throws — leaves it APPROVED for retry', async () => {
       const mock = buildPrismaMock();
       mock.returnRequest.findUnique.mockResolvedValue(
         buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
       );
       await createModule(mock);
-      (paymentsService.refundPayment as jest.Mock).mockRejectedValue(new Error('Stripe API error'));
+      (paymentsService.partialRefund as jest.Mock).mockRejectedValue(new Error('Stripe API error'));
 
       await expect(service.markRefunded('return-id-001')).rejects.toThrow('Stripe API error');
       expect(mock.returnRequest.update).not.toHaveBeenCalled();
     });
 
-    it('calls refundPayment before updating the DB — ordering is intentional', async () => {
+    it('calls partialRefund before updating the DB — ordering is intentional', async () => {
       const mock = buildPrismaMock();
       mock.returnRequest.findUnique.mockResolvedValue(
         buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
@@ -1050,8 +1101,8 @@ describe('ReturnsService', () => {
       await createModule(mock);
 
       const callOrder: string[] = [];
-      (paymentsService.refundPayment as jest.Mock).mockImplementation(async () => {
-        callOrder.push('refundPayment');
+      (paymentsService.partialRefund as jest.Mock).mockImplementation(async () => {
+        callOrder.push('partialRefund');
       });
       mock.returnRequest.update.mockImplementation(async () => {
         callOrder.push('statusUpdate');
@@ -1060,7 +1111,7 @@ describe('ReturnsService', () => {
 
       await service.markRefunded('return-id-001');
 
-      expect(callOrder).toEqual(['refundPayment', 'statusUpdate']);
+      expect(callOrder).toEqual(['partialRefund', 'statusUpdate']);
     });
 
     // ── return receipt gate (Art. 32 UoK anti-fraud) ──────────────────────────
@@ -1079,7 +1130,7 @@ describe('ReturnsService', () => {
       await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
     });
 
-    it('does not call refundPayment when WITHDRAWAL tracking number is missing', async () => {
+    it('does not call partialRefund when WITHDRAWAL tracking number is missing', async () => {
       const mock = buildPrismaMock();
       mock.returnRequest.findUnique.mockResolvedValue(
         buildReturnRecord({ status: 'APPROVED', type: 'WITHDRAWAL', returnTrackingNumber: null }),
@@ -1088,7 +1139,7 @@ describe('ReturnsService', () => {
 
       await service.markRefunded('return-id-001').catch(() => undefined);
 
-      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(paymentsService.partialRefund).not.toHaveBeenCalled();
     });
 
     it('proceeds for WITHDRAWAL when returnTrackingNumber is set', async () => {
@@ -1100,7 +1151,12 @@ describe('ReturnsService', () => {
 
       await service.markRefunded('return-id-001');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-uuid-1', 'RETURN_APPROVAL');
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        expect.any(Array),
+        expect.any(String),
+        'RETURN_APPROVAL',
+      );
     });
 
     it('does NOT require a tracking number for COMPLAINT type (carrier pickup, no inbound parcel)', async () => {
@@ -1112,7 +1168,134 @@ describe('ReturnsService', () => {
 
       await service.markRefunded('return-id-001');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-uuid-1', 'RETURN_APPROVAL');
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        expect.any(Array),
+        expect.any(String),
+        'RETURN_APPROVAL',
+      );
+    });
+
+    // ── partial refund fix invariants ──────────────────────────────────────────
+    // Before: markRefunded() called refundPayment(orderId) — full refund of
+    //   payment.amountInCents regardless of which items the customer returned.
+    // After: computes refund from snapshotPrice × returnedQty for matched items only,
+    //   calls partialRefund() so stock is restored only for returned items.
+
+    it('refund amount equals snapshotPrice × returned quantity, not the full order total', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({
+          status: 'APPROVED',
+          returnTrackingNumber: 'INP-TRACK-001',
+          // Customer returns 1 of 2 items — only that item should be refunded
+          items: [{ productName: 'Perfumy Gold 50ml', quantity: 1 }],
+        }),
+      );
+      // Two-item order; only the first matches the return request
+      mock.orderItem.findMany.mockResolvedValue([
+        { id: 'item-uuid-1', productVariantId: 'variant-uuid-1', snapshotName: 'Perfumy Gold 50ml', snapshotPrice: 34900, quantity: 2, cancelledQuantity: 0 },
+        { id: 'item-uuid-2', productVariantId: 'variant-uuid-2', snapshotName: 'Rose 50ml', snapshotPrice: 19900, quantity: 1, cancelledQuantity: 0 },
+      ]);
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      // Only 'Perfumy Gold 50ml' matched → quantity=1 × price=34900
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        [expect.objectContaining({ orderItemId: 'item-uuid-1', quantity: 1, priceInCents: 34900 })],
+        expect.any(String),
+        'RETURN_APPROVAL',
+      );
+      // 'Rose 50ml' must NOT appear in the refund payload
+      const [, items] = (paymentsService.partialRefund as jest.Mock).mock.calls[0];
+      expect(items.some((i: any) => i.orderItemId === 'item-uuid-2')).toBe(false);
+    });
+
+    it('matches returned product names case-insensitively against snapshotName', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({
+          status: 'APPROVED',
+          returnTrackingNumber: 'INP-TRACK-001',
+          items: [{ productName: 'PERFUMY GOLD 50ML', quantity: 1 }],
+        }),
+      );
+      mock.orderItem.findMany.mockResolvedValue([
+        { id: 'item-uuid-1', productVariantId: 'variant-uuid-1', snapshotName: 'Perfumy Gold 50ml', snapshotPrice: 34900, quantity: 1, cancelledQuantity: 0 },
+      ]);
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        [expect.objectContaining({ orderItemId: 'item-uuid-1' })],
+        expect.any(String),
+        'RETURN_APPROVAL',
+      );
+    });
+
+    it('throws BadRequestException when none of the returned product names match any order item', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({
+          status: 'APPROVED',
+          returnTrackingNumber: 'INP-TRACK-001',
+          items: [{ productName: 'Nieistniejący Produkt', quantity: 1 }],
+        }),
+      );
+      mock.orderItem.findMany.mockResolvedValue([
+        { id: 'item-uuid-1', productVariantId: 'variant-uuid-1', snapshotName: 'Perfumy Gold 50ml', snapshotPrice: 34900, quantity: 1, cancelledQuantity: 0 },
+      ]);
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(BadRequestException);
+      expect(paymentsService.partialRefund).not.toHaveBeenCalled();
+    });
+
+    it('clamps refund quantity to unrefunded stock — prevents double-refund on retry', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({
+          status: 'APPROVED',
+          returnTrackingNumber: 'INP-TRACK-001',
+          items: [{ productName: 'Perfumy Gold 50ml', quantity: 2 }],
+        }),
+      );
+      // Only 1 unit is still refundable (1 already cancelled)
+      mock.orderItem.findMany.mockResolvedValue([
+        { id: 'item-uuid-1', productVariantId: 'variant-uuid-1', snapshotName: 'Perfumy Gold 50ml', snapshotPrice: 34900, quantity: 2, cancelledQuantity: 1 },
+      ]);
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        [expect.objectContaining({ quantity: 1 })], // clamped from 2 to 1
+        expect.any(String),
+        'RETURN_APPROVAL',
+      );
+    });
+
+    it('passes current order status from DB to partialRefund — not a hardcoded value', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'PROCESSING' });
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        expect.any(Array),
+        'PROCESSING',
+        'RETURN_APPROVAL',
+      );
     });
   });
 

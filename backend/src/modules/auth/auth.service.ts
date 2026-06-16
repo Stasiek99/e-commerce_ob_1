@@ -80,27 +80,48 @@ export class AuthService {
     const failKey = `auth:login-failures:${normalizedEmail}`;
     const lockKey = `auth:login-locked:${normalizedEmail}`;
 
-    if (await this.redis.exists(lockKey)) {
-      throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
+    // IORedis queues calls indefinitely when maxRetriesPerRequest is null.
+    // Any Redis outage would hang every login until the TimeoutInterceptor fires.
+    // Wrap all Redis calls so the rate-limit is advisory: skip it on outage,
+    // log to Sentry, and allow login to proceed — same pattern as JwtStrategy.
+    try {
+      if (await this.redis.exists(lockKey)) {
+        throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
+      }
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
+      this.logger.error('Redis unavailable in login() — skipping lockout check', (err as Error).message);
     }
 
     const user = await this.usersService.findByEmail(email);
     if (!user || !user.passwordHash) {
-      const failures = await this.redis.incr(failKey);
-      if (failures === 1) await this.redis.expire(failKey, 900);
-      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      try {
+        const failures = await this.redis.incr(failKey);
+        if (failures === 1) await this.redis.expire(failKey, 900);
+        if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      } catch (err) {
+        this.logger.error('Redis unavailable in login() — skipping failure tracking', (err as Error).message);
+      }
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
-      const failures = await this.redis.incr(failKey);
-      if (failures === 1) await this.redis.expire(failKey, 900);
-      if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      try {
+        const failures = await this.redis.incr(failKey);
+        if (failures === 1) await this.redis.expire(failKey, 900);
+        if (failures >= 10) await this.redis.setex(lockKey, 900, '1');
+      } catch (err) {
+        this.logger.error('Redis unavailable in login() — skipping failure tracking', (err as Error).message);
+      }
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    await this.redis.del(failKey);
+    try {
+      await this.redis.del(failKey);
+    } catch (err) {
+      this.logger.error('Redis unavailable in login() — skipping failure counter reset', (err as Error).message);
+    }
     return this.generateTokenPair(user);
   }
 
@@ -115,6 +136,14 @@ export class AuthService {
 
     user = await this.usersService.findByEmail(profile.email);
     if (user) {
+      // Block silent hijack: if the account was created with a password, require
+      // the user to explicitly link Google from their account settings instead of
+      // allowing any Google identity with the same email to take over the account.
+      if (user.passwordHash && !user.googleId) {
+        throw new ConflictException(
+          'An account with this email already exists. Please log in with your password.',
+        );
+      }
       return this.usersService.update(user.id, {
         googleId: profile.googleId,
         isEmailVerified: true,
@@ -193,10 +222,17 @@ export class AuthService {
 
   async logout(rawRefreshToken: string) {
     const tokenHash = createHash('sha256').update(rawRefreshToken).digest('hex');
+    const token = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+      select: { userId: true },
+    });
     await this.prisma.refreshToken.updateMany({
       where: { tokenHash },
       data: { revokedAt: new Date() },
     });
+    if (token) {
+      await this.revokeAccessTokensForUser(token.userId);
+    }
   }
 
   private async rotateToken(
@@ -208,15 +244,24 @@ export class AuthService {
     const newHash = createHash('sha256').update(rawNew).digest('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await this.prisma.$transaction([
-      this.prisma.refreshToken.update({
-        where: { id: token.id },
+    await this.prisma.$transaction(async (tx) => {
+      // Atomic guard: revokedAt: null in the WHERE clause ensures only the
+      // first concurrent caller can rotate this exact token. Without it, two
+      // requests racing on the same stale token (e.g. two browser tabs both
+      // retrying after a dropped refresh within the grace window) could each
+      // successfully rotate it, splitting the family into two divergent
+      // child chains and silently defeating reuse detection.
+      const result = await tx.refreshToken.updateMany({
+        where: { id: token.id, revokedAt: null },
         data: { revokedAt: new Date(), replacedBy: newHash },
-      }),
-      this.prisma.refreshToken.create({
+      });
+      if (result.count === 0) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+      await tx.refreshToken.create({
         data: { tokenHash: newHash, userId: user.id, family, expiresAt },
-      }),
-    ]);
+      });
+    });
 
     const accessToken = this.signAccessToken(user);
     return { accessToken, refreshToken: rawNew };
@@ -285,6 +330,12 @@ export class AuthService {
       newEmail,
       verifyUrl,
     });
+
+    // Access tokens already in flight still carry the old email claim. Fence
+    // them off now rather than waiting for verifyEmail() to confirm the
+    // change, so stale-email artifacts (logging, Stripe, audit trail) stop
+    // the moment a change is requested, not when it's confirmed.
+    await this.revokeAccessTokensForUser(userId);
   }
 
   async verifyEmail(rawToken: string): Promise<void> {
@@ -299,11 +350,20 @@ export class AuthService {
       throw new BadRequestException('Invalid or expired verification link');
     }
 
-    // Idempotent double-click for normal registration verification
-    if (stored?.user?.isEmailVerified && !stored?.user?.pendingEmail) return;
-
     if (!stored || stored.usedAt || stored.expiresAt < new Date()) {
       throw new BadRequestException('Invalid or expired verification link');
+    }
+
+    // Idempotent double-click: only for EMAIL_VERIFICATION tokens on an
+    // already-verified account with no pending change. Must run AFTER the
+    // usedAt/expiresAt guards so expired or stolen tokens cannot silently
+    // bypass validation by exploiting this shortcut.
+    if (
+      stored.type === EmailTokenType.EMAIL_VERIFICATION &&
+      stored.user.isEmailVerified &&
+      !stored.user.pendingEmail
+    ) {
+      return;
     }
 
     if (stored.user.pendingEmail) {
