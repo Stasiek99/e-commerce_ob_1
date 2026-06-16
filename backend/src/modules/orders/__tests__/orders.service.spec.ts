@@ -146,6 +146,7 @@ describe('OrdersService', () => {
           useValue: {
             processInvoice: jest.fn(),
             getSignedUrl: jest.fn(),
+            processCorrectiveInvoice: jest.fn(),
           },
         },
         {
@@ -173,6 +174,11 @@ describe('OrdersService', () => {
     paymentsService = module.get(PaymentsService);
     invoiceService = module.get(InvoiceService);
     emailService = module.get(EmailQueueService);
+    invoiceService.processCorrectiveInvoice.mockResolvedValue({
+      correctiveUrl: 'https://cdn.example.com/corrective.pdf',
+      correctiveStoragePath: 'invoices/corrective.pdf',
+      correctiveInvoiceNumber: 'FK/2026/000001',
+    } as any);
   });
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
@@ -2939,6 +2945,7 @@ describe('OrdersService', () => {
         snapshotName: 'Dior Sauvage 100ml',
         snapshotSku: 'DS-100',
         snapshotPrice: 34900,
+        snapshotVatRate: 2300,
       },
       {
         id: 'item-2',
@@ -2948,6 +2955,7 @@ describe('OrdersService', () => {
         snapshotName: 'Chanel No 5 50ml',
         snapshotSku: 'CN5-50',
         snapshotPrice: 44900,
+        snapshotVatRate: 2300,
       },
     ];
 
@@ -3079,6 +3087,7 @@ describe('OrdersService', () => {
             productVariantId: 'pv-1',
             quantity: 2,
             priceInCents: 34900,
+            vatRate: 2300,
           },
         ],
         OrderStatus.PAID,
@@ -3490,6 +3499,69 @@ describe('OrdersService', () => {
 
       expect(paymentsService.partialRefund).toHaveBeenCalled();
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    // ─── corrective invoice VAT breakdown (fix: Art. 106j ust. 2 Ustawy o VAT) ──
+    // processCorrectiveInvoice needs each cancelled item's snapshotVatRate to render
+    // a compliant per-rate breakdown. Without it, mixed-rate orders produce a
+    // corrective invoice with no VAT split, which JPK_V7 flags as non-compliant.
+
+    it('passes the cancelled items with their snapshotVatRate to processCorrectiveInvoice', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...mockPaidOrder, invoiceNumber: 'FV/2026/000001' });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-1',
+        'FV/2026/000001',
+        69800,
+        'PARTIAL_CANCELLATION',
+        [{ quantity: 2, priceInCents: 34900, vatRate: 2300 }],
+      );
+    });
+
+    it('passes each cancelled item with its own vatRate for mixed-rate cancellations', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        invoiceNumber: 'FV/2026/000002',
+        items: [
+          { ...mockOrderItems[0], snapshotVatRate: 2300 },
+          { ...mockOrderItems[1], snapshotVatRate: 500 },
+        ],
+      });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 1 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-1',
+        'FV/2026/000002',
+        expect.any(Number),
+        'PARTIAL_CANCELLATION',
+        expect.arrayContaining([
+          expect.objectContaining({ priceInCents: 34900, vatRate: 2300 }),
+          expect.objectContaining({ priceInCents: 44900, vatRate: 500 }),
+        ]),
+      );
+    });
+
+    it('does not call processCorrectiveInvoice when the order has no invoiceNumber yet', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).not.toHaveBeenCalled();
     });
   });
 

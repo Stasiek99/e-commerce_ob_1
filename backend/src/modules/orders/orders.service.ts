@@ -897,6 +897,7 @@ export class OrdersService implements OnModuleInit {
       productVariantId: string;
       quantity: number;
       priceInCents: number;
+      vatRate: number;
     }> = [];
 
     for (const line of dto.items) {
@@ -915,6 +916,7 @@ export class OrdersService implements OnModuleInit {
         productVariantId: item.productVariantId,
         quantity: line.quantity,
         priceInCents: item.snapshotPrice,
+        vatRate: item.snapshotVatRate,
       });
     }
 
@@ -977,7 +979,13 @@ export class OrdersService implements OnModuleInit {
 
     if (order.invoiceNumber) {
       this.invoiceService
-        .processCorrectiveInvoice(orderId, order.invoiceNumber, refundAmountInCents, 'PARTIAL_CANCELLATION')
+        .processCorrectiveInvoice(
+          orderId,
+          order.invoiceNumber,
+          refundAmountInCents,
+          'PARTIAL_CANCELLATION',
+          resolvedItems.map((i) => ({ quantity: i.quantity, priceInCents: i.priceInCents, vatRate: i.vatRate })),
+        )
         .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
     }
 

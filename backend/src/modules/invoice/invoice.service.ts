@@ -7,6 +7,22 @@ import { StorageService } from '../storage/storage.service';
 
 const FONTS_DIR = path.join(__dirname, 'fonts');
 
+export interface CorrectiveInvoiceItem {
+  quantity: number;
+  priceInCents: number; // per-unit price actually refunded (post-discount)
+  vatRate: number; // basis points — 2300 = 23%, 500 = 5%, 0 = exempt
+}
+
+interface CorrectiveVatBreakdownRow {
+  rate: number; // fraction, e.g. 0.23
+  originalNetCents: number;
+  originalVatCents: number;
+  correctedNetCents: number;
+  correctedVatCents: number;
+  deltaNetCents: number;
+  deltaVatCents: number;
+}
+
 export interface InvoiceOrder {
   id: string;
   orderNumber: string;
@@ -188,6 +204,7 @@ export class InvoiceService implements OnModuleInit {
     originalInvoiceNumber: string,
     refundAmountInCents: number,
     reasonCode: string,
+    cancelledItems: CorrectiveInvoiceItem[] = [],
   ): Promise<{ correctiveUrl: string; correctiveStoragePath: string; correctiveInvoiceNumber: string }> {
     const correctedAmountInCents = -Math.abs(refundAmountInCents);
     const year = new Date().getFullYear();
@@ -256,14 +273,18 @@ export class InvoiceService implements OnModuleInit {
         snapshotPostalCode: true,
         snapshotCountry: true,
         createdAt: true,
+        items: { select: { snapshotPrice: true, quantity: true, snapshotVatRate: true } },
       },
     });
+
+    const vatBreakdown = this.buildCorrectiveVatBreakdown(order.items, cancelledItems);
 
     const pdf = await this.generateCorrectivePdf(
       order,
       reserved.correctiveInvoiceNumber,
       originalInvoiceNumber,
       refundAmountInCents,
+      vatBreakdown,
     );
     const filename = `${reserved.correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
     const correctiveStoragePath = await this.storage.uploadInvoice(pdf, filename);
@@ -294,6 +315,54 @@ export class InvoiceService implements OnModuleInit {
     return { correctiveInvoiceUrl, correctiveInvoiceNumber: correction.correctiveInvoiceNumber };
   }
 
+  /**
+   * Groups the original order items and the items being cancelled in this
+   * correction by VAT rate, so the corrective invoice can show, per rate,
+   * the taxable base before and after the correction plus the net/VAT delta
+   * — required by Art. 106j ust. 2 Ustawy o VAT. Rates untouched by this
+   * correction (no cancelled items) are omitted from the breakdown.
+   */
+  private buildCorrectiveVatBreakdown(
+    originalItems: Array<{ snapshotPrice: number; quantity: number; snapshotVatRate: number }>,
+    cancelledItems: CorrectiveInvoiceItem[],
+  ): CorrectiveVatBreakdownRow[] {
+    const byRate = new Map<number, { originalGross: number; deltaGross: number }>();
+
+    for (const item of originalItems) {
+      const rate = item.snapshotVatRate / 10000;
+      const bucket = byRate.get(rate) ?? { originalGross: 0, deltaGross: 0 };
+      bucket.originalGross += item.snapshotPrice * item.quantity;
+      byRate.set(rate, bucket);
+    }
+
+    for (const item of cancelledItems) {
+      const rate = item.vatRate / 10000;
+      const bucket = byRate.get(rate) ?? { originalGross: 0, deltaGross: 0 };
+      bucket.deltaGross += item.priceInCents * item.quantity;
+      byRate.set(rate, bucket);
+    }
+
+    return Array.from(byRate.entries())
+      .filter(([, bucket]) => bucket.deltaGross !== 0)
+      .sort(([a], [b]) => b - a)
+      .map(([rate, bucket]) => {
+        const originalNetCents = Math.round(bucket.originalGross / (1 + rate));
+        const originalVatCents = bucket.originalGross - originalNetCents;
+        const correctedGross = bucket.originalGross - bucket.deltaGross;
+        const correctedNetCents = Math.round(correctedGross / (1 + rate));
+        const correctedVatCents = correctedGross - correctedNetCents;
+        return {
+          rate,
+          originalNetCents,
+          originalVatCents,
+          correctedNetCents,
+          correctedVatCents,
+          deltaNetCents: correctedNetCents - originalNetCents,
+          deltaVatCents: correctedVatCents - originalVatCents,
+        };
+      });
+  }
+
   private generateCorrectivePdf(
     order: {
       orderNumber: string;
@@ -310,6 +379,7 @@ export class InvoiceService implements OnModuleInit {
     correctiveNumber: string,
     originalInvoiceNumber: string,
     refundAmountInCents: number,
+    vatBreakdown: CorrectiveVatBreakdownRow[],
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({
@@ -327,7 +397,7 @@ export class InvoiceService implements OnModuleInit {
       doc.registerFont('Inter-Bold', path.join(FONTS_DIR, 'Inter-Bold.ttf'));
       doc.font('Inter');
 
-      this.renderCorrective(doc, order, correctiveNumber, originalInvoiceNumber, refundAmountInCents);
+      this.renderCorrective(doc, order, correctiveNumber, originalInvoiceNumber, refundAmountInCents, vatBreakdown);
       doc.end();
     });
   }
@@ -349,6 +419,7 @@ export class InvoiceService implements OnModuleInit {
     correctiveNumber: string,
     originalInvoiceNumber: string,
     refundAmountInCents: number,
+    vatBreakdown: CorrectiveVatBreakdownRow[],
   ) {
     const W = 495;
     const issueDate = this.fmtDate(new Date());
@@ -396,31 +467,77 @@ export class InvoiceService implements OnModuleInit {
     doc.moveDown(3);
 
     // ── Correction table ───────────────────────────────────────────────────
+    // Art. 106j ust. 2 Ustawy o VAT: a corrective invoice must state the
+    // taxable base and tax amount before and after the correction, per VAT
+    // rate. When no per-rate breakdown is available (legacy callers that
+    // don't pass cancelled items), fall back to a single gross correction
+    // line so the invoice is still generated.
     const tableTop = doc.y + 8;
     const ROW_H = 20;
-    const cx = { no: 50, desc: 72, gross: 470 };
-    const cw = { no: 20, desc: 395, gross: 75 };
+    let rowY: number;
 
-    doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
-    doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
-    const th = tableTop + 6;
-    doc.text('Lp.', cx.no, th, { width: cw.no });
-    doc.text('Opis korekty', cx.desc, th, { width: cw.desc });
-    doc.text('Kwota korekty', cx.gross, th, { width: cw.gross, align: 'right' });
+    if (vatBreakdown.length === 0) {
+      const cx = { no: 50, desc: 72, gross: 470 };
+      const cw = { no: 20, desc: 395, gross: 75 };
 
-    doc.fillColor('#000').font('Inter').fontSize(8);
-    const rowY = tableTop + ROW_H;
-    doc.rect(50, rowY, W, ROW_H).fill('#fff').stroke();
-    doc.fillColor('#000');
-    doc.text('1', cx.no, rowY + 6, { width: cw.no });
-    doc.text('Zwrot czesciowy — korekta platnosci (Art. 106j Ustawy o VAT)', cx.desc, rowY + 6, { width: cw.desc });
-    doc.text(this.fmtMoney(-Math.abs(refundAmountInCents)), cx.gross, rowY + 6, { width: cw.gross, align: 'right' });
+      doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
+      doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
+      const th = tableTop + 6;
+      doc.text('Lp.', cx.no, th, { width: cw.no });
+      doc.text('Opis korekty', cx.desc, th, { width: cw.desc });
+      doc.text('Kwota korekty', cx.gross, th, { width: cw.gross, align: 'right' });
+
+      doc.fillColor('#000').font('Inter').fontSize(8);
+      rowY = tableTop + ROW_H;
+      doc.rect(50, rowY, W, ROW_H).fill('#fff').stroke();
+      doc.fillColor('#000');
+      doc.text('1', cx.no, rowY + 6, { width: cw.no });
+      doc.text('Zwrot czesciowy — korekta platnosci (Art. 106j Ustawy o VAT)', cx.desc, rowY + 6, { width: cw.desc });
+      doc.text(this.fmtMoney(-Math.abs(refundAmountInCents)), cx.gross, rowY + 6, { width: cw.gross, align: 'right' });
+      rowY += ROW_H;
+    } else {
+      const cx = { label: 50, before: 230, after: 340, delta: 450 };
+      const cw = { label: 180, before: 110, after: 110, delta: 95 };
+
+      doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
+      doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
+      const th = tableTop + 6;
+      doc.text('Pozycja korekty', cx.label, th, { width: cw.label });
+      doc.text('Przed korekta', cx.before, th, { width: cw.before, align: 'right' });
+      doc.text('Po korekcie', cx.after, th, { width: cw.after, align: 'right' });
+      doc.text('Korekta', cx.delta, th, { width: cw.delta, align: 'right' });
+
+      doc.font('Inter').fontSize(8);
+      rowY = tableTop + ROW_H;
+      let rowIdx = 0;
+      for (const row of vatBreakdown) {
+        const rateLabel = row.rate === 0 ? 'zw.' : `${Math.round(row.rate * 100)}%`;
+
+        doc.rect(50, rowY, W, ROW_H).fill(rowIdx % 2 === 0 ? '#fff' : '#f9f9f9').stroke();
+        doc.fillColor('#000');
+        doc.text(`Stawka ${rateLabel} — podstawa netto`, cx.label, rowY + 6, { width: cw.label });
+        doc.text(this.fmtMoney(row.originalNetCents), cx.before, rowY + 6, { width: cw.before, align: 'right' });
+        doc.text(this.fmtMoney(row.correctedNetCents), cx.after, rowY + 6, { width: cw.after, align: 'right' });
+        doc.text(this.fmtMoney(row.deltaNetCents), cx.delta, rowY + 6, { width: cw.delta, align: 'right' });
+        rowY += ROW_H;
+        rowIdx += 1;
+
+        doc.rect(50, rowY, W, ROW_H).fill(rowIdx % 2 === 0 ? '#fff' : '#f9f9f9').stroke();
+        doc.fillColor('#000');
+        doc.text(`Stawka ${rateLabel} — VAT`, cx.label, rowY + 6, { width: cw.label });
+        doc.text(this.fmtMoney(row.originalVatCents), cx.before, rowY + 6, { width: cw.before, align: 'right' });
+        doc.text(this.fmtMoney(row.correctedVatCents), cx.after, rowY + 6, { width: cw.after, align: 'right' });
+        doc.text(this.fmtMoney(row.deltaVatCents), cx.delta, rowY + 6, { width: cw.delta, align: 'right' });
+        rowY += ROW_H;
+        rowIdx += 1;
+      }
+    }
 
     // ── Totals ─────────────────────────────────────────────────────────────
     const sumX = 340;
     const sumLabelW = 120;
     const sumValueW = 85;
-    let y = rowY + ROW_H + 14;
+    let y = rowY + 14;
 
     doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
     y += 6;

@@ -1034,6 +1034,7 @@ describe('InvoiceService', () => {
       snapshotPostalCode: '00-001',
       snapshotCountry: 'PL',
       createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [] as Array<{ snapshotPrice: number; quantity: number; snapshotVatRate: number }>,
     };
 
     beforeEach(async () => {
@@ -1300,6 +1301,182 @@ describe('InvoiceService', () => {
           correctiveInvoiceUrl: MOCK_CORRECTIVE_URL,
           correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
         });
+      });
+    });
+
+    // ── buildCorrectiveVatBreakdown — Art. 106j ust. 2 Ustawy o VAT ────────
+    // Mixed-rate orders must show, per VAT rate touched by the correction,
+    // the taxable base before/after and the net+VAT delta — not a single
+    // gross correction amount with no breakdown.
+
+    describe('buildCorrectiveVatBreakdown', () => {
+      it('omits VAT rates from the original order that are untouched by this correction', () => {
+        const originalItems = [
+          { snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 },
+          { snapshotPrice: 5000, quantity: 1, snapshotVatRate: 500 },
+        ];
+        const cancelledItems = [{ priceInCents: 5000, quantity: 1, vatRate: 500 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0].rate).toBeCloseTo(0.05);
+      });
+
+      it('computes original/corrected net and VAT per rate, plus the net+VAT delta', () => {
+        const originalItems = [{ snapshotPrice: 5000, quantity: 1, snapshotVatRate: 500 }];
+        const cancelledItems = [{ priceInCents: 5000, quantity: 1, vatRate: 500 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows[0]).toMatchObject({
+          originalNetCents: 4762,
+          originalVatCents: 238,
+          correctedNetCents: 0,
+          correctedVatCents: 0,
+          deltaNetCents: -4762,
+          deltaVatCents: -238,
+        });
+      });
+
+      it('returns one row per rate, sorted highest rate first, for a mixed-rate cancellation', () => {
+        const originalItems = [
+          { snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 },
+          { snapshotPrice: 5000, quantity: 1, snapshotVatRate: 500 },
+        ];
+        const cancelledItems = [
+          { priceInCents: 10000, quantity: 1, vatRate: 2300 },
+          { priceInCents: 5000, quantity: 1, vatRate: 500 },
+        ];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows.map((r: any) => r.rate)).toEqual([0.23, 0.05]);
+      });
+
+      it('treats a 0% (exempt) rate as its own bucket', () => {
+        const originalItems = [{ snapshotPrice: 3000, quantity: 1, snapshotVatRate: 0 }];
+        const cancelledItems = [{ priceInCents: 3000, quantity: 1, vatRate: 0 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows).toEqual([
+          expect.objectContaining({ rate: 0, originalNetCents: 3000, deltaNetCents: -3000 }),
+        ]);
+      });
+
+      it('returns an empty breakdown when no items are being cancelled (legacy fallback)', () => {
+        const originalItems = [{ snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, []);
+
+        expect(rows).toEqual([]);
+      });
+    });
+
+    // ── renderCorrective — per-rate table rendering ────────────────────────
+
+    describe('renderCorrective — per-rate VAT table', () => {
+      function makeMockDoc(): { doc: any; calls: string[] } {
+        const calls: string[] = [];
+        const doc: any = {
+          registerFont: jest.fn().mockReturnThis(),
+          font: jest.fn().mockReturnThis(),
+          fontSize: jest.fn().mockReturnThis(),
+          fillColor: jest.fn().mockReturnThis(),
+          text: jest.fn().mockImplementation((t: unknown) => { calls.push(String(t)); return doc; }),
+          moveDown: jest.fn().mockReturnThis(),
+          moveTo: jest.fn().mockReturnThis(),
+          lineTo: jest.fn().mockReturnThis(),
+          lineWidth: jest.fn().mockReturnThis(),
+          stroke: jest.fn().mockReturnThis(),
+          rect: jest.fn().mockReturnThis(),
+          fill: jest.fn().mockReturnThis(),
+          end: jest.fn(),
+          y: 300,
+        };
+        return { doc, calls };
+      }
+
+      it('renders one netto/VAT row pair per VAT rate when a breakdown is provided', () => {
+        const { doc, calls } = makeMockDoc();
+        const vatBreakdown = [
+          {
+            rate: 0.23,
+            originalNetCents: 8130,
+            originalVatCents: 1870,
+            correctedNetCents: 0,
+            correctedVatCents: 0,
+            deltaNetCents: -8130,
+            deltaVatCents: -1870,
+          },
+          {
+            rate: 0.05,
+            originalNetCents: 4762,
+            originalVatCents: 238,
+            correctedNetCents: 0,
+            correctedVatCents: 0,
+            deltaNetCents: -4762,
+            deltaVatCents: -238,
+          },
+        ];
+
+        (corrService as any).renderCorrective(
+          doc,
+          mockOrderData,
+          'FK/2026/000001',
+          'FV/2026/000001',
+          15000,
+          vatBreakdown,
+        );
+
+        expect(calls).toContain('Stawka 23% — podstawa netto');
+        expect(calls).toContain('Stawka 23% — VAT');
+        expect(calls).toContain('Stawka 5% — podstawa netto');
+        expect(calls).toContain('Stawka 5% — VAT');
+        expect(calls).not.toContain('Opis korekty');
+      });
+
+      it('falls back to a single gross correction line when no VAT breakdown is available', () => {
+        const { doc, calls } = makeMockDoc();
+
+        (corrService as any).renderCorrective(
+          doc,
+          mockOrderData,
+          'FK/2026/000001',
+          'FV/2026/000001',
+          5000,
+          [],
+        );
+
+        expect(calls).toContain('Opis korekty');
+        expect(calls).not.toContain('Stawka 23% — podstawa netto');
+      });
+
+      it('labels a 0% breakdown row as exempt ("zw.") rather than "0%"', () => {
+        const { doc, calls } = makeMockDoc();
+        const vatBreakdown = [
+          {
+            rate: 0,
+            originalNetCents: 3000,
+            originalVatCents: 0,
+            correctedNetCents: 0,
+            correctedVatCents: 0,
+            deltaNetCents: -3000,
+            deltaVatCents: 0,
+          },
+        ];
+
+        (corrService as any).renderCorrective(
+          doc,
+          mockOrderData,
+          'FK/2026/000001',
+          'FV/2026/000001',
+          3000,
+          vatBreakdown,
+        );
+
+        expect(calls).toContain('Stawka zw. — podstawa netto');
       });
     });
   });
