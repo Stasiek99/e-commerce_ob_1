@@ -120,6 +120,7 @@ model User {
   analyticsConsentAt DateTime?
   emailBounced       Boolean   @default(false)
   emailBouncedAt     DateTime?
+  emailBouncedReason String?
   emailComplained       Boolean   @default(false)
   emailComplainedAt     DateTime?
   createdAt          DateTime  @default(now())
@@ -762,12 +763,13 @@ model InvoiceCorrection {
   orderId                 String
   order                   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   correctiveInvoiceNumber String   @unique
-  correctiveStoragePath   String
+  correctiveStoragePath   String?
   correctedAmountInCents  Int
   refundReasonCode        String   @default("PARTIAL_CANCELLATION")
   issuedAt                DateTime @default(now())
   createdAt               DateTime @default(now())
 
+  @@unique([orderId, correctedAmountInCents])
   @@index([orderId])
   @@map("invoice_corrections")
 }

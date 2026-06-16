@@ -164,7 +164,10 @@ export class PaymentsService {
     }
 
     const guestToken = randomBytes(32).toString('hex');
-    await this.redis.set(`order-token:${order.id}`, guestToken, 'EX', 3600);
+    // P24 bank transfers can take up to 5 business days; 7-day window covers the
+    // full async settlement period plus Stripe's retry window so guest customers
+    // can check payment status after returning from their bank's confirmation page.
+    await this.redis.set(`order-token:${order.id}`, guestToken, 'EX', 7 * 24 * 3600);
 
     let session: Awaited<ReturnType<StripeClient['createCheckoutSession']>>;
     try {
@@ -176,7 +179,7 @@ export class PaymentsService {
         currency,
         lineItems,
         successUrl: `${successUrl}?orderId=${order.id}&token=${guestToken}`,
-        cancelUrl: `${cancelUrl}?orderId=${order.id}&guestToken=${generateOrderToken(order.id, order.snapshotEmail, this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'))}`,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}&guestToken=${generateOrderToken(order.id, order.snapshotEmail, this.configService.getOrThrow<string>('ORDER_CANCEL_SECRET'))}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
           couponLabel: order.couponCode ?? undefined,
@@ -908,7 +911,7 @@ export class PaymentsService {
    */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, { timeZone: 'Europe/Warsaw' })
   async pruneProcessedStripeEvents() {
-    const acquired = await this.redis.set('cron:prune-stripe-events:lock', '1', 'EX', 82800, 'NX');
+    const acquired = await this.redis.set('cron:prune-stripe-events:lock', '1', 'EX', 82000, 'NX');
     if (!acquired) return;
 
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -1019,7 +1022,14 @@ export class PaymentsService {
   ): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
-      select: { id: true, status: true, stripePaymentIntentId: true, order: { select: { orderNumber: true } } },
+      select: {
+        id: true,
+        status: true,
+        stripePaymentIntentId: true,
+        amountInCents: true,
+        refundedAmountInCents: true,
+        order: { select: { orderNumber: true } },
+      },
     });
 
     if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -1030,7 +1040,14 @@ export class PaymentsService {
       throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
     }
 
-    const refundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const rawRefundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const available = payment.amountInCents - payment.refundedAmountInCents;
+    if (available <= 0) {
+      throw new Error(`No refundable balance remaining for order ${orderId}`);
+    }
+    // Cap against the remaining balance to prevent over-refund from rounding accumulation
+    // across multiple partial cancels of the same order.
+    const refundAmountInCents = Math.min(rawRefundAmountInCents, available);
     const idempotencyKey = `${orderId}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
 
     await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
@@ -1212,7 +1229,7 @@ export class PaymentsService {
 
     const payment = await this.prisma.payment.findUnique({
       where: { stripePaymentIntentId: paymentIntentId },
-      include: { order: { include: { items: true, shipment: true } } },
+      include: { order: { include: { items: true } } },
     });
 
     if (!payment) {
@@ -1265,9 +1282,9 @@ export class PaymentsService {
         `Dispute ${dispute.id} WON: order ${payment.order.orderNumber} restored to ${restoreStatus}`,
       );
     } else if (dispute.status === 'lost') {
-      // Funds already taken by Stripe. Restore stock only if label was never generated.
-      const goodsShipped = !!payment.order.shipment?.labelUrl;
-
+      // Funds already taken by Stripe. A generated shipping label only proves a label was
+      // created, not that the parcel was delivered — restore stock by default and let an
+      // admin manually adjust if goods are provably delivered.
       try {
         await this.prisma.$transaction(async (tx) => {
           if (eventId) {
@@ -1277,15 +1294,13 @@ export class PaymentsService {
             where: { id: payment.orderId },
             data: { status: OrderStatus.CANCELLED },
           });
-          if (!goodsShipped) {
-            for (const item of payment.order.items) {
-              const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-              if (activeQty > 0) {
-                await tx.productVariant.update({
-                  where: { id: item.productVariantId },
-                  data: { stock: { increment: activeQty } },
-                });
-              }
+          for (const item of payment.order.items) {
+            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+            if (activeQty > 0) {
+              await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQty } },
+              });
             }
           }
           await tx.orderEvent.create({
@@ -1294,7 +1309,7 @@ export class PaymentsService {
               fromStatus: OrderStatus.DISPUTE_HOLD,
               toStatus: OrderStatus.CANCELLED,
               actor: 'SYSTEM:stripe-webhook',
-              note: `Dispute ${dispute.id} closed LOST${goodsShipped ? ' — goods shipped, stock not restored' : ' — stock restored'}`,
+              note: `Dispute ${dispute.id} closed LOST — stock restored`,
             },
           });
         });
@@ -1307,7 +1322,7 @@ export class PaymentsService {
       }
 
       this.logger.error(
-        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled. Goods shipped: ${goodsShipped}`,
+        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled, stock restored.`,
       );
       Sentry.withScope((scope) => {
         scope.setLevel('fatal');
@@ -1316,7 +1331,6 @@ export class PaymentsService {
           disputeId: dispute.id,
           orderNumber: payment.order.orderNumber,
           amount: dispute.amount,
-          goodsShipped,
         });
         Sentry.captureMessage(
           `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed`,

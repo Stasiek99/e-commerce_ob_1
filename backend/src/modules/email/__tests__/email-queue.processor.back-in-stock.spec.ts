@@ -36,7 +36,7 @@ describe('EmailQueueProcessor — back_in_stock job', () => {
 
   const mockPrisma = {
     wishlistItem: {
-      update: jest.fn(),
+      updateMany: jest.fn(),
     },
   };
 
@@ -55,38 +55,62 @@ describe('EmailQueueProcessor — back_in_stock job', () => {
     jest.clearAllMocks();
   });
 
-  describe('successful delivery', () => {
-    it('resets notifyOnRestock to false for the specific wishlist item after email is sent', async () => {
-      mockEmailService.sendBackInStock.mockResolvedValue(undefined);
-      mockPrisma.wishlistItem.update.mockResolvedValue({ id: WISHLIST_ITEM_ID, notifyOnRestock: false });
+  describe('idempotency guard — flag-first pattern', () => {
+    it('clears notifyOnRestock before sending so a BullMQ retry cannot send a duplicate', async () => {
+      const callOrder: string[] = [];
+      mockPrisma.wishlistItem.updateMany.mockImplementation(async () => {
+        callOrder.push('updateFlag');
+        return { count: 1 };
+      });
+      mockEmailService.sendBackInStock.mockImplementation(async () => {
+        callOrder.push('sendBackInStock');
+      });
 
       await processor.process(makeJob(backInStockPayload));
 
-      expect(mockPrisma.wishlistItem.update).toHaveBeenCalledTimes(1);
-      expect(mockPrisma.wishlistItem.update).toHaveBeenCalledWith({
-        where: { id: WISHLIST_ITEM_ID },
+      expect(callOrder).toEqual(['updateFlag', 'sendBackInStock']);
+    });
+
+    it('uses updateMany with notifyOnRestock:true condition to make the check atomic', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
+      mockEmailService.sendBackInStock.mockResolvedValue(undefined);
+
+      await processor.process(makeJob(backInStockPayload));
+
+      expect(mockPrisma.wishlistItem.updateMany).toHaveBeenCalledWith({
+        where: { id: WISHLIST_ITEM_ID, notifyOnRestock: true },
         data: { notifyOnRestock: false },
       });
     });
 
-    it('resets the flag AFTER email send, not before — so a send failure still leaves the flag true', async () => {
-      const callOrder: string[] = [];
-      mockEmailService.sendBackInStock.mockImplementation(async () => {
-        callOrder.push('sendBackInStock');
-      });
-      mockPrisma.wishlistItem.update.mockImplementation(async () => {
-        callOrder.push('updateFlag');
-        return { id: WISHLIST_ITEM_ID, notifyOnRestock: false };
-      });
+    it('skips email send when count === 0 (flag already cleared — idempotency guard on retry)', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 0 });
 
       await processor.process(makeJob(backInStockPayload));
 
-      expect(callOrder).toEqual(['sendBackInStock', 'updateFlag']);
+      expect(mockEmailService.sendBackInStock).not.toHaveBeenCalled();
+    });
+
+    it('resolves without throwing when skipping a duplicate (count === 0)', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(processor.process(makeJob(backInStockPayload))).resolves.toBeUndefined();
+    });
+  });
+
+  describe('successful delivery', () => {
+    it('sends the email when count === 1 (flag was still true)', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
+      mockEmailService.sendBackInStock.mockResolvedValue(undefined);
+
+      await processor.process(makeJob(backInStockPayload));
+
+      expect(mockEmailService.sendBackInStock).toHaveBeenCalledTimes(1);
     });
 
     it('strips wishlistItemId from the payload before calling emailService.sendBackInStock', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
       mockEmailService.sendBackInStock.mockResolvedValue(undefined);
-      mockPrisma.wishlistItem.update.mockResolvedValue({});
 
       await processor.process(makeJob(backInStockPayload));
 
@@ -103,19 +127,24 @@ describe('EmailQueueProcessor — back_in_stock job', () => {
   });
 
   describe('delivery failure', () => {
-    it('does NOT reset notifyOnRestock when email send throws — flag stays true for BullMQ retry', async () => {
-      mockEmailService.sendBackInStock.mockRejectedValue(new Error('Resend API timeout'));
-
-      await expect(processor.process(makeJob(backInStockPayload))).rejects.toThrow('Resend API timeout');
-
-      expect(mockPrisma.wishlistItem.update).not.toHaveBeenCalled();
-    });
-
     it('propagates the send error so BullMQ can apply its retry/backoff policy', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
       const sendError = new Error('network failure');
       mockEmailService.sendBackInStock.mockRejectedValue(sendError);
 
       await expect(processor.process(makeJob(backInStockPayload))).rejects.toBe(sendError);
+    });
+
+    it('has already set notifyOnRestock=false when send throws — retry will skip re-send', async () => {
+      mockPrisma.wishlistItem.updateMany.mockResolvedValue({ count: 1 });
+      mockEmailService.sendBackInStock.mockRejectedValue(new Error('Resend API timeout'));
+
+      await expect(processor.process(makeJob(backInStockPayload))).rejects.toThrow('Resend API timeout');
+
+      // The flag was already cleared BEFORE the failed send — the idempotency guard holds
+      expect(mockPrisma.wishlistItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { notifyOnRestock: false } }),
+      );
     });
   });
 });

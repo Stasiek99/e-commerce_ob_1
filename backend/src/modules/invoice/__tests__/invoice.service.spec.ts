@@ -37,7 +37,7 @@ describe('InvoiceService', () => {
   let service: InvoiceService;
   let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
   let mockTx: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
-  let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock };
+  let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock; order: { update: jest.Mock } };
 
   beforeEach(async () => {
     mockStorage = {
@@ -59,6 +59,8 @@ describe('InvoiceService', () => {
       $transaction: jest.fn().mockImplementation(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),
       // $executeRawUnsafe is still present on the outer client (called by onModuleInit via ensureSequence)
       $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+      // TX2: persists invoiceStoragePath after the upload completes (outside the transaction)
+      order: { update: jest.fn().mockResolvedValue({}) },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -117,16 +119,24 @@ describe('InvoiceService', () => {
       );
     });
 
-    it('persists invoiceStoragePath (raw path) — never stores a signed URL in the DB', async () => {
+    it('TX1 reserves invoiceNumber, TX2 persists invoiceStoragePath — never stores a signed URL in the DB', async () => {
       await service.processInvoice(buildOrder());
 
+      // TX1: reserve the invoice number so concurrent callers see it and bail out
       expect(mockTx.order.update).toHaveBeenCalledWith({
         where: { id: 'order-1' },
-        data: { invoiceStoragePath: MOCK_PATH, invoiceNumber: 'FV/2026/000001' },
+        data: { invoiceNumber: 'FV/2026/000001' },
       });
-      // The DB update must NOT contain invoiceUrl — that would break on key rotation
-      const [call] = mockTx.order.update.mock.calls;
-      expect(call[0].data).not.toHaveProperty('invoiceUrl');
+      // TX2: persist the raw storage path (not a signed URL) after upload succeeds
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { invoiceStoragePath: MOCK_PATH },
+      });
+      // Neither update must contain invoiceUrl — that would break on key rotation
+      const [tx1Call] = mockTx.order.update.mock.calls;
+      const [tx2Call] = mockPrisma.order.update.mock.calls;
+      expect(tx1Call[0].data).not.toHaveProperty('invoiceUrl');
+      expect(tx2Call[0].data).not.toHaveProperty('invoiceUrl');
     });
 
     it('calls getInvoiceSignedUrl with a 7-day TTL for the returned email URL', async () => {
@@ -164,7 +174,13 @@ describe('InvoiceService', () => {
 
       await expect(service.processInvoice(buildOrder())).rejects.toThrow('upload failed');
 
-      expect(mockTx.order.update).not.toHaveBeenCalled();
+      // TX1 still reserves the invoiceNumber (idempotency marker)
+      expect(mockTx.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { invoiceNumber: 'FV/2026/000001' },
+      });
+      // TX2 must not run — invoiceStoragePath is never written when upload fails
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
     it('propagates storage errors without swallowing them', async () => {
@@ -212,6 +228,66 @@ describe('InvoiceService', () => {
       await service.processInvoice(buildOrder());
 
       expect(mockStorage.uploadInvoice).not.toHaveBeenCalled();
+      expect(mockTx.order.update).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── two-transaction lock-release fix ─────────────────────────────────────────
+  // processInvoice previously held a SELECT FOR UPDATE lock for the entire duration
+  // of the Supabase upload (up to 30s), exhausting pgBouncer's 10-connection pool.
+  // The fix: TX1 releases the lock after reserving the invoice number, the upload
+  // runs outside any transaction, then TX2 commits the storage path.
+
+  describe('processInvoice — upload outside transaction (lock-release fix)', () => {
+    it('upload happens after $transaction resolves, not inside the callback', async () => {
+      let txResolved = false;
+      mockPrisma.$transaction.mockImplementation(
+        async (fn: (tx: typeof mockTx) => Promise<unknown>) => {
+          const result = await fn(mockTx);
+          txResolved = true;
+          return result;
+        },
+      );
+
+      let uploadCalledAfterTxResolve = false;
+      mockStorage.uploadInvoice.mockImplementation(async () => {
+        uploadCalledAfterTxResolve = txResolved;
+        return MOCK_PATH;
+      });
+
+      await service.processInvoice(buildOrder());
+
+      expect(uploadCalledAfterTxResolve).toBe(true);
+    });
+
+    it('reuses existing invoiceNumber when a previous attempt was interrupted between TX1 and TX2', async () => {
+      const INTERRUPTED_NUMBER = 'FV/2026/000099';
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValueOnce([
+        { invoice_storage_path: null, invoice_number: INTERRUPTED_NUMBER },
+      ]);
+      mockStorage.uploadInvoice.mockResolvedValue('invoices/FV-2026-000099.pdf');
+
+      const result = await service.processInvoice(buildOrder());
+
+      expect(result.invoiceNumber).toBe(INTERRUPTED_NUMBER);
+      expect(mockStorage.uploadInvoice).toHaveBeenCalledWith(expect.any(Buffer), 'FV-2026-000099.pdf');
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: { invoiceStoragePath: 'invoices/FV-2026-000099.pdf' },
+      });
+    });
+
+    it('does not consume a new sequence number when recovering from an interrupted attempt', async () => {
+      mockTx.$queryRawUnsafe.mockReset().mockResolvedValueOnce([
+        { invoice_storage_path: null, invoice_number: 'FV/2026/000099' },
+      ]);
+
+      await service.processInvoice(buildOrder());
+
+      // CREATE SEQUENCE and nextval must not be called — existing number is re-used
+      expect(mockTx.$executeRawUnsafe).not.toHaveBeenCalled();
+      // tx.order.update in TX1 must not be called — no new number to reserve
       expect(mockTx.order.update).not.toHaveBeenCalled();
     });
   });
@@ -914,6 +990,554 @@ describe('InvoiceService', () => {
       // 23% bucket unchanged → "0.19 zl"
       const vat23Idx = calls.indexOf('VAT 23%:');
       expect(calls[vat23Idx + 1]).toBe('0.19 zl');
+    });
+  });
+  // ── processCorrectiveInvoice — idempotency guard ─────────────────────────
+  // Verifies the SELECT FOR UPDATE + two-phase pattern that prevents BullMQ
+  // retries from burning FK/YYYY/NNNNNN sequential numbers (Art. 106e ust. 1
+  // pkt 2 Ustawy o VAT) and from inserting duplicate InvoiceCorrection rows.
+
+  describe('processCorrectiveInvoice', () => {
+    const YEAR = new Date().getFullYear();
+    const ORDER_ID = 'order-corr-1';
+    const ORIGINAL_INVOICE = 'FV/2026/000001';
+    const REFUND_CENTS = 5000;
+    const CORRECTED_AMOUNT = -5000; // -Math.abs(5000)
+    const REASON = 'PARTIAL_CANCELLATION';
+    const MOCK_CORRECTIVE_NUM = `FK/${YEAR}/000001`;
+    const MOCK_CORRECTIVE_FILENAME = `FK-${YEAR}-000001.pdf`;
+    const MOCK_CORRECTIVE_PATH = `invoices/${MOCK_CORRECTIVE_FILENAME}`;
+    const MOCK_CORRECTIVE_URL = 'https://cdn.example.com/corrective-invoice.pdf?token=xyz';
+
+    let corrService: InvoiceService;
+    let corrStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
+    let corrTx: {
+      $queryRawUnsafe: jest.Mock;
+      $executeRawUnsafe: jest.Mock;
+      invoiceCorrection: { findFirst: jest.Mock; create: jest.Mock };
+    };
+    let corrPrisma: {
+      $transaction: jest.Mock;
+      $executeRawUnsafe: jest.Mock;
+      order: { update: jest.Mock; findUniqueOrThrow: jest.Mock };
+      invoiceCorrection: { findFirst: jest.Mock; update: jest.Mock };
+    };
+
+    const mockOrderData = {
+      orderNumber: 'ORD-2026-000001',
+      snapshotFirstName: 'Jan',
+      snapshotLastName: 'Kowalski',
+      snapshotCompany: null,
+      snapshotNip: null,
+      snapshotStreet: 'ul. Marszałkowska 1',
+      snapshotCity: 'Warszawa',
+      snapshotPostalCode: '00-001',
+      snapshotCountry: 'PL',
+      createdAt: new Date('2026-05-01T10:00:00Z'),
+      items: [] as Array<{ snapshotPrice: number; quantity: number; snapshotVatRate: number }>,
+    };
+
+    beforeEach(async () => {
+      corrStorage = {
+        uploadInvoice: jest.fn().mockResolvedValue(MOCK_CORRECTIVE_PATH),
+        getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_CORRECTIVE_URL),
+      };
+
+      corrTx = {
+        // 1st call — SELECT FOR UPDATE; 2nd call — SELECT nextval
+        $queryRawUnsafe: jest.fn()
+          .mockResolvedValueOnce([{ id: ORDER_ID }])
+          .mockResolvedValueOnce([{ nextval: 1n }]),
+        $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+        invoiceCorrection: {
+          findFirst: jest.fn().mockResolvedValue(null), // fresh attempt by default
+          create: jest.fn().mockResolvedValue({ id: 'corr-1', correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM }),
+        },
+      };
+
+      corrPrisma = {
+        $transaction: jest.fn().mockImplementation(
+          async (fn: (tx: typeof corrTx) => Promise<unknown>) => fn(corrTx),
+        ),
+        $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
+        order: {
+          update: jest.fn().mockResolvedValue({}),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(mockOrderData),
+        },
+        invoiceCorrection: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          update: jest.fn().mockResolvedValue({}),
+        },
+      };
+
+      const mod = await Test.createTestingModule({
+        providers: [
+          InvoiceService,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn((key: string, fallback?: string) => {
+                const cfg: Record<string, string> = {
+                  SELLER_NAME: 'Aromaterie',
+                  SELLER_NIP: '1234567890',
+                  SELLER_STREET: 'ul. Testowa 1',
+                  SELLER_CITY: 'Kraków',
+                  SELLER_POSTAL_CODE: '30-001',
+                };
+                return cfg[key] ?? fallback ?? '';
+              }),
+            },
+          },
+          { provide: PrismaService, useValue: corrPrisma },
+          { provide: StorageService, useValue: corrStorage },
+        ],
+      }).compile();
+
+      corrService = mod.get(InvoiceService);
+    });
+
+    // ── orchestration — fresh attempt ──────────────────────────────────────
+
+    describe('orchestration — fresh attempt', () => {
+      it('returns correctiveUrl, correctiveStoragePath, and correctiveInvoiceNumber', async () => {
+        const result = await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(result.correctiveUrl).toBe(MOCK_CORRECTIVE_URL);
+        expect(result.correctiveStoragePath).toBe(MOCK_CORRECTIVE_PATH);
+        expect(result.correctiveInvoiceNumber).toBe(MOCK_CORRECTIVE_NUM);
+      });
+
+      it('uploads the corrective PDF with the FK-formatted filename', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrStorage.uploadInvoice).toHaveBeenCalledWith(
+          expect.any(Buffer),
+          MOCK_CORRECTIVE_FILENAME,
+        );
+      });
+
+      it('generated corrective PDF starts with %PDF (valid PDF header)', async () => {
+        let capturedPdf: Buffer | undefined;
+        corrStorage.uploadInvoice.mockImplementation(async (pdf: Buffer) => {
+          capturedPdf = pdf;
+          return MOCK_CORRECTIVE_PATH;
+        });
+
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(capturedPdf).toBeDefined();
+        expect(capturedPdf!.slice(0, 4).toString()).toBe('%PDF');
+      });
+
+      it('TX1 inserts InvoiceCorrection without correctiveStoragePath to reserve the sequence number', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        const createCall = corrTx.invoiceCorrection.create.mock.calls[0][0];
+        expect(createCall.data).toMatchObject({
+          orderId: ORDER_ID,
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctedAmountInCents: CORRECTED_AMOUNT,
+          refundReasonCode: REASON,
+        });
+        expect(createCall.data).not.toHaveProperty('correctiveStoragePath');
+      });
+
+      it('TX2 updates InvoiceCorrection with the actual storage path after upload succeeds', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrPrisma.invoiceCorrection.update).toHaveBeenCalledWith({
+          where: { orderId_correctedAmountInCents: { orderId: ORDER_ID, correctedAmountInCents: CORRECTED_AMOUNT } },
+          data: { correctiveStoragePath: MOCK_CORRECTIVE_PATH },
+        });
+      });
+
+      it('does not run TX2 update when upload fails — correction row stays with null storagePath for retry', async () => {
+        corrStorage.uploadInvoice.mockRejectedValue(new Error('Supabase upload failed'));
+
+        await expect(
+          corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON),
+        ).rejects.toThrow('Supabase upload failed');
+
+        expect(corrPrisma.invoiceCorrection.update).not.toHaveBeenCalled();
+      });
+
+      it('calls getInvoiceSignedUrl with a 7-day TTL', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        const SEVEN_DAYS = 7 * 24 * 60 * 60;
+        expect(corrStorage.getInvoiceSignedUrl).toHaveBeenCalledWith(MOCK_CORRECTIVE_PATH, SEVEN_DAYS);
+      });
+    });
+
+    // ── idempotency guard — SELECT FOR UPDATE ──────────────────────────────
+
+    describe('idempotency guard — SELECT FOR UPDATE', () => {
+      it('returns the existing URL and number when correction is already fully completed', async () => {
+        corrTx.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctiveStoragePath: MOCK_CORRECTIVE_PATH,
+        });
+
+        const result = await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(result.correctiveInvoiceNumber).toBe(MOCK_CORRECTIVE_NUM);
+        expect(result.correctiveStoragePath).toBe(MOCK_CORRECTIVE_PATH);
+        expect(result.correctiveUrl).toBe(MOCK_CORRECTIVE_URL);
+      });
+
+      it('does not allocate a new sequence number when correction already exists', async () => {
+        corrTx.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctiveStoragePath: MOCK_CORRECTIVE_PATH,
+        });
+
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrTx.$executeRawUnsafe).not.toHaveBeenCalled();
+      });
+
+      it('does not upload or run TX2 when correction is already complete', async () => {
+        corrTx.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctiveStoragePath: MOCK_CORRECTIVE_PATH,
+        });
+
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrStorage.uploadInvoice).not.toHaveBeenCalled();
+        expect(corrPrisma.invoiceCorrection.update).not.toHaveBeenCalled();
+      });
+
+      it('re-uses the reserved number and completes the upload when a prior attempt crashed after TX1', async () => {
+        const RESERVED_NUM = `FK/${YEAR}/000099`;
+        const RESERVED_PATH = `invoices/FK-${YEAR}-000099.pdf`;
+        corrTx.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: RESERVED_NUM,
+          correctiveStoragePath: null,
+        });
+        corrStorage.uploadInvoice.mockResolvedValue(RESERVED_PATH);
+
+        const result = await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(result.correctiveInvoiceNumber).toBe(RESERVED_NUM);
+        expect(corrStorage.uploadInvoice).toHaveBeenCalledWith(
+          expect.any(Buffer),
+          `FK-${YEAR}-000099.pdf`,
+        );
+        expect(corrPrisma.invoiceCorrection.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { correctiveStoragePath: RESERVED_PATH } }),
+        );
+      });
+
+      it('does not allocate a new nextval when re-using a reserved corrective number', async () => {
+        corrTx.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: `FK/${YEAR}/000099`,
+          correctiveStoragePath: null,
+        });
+
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrTx.$executeRawUnsafe).not.toHaveBeenCalled();
+        expect(corrTx.invoiceCorrection.create).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── upload outside transaction (lock-release) ──────────────────────────
+
+    describe('upload outside transaction (lock-release)', () => {
+      it('upload happens after $transaction resolves, not inside the callback', async () => {
+        let txResolved = false;
+        corrPrisma.$transaction.mockImplementation(
+          async (fn: (tx: typeof corrTx) => Promise<unknown>) => {
+            const result = await fn(corrTx);
+            txResolved = true;
+            return result;
+          },
+        );
+
+        let uploadCalledAfterTxResolve = false;
+        corrStorage.uploadInvoice.mockImplementation(async () => {
+          uploadCalledAfterTxResolve = txResolved;
+          return MOCK_CORRECTIVE_PATH;
+        });
+
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(uploadCalledAfterTxResolve).toBe(true);
+      });
+    });
+
+    // ── getCorrectiveInvoiceUrl — nullable storagePath guard ───────────────
+
+    describe('getCorrectiveInvoiceUrl — nullable storagePath guard', () => {
+      it('returns null when the correction row has a null correctiveStoragePath (upload not yet completed)', async () => {
+        corrPrisma.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctiveStoragePath: null,
+        });
+
+        const result = await corrService.getCorrectiveInvoiceUrl(ORDER_ID);
+
+        expect(result).toBeNull();
+      });
+
+      it('returns null when no correction row exists for the order', async () => {
+        corrPrisma.invoiceCorrection.findFirst.mockResolvedValue(null);
+
+        const result = await corrService.getCorrectiveInvoiceUrl(ORDER_ID);
+
+        expect(result).toBeNull();
+      });
+
+      it('returns correctiveInvoiceUrl and correctiveInvoiceNumber when storagePath is set', async () => {
+        corrPrisma.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctiveStoragePath: MOCK_CORRECTIVE_PATH,
+        });
+
+        const result = await corrService.getCorrectiveInvoiceUrl(ORDER_ID);
+
+        expect(result).toEqual({
+          correctiveInvoiceUrl: MOCK_CORRECTIVE_URL,
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+        });
+      });
+    });
+
+    // ── buildCorrectiveVatBreakdown — Art. 106j ust. 2 Ustawy o VAT ────────
+    // Mixed-rate orders must show, per VAT rate touched by the correction,
+    // the taxable base before/after and the net+VAT delta — not a single
+    // gross correction amount with no breakdown.
+
+    describe('buildCorrectiveVatBreakdown', () => {
+      it('omits VAT rates from the original order that are untouched by this correction', () => {
+        const originalItems = [
+          { snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 },
+          { snapshotPrice: 5000, quantity: 1, snapshotVatRate: 500 },
+        ];
+        const cancelledItems = [{ priceInCents: 5000, quantity: 1, vatRate: 500 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0].rate).toBeCloseTo(0.05);
+      });
+
+      it('computes original/corrected net and VAT per rate, plus the net+VAT delta', () => {
+        const originalItems = [{ snapshotPrice: 5000, quantity: 1, snapshotVatRate: 500 }];
+        const cancelledItems = [{ priceInCents: 5000, quantity: 1, vatRate: 500 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows[0]).toMatchObject({
+          originalNetCents: 4762,
+          originalVatCents: 238,
+          correctedNetCents: 0,
+          correctedVatCents: 0,
+          deltaNetCents: -4762,
+          deltaVatCents: -238,
+        });
+      });
+
+      it('returns one row per rate, sorted highest rate first, for a mixed-rate cancellation', () => {
+        const originalItems = [
+          { snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 },
+          { snapshotPrice: 5000, quantity: 1, snapshotVatRate: 500 },
+        ];
+        const cancelledItems = [
+          { priceInCents: 10000, quantity: 1, vatRate: 2300 },
+          { priceInCents: 5000, quantity: 1, vatRate: 500 },
+        ];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows.map((r: any) => r.rate)).toEqual([0.23, 0.05]);
+      });
+
+      it('treats a 0% (exempt) rate as its own bucket', () => {
+        const originalItems = [{ snapshotPrice: 3000, quantity: 1, snapshotVatRate: 0 }];
+        const cancelledItems = [{ priceInCents: 3000, quantity: 1, vatRate: 0 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows).toEqual([
+          expect.objectContaining({ rate: 0, originalNetCents: 3000, deltaNetCents: -3000 }),
+        ]);
+      });
+
+      it('returns an empty breakdown when no items are being cancelled (legacy fallback)', () => {
+        const originalItems = [{ snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, []);
+
+        expect(rows).toEqual([]);
+      });
+    });
+
+    // ── renderCorrective — per-rate table rendering ────────────────────────
+
+    describe('renderCorrective — per-rate VAT table', () => {
+      function makeMockDoc(): { doc: any; calls: string[] } {
+        const calls: string[] = [];
+        const doc: any = {
+          registerFont: jest.fn().mockReturnThis(),
+          font: jest.fn().mockReturnThis(),
+          fontSize: jest.fn().mockReturnThis(),
+          fillColor: jest.fn().mockReturnThis(),
+          text: jest.fn().mockImplementation((t: unknown) => { calls.push(String(t)); return doc; }),
+          moveDown: jest.fn().mockReturnThis(),
+          moveTo: jest.fn().mockReturnThis(),
+          lineTo: jest.fn().mockReturnThis(),
+          lineWidth: jest.fn().mockReturnThis(),
+          stroke: jest.fn().mockReturnThis(),
+          rect: jest.fn().mockReturnThis(),
+          fill: jest.fn().mockReturnThis(),
+          end: jest.fn(),
+          y: 300,
+        };
+        return { doc, calls };
+      }
+
+      it('renders one netto/VAT row pair per VAT rate when a breakdown is provided', () => {
+        const { doc, calls } = makeMockDoc();
+        const vatBreakdown = [
+          {
+            rate: 0.23,
+            originalNetCents: 8130,
+            originalVatCents: 1870,
+            correctedNetCents: 0,
+            correctedVatCents: 0,
+            deltaNetCents: -8130,
+            deltaVatCents: -1870,
+          },
+          {
+            rate: 0.05,
+            originalNetCents: 4762,
+            originalVatCents: 238,
+            correctedNetCents: 0,
+            correctedVatCents: 0,
+            deltaNetCents: -4762,
+            deltaVatCents: -238,
+          },
+        ];
+
+        (corrService as any).renderCorrective(
+          doc,
+          mockOrderData,
+          'FK/2026/000001',
+          'FV/2026/000001',
+          15000,
+          vatBreakdown,
+        );
+
+        expect(calls).toContain('Stawka 23% — podstawa netto');
+        expect(calls).toContain('Stawka 23% — VAT');
+        expect(calls).toContain('Stawka 5% — podstawa netto');
+        expect(calls).toContain('Stawka 5% — VAT');
+        expect(calls).not.toContain('Opis korekty');
+      });
+
+      it('falls back to a single gross correction line when no VAT breakdown is available', () => {
+        const { doc, calls } = makeMockDoc();
+
+        (corrService as any).renderCorrective(
+          doc,
+          mockOrderData,
+          'FK/2026/000001',
+          'FV/2026/000001',
+          5000,
+          [],
+        );
+
+        expect(calls).toContain('Opis korekty');
+        expect(calls).not.toContain('Stawka 23% — podstawa netto');
+      });
+
+      it('labels a 0% breakdown row as exempt ("zw.") rather than "0%"', () => {
+        const { doc, calls } = makeMockDoc();
+        const vatBreakdown = [
+          {
+            rate: 0,
+            originalNetCents: 3000,
+            originalVatCents: 0,
+            correctedNetCents: 0,
+            correctedVatCents: 0,
+            deltaNetCents: -3000,
+            deltaVatCents: 0,
+          },
+        ];
+
+        (corrService as any).renderCorrective(
+          doc,
+          mockOrderData,
+          'FK/2026/000001',
+          'FV/2026/000001',
+          3000,
+          vatBreakdown,
+        );
+
+        expect(calls).toContain('Stawka zw. — podstawa netto');
+      });
+    });
+  });
+
+  // ── onModuleInit — SELLER_NIP production guard ────────────────────────────
+  // FIX: onModuleInit now throws when NODE_ENV=production and SELLER_NIP is
+  // empty, providing a second line of defence after the Joi schema check.
+  // Dev environments (no NIP yet) must continue to boot unimpeded.
+
+  describe('onModuleInit — SELLER_NIP production guard', () => {
+    async function invokeOnModuleInit(cfg: { NODE_ENV: string; SELLER_NIP: string }): Promise<void> {
+      const localPrisma = { $executeRawUnsafe: jest.fn().mockResolvedValue(undefined) };
+      const mod = await Test.createTestingModule({
+        providers: [
+          InvoiceService,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn((key: string, fallback?: string) =>
+                cfg[key as keyof typeof cfg] ?? fallback ?? '',
+              ),
+            },
+          },
+          { provide: PrismaService, useValue: localPrisma },
+          {
+            provide: StorageService,
+            useValue: { uploadInvoice: jest.fn(), getInvoiceSignedUrl: jest.fn() },
+          },
+        ],
+      }).compile();
+      return mod.get(InvoiceService).onModuleInit();
+    }
+
+    it('throws when NODE_ENV is production and SELLER_NIP is empty', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'production', SELLER_NIP: '' }),
+      ).rejects.toThrow('SELLER_NIP is required in production');
+    });
+
+    it('error message includes the VAT law reference (Art. 106e ust. 1 pkt 4)', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'production', SELLER_NIP: '' }),
+      ).rejects.toThrow('Art. 106e');
+    });
+
+    it('does not throw when NODE_ENV is production and SELLER_NIP is a valid 10-digit NIP', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'production', SELLER_NIP: '1234567890' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('does not throw when NODE_ENV is development and SELLER_NIP is empty', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: 'development', SELLER_NIP: '' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('does not throw when NODE_ENV is absent and SELLER_NIP is empty', async () => {
+      await expect(
+        invokeOnModuleInit({ NODE_ENV: '', SELLER_NIP: '' }),
+      ).resolves.toBeUndefined();
     });
   });
 });

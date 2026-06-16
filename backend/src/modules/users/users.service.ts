@@ -28,6 +28,11 @@ export class UsersService {
   }
 
   async update(id: string, data: Prisma.UserUpdateInput): Promise<User> {
+    // GDPR Art. 7(1) — marketingConsentAt is the only proof of when consent
+    // was given or withdrawn, so it must track every change to the flag.
+    if ('marketingConsent' in data) {
+      data = { ...data, marketingConsentAt: new Date() };
+    }
     return this.prisma.user.update({ where: { id }, data });
   }
 

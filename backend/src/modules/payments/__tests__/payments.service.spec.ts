@@ -1000,19 +1000,34 @@ describe('PaymentsService', () => {
     // An HMAC/JWT in the URL leaks via Referer headers to analytics providers and
     // exposes the master JWT_ACCESS_SECRET if the token is ever decoded.
 
-    it('stores an opaque random token in Redis under the order-token key', async () => {
+    it('stores an opaque random token in Redis under the order-token key with a 7-day TTL', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
       stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
       prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
 
       await service.initiatePayment('order-1');
 
+      // TTL must be 7 days (604800s) — P24 bank transfers can take up to 5
+      // business days; a 1-hour TTL locked out guests before payment settled.
       expect(redis.set).toHaveBeenCalledWith(
         'order-token:order-1',
         expect.stringMatching(/^[0-9a-f]{64}$/),
         'EX',
-        3600,
+        604800,
       );
+    });
+
+    it('does NOT use a 1-hour TTL for the guest order token (P24/BLIK regression guard)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithItems);
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const setCall = redis.set.mock.calls.find((c: any[]) => c[0] === 'order-token:order-1');
+      const ttl: number = setCall[3];
+      expect(ttl).not.toBe(3600);
+      expect(ttl).toBe(7 * 24 * 3600);
     });
 
     it('embeds the stored Redis token in the success URL', async () => {
@@ -1422,6 +1437,8 @@ describe('PaymentsService', () => {
       id: 'payment-1',
       status: PaymentStatus.COMPLETED,
       stripePaymentIntentId: 'pi_test_abc123',
+      amountInCents: 200000,
+      refundedAmountInCents: 0,
       order: { orderNumber: 'ORD-2026-000001' },
     };
 
@@ -1798,6 +1815,72 @@ describe('PaymentsService', () => {
       expect(capturedEventData.fromStatus).toBe(OrderStatus.PAID);
       expect(capturedEventData.note).toContain('114700');
       expect(capturedEventData.note).toContain('2 item line(s)');
+    });
+
+    // ─── available-balance cap (fix: prevent over-refund on second partial cancel) ─
+
+    it('throws Error when no refundable balance remains', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 50000,
+        refundedAmountInCents: 50000,
+      });
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow('No refundable balance remaining for order order-1');
+    });
+
+    it('caps Stripe refund at available balance when raw items sum exceeds remaining amount', async () => {
+      // Raw sum = 2×34900 + 1×44900 = 114700, but only 90000 remain refundable.
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 150000,
+        refundedAmountInCents: 60000,
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(stripeClient.createPartialRefund).toHaveBeenCalledWith(
+        'pi_test_abc123',
+        90000,
+        expect.any(String),
+      );
+    });
+
+    it('increments refundedAmountInCents by the capped amount when raw sum exceeds available', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 150000,
+        refundedAmountInCents: 60000,
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      let capturedPaymentData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedPaymentData = args.data;
+            }),
+          },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedPaymentData.refundedAmountInCents).toEqual({ increment: 90000 });
     });
   });
 
@@ -2905,7 +2988,7 @@ describe('PaymentsService', () => {
   // Invariants enforced by the fix:
   //   1. charge.dispute.created → order → DISPUTE_HOLD, admin email + Sentry alert
   //   2. charge.dispute.closed (won) → order restored to pre-dispute status
-  //   3. charge.dispute.closed (lost) → CANCELLED; stock restored only if not shipped
+  //   3. charge.dispute.closed (lost) → CANCELLED; stock always restored (no labelUrl heuristic)
   //   4. Duplicate events (P2002) are swallowed; non-P2002 errors are re-thrown
 
   describe('dispute webhook handlers', () => {
@@ -3290,12 +3373,11 @@ describe('PaymentsService', () => {
       expect(capturedOrderStatus).toBe(OrderStatus.CANCELLED);
     });
 
-    it('restores stock when dispute is lost and no shipment label was generated', async () => {
+    it('restores stock when dispute is lost', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
           ...mockPaymentForDisputeClosed.order,
-          shipment: null,
           items: [
             { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 },
             { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 },
@@ -3329,7 +3411,9 @@ describe('PaymentsService', () => {
       );
     });
 
-    it('does NOT restore stock when dispute is lost and goods were already shipped (labelUrl set)', async () => {
+    it('still restores stock when dispute is lost even though a shipping label was generated (labelUrl set)', async () => {
+      // Regression guard: a generated label only proves a label was created, not that the
+      // parcel was delivered — the old labelUrl heuristic incorrectly skipped stock restore here.
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
@@ -3346,7 +3430,7 @@ describe('PaymentsService', () => {
           order: { update: jest.fn() },
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
-              stockUpdates.push(args);
+              stockUpdates.push({ id: args.where.id, increment: args.data.stock.increment });
             }),
           },
           orderEvent: { create: jest.fn() },
@@ -3357,7 +3441,7 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(stockUpdates).toHaveLength(0);
+      expect(stockUpdates).toEqual([{ id: 'pv-1', increment: 2 }]);
     });
 
     it('captures a Sentry fatal event when dispute is lost', async () => {
@@ -3548,6 +3632,21 @@ describe('PaymentsService', () => {
         await service.pruneProcessedStripeEvents();
 
         expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('acquires the lock with a TTL under 24h so a missed run can retry within the same calendar day', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+        await service.pruneProcessedStripeEvents();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:prune-stripe-events:lock',
+          '1',
+          'EX',
+          82000,
+          'NX',
+        );
       });
     });
   });

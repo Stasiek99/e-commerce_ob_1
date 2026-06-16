@@ -283,6 +283,15 @@ describe('EmailWebhookController', () => {
           expect(prisma.user.updateMany).not.toHaveBeenCalled();
         });
 
+        it('sets emailBouncedReason from the bounce subType', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-bounce-3', ['bounced@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          const [callArg] = prisma.user.updateMany.mock.calls[0];
+          expect(callArg.data.emailBouncedReason).toBe('General');
+        });
+
         it('still calls user.updateMany even when the bounced address has no user row (updateMany is safe for 0 matches)', async () => {
           prisma.user.updateMany.mockResolvedValue({ count: 0 });
           const req = makeReq(makeEvent('email.bounced', 'em-guest', ['guest@nonexistent.com']));

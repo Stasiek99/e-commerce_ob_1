@@ -16,6 +16,7 @@ import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
 import { getCountries } from 'libphonenumber-js/min';
 import { parsePhoneNumber } from 'libphonenumber-js';
 import { nameValidator, phoneValidator, streetValidator } from '../../../shared/validators/form.validators';
+import { CURRENT_TERMS_VERSION } from '@fragrance-store/shared-types';
 
 import { CartService } from '../../../core/services/cart.service';
 import { AuthService } from '../../../core/services/auth.service';
@@ -36,7 +37,6 @@ declare const easyPack: {
   ) => void;
 };
 
-const TERMS_VERSION = '1.0';
 const enum CarrierCode { INPOST = 'INPOST', DPD = 'DPD', DPD_COURIER = 'DPD_COURIER', DHL = 'DHL', GLS = 'GLS' }
 
 const CARRIERS = [
@@ -1060,7 +1060,7 @@ export class CheckoutPageComponent implements OnInit {
         inpostLockerCode: this.lockerCode() ?? undefined,
         dpdPickupPointCode: this.selectedDpdPoint()?.code ?? undefined,
         guestEmail: a.email,
-        termsVersion: TERMS_VERSION,
+        termsVersion: CURRENT_TERMS_VERSION,
         termsAcceptedAt: new Date().toISOString(),
         couponCode: this.appliedCoupon()?.code ?? undefined,
         idempotencyKey: this.checkoutIdempotencyKey,

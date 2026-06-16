@@ -87,6 +87,7 @@ describe('OrdersService', () => {
             order: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn(), findMany: jest.fn() },
             returnRequest: { count: jest.fn().mockResolvedValue(0) },
+            coupon: { findUnique: jest.fn().mockResolvedValue(null) },
             cart: { findFirst: jest.fn() },
             cartItem: { deleteMany: jest.fn() },
             productVariant: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -145,6 +146,7 @@ describe('OrdersService', () => {
           useValue: {
             processInvoice: jest.fn(),
             getSignedUrl: jest.fn(),
+            processCorrectiveInvoice: jest.fn(),
           },
         },
         {
@@ -172,6 +174,11 @@ describe('OrdersService', () => {
     paymentsService = module.get(PaymentsService);
     invoiceService = module.get(InvoiceService);
     emailService = module.get(EmailQueueService);
+    invoiceService.processCorrectiveInvoice.mockResolvedValue({
+      correctiveUrl: 'https://cdn.example.com/corrective.pdf',
+      correctiveStoragePath: 'invoices/corrective.pdf',
+      correctiveInvoiceNumber: 'FK/2026/000001',
+    } as any);
   });
 
   // ─── onModuleInit — sequence pre-creation ────────────────────────────────────
@@ -1119,6 +1126,141 @@ describe('OrdersService', () => {
         await service.createFromCart('user-1', undefined, 'test@example.com', guardDto);
 
         expect(tx.order.create).toHaveBeenCalled();
+      });
+    });
+
+    // ─── shipping rate atomicity — inside $transaction ─────────────────────────
+    // getRateForCarrier() must be called INSIDE the $transaction callback so the
+    // shipping cost is consistent with the price snapshot and stock decrement that
+    // are committed in the same atomic unit. Moving it outside the transaction
+    // opens a window where an admin rate update or Redis-key invalidation between
+    // the rate fetch and the DB write silently charges the customer the stale value.
+
+    describe('shipping rate atomicity — getRateForCarrier inside $transaction', () => {
+      it('calls getRateForCarrier inside the $transaction callback, not before it', async () => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+        const callOrder: string[] = [];
+
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([
+                { id: 'pv-1', priceInCents: 34900 },
+                { id: 'pv-2', priceInCents: 44900 },
+              ]),
+            },
+            order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 116699 }) },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          callOrder.push('transaction:start');
+          const result = await fn(tx);
+          callOrder.push('transaction:end');
+          return result;
+        });
+
+        mockShippingRatesService.getRateForCarrier.mockImplementation(async () => {
+          callOrder.push('getRateForCarrier');
+          return 1999;
+        });
+
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        const txStart = callOrder.indexOf('transaction:start');
+        const rateCall = callOrder.indexOf('getRateForCarrier');
+        const txEnd = callOrder.indexOf('transaction:end');
+
+        expect(rateCall).toBeGreaterThan(txStart); // called AFTER $transaction opens
+        expect(rateCall).toBeLessThan(txEnd);       // called BEFORE $transaction closes
+      });
+
+      it('uses the rate returned by getRateForCarrier when computing shippingCostInCents', async () => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+        // Simulate a rate change: admin bumped DHL to 2499 after cart was loaded
+        mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(2499);
+
+        let capturedShipping: number | undefined;
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([
+                { id: 'pv-1', priceInCents: 34900 },
+                { id: 'pv-2', priceInCents: 44900 },
+              ]),
+            },
+            order: {
+              create: jest.fn().mockImplementation((args: any) => {
+                capturedShipping = args.data.shippingCostInCents;
+                return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 117199 };
+              }),
+            },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          return fn(tx);
+        });
+
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        expect(capturedShipping).toBe(2499);
+      });
+
+      it('calls getRateForCarrier exactly once per checkout', async () => {
+        cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+        let rateCallCount = 0;
+        mockShippingRatesService.getRateForCarrier.mockImplementation(async (code: CarrierCode) => {
+          rateCallCount++;
+          return MOCK_RATES[code] ?? 1999;
+        });
+
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          const tx = {
+            $executeRawUnsafe: jest.fn(),
+            $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+            productVariant: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              findMany: jest.fn().mockResolvedValue([
+                { id: 'pv-1', priceInCents: 34900 },
+                { id: 'pv-2', priceInCents: 44900 },
+              ]),
+            },
+            order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 116699 }) },
+            cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+            cartItem: { deleteMany: jest.fn() },
+            orderEvent: { create: jest.fn() },
+          };
+          return fn(tx);
+        });
+
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+        await service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        });
+
+        expect(rateCallCount).toBe(1);
       });
     });
   });
@@ -2803,6 +2945,7 @@ describe('OrdersService', () => {
         snapshotName: 'Dior Sauvage 100ml',
         snapshotSku: 'DS-100',
         snapshotPrice: 34900,
+        snapshotVatRate: 2300,
       },
       {
         id: 'item-2',
@@ -2812,6 +2955,7 @@ describe('OrdersService', () => {
         snapshotName: 'Chanel No 5 50ml',
         snapshotSku: 'CN5-50',
         snapshotPrice: 44900,
+        snapshotVatRate: 2300,
       },
     ];
 
@@ -2943,6 +3087,7 @@ describe('OrdersService', () => {
             productVariantId: 'pv-1',
             quantity: 2,
             priceInCents: 34900,
+            vatRate: 2300,
           },
         ],
         OrderStatus.PAID,
@@ -3146,6 +3291,135 @@ describe('OrdersService', () => {
       );
     });
 
+    // ─── alreadyCancelledDiscount guard (fix: prevent discount compounding on second partial cancel) ─
+
+    it('uses only remaining discount budget on second partial cancel of the same item', async () => {
+      // snapshotPrice=33, qty=2, itemsTotalInCents=66, discountInCents=5
+      // discountFraction = 5/66. First cancel consumed discount=round(33*5/66*1)=round(2.5)=3.
+      // Second cancel (cancelledQuantity=1): maxItemDiscount=round(33*5/66*2)=round(5)=5,
+      // alreadyCancelledDiscount=3, remaining=2 → appliedDiscount=min(3,2)=2 → priceInCents=33-2=31.
+      // Without the fix, the old formula would apply discount=3 again → priceInCents=30 (under-refund
+      // and total would be 30+30=60 while customer paid 66-5=61).
+      const partiallyRefundedOrder = {
+        ...mockPaidOrder,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+        itemsTotalInCents: 66,
+        discountInCents: 5,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 1,
+            snapshotName: 'Test Item',
+            snapshotSku: 'T-1',
+            snapshotPrice: 33,
+          },
+          {
+            // item-2 still has remaining quantity so the order is not fully cancelled
+            // and partialRefund() — not refundPayment() — is invoked.
+            id: 'item-2',
+            productVariantId: 'pv-2',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Other Item',
+            snapshotSku: 'O-1',
+            snapshotPrice: 33,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(partiallyRefundedOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31 })],
+        OrderStatus.PARTIALLY_REFUNDED,
+        'CUSTOMER',
+      );
+    });
+
+    // ─── FREE_SHIPPING coupon proration guard (fix: shipping discount must not ──
+    // ─── be divided into item prices) ────────────────────────────────────────
+    // discountInCents on a FREE_SHIPPING order equals shippingCostInCents, which is
+    // unrelated to itemsTotalInCents. Prorating it across item prices would refund
+    // the customer less than they paid for the items themselves.
+
+    it('does not reduce item priceInCents when the order used a FREE_SHIPPING coupon', async () => {
+      // discountInCents (1499, the shipping cost) would otherwise be misread as a
+      // ~7.5% items discount against itemsTotalInCents=20000.
+      const freeShippingOrder = {
+        ...mockPaidOrder,
+        couponId: 'coupon-free-shipping',
+        itemsTotalInCents: 20000,
+        discountInCents: 1499,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 10000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(freeShippingOrder);
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.FREE_SHIPPING });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(prisma.coupon.findUnique).toHaveBeenCalledWith({
+        where: { id: 'coupon-free-shipping' },
+        select: { discountType: true },
+      });
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 10000 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
+    it('still prorates item priceInCents when a non-FREE_SHIPPING coupon is applied', async () => {
+      const percentageOrder = {
+        ...mockPaidOrder,
+        couponId: 'coupon-percentage',
+        itemsTotalInCents: 20000,
+        discountInCents: 4000,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 2,
+            cancelledQuantity: 0,
+            snapshotName: 'Test Product',
+            snapshotSku: 'TEST-1',
+            snapshotPrice: 20000,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(percentageOrder);
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
+        OrderStatus.PAID,
+        'CUSTOMER',
+      );
+    });
+
     // ─── full-withdrawal shipping refund (fix: Art. 32 UoK compliance) ──────────
     // When ALL remaining items are cancelled, refundPayment() must be called instead
     // of partialRefund() so the shipping cost (shippingCostInCents) is included in
@@ -3225,6 +3499,69 @@ describe('OrdersService', () => {
 
       expect(paymentsService.partialRefund).toHaveBeenCalled();
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    // ─── corrective invoice VAT breakdown (fix: Art. 106j ust. 2 Ustawy o VAT) ──
+    // processCorrectiveInvoice needs each cancelled item's snapshotVatRate to render
+    // a compliant per-rate breakdown. Without it, mixed-rate orders produce a
+    // corrective invoice with no VAT split, which JPK_V7 flags as non-compliant.
+
+    it('passes the cancelled items with their snapshotVatRate to processCorrectiveInvoice', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...mockPaidOrder, invoiceNumber: 'FV/2026/000001' });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-1',
+        'FV/2026/000001',
+        69800,
+        'PARTIAL_CANCELLATION',
+        [{ quantity: 2, priceInCents: 34900, vatRate: 2300 }],
+      );
+    });
+
+    it('passes each cancelled item with its own vatRate for mixed-rate cancellations', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockPaidOrder,
+        invoiceNumber: 'FV/2026/000002',
+        items: [
+          { ...mockOrderItems[0], snapshotVatRate: 2300 },
+          { ...mockOrderItems[1], snapshotVatRate: 500 },
+        ],
+      });
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [
+          { orderItemId: 'item-1', quantity: 1 },
+          { orderItemId: 'item-2', quantity: 1 },
+        ],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-1',
+        'FV/2026/000002',
+        expect.any(Number),
+        'PARTIAL_CANCELLATION',
+        expect.arrayContaining([
+          expect.objectContaining({ priceInCents: 34900, vatRate: 2300 }),
+          expect.objectContaining({ priceInCents: 44900, vatRate: 500 }),
+        ]),
+      );
+    });
+
+    it('does not call processCorrectiveInvoice when the order has no invoiceNumber yet', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).not.toHaveBeenCalled();
     });
   });
 

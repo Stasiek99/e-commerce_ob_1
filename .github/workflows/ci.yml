@@ -10,6 +10,21 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: prisma
+          POSTGRES_PASSWORD: prisma
+          POSTGRES_DB: shadow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U prisma"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +49,14 @@ jobs:
 
       - name: Generate Prisma client
         run: pnpm --filter backend prisma:generate
+
+      - name: Check for pending/uncommitted Prisma migrations
+        run: |
+          pnpm --filter backend exec prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url postgresql://prisma:prisma@localhost:5432/shadow \
+            --exit-code
 
       - name: Build backend
         run: pnpm build:backend

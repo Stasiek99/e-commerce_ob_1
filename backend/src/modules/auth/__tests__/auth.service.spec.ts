@@ -40,38 +40,50 @@ describe('AuthService', () => {
   };
 
   beforeEach(async () => {
+    // $transaction supports both call styles used in auth.service.ts: array-style
+    // (resetPassword, changePassword, verifyEmail) eagerly evaluates its queries when
+    // the array literal is constructed, so the literal [{}, {}] resolution is enough
+    // for those callers. Callback-style (rotateToken, consumeMagicLink) must actually
+    // invoke the callback — routed to this same prismaMock so existing assertions on
+    // e.g. prisma.refreshToken.create continue to work unchanged.
+    const prismaMock: any = {
+      refreshToken: {
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      emailVerificationToken: {
+        updateMany: jest.fn().mockResolvedValue({}),
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      passwordResetToken: {
+        updateMany: jest.fn().mockResolvedValue({}),
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      user: {
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    prismaMock.$transaction = jest.fn().mockImplementation((arg: unknown) =>
+      typeof arg === 'function'
+        ? (arg as (tx: unknown) => Promise<unknown>)(prismaMock)
+        : Promise.resolve([{}, {}]),
+    );
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         {
           provide: PrismaService,
-          useValue: {
-            refreshToken: {
-              create: jest.fn().mockResolvedValue({}),
-              findUnique: jest.fn(),
-              update: jest.fn(),
-              updateMany: jest.fn(),
-              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-            emailVerificationToken: {
-              updateMany: jest.fn().mockResolvedValue({}),
-              create: jest.fn().mockResolvedValue({}),
-              findUnique: jest.fn(),
-              update: jest.fn().mockResolvedValue({}),
-              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-            passwordResetToken: {
-              updateMany: jest.fn().mockResolvedValue({}),
-              create: jest.fn().mockResolvedValue({}),
-              findUnique: jest.fn(),
-              update: jest.fn().mockResolvedValue({}),
-              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-            user: {
-              update: jest.fn().mockResolvedValue({}),
-            },
-            $transaction: jest.fn().mockResolvedValue([{}, {}]),
-          },
+          useValue: prismaMock,
         },
         {
           provide: UsersService,
@@ -284,6 +296,95 @@ describe('AuthService', () => {
         expect(redis.del).not.toHaveBeenCalled();
       });
     });
+
+    // ─── Redis outage safety valve ────────────────────────────────────────────
+    // IORedis with maxRetriesPerRequest: null queues calls forever on outage,
+    // hanging every login until TimeoutInterceptor fires. The fix wraps every
+    // Redis call in try/catch: on error, skip the rate-limit and allow login
+    // to proceed (fail-open). UnauthorizedException from valid lockouts or bad
+    // credentials must still propagate — Redis errors must not suppress them.
+
+    describe('Redis outage safety valve', () => {
+      const redisError = new Error('Redis connection refused');
+
+      it('allows login to succeed when redis.exists() throws during lockout check', async () => {
+        redis.exists.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.del.mockResolvedValue(1);
+
+        const result = await service.login('test@example.com', 'correctpass');
+
+        expect(result).toHaveProperty('accessToken', 'mock-access-token');
+      });
+
+      it('still throws UnauthorizedException for bad password when redis.exists() throws', async () => {
+        redis.exists.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+      });
+
+      it('still throws UnauthorizedException for missing user when redis.incr() throws', async () => {
+        redis.exists.mockResolvedValue(0);
+        redis.incr.mockRejectedValue(redisError);
+        usersService.findByEmail.mockResolvedValue(null);
+
+        await expect(service.login('missing@example.com', 'anypass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+      });
+
+      it('still throws UnauthorizedException for wrong password when redis.incr() throws', async () => {
+        redis.exists.mockResolvedValue(0);
+        redis.incr.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        await expect(service.login('test@example.com', 'wrongpass')).rejects.toThrow(
+          UnauthorizedException,
+        );
+      });
+
+      it('returns token pair when redis.del() throws on successful login', async () => {
+        redis.exists.mockResolvedValue(0);
+        redis.del.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+
+        const result = await service.login('test@example.com', 'correctpass');
+
+        expect(result).toHaveProperty('accessToken', 'mock-access-token');
+      });
+
+      it('re-throws the UnauthorizedException from an active lockout even inside the try/catch', async () => {
+        redis.exists.mockResolvedValue(1); // account is locked
+
+        await expect(service.login('victim@example.com', 'anypass')).rejects.toThrow(
+          'Account temporarily locked',
+        );
+      });
+
+      it('does not call usersService.findByEmail when the lockout check is skipped on Redis error', async () => {
+        redis.exists.mockRejectedValue(redisError);
+
+        const hash = await bcrypt.hash('correctpass', 10);
+        usersService.findByEmail.mockResolvedValue({ ...mockUser, passwordHash: hash } as any);
+        redis.del.mockResolvedValue(1);
+
+        await service.login('test@example.com', 'correctpass');
+
+        // findByEmail is called once for credential resolution, not blocked by Redis error
+        expect(usersService.findByEmail).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   describe('validateRefreshTokenByRaw', () => {
@@ -364,15 +465,15 @@ describe('AuthService', () => {
         expiresAt: new Date(Date.now() + 1000 * 60),
         user: mockUser,
       });
-      prisma.refreshToken.update.mockResolvedValue({});
       prisma.refreshToken.create.mockResolvedValue({});
 
       const result = await service.refresh('user-1', 'valid-raw-token');
 
+      // Atomic guard: revokedAt: null in the WHERE clause — see rotateToken fix.
       // data now includes replacedBy in addition to revokedAt — use objectContaining
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'rt-1' },
+          where: { id: 'rt-1', revokedAt: null },
           data: expect.objectContaining({ revokedAt: expect.any(Date) }),
         }),
       );
@@ -432,10 +533,54 @@ describe('AuthService', () => {
         }),
       );
     });
+
+    // ─── account-hijack guard (fix: block silent OAuth takeover of password accounts) ─
+
+    it('throws ConflictException when Google email matches a password-protected account without a linked googleId', async () => {
+      // An attacker controls a Google account sharing the victim's email.
+      // Before the fix, findOrCreateGoogleUser() would silently link and issue a session.
+      const passwordAccount = { ...mockUser, passwordHash: '$2b$10$hashedpassword', googleId: null };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(passwordAccount as any);
+
+      await expect(
+        service.findOrCreateGoogleUser({ googleId: 'gid-attacker', email: 'test@example.com' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('does not link googleId or issue a session when the hijack guard fires', async () => {
+      const passwordAccount = { ...mockUser, passwordHash: '$2b$10$hashedpassword', googleId: null };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(passwordAccount as any);
+
+      await expect(
+        service.findOrCreateGoogleUser({ googleId: 'gid-attacker', email: 'test@example.com' }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(usersService.update).not.toHaveBeenCalled();
+      expect(usersService.create).not.toHaveBeenCalled();
+    });
+
+    it('links googleId when the existing email account has no password set (passwordless or invite account)', async () => {
+      // passwordHash=null means the account was created without a password
+      // (e.g., invited or via another OAuth provider). Linking is safe.
+      const passwordlessAccount = { ...mockUser, passwordHash: null, googleId: null };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(passwordlessAccount as any);
+      usersService.update.mockResolvedValue({ ...passwordlessAccount, googleId: 'gid-safe' } as any);
+
+      await service.findOrCreateGoogleUser({ googleId: 'gid-safe', email: 'test@example.com' });
+
+      expect(usersService.update).toHaveBeenCalledWith(
+        mockUser.id,
+        expect.objectContaining({ googleId: 'gid-safe', isEmailVerified: true }),
+      );
+    });
   });
 
   describe('logout', () => {
     it('revokes the refresh token by hash', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
       prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
 
       await service.logout('some-raw-token');
@@ -443,6 +588,48 @@ describe('AuthService', () => {
       expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({ data: { revokedAt: expect.any(Date) } }),
       );
+    });
+
+    it('writes the access-token revocation fence to Redis when the refresh token exists in the database', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.logout('some-raw-token');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        900,
+      );
+    });
+
+    it('does not write the revocation fence when the refresh token is not found in the database', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue(null);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.logout('unknown-raw-token');
+
+      expect(redis.set).not.toHaveBeenCalled();
+    });
+
+    it('looks up the refresh token by its SHA-256 hash to obtain the userId before revoking', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.logout('some-raw-token');
+
+      expect(prisma.refreshToken.findUnique).toHaveBeenCalledWith({
+        where: { tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        select: { userId: true },
+      });
+    });
+
+    it('resolves without throwing when called with an unrecognised token', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue(null);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.logout('totally-unknown-token')).resolves.toBeUndefined();
     });
   });
 
@@ -510,9 +697,9 @@ describe('AuthService', () => {
 
       await service.refresh('user-1', 'valid-raw-token');
 
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'rt-1' },
+          where: { id: 'rt-1', revokedAt: null },
           data: expect.objectContaining({
             revokedAt: expect.any(Date),
             replacedBy: expect.stringMatching(/^[a-f0-9]{64}$/), // SHA-256 hex
@@ -581,13 +768,74 @@ describe('AuthService', () => {
 
       const result = await service.refresh('user-1', 'network-drop-raw-token');
 
-      // The replacement token should now be revoked and a fresh one issued
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'rt-replacement' } }),
+      // The replacement token should now be revoked (atomic guard) and a fresh one issued
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'rt-replacement', revokedAt: null } }),
       );
       expect(result).toHaveProperty('accessToken', 'mock-access-token');
       expect(result).toHaveProperty('refreshToken');
       expect(typeof result.refreshToken).toBe('string');
+    });
+
+    // ─── concurrent-tab double-rotation guard (fix) ──────────────────────────
+    // Two browser tabs can both receive a 401 and both retry refresh() with the
+    // same stale raw token within the grace window. Before the fix, rotateToken()
+    // used a plain `update` with no WHERE guard, so both concurrent calls could
+    // each successfully rotate the same "replacement" token — splitting the
+    // family into two divergent child chains and defeating reuse detection.
+    // The atomic `updateMany({ where: { id, revokedAt: null } })` guard ensures
+    // only the first racer wins; the second must see a clean rejection.
+
+    it('throws UnauthorizedException when a concurrent request already rotated the replacement token (lost the race)', async () => {
+      const replacementToken = {
+        id: 'rt-replacement',
+        userId: 'user-1',
+        family: 'family-abc',
+        replacedBy: null,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      };
+
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(Date.now() - 5_000),
+          replacedBy: 'replacement-hash-abc',
+        })
+        .mockResolvedValueOnce(replacementToken);
+      // Simulates the second concurrent tab losing the atomic race: the first
+      // request already flipped revokedAt, so this updateMany matches 0 rows.
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.refresh('user-1', 'network-drop-raw-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('does not create a new token when the atomic rotation guard loses the race', async () => {
+      const replacementToken = {
+        id: 'rt-replacement',
+        userId: 'user-1',
+        family: 'family-abc',
+        replacedBy: null,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      };
+
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(Date.now() - 5_000),
+          replacedBy: 'replacement-hash-abc',
+        })
+        .mockResolvedValueOnce(replacementToken);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.refresh('user-1', 'network-drop-raw-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
     });
 
     it('falls back to theft detection when the replacement is already revoked during the grace window', async () => {
@@ -728,12 +976,43 @@ describe('AuthService', () => {
         userId: 'user-1',
         usedAt: null,
         expiresAt: new Date(Date.now() + 60_000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
         user: { ...mockUser, isEmailVerified: true },
       });
 
       await service.verifyEmail('already-verified-token');
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException for an expired EMAIL_VERIFICATION token even when the account is already verified', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue({
+        id: 'vt-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() - 1000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
+        user: { ...mockUser, isEmailVerified: true },
+      });
+
+      await expect(service.verifyEmail('expired-already-verified-token')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException for a used EMAIL_VERIFICATION token even when the account is already verified', async () => {
+      prisma.emailVerificationToken.findUnique.mockResolvedValue({
+        id: 'vt-1',
+        userId: 'user-1',
+        usedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
+        user: { ...mockUser, isEmailVerified: true },
+      });
+
+      await expect(service.verifyEmail('used-already-verified-token')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws BadRequestException when token does not exist', async () => {
@@ -880,6 +1159,36 @@ describe('AuthService', () => {
       await expect(
         service.requestEmailChange('user-1', 'test@example.com'),
       ).resolves.toBeUndefined();
+    });
+
+    it('writes the access-token revocation fence to Redis so already-issued tokens stop carrying the old email claim', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.stringMatching(/^\d+$/),
+        'EX',
+        900,
+      );
+    });
+
+    it('does not write the revocation fence when the new email is already taken (request rejected before any side effects)', async () => {
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, id: 'other-user' } as any);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await expect(service.requestEmailChange('user-1', 'taken@example.com')).rejects.toThrow(
+        ConflictException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        900,
+      );
     });
   });
 

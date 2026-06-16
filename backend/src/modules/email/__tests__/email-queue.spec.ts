@@ -24,12 +24,17 @@ function makeJob<T>(data: T): Job<T> {
 describe('EmailQueueService', () => {
   let service: EmailQueueService;
   let queueAdd: jest.Mock;
-  let mockPrisma: { user: { findFirst: jest.Mock } };
+  let mockPrisma: { user: { findFirst: jest.Mock; updateMany: jest.Mock } };
 
   beforeEach(async () => {
     queueAdd = jest.fn().mockResolvedValue({ id: 'job-1' });
     // Default: user not found → no suppression → all existing tests unaffected
-    mockPrisma = { user: { findFirst: jest.fn().mockResolvedValue(null) } };
+    mockPrisma = {
+      user: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -452,6 +457,20 @@ describe('EmailQueueService', () => {
       expect(firstJobId).not.toBe(secondJobId);
     });
 
+    it('sets jobId = back_in_stock-{wishlistItemId} to deduplicate concurrent restock triggers', async () => {
+      await service.sendBackInStock({
+        to: 'alice@example.com',
+        firstName: 'Alice',
+        productName: 'Rose Oud',
+        variantLabel: '50ml',
+        productUrl: 'https://store.pl/products/rose-oud',
+        wishlistItemId: 'wl-uuid-1234',
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('back_in_stock-wl-uuid-1234');
+    });
+
     it('does NOT set jobId for email_verification (user-level, no dedup risk)', async () => {
       await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
 
@@ -493,16 +512,10 @@ describe('EmailQueueService', () => {
   // blacklist the domain, silently killing all transactional email delivery.
 
   describe('bounce suppression gate', () => {
-    it('suppresses enqueue and does not call queue.add when recipient has emailBounced=true', async () => {
+    it('suppresses enqueue and does not call queue.add for a non-order email when recipient has emailBounced=true', async () => {
       mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true });
 
-      await service.sendOrderConfirmation({
-        to: 'bounced@example.com',
-        orderNumber: 'ORD-1',
-        firstName: 'Jan',
-        items: [],
-        totalInCents: 9999,
-      });
+      await service.sendMagicLink({ to: 'bounced@example.com', firstName: 'Jan', magicUrl: 'https://x' });
 
       expect(queueAdd).not.toHaveBeenCalled();
     });
@@ -535,14 +548,14 @@ describe('EmailQueueService', () => {
       expect(queueAdd).toHaveBeenCalledTimes(1);
     });
 
-    it('suppression applies to all job types — verified with sendPaymentConfirmed', async () => {
+    it('suppression applies to non-order job types — verified with sendReviewRequest', async () => {
       mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true });
 
-      await service.sendPaymentConfirmed({
+      await service.sendReviewRequest({
         to: 'bounced@example.com',
-        orderNumber: 'ORD-4',
         firstName: 'Jan',
-        totalInCents: 5000,
+        orderNumber: 'ORD-4',
+        products: [],
       });
 
       expect(queueAdd).not.toHaveBeenCalled();
@@ -559,13 +572,104 @@ describe('EmailQueueService', () => {
       );
     });
 
-    it('selects emailBounced and emailComplained fields — avoids pulling full user row', async () => {
+    it('selects emailBounced, emailBouncedAt and emailComplained fields — avoids pulling full user row', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
 
       await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
 
       const [callArg] = mockPrisma.user.findFirst.mock.calls[0];
-      expect(callArg.select).toEqual({ emailBounced: true, emailComplained: true });
+      expect(callArg.select).toEqual({ emailBounced: true, emailBouncedAt: true, emailComplained: true });
+    });
+  });
+
+  // ── transactional order emails bypass bounce suppression ───────────────────
+  // Invariant: UoK Art. 21 requires order confirmation/payment/shipping emails
+  // to reach the customer on a durable medium even with a hard bounce on
+  // record — only non-order emails (e.g. marketing-adjacent) stay suppressed.
+
+  describe('transactional order emails bypass bounce suppression', () => {
+    it('still enqueues sendOrderConfirmation despite a fresh hard bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: new Date() });
+
+      await service.sendOrderConfirmation({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('still enqueues sendShippingNotification despite a fresh hard bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: new Date() });
+
+      await service.sendShippingNotification({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        carrier: 'InPost',
+        trackingNumber: 'INP123',
+      });
+
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('still suppresses non-order emails (e.g. magic_link_login) on a fresh hard bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: new Date() });
+
+      await service.sendMagicLink({ to: 'bounced@example.com', firstName: 'Jan', magicUrl: 'https://x' });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('a transactional order email bypassing suppression is still blocked by a spam complaint', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailComplained: true,
+      });
+
+      await service.sendOrderConfirmation({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── 30-day bounce auto-reset ────────────────────────────────────────────────
+  // Invariant: a hard bounce older than 30 days is treated as stale (inbox may
+  // have recovered) and is cleared so delivery resumes for every email type —
+  // a permanent bounce flag would otherwise silence a customer forever.
+
+  describe('30-day bounce auto-reset', () => {
+    it('clears the bounce flag and enqueues normally when emailBouncedAt is older than 30 days', async () => {
+      const staleDate = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: staleDate });
+
+      await service.sendMagicLink({ to: 'recovered@example.com', firstName: 'Jan', magicUrl: 'https://x' });
+
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
+        where: { email: 'recovered@example.com' },
+        data: { emailBounced: false, emailBouncedAt: null, emailBouncedReason: null },
+      });
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps suppressing a non-order email when emailBouncedAt is within 30 days', async () => {
+      const recentDate = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: recentDate });
+
+      await service.sendMagicLink({ to: 'still-bounced@example.com', firstName: 'Jan', magicUrl: 'https://x' });
+
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
+      expect(queueAdd).not.toHaveBeenCalled();
     });
   });
 
@@ -671,7 +775,7 @@ describe('EmailQueueProcessor', () => {
         {
           provide: PrismaService,
           useValue: {
-            wishlistItem: { update: jest.fn().mockResolvedValue({}) },
+            wishlistItem: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           },
         },
       ],
@@ -1283,14 +1387,16 @@ describe('EmailQueueProcessor', () => {
     });
   });
 
-  // ── graceful shutdown (SIGTERM drain) ─────────────────────────────────────────
-  // Invariant: onApplicationShutdown must drain the BullMQ worker before the
-  // process exits. Without worker.close(true), a mid-flight job is interrupted:
-  //   • new container starts within lockDuration → job re-queued → duplicate email
-  //   • new container starts after lock expires  → job dropped  → no confirmation
-  // The `true` argument is the drain flag — it blocks until the active job finishes.
+  // ── graceful shutdown (SIGTERM window) ────────────────────────────────────────
+  // Invariant: onApplicationShutdown must close the BullMQ worker without forcing
+  // it to wait for the active job to finish. Railway's SIGTERM→SIGKILL window is
+  // ~10s, shorter than some jobs (e.g. PDF invoice generation). force=true would
+  // block until the job finishes and get SIGKILLed mid-job, leaving it stalled —
+  // BullMQ re-queues a stalled job on next boot, which would resend the email if
+  // it lacked a deterministic jobId. force=false lets the process exit promptly
+  // and relies on that same dedup-by-jobId for safety on restart.
 
-  describe('onApplicationShutdown — graceful BullMQ drain', () => {
+  describe('onApplicationShutdown — non-blocking BullMQ close', () => {
     function stubWorker(processor: EmailQueueProcessor, close: jest.Mock) {
       Object.defineProperty(processor, 'worker', {
         get: () => ({ close }),
@@ -1298,13 +1404,13 @@ describe('EmailQueueProcessor', () => {
       });
     }
 
-    it('calls worker.close with drain=true on shutdown', async () => {
+    it('calls worker.close with force=false on shutdown', async () => {
       const mockWorkerClose = jest.fn().mockResolvedValue(undefined);
       stubWorker(processor, mockWorkerClose);
 
       await processor.onApplicationShutdown();
 
-      expect(mockWorkerClose).toHaveBeenCalledWith(true);
+      expect(mockWorkerClose).toHaveBeenCalledWith(false);
     });
 
     it('calls worker.close exactly once — no double-drain', async () => {
@@ -1316,16 +1422,16 @@ describe('EmailQueueProcessor', () => {
       expect(mockWorkerClose).toHaveBeenCalledTimes(1);
     });
 
-    it('awaits worker.close — does not return before drain completes', async () => {
-      let drainResolved = false;
+    it('awaits worker.close — does not return before close completes', async () => {
+      let closeResolved = false;
       const mockWorkerClose = jest.fn().mockImplementation(
-        () => new Promise<void>((resolve) => setTimeout(() => { drainResolved = true; resolve(); }, 10)),
+        () => new Promise<void>((resolve) => setTimeout(() => { closeResolved = true; resolve(); }, 10)),
       );
       stubWorker(processor, mockWorkerClose);
 
       await processor.onApplicationShutdown();
 
-      expect(drainResolved).toBe(true);
+      expect(closeResolved).toBe(true);
     });
 
     it('propagates worker.close rejection so the process exits with an error signal', async () => {

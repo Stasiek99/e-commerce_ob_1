@@ -442,6 +442,43 @@ describe('UsersService', () => {
     });
   });
 
+  // ─── update — marketingConsentAt timestamp (GDPR Art. 7(1) proof of consent) ──
+
+  describe('update', () => {
+    it('sets marketingConsentAt when marketingConsent: true is included in the payload', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', marketingConsent: true });
+
+      await service.update('user-1', { marketingConsent: true });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { marketingConsent: true, marketingConsentAt: expect.any(Date) },
+      });
+    });
+
+    it('sets marketingConsentAt when marketingConsent: false is included in the payload', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', marketingConsent: false });
+
+      await service.update('user-1', { marketingConsent: false });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { marketingConsent: false, marketingConsentAt: expect.any(Date) },
+      });
+    });
+
+    it('does not set marketingConsentAt when marketingConsent is absent from the payload', async () => {
+      prisma.user.update.mockResolvedValue({ id: 'user-1', firstName: 'Jan' });
+
+      await service.update('user-1', { firstName: 'Jan' });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { firstName: 'Jan' },
+      });
+    });
+  });
+
   describe('recordConsent', () => {
     it('updates analyticsConsent and analyticsConsentAt for the given user', async () => {
       prisma.user.update.mockResolvedValue({ id: 'user-1', analyticsConsent: true });

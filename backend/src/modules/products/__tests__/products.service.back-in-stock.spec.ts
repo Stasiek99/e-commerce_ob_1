@@ -58,6 +58,12 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
     publish: jest.fn().mockResolvedValue(0),
   };
 
+  const mockSseSubscriber = {
+    on: jest.fn(),
+    subscribe: jest.fn().mockResolvedValue(undefined),
+    quit: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     const module = await Test.createTestingModule({
       providers: [
@@ -67,6 +73,7 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('http://localhost:4200') } },
         { provide: StorageService, useValue: {} },
         { provide: 'REDIS_CLIENT', useValue: mockRedis },
+        { provide: 'STOCK_SSE_REDIS_SUBSCRIBER', useValue: mockSseSubscriber },
       ],
     }).compile();
 

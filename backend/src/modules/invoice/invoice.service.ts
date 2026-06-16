@@ -7,6 +7,22 @@ import { StorageService } from '../storage/storage.service';
 
 const FONTS_DIR = path.join(__dirname, 'fonts');
 
+export interface CorrectiveInvoiceItem {
+  quantity: number;
+  priceInCents: number; // per-unit price actually refunded (post-discount)
+  vatRate: number; // basis points — 2300 = 23%, 500 = 5%, 0 = exempt
+}
+
+interface CorrectiveVatBreakdownRow {
+  rate: number; // fraction, e.g. 0.23
+  originalNetCents: number;
+  originalVatCents: number;
+  correctedNetCents: number;
+  correctedVatCents: number;
+  deltaNetCents: number;
+  deltaVatCents: number;
+}
+
 export interface InvoiceOrder {
   id: string;
   orderNumber: string;
@@ -55,6 +71,11 @@ export class InvoiceService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    if (this.config.get<string>('NODE_ENV') === 'production' && !this.sellerNip) {
+      throw new Error(
+        'SELLER_NIP is required in production — Polish VAT invoices cannot be issued without the seller NIP (Art. 106e ust. 1 pkt 4 Ustawy o VAT)',
+      );
+    }
     const year = new Date().getFullYear();
     await this.ensureSequence(year);
   }
@@ -97,56 +118,69 @@ export class InvoiceService implements OnModuleInit {
       throw new Error(`Invalid invoice year: ${year}`);
     }
 
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        const rows = await tx.$queryRawUnsafe<
-          Array<{ invoice_storage_path: string | null; invoice_number: string | null }>
-        >(
-          `SELECT invoice_storage_path, invoice_number FROM orders WHERE id = $1 FOR UPDATE`,
-          order.id,
-        );
+    // TX1 — short lock: check idempotency and reserve the invoice number.
+    // Lock-hold time is microseconds; PDF generation and upload happen outside.
+    const reserved = await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ invoice_storage_path: string | null; invoice_number: string | null }>
+      >(
+        `SELECT invoice_storage_path, invoice_number FROM orders WHERE id = $1 FOR UPDATE`,
+        order.id,
+      );
 
-        if (rows[0]?.invoice_storage_path && rows[0]?.invoice_number) {
-          return {
-            storagePath: rows[0].invoice_storage_path,
-            invoiceNumber: rows[0].invoice_number,
-            pdf: null as Buffer | null,
-          };
-        }
+      if (rows[0]?.invoice_storage_path && rows[0]?.invoice_number) {
+        return {
+          invoiceNumber: rows[0].invoice_number,
+          storagePath: rows[0].invoice_storage_path as string,
+          alreadyDone: true as const,
+        };
+      }
 
-        await tx.$executeRawUnsafe(
-          `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
-        );
-        const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
-          `SELECT nextval('invoice_number_seq_${year}')`,
-        );
-        const seq = Number(seqRows[0].nextval);
-        const invoiceNumber = `FV/${year}/${seq.toString().padStart(6, '0')}`;
+      // invoice_number may already be set if a previous attempt was interrupted
+      // after TX1 but before TX2 — re-use it to avoid a gap in the legal sequence.
+      if (rows[0]?.invoice_number) {
+        return { invoiceNumber: rows[0].invoice_number, storagePath: null, alreadyDone: false as const };
+      }
 
-        const pdf = await this.generatePdf(order, invoiceNumber);
-        const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
-        const storagePath = await this.storage.uploadInvoice(pdf, filename);
+      await tx.$executeRawUnsafe(
+        `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq_${year} START 1 INCREMENT 1`,
+      );
+      const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+        `SELECT nextval('invoice_number_seq_${year}')`,
+      );
+      const invoiceNumber = `FV/${year}/${Number(seqRows[0].nextval).toString().padStart(6, '0')}`;
 
-        await tx.order.update({
-          where: { id: order.id },
-          data: { invoiceStoragePath: storagePath, invoiceNumber },
-        });
+      // Persist the reserved number so concurrent callers see it and skip TX1
+      await tx.order.update({ where: { id: order.id }, data: { invoiceNumber } });
 
-        this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
-        return { storagePath, invoiceNumber, pdf };
-      },
-      { timeout: 30_000 },
-    );
+      return { invoiceNumber, storagePath: null, alreadyDone: false as const };
+    });
+
+    if (reserved.alreadyDone) {
+      const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+      const url = await this.storage.getInvoiceSignedUrl(reserved.storagePath, SEVEN_DAYS_SECONDS);
+      return { url, storagePath: reserved.storagePath, pdf: Buffer.alloc(0), invoiceNumber: reserved.invoiceNumber };
+    }
+
+    // Outside any transaction: generate PDF and upload to Supabase.
+    // No Postgres connection is held during this I/O, eliminating the lock that
+    // could exhaust pgBouncer under concurrent invoice generation.
+    const { invoiceNumber } = reserved;
+    const pdf = await this.generatePdf(order, invoiceNumber);
+    const filename = `${invoiceNumber.replace(/\//g, '-')}.pdf`;
+    const storagePath = await this.storage.uploadInvoice(pdf, filename);
+
+    // TX2 — short write: persist the storage path now that upload succeeded
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { invoiceStoragePath: storagePath },
+    });
+
+    this.logger.log(`Invoice ${invoiceNumber} generated for order ${order.orderNumber}: ${storagePath}`);
 
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
-    const url = await this.storage.getInvoiceSignedUrl(result.storagePath, SEVEN_DAYS_SECONDS);
-
-    return {
-      url,
-      storagePath: result.storagePath,
-      pdf: result.pdf ?? Buffer.alloc(0),
-      invoiceNumber: result.invoiceNumber,
-    };
+    const url = await this.storage.getInvoiceSignedUrl(storagePath, SEVEN_DAYS_SECONDS);
+    return { url, storagePath, pdf, invoiceNumber };
   }
 
   async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
@@ -157,13 +191,75 @@ export class InvoiceService implements OnModuleInit {
    * Generates and persists a corrective invoice (faktura korygująca) per
    * Art. 106j Ustawy o VAT. Called after each successful partial refund.
    * Uses its own sequential series (FK/YYYY/NNNNNN).
+   *
+   * A SELECT FOR UPDATE lock on the order row ensures idempotency against
+   * BullMQ retries: only one caller can allocate the sequence and insert the
+   * InvoiceCorrection row; a retry sees the existing row and returns early,
+   * preventing gaps in the FK/YYYY/NNNNNN series (Art. 106e ust. 1 pkt 2
+   * Ustawy o VAT). The composite unique index on (orderId, correctedAmountInCents)
+   * is the DB-level backstop if two callers race past the application check.
    */
   async processCorrectiveInvoice(
     orderId: string,
     originalInvoiceNumber: string,
     refundAmountInCents: number,
     reasonCode: string,
+    cancelledItems: CorrectiveInvoiceItem[] = [],
   ): Promise<{ correctiveUrl: string; correctiveStoragePath: string; correctiveInvoiceNumber: string }> {
+    const correctedAmountInCents = -Math.abs(refundAmountInCents);
+    const year = new Date().getFullYear();
+
+    // TX1 — short lock: check idempotency and reserve the corrective invoice number.
+    // Lock-hold time is microseconds; PDF generation and upload happen outside.
+    const reserved = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, orderId);
+
+      const existing = await tx.invoiceCorrection.findFirst({
+        where: { orderId, correctedAmountInCents },
+        select: { correctiveInvoiceNumber: true, correctiveStoragePath: true },
+      });
+
+      if (existing?.correctiveStoragePath) {
+        return {
+          correctiveInvoiceNumber: existing.correctiveInvoiceNumber,
+          correctiveStoragePath: existing.correctiveStoragePath,
+          alreadyDone: true as const,
+        };
+      }
+
+      if (existing) {
+        // Number reserved but upload failed on a prior attempt — re-use to avoid gap
+        return {
+          correctiveInvoiceNumber: existing.correctiveInvoiceNumber,
+          correctiveStoragePath: null,
+          alreadyDone: false as const,
+        };
+      }
+
+      await tx.$executeRawUnsafe(
+        `CREATE SEQUENCE IF NOT EXISTS corrective_invoice_number_seq_${year} START 1 INCREMENT 1`,
+      );
+      const seqRows = await tx.$queryRawUnsafe<Array<{ nextval: bigint }>>(
+        `SELECT nextval('corrective_invoice_number_seq_${year}')`,
+      );
+      const correctiveInvoiceNumber = `FK/${year}/${Number(seqRows[0].nextval).toString().padStart(6, '0')}`;
+
+      // Insert with null storage path to reserve the number before the upload
+      await tx.invoiceCorrection.create({
+        data: { orderId, correctiveInvoiceNumber, correctedAmountInCents, refundReasonCode: reasonCode },
+      });
+
+      return { correctiveInvoiceNumber, correctiveStoragePath: null, alreadyDone: false as const };
+    });
+
+    if (reserved.alreadyDone) {
+      const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
+      const correctiveUrl = await this.storage.getInvoiceSignedUrl(reserved.correctiveStoragePath, SEVEN_DAYS_SECONDS);
+      return { correctiveUrl, correctiveStoragePath: reserved.correctiveStoragePath, correctiveInvoiceNumber: reserved.correctiveInvoiceNumber };
+    }
+
+    // Outside any transaction: fetch order data, generate PDF and upload.
+    // No Postgres connection is held during this I/O.
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
       select: {
@@ -177,45 +273,35 @@ export class InvoiceService implements OnModuleInit {
         snapshotPostalCode: true,
         snapshotCountry: true,
         createdAt: true,
+        items: { select: { snapshotPrice: true, quantity: true, snapshotVatRate: true } },
       },
     });
 
-    const year = new Date().getFullYear();
-    await this.ensureCorrectiveSequence(year);
-    const seqName = `corrective_invoice_number_seq_${year}`;
-    const seqRows = await this.prisma.$queryRawUnsafe<Array<{ nextval: bigint }>>(
-      `SELECT nextval('${seqName}')`,
-    );
-    const seq = Number(seqRows[0].nextval);
-    const correctiveInvoiceNumber = `FK/${year}/${seq.toString().padStart(6, '0')}`;
+    const vatBreakdown = this.buildCorrectiveVatBreakdown(order.items, cancelledItems);
 
     const pdf = await this.generateCorrectivePdf(
       order,
-      correctiveInvoiceNumber,
+      reserved.correctiveInvoiceNumber,
       originalInvoiceNumber,
       refundAmountInCents,
+      vatBreakdown,
     );
-    const filename = `${correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
+    const filename = `${reserved.correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
     const correctiveStoragePath = await this.storage.uploadInvoice(pdf, filename);
 
-    await this.prisma.invoiceCorrection.create({
-      data: {
-        orderId,
-        correctiveInvoiceNumber,
-        correctiveStoragePath,
-        correctedAmountInCents: -Math.abs(refundAmountInCents),
-        refundReasonCode: reasonCode,
-      },
+    // TX2 — short write: persist the storage path now that upload succeeded
+    await this.prisma.invoiceCorrection.update({
+      where: { orderId_correctedAmountInCents: { orderId, correctedAmountInCents } },
+      data: { correctiveStoragePath },
     });
 
     this.logger.log(
-      `Corrective invoice ${correctiveInvoiceNumber} generated for order ${order.orderNumber} (refund: ${refundAmountInCents} gr)`,
+      `Corrective invoice ${reserved.correctiveInvoiceNumber} generated for order ${order.orderNumber} (refund: ${refundAmountInCents} gr)`,
     );
 
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
     const correctiveUrl = await this.storage.getInvoiceSignedUrl(correctiveStoragePath, SEVEN_DAYS_SECONDS);
-
-    return { correctiveUrl, correctiveStoragePath, correctiveInvoiceNumber };
+    return { correctiveUrl, correctiveStoragePath, correctiveInvoiceNumber: reserved.correctiveInvoiceNumber };
   }
 
   async getCorrectiveInvoiceUrl(orderId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string } | null> {
@@ -224,9 +310,57 @@ export class InvoiceService implements OnModuleInit {
       orderBy: { createdAt: 'desc' },
       select: { correctiveStoragePath: true, correctiveInvoiceNumber: true },
     });
-    if (!correction) return null;
+    if (!correction || !correction.correctiveStoragePath) return null;
     const correctiveInvoiceUrl = await this.storage.getInvoiceSignedUrl(correction.correctiveStoragePath);
     return { correctiveInvoiceUrl, correctiveInvoiceNumber: correction.correctiveInvoiceNumber };
+  }
+
+  /**
+   * Groups the original order items and the items being cancelled in this
+   * correction by VAT rate, so the corrective invoice can show, per rate,
+   * the taxable base before and after the correction plus the net/VAT delta
+   * — required by Art. 106j ust. 2 Ustawy o VAT. Rates untouched by this
+   * correction (no cancelled items) are omitted from the breakdown.
+   */
+  private buildCorrectiveVatBreakdown(
+    originalItems: Array<{ snapshotPrice: number; quantity: number; snapshotVatRate: number }>,
+    cancelledItems: CorrectiveInvoiceItem[],
+  ): CorrectiveVatBreakdownRow[] {
+    const byRate = new Map<number, { originalGross: number; deltaGross: number }>();
+
+    for (const item of originalItems) {
+      const rate = item.snapshotVatRate / 10000;
+      const bucket = byRate.get(rate) ?? { originalGross: 0, deltaGross: 0 };
+      bucket.originalGross += item.snapshotPrice * item.quantity;
+      byRate.set(rate, bucket);
+    }
+
+    for (const item of cancelledItems) {
+      const rate = item.vatRate / 10000;
+      const bucket = byRate.get(rate) ?? { originalGross: 0, deltaGross: 0 };
+      bucket.deltaGross += item.priceInCents * item.quantity;
+      byRate.set(rate, bucket);
+    }
+
+    return Array.from(byRate.entries())
+      .filter(([, bucket]) => bucket.deltaGross !== 0)
+      .sort(([a], [b]) => b - a)
+      .map(([rate, bucket]) => {
+        const originalNetCents = Math.round(bucket.originalGross / (1 + rate));
+        const originalVatCents = bucket.originalGross - originalNetCents;
+        const correctedGross = bucket.originalGross - bucket.deltaGross;
+        const correctedNetCents = Math.round(correctedGross / (1 + rate));
+        const correctedVatCents = correctedGross - correctedNetCents;
+        return {
+          rate,
+          originalNetCents,
+          originalVatCents,
+          correctedNetCents,
+          correctedVatCents,
+          deltaNetCents: correctedNetCents - originalNetCents,
+          deltaVatCents: correctedVatCents - originalVatCents,
+        };
+      });
   }
 
   private generateCorrectivePdf(
@@ -245,6 +379,7 @@ export class InvoiceService implements OnModuleInit {
     correctiveNumber: string,
     originalInvoiceNumber: string,
     refundAmountInCents: number,
+    vatBreakdown: CorrectiveVatBreakdownRow[],
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({
@@ -262,7 +397,7 @@ export class InvoiceService implements OnModuleInit {
       doc.registerFont('Inter-Bold', path.join(FONTS_DIR, 'Inter-Bold.ttf'));
       doc.font('Inter');
 
-      this.renderCorrective(doc, order, correctiveNumber, originalInvoiceNumber, refundAmountInCents);
+      this.renderCorrective(doc, order, correctiveNumber, originalInvoiceNumber, refundAmountInCents, vatBreakdown);
       doc.end();
     });
   }
@@ -284,6 +419,7 @@ export class InvoiceService implements OnModuleInit {
     correctiveNumber: string,
     originalInvoiceNumber: string,
     refundAmountInCents: number,
+    vatBreakdown: CorrectiveVatBreakdownRow[],
   ) {
     const W = 495;
     const issueDate = this.fmtDate(new Date());
@@ -331,31 +467,77 @@ export class InvoiceService implements OnModuleInit {
     doc.moveDown(3);
 
     // ── Correction table ───────────────────────────────────────────────────
+    // Art. 106j ust. 2 Ustawy o VAT: a corrective invoice must state the
+    // taxable base and tax amount before and after the correction, per VAT
+    // rate. When no per-rate breakdown is available (legacy callers that
+    // don't pass cancelled items), fall back to a single gross correction
+    // line so the invoice is still generated.
     const tableTop = doc.y + 8;
     const ROW_H = 20;
-    const cx = { no: 50, desc: 72, gross: 470 };
-    const cw = { no: 20, desc: 395, gross: 75 };
+    let rowY: number;
 
-    doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
-    doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
-    const th = tableTop + 6;
-    doc.text('Lp.', cx.no, th, { width: cw.no });
-    doc.text('Opis korekty', cx.desc, th, { width: cw.desc });
-    doc.text('Kwota korekty', cx.gross, th, { width: cw.gross, align: 'right' });
+    if (vatBreakdown.length === 0) {
+      const cx = { no: 50, desc: 72, gross: 470 };
+      const cw = { no: 20, desc: 395, gross: 75 };
 
-    doc.fillColor('#000').font('Inter').fontSize(8);
-    const rowY = tableTop + ROW_H;
-    doc.rect(50, rowY, W, ROW_H).fill('#fff').stroke();
-    doc.fillColor('#000');
-    doc.text('1', cx.no, rowY + 6, { width: cw.no });
-    doc.text('Zwrot czesciowy — korekta platnosci (Art. 106j Ustawy o VAT)', cx.desc, rowY + 6, { width: cw.desc });
-    doc.text(this.fmtMoney(-Math.abs(refundAmountInCents)), cx.gross, rowY + 6, { width: cw.gross, align: 'right' });
+      doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
+      doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
+      const th = tableTop + 6;
+      doc.text('Lp.', cx.no, th, { width: cw.no });
+      doc.text('Opis korekty', cx.desc, th, { width: cw.desc });
+      doc.text('Kwota korekty', cx.gross, th, { width: cw.gross, align: 'right' });
+
+      doc.fillColor('#000').font('Inter').fontSize(8);
+      rowY = tableTop + ROW_H;
+      doc.rect(50, rowY, W, ROW_H).fill('#fff').stroke();
+      doc.fillColor('#000');
+      doc.text('1', cx.no, rowY + 6, { width: cw.no });
+      doc.text('Zwrot czesciowy — korekta platnosci (Art. 106j Ustawy o VAT)', cx.desc, rowY + 6, { width: cw.desc });
+      doc.text(this.fmtMoney(-Math.abs(refundAmountInCents)), cx.gross, rowY + 6, { width: cw.gross, align: 'right' });
+      rowY += ROW_H;
+    } else {
+      const cx = { label: 50, before: 230, after: 340, delta: 450 };
+      const cw = { label: 180, before: 110, after: 110, delta: 95 };
+
+      doc.rect(50, tableTop, W, ROW_H).fill('#1a1a1a').stroke();
+      doc.fillColor('#fff').fontSize(7).font('Inter-Bold');
+      const th = tableTop + 6;
+      doc.text('Pozycja korekty', cx.label, th, { width: cw.label });
+      doc.text('Przed korekta', cx.before, th, { width: cw.before, align: 'right' });
+      doc.text('Po korekcie', cx.after, th, { width: cw.after, align: 'right' });
+      doc.text('Korekta', cx.delta, th, { width: cw.delta, align: 'right' });
+
+      doc.font('Inter').fontSize(8);
+      rowY = tableTop + ROW_H;
+      let rowIdx = 0;
+      for (const row of vatBreakdown) {
+        const rateLabel = row.rate === 0 ? 'zw.' : `${Math.round(row.rate * 100)}%`;
+
+        doc.rect(50, rowY, W, ROW_H).fill(rowIdx % 2 === 0 ? '#fff' : '#f9f9f9').stroke();
+        doc.fillColor('#000');
+        doc.text(`Stawka ${rateLabel} — podstawa netto`, cx.label, rowY + 6, { width: cw.label });
+        doc.text(this.fmtMoney(row.originalNetCents), cx.before, rowY + 6, { width: cw.before, align: 'right' });
+        doc.text(this.fmtMoney(row.correctedNetCents), cx.after, rowY + 6, { width: cw.after, align: 'right' });
+        doc.text(this.fmtMoney(row.deltaNetCents), cx.delta, rowY + 6, { width: cw.delta, align: 'right' });
+        rowY += ROW_H;
+        rowIdx += 1;
+
+        doc.rect(50, rowY, W, ROW_H).fill(rowIdx % 2 === 0 ? '#fff' : '#f9f9f9').stroke();
+        doc.fillColor('#000');
+        doc.text(`Stawka ${rateLabel} — VAT`, cx.label, rowY + 6, { width: cw.label });
+        doc.text(this.fmtMoney(row.originalVatCents), cx.before, rowY + 6, { width: cw.before, align: 'right' });
+        doc.text(this.fmtMoney(row.correctedVatCents), cx.after, rowY + 6, { width: cw.after, align: 'right' });
+        doc.text(this.fmtMoney(row.deltaVatCents), cx.delta, rowY + 6, { width: cw.delta, align: 'right' });
+        rowY += ROW_H;
+        rowIdx += 1;
+      }
+    }
 
     // ── Totals ─────────────────────────────────────────────────────────────
     const sumX = 340;
     const sumLabelW = 120;
     const sumValueW = 85;
-    let y = rowY + ROW_H + 14;
+    let y = rowY + 14;
 
     doc.moveTo(sumX, y).lineTo(sumX + sumLabelW + sumValueW, y).lineWidth(0.5).stroke();
     y += 6;
