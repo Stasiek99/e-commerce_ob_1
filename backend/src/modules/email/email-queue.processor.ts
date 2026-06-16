@@ -44,7 +44,13 @@ export class EmailQueueProcessor extends WorkerHost implements OnApplicationBoot
   }
 
   async onApplicationShutdown(): Promise<void> {
-    await this.worker.close(true);
+    // force=false: Railway's SIGTERM→SIGKILL window (~10s) is shorter than some
+    // jobs (e.g. PDF invoice generation). force=true blocks until the active job
+    // finishes and gets SIGKILLed mid-job instead, leaving it stalled — BullMQ then
+    // re-queues it on the next boot and the customer gets a duplicate email. Every
+    // customer-facing job type carries a deterministic jobId (see deriveJobId in
+    // EmailQueueService), so a stalled-job re-add is a no-op rather than a resend.
+    await this.worker.close(false);
   }
 
   async process(job: Job<EmailJobData>): Promise<void> {
