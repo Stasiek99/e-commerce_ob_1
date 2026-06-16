@@ -244,15 +244,24 @@ export class AuthService {
     const newHash = createHash('sha256').update(rawNew).digest('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await this.prisma.$transaction([
-      this.prisma.refreshToken.update({
-        where: { id: token.id },
+    await this.prisma.$transaction(async (tx) => {
+      // Atomic guard: revokedAt: null in the WHERE clause ensures only the
+      // first concurrent caller can rotate this exact token. Without it, two
+      // requests racing on the same stale token (e.g. two browser tabs both
+      // retrying after a dropped refresh within the grace window) could each
+      // successfully rotate it, splitting the family into two divergent
+      // child chains and silently defeating reuse detection.
+      const result = await tx.refreshToken.updateMany({
+        where: { id: token.id, revokedAt: null },
         data: { revokedAt: new Date(), replacedBy: newHash },
-      }),
-      this.prisma.refreshToken.create({
+      });
+      if (result.count === 0) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+      await tx.refreshToken.create({
         data: { tokenHash: newHash, userId: user.id, family, expiresAt },
-      }),
-    ]);
+      });
+    });
 
     const accessToken = this.signAccessToken(user);
     return { accessToken, refreshToken: rawNew };

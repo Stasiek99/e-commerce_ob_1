@@ -40,38 +40,50 @@ describe('AuthService', () => {
   };
 
   beforeEach(async () => {
+    // $transaction supports both call styles used in auth.service.ts: array-style
+    // (resetPassword, changePassword, verifyEmail) eagerly evaluates its queries when
+    // the array literal is constructed, so the literal [{}, {}] resolution is enough
+    // for those callers. Callback-style (rotateToken, consumeMagicLink) must actually
+    // invoke the callback — routed to this same prismaMock so existing assertions on
+    // e.g. prisma.refreshToken.create continue to work unchanged.
+    const prismaMock: any = {
+      refreshToken: {
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      emailVerificationToken: {
+        updateMany: jest.fn().mockResolvedValue({}),
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      passwordResetToken: {
+        updateMany: jest.fn().mockResolvedValue({}),
+        create: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      user: {
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    prismaMock.$transaction = jest.fn().mockImplementation((arg: unknown) =>
+      typeof arg === 'function'
+        ? (arg as (tx: unknown) => Promise<unknown>)(prismaMock)
+        : Promise.resolve([{}, {}]),
+    );
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         {
           provide: PrismaService,
-          useValue: {
-            refreshToken: {
-              create: jest.fn().mockResolvedValue({}),
-              findUnique: jest.fn(),
-              update: jest.fn(),
-              updateMany: jest.fn(),
-              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-            emailVerificationToken: {
-              updateMany: jest.fn().mockResolvedValue({}),
-              create: jest.fn().mockResolvedValue({}),
-              findUnique: jest.fn(),
-              update: jest.fn().mockResolvedValue({}),
-              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-            passwordResetToken: {
-              updateMany: jest.fn().mockResolvedValue({}),
-              create: jest.fn().mockResolvedValue({}),
-              findUnique: jest.fn(),
-              update: jest.fn().mockResolvedValue({}),
-              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            },
-            user: {
-              update: jest.fn().mockResolvedValue({}),
-            },
-            $transaction: jest.fn().mockResolvedValue([{}, {}]),
-          },
+          useValue: prismaMock,
         },
         {
           provide: UsersService,
@@ -453,15 +465,15 @@ describe('AuthService', () => {
         expiresAt: new Date(Date.now() + 1000 * 60),
         user: mockUser,
       });
-      prisma.refreshToken.update.mockResolvedValue({});
       prisma.refreshToken.create.mockResolvedValue({});
 
       const result = await service.refresh('user-1', 'valid-raw-token');
 
+      // Atomic guard: revokedAt: null in the WHERE clause — see rotateToken fix.
       // data now includes replacedBy in addition to revokedAt — use objectContaining
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'rt-1' },
+          where: { id: 'rt-1', revokedAt: null },
           data: expect.objectContaining({ revokedAt: expect.any(Date) }),
         }),
       );
@@ -685,9 +697,9 @@ describe('AuthService', () => {
 
       await service.refresh('user-1', 'valid-raw-token');
 
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'rt-1' },
+          where: { id: 'rt-1', revokedAt: null },
           data: expect.objectContaining({
             revokedAt: expect.any(Date),
             replacedBy: expect.stringMatching(/^[a-f0-9]{64}$/), // SHA-256 hex
@@ -756,13 +768,74 @@ describe('AuthService', () => {
 
       const result = await service.refresh('user-1', 'network-drop-raw-token');
 
-      // The replacement token should now be revoked and a fresh one issued
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'rt-replacement' } }),
+      // The replacement token should now be revoked (atomic guard) and a fresh one issued
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'rt-replacement', revokedAt: null } }),
       );
       expect(result).toHaveProperty('accessToken', 'mock-access-token');
       expect(result).toHaveProperty('refreshToken');
       expect(typeof result.refreshToken).toBe('string');
+    });
+
+    // ─── concurrent-tab double-rotation guard (fix) ──────────────────────────
+    // Two browser tabs can both receive a 401 and both retry refresh() with the
+    // same stale raw token within the grace window. Before the fix, rotateToken()
+    // used a plain `update` with no WHERE guard, so both concurrent calls could
+    // each successfully rotate the same "replacement" token — splitting the
+    // family into two divergent child chains and defeating reuse detection.
+    // The atomic `updateMany({ where: { id, revokedAt: null } })` guard ensures
+    // only the first racer wins; the second must see a clean rejection.
+
+    it('throws UnauthorizedException when a concurrent request already rotated the replacement token (lost the race)', async () => {
+      const replacementToken = {
+        id: 'rt-replacement',
+        userId: 'user-1',
+        family: 'family-abc',
+        replacedBy: null,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      };
+
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(Date.now() - 5_000),
+          replacedBy: 'replacement-hash-abc',
+        })
+        .mockResolvedValueOnce(replacementToken);
+      // Simulates the second concurrent tab losing the atomic race: the first
+      // request already flipped revokedAt, so this updateMany matches 0 rows.
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.refresh('user-1', 'network-drop-raw-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('does not create a new token when the atomic rotation guard loses the race', async () => {
+      const replacementToken = {
+        id: 'rt-replacement',
+        userId: 'user-1',
+        family: 'family-abc',
+        replacedBy: null,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      };
+
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(Date.now() - 5_000),
+          replacedBy: 'replacement-hash-abc',
+        })
+        .mockResolvedValueOnce(replacementToken);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.refresh('user-1', 'network-drop-raw-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
     });
 
     it('falls back to theft detection when the replacement is already revoked during the grace window', async () => {
