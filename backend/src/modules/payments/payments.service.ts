@@ -911,7 +911,7 @@ export class PaymentsService {
    */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, { timeZone: 'Europe/Warsaw' })
   async pruneProcessedStripeEvents() {
-    const acquired = await this.redis.set('cron:prune-stripe-events:lock', '1', 'EX', 82800, 'NX');
+    const acquired = await this.redis.set('cron:prune-stripe-events:lock', '1', 'EX', 82000, 'NX');
     if (!acquired) return;
 
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);

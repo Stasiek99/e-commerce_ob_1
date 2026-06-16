@@ -3633,6 +3633,21 @@ describe('PaymentsService', () => {
 
         expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledTimes(1);
       });
+
+      it('acquires the lock with a TTL under 24h so a missed run can retry within the same calendar day', async () => {
+        redis.set.mockResolvedValue('OK');
+        prisma.processedStripeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+        await service.pruneProcessedStripeEvents();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'cron:prune-stripe-events:lock',
+          '1',
+          'EX',
+          82000,
+          'NX',
+        );
+      });
     });
   });
 
