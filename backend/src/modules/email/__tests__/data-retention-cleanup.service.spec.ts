@@ -16,6 +16,7 @@ describe('DataRetentionCleanupService', () => {
           useValue: {
             outboxMessage: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
             emailLog: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+            consentLog: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
           },
         },
         {
@@ -41,6 +42,7 @@ describe('DataRetentionCleanupService', () => {
 
     expect(prisma.outboxMessage.deleteMany).not.toHaveBeenCalled();
     expect(prisma.emailLog.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.consentLog.deleteMany).not.toHaveBeenCalled();
   });
 
   it('acquires the lock with a TTL under 24h so a missed run can retry within the same calendar day', async () => {
@@ -91,16 +93,43 @@ describe('DataRetentionCleanupService', () => {
     redis.set.mockResolvedValue('OK');
     prisma.outboxMessage.deleteMany.mockResolvedValue({ count: 0 });
     prisma.emailLog.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.consentLog.deleteMany.mockResolvedValue({ count: 0 });
 
     await expect(service.purgeStaleOperationalLogs()).resolves.not.toThrow();
   });
 
-  it('resolves without error when rows are purged from both tables', async () => {
+  it('resolves without error when rows are purged from all tables', async () => {
     redis.set.mockResolvedValue('OK');
     prisma.outboxMessage.deleteMany.mockResolvedValue({ count: 12 });
     prisma.emailLog.deleteMany.mockResolvedValue({ count: 7 });
+    prisma.consentLog.deleteMany.mockResolvedValue({ count: 3 });
 
     await expect(service.purgeStaleOperationalLogs()).resolves.not.toThrow();
+  });
+
+  // ─── consentLog retention ────────────────────────────────────────────────
+
+  it('deletes consent logs whose expiresAt has passed', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-16T00:00:00Z'));
+    redis.set.mockResolvedValue('OK');
+
+    await service.purgeStaleOperationalLogs();
+
+    expect(prisma.consentLog.deleteMany).toHaveBeenCalledWith({
+      where: { expiresAt: { lt: new Date('2026-06-16T00:00:00Z') } },
+    });
+
+    jest.useRealTimers();
+  });
+
+  it('does not delete consent logs that have not yet expired', async () => {
+    redis.set.mockResolvedValue('OK');
+    prisma.consentLog.deleteMany.mockResolvedValue({ count: 0 });
+
+    await service.purgeStaleOperationalLogs();
+
+    const call = prisma.consentLog.deleteMany.mock.calls[0][0];
+    expect(call.where.expiresAt.lt.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   // ─── @Cron timezone configuration ────────────────────────────────────────

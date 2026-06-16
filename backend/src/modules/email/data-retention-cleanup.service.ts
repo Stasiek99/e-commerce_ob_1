@@ -37,5 +37,12 @@ export class DataRetentionCleanupService {
     if (emailLogCount > 0) {
       this.logger.log(`Retention purge: deleted ${emailLogCount} email log(s) older than ${EMAIL_LOG_RETENTION_DAYS} days`);
     }
+
+    const { count: consentLogCount } = await this.prisma.consentLog.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    });
+    if (consentLogCount > 0) {
+      this.logger.log(`Retention purge: deleted ${consentLogCount} expired consent log(s)`);
+    }
   }
 }
