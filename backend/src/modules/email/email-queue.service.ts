@@ -13,6 +13,19 @@ const JOB_OPTIONS = {
   removeOnFail: false,
 } as const;
 
+// UoK Art. 21 requires order confirmation on a durable medium — these must reach
+// the customer even if a (possibly stale) hard bounce is on record.
+const TRANSACTIONAL_ORDER_EMAIL_TYPES = new Set<EmailJobData['type']>([
+  'order_confirmation',
+  'payment_confirmed',
+  'payment_confirmed_with_invoice',
+  'order_cancellation',
+  'shipping_notification',
+  'order_acknowledged',
+]);
+
+const BOUNCE_AUTO_RESET_MS = 30 * 24 * 60 * 60 * 1000;
+
 type Payload<T extends EmailJobData['type']> = Extract<EmailJobData, { type: T }>['payload'];
 
 @Injectable()
@@ -45,11 +58,25 @@ export class EmailQueueService {
     if (to) {
       const user = await this.prisma.user.findFirst({
         where: { email: to },
-        select: { emailBounced: true, emailComplained: true },
+        select: { emailBounced: true, emailBouncedAt: true, emailComplained: true },
       });
       if (user?.emailBounced) {
-        this.logger.warn(`Email job "${name}" suppressed — ${to} has a hard bounce on record`);
-        return;
+        const bounceIsStale =
+          !!user.emailBouncedAt && Date.now() - user.emailBouncedAt.getTime() > BOUNCE_AUTO_RESET_MS;
+        if (bounceIsStale) {
+          await this.prisma.user.updateMany({
+            where: { email: to },
+            data: { emailBounced: false, emailBouncedAt: null, emailBouncedReason: null },
+          });
+          this.logger.log(`Bounce flag auto-reset for ${to} after 30 days — retrying delivery`);
+        } else if (TRANSACTIONAL_ORDER_EMAIL_TYPES.has(data.type)) {
+          this.logger.warn(
+            `Email job "${name}" sent despite hard bounce on record — transactional order email required by law (${to})`,
+          );
+        } else {
+          this.logger.warn(`Email job "${name}" suppressed — ${to} has a hard bounce on record`);
+          return;
+        }
       }
       if (user?.emailComplained) {
         this.logger.warn(`Email job "${name}" suppressed — ${to} has filed a spam complaint`);

@@ -120,6 +120,7 @@ model User {
   analyticsConsentAt DateTime?
   emailBounced       Boolean   @default(false)
   emailBouncedAt     DateTime?
+  emailBouncedReason String?
   emailComplained       Boolean   @default(false)
   emailComplainedAt     DateTime?
   createdAt          DateTime  @default(now())
