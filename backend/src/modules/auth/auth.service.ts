@@ -321,6 +321,12 @@ export class AuthService {
       newEmail,
       verifyUrl,
     });
+
+    // Access tokens already in flight still carry the old email claim. Fence
+    // them off now rather than waiting for verifyEmail() to confirm the
+    // change, so stale-email artifacts (logging, Stripe, audit trail) stop
+    // the moment a change is requested, not when it's confirmed.
+    await this.revokeAccessTokensForUser(userId);
   }
 
   async verifyEmail(rawToken: string): Promise<void> {

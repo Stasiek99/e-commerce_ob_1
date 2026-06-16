@@ -1087,6 +1087,36 @@ describe('AuthService', () => {
         service.requestEmailChange('user-1', 'test@example.com'),
       ).resolves.toBeUndefined();
     });
+
+    it('writes the access-token revocation fence to Redis so already-issued tokens stop carrying the old email claim', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await service.requestEmailChange('user-1', 'new@example.com');
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.stringMatching(/^\d+$/),
+        'EX',
+        900,
+      );
+    });
+
+    it('does not write the revocation fence when the new email is already taken (request rejected before any side effects)', async () => {
+      usersService.findByEmail.mockResolvedValue({ ...mockUser, id: 'other-user' } as any);
+      usersService.findById.mockResolvedValue(mockUser as any);
+
+      await expect(service.requestEmailChange('user-1', 'taken@example.com')).rejects.toThrow(
+        ConflictException,
+      );
+
+      expect(redis.set).not.toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        900,
+      );
+    });
   });
 
   describe('requestPasswordReset', () => {
