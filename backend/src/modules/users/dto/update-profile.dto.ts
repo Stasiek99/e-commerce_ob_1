@@ -8,15 +8,12 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
+import { isValidNipChecksum } from '../../../common/utils/nip-checksum.util';
 
 @ValidatorConstraint({ name: 'nipChecksum', async: false })
 export class NipChecksumConstraint implements ValidatorConstraintInterface {
   validate(nip: string): boolean {
-    if (!nip || !/^\d{10}$/.test(nip)) return false;
-    const weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];
-    const digits = nip.split('').map(Number);
-    const sum = weights.reduce((acc, w, i) => acc + w * digits[i], 0);
-    return sum % 11 === digits[9];
+    return !!nip && isValidNipChecksum(nip);
   }
 
   defaultMessage(): string {

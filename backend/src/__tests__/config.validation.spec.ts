@@ -245,9 +245,14 @@ describe('envValidationSchema — SELLER_NIP production guard', () => {
       expect(hasSellerNipError(error)).toBe(true);
     });
 
-    it('accepts a valid 10-digit NIP in production', () => {
-      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '1234567890' });
+    it('accepts a valid 10-digit NIP with a correct checksum in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '5250007738' });
       expect(hasSellerNipError(error)).toBe(false);
+    });
+
+    it('rejects a 10-digit NIP with an incorrect checksum in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', SELLER_NIP: '1234567890' });
+      expect(hasSellerNipError(error)).toBe(true);
     });
   });
 
