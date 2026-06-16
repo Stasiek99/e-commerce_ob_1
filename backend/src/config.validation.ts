@@ -35,6 +35,13 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_SECRET: Joi.string().min(16).required(),
   JWT_ACCESS_EXPIRES_IN: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  // Dedicated HMAC key for guest order cancel-link tokens (orders.service.ts
+  // cancelByToken / generateOrderToken). Kept separate from JWT_ACCESS_SECRET so
+  // JWT secret rotation doesn't silently invalidate outstanding cancel links
+  // embedded in emails and Stripe redirect URLs, and so a leaked cancel token
+  // cannot be used to forge access JWTs. Generate with:
+  //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  ORDER_CANCEL_SECRET: requiredInProd(Joi.string().min(32), 'dev-order-cancel-secret'),
 
   // ── Google OAuth (always required) ──
   GOOGLE_CLIENT_ID: Joi.string().required(),

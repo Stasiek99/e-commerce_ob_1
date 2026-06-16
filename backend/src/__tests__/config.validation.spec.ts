@@ -273,3 +273,44 @@ describe('envValidationSchema — SELLER_NIP production guard', () => {
     });
   });
 });
+
+// ── ORDER_CANCEL_SECRET production guard ──────────────────────────────────────
+// FIX: guest order cancel tokens previously reused JWT_ACCESS_SECRET as their
+// HMAC key, coupling cancel-link validity to JWT secret rotation and letting a
+// leaked cancel token double as a JWT-forgery key. ORDER_CANCEL_SECRET is now
+// a dedicated, required-in-prod secret (>=32 chars).
+
+const hasOrderCancelSecretError = (error: ReturnType<typeof validate>['error']): boolean =>
+  error?.details.some(
+    (d) => d.context?.key === 'ORDER_CANCEL_SECRET' || d.message.includes('ORDER_CANCEL_SECRET'),
+  ) ?? false;
+
+describe('envValidationSchema — ORDER_CANCEL_SECRET production guard', () => {
+  describe('production environment', () => {
+    it('rejects a missing ORDER_CANCEL_SECRET in production', () => {
+      const { error } = validate({ NODE_ENV: 'production' });
+      expect(hasOrderCancelSecretError(error)).toBe(true);
+    });
+
+    it('rejects an ORDER_CANCEL_SECRET shorter than 32 characters in production', () => {
+      const { error } = validate({ NODE_ENV: 'production', ORDER_CANCEL_SECRET: 'short-secret' });
+      expect(hasOrderCancelSecretError(error)).toBe(true);
+    });
+
+    it('accepts a 32+ character ORDER_CANCEL_SECRET in production', () => {
+      const { error } = validate({
+        NODE_ENV: 'production',
+        ORDER_CANCEL_SECRET: 'a'.repeat(32),
+      });
+      expect(hasOrderCancelSecretError(error)).toBe(false);
+    });
+  });
+
+  describe('development environment', () => {
+    it('applies a dev default when ORDER_CANCEL_SECRET is absent in development', () => {
+      const { error, value } = validate({ NODE_ENV: 'development' });
+      expect(hasOrderCancelSecretError(error)).toBe(false);
+      expect(value.ORDER_CANCEL_SECRET).toBe('dev-order-cancel-secret');
+    });
+  });
+});

@@ -179,7 +179,7 @@ export class PaymentsService {
         currency,
         lineItems,
         successUrl: `${successUrl}?orderId=${order.id}&token=${guestToken}`,
-        cancelUrl: `${cancelUrl}?orderId=${order.id}&guestToken=${generateOrderToken(order.id, order.snapshotEmail, this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'))}`,
+        cancelUrl: `${cancelUrl}?orderId=${order.id}&guestToken=${generateOrderToken(order.id, order.snapshotEmail, this.configService.getOrThrow<string>('ORDER_CANCEL_SECRET'))}`,
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
           couponLabel: order.couponCode ?? undefined,

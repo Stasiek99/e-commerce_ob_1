@@ -441,8 +441,8 @@ export class OrdersService implements OnModuleInit {
     // durable confirmation on a durable medium, even if they close the browser before paying.
     // The payment-confirmed + invoice email is still sent from markSessionPaid() as the second email.
     const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
-    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
-    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, jwtSecret);
+    const cancelSecret = this.configService.get<string>('ORDER_CANCEL_SECRET', '');
+    const cancelToken = generateOrderToken(order.id, order.snapshotEmail, cancelSecret);
     const cancelUrl = `${frontendUrl}/orders/${order.id}/cancel?token=${cancelToken}`;
     this.emailService
       .sendOrderAcknowledgement({
@@ -810,7 +810,7 @@ export class OrdersService implements OnModuleInit {
     });
     if (!order) throw new NotFoundException('Order not found');
 
-    const secret = this.configService.get<string>('JWT_ACCESS_SECRET', '');
+    const secret = this.configService.get<string>('ORDER_CANCEL_SECRET', '');
     if (!verifyOrderToken(token, orderId, order.snapshotEmail, secret)) {
       throw new UnauthorizedException('Invalid cancel token');
     }
