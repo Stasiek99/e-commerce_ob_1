@@ -10,10 +10,12 @@ import {
   IsUUID,
   Matches,
   MaxLength,
+  Validate,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CarrierCode } from '@prisma/client';
+import { NipChecksumConstraint } from '../../users/dto/update-profile.dto';
 
 class NewAddressDto {
   @IsString()
@@ -101,6 +103,7 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   @Matches(/^\d{10}$/, { message: 'NIP must be exactly 10 digits' })
+  @Validate(NipChecksumConstraint)
   nip?: string;
 
   @IsOptional()

@@ -104,3 +104,52 @@ describe('CreateOrderDto — newAddress.country validation', () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 });
+
+// ── CreateOrderDto — nip checksum validation ─────────────────────────────────
+// Guards against a syntactically valid (10-digit) but algorithmically wrong
+// NIP being snapshotted onto the order and printed on the VAT invoice, which
+// would produce a legally defective invoice under Art. 106e ust. 1 pkt 5.
+
+async function getNipErrors(nip: unknown) {
+  const dto = plainToInstance(CreateOrderDto, { ...BASE_PLAIN, nip });
+  const errors = await validate(dto);
+  return errors.filter((e) => e.property === 'nip');
+}
+
+describe('CreateOrderDto — nip checksum validation', () => {
+  it('passes when nip is absent (field is optional)', async () => {
+    const errors = await getNipErrors(undefined);
+
+    expect(errors).toHaveLength(0);
+  });
+
+  it('passes for NIP 1234563218 (valid checksum)', async () => {
+    const errors = await getNipErrors('1234563218');
+
+    expect(errors).toHaveLength(0);
+  });
+
+  it('passes for NIP 5250007738 (valid checksum)', async () => {
+    const errors = await getNipErrors('5250007738');
+
+    expect(errors).toHaveLength(0);
+  });
+
+  it('fails for NIP 1234567890 — 10 digits but wrong checksum', async () => {
+    const errors = await getNipErrors('1234567890');
+
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('fails for NIP 0000000001 — 10 digits but wrong checksum', async () => {
+    const errors = await getNipErrors('0000000001');
+
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('fails for NIP with non-digit characters before checksum can be evaluated', async () => {
+    const errors = await getNipErrors('123456789a');
+
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});
