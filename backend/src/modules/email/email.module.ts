@@ -4,6 +4,7 @@ import { EmailService } from './email.service';
 import { EmailQueueService } from './email-queue.service';
 import { EmailQueueProcessor } from './email-queue.processor';
 import { EmailWebhookController } from './email-webhook.controller';
+import { DataRetentionCleanupService } from './data-retention-cleanup.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { StorageModule } from '../storage/storage.module';
 
@@ -15,7 +16,7 @@ import { StorageModule } from '../storage/storage.module';
     BullModule.registerQueue({ name: 'email-dlq' }),
   ],
   controllers: [EmailWebhookController],
-  providers: [EmailService, EmailQueueService, EmailQueueProcessor],
+  providers: [EmailService, EmailQueueService, EmailQueueProcessor, DataRetentionCleanupService],
   exports: [EmailService, EmailQueueService],
 })
 export class EmailModule {}
