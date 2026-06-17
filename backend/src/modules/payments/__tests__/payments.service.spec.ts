@@ -3252,6 +3252,92 @@ describe('PaymentsService', () => {
     });
   });
 
+  // ── handlePaymentFailure — stock restore respects cancelledQuantity ────────
+  // Invariant: stock restore must credit only the still-active units
+  // (quantity - cancelledQuantity), matching the other three restore sites in
+  // payments.service.ts and orders.service.ts. Without this, an item that was
+  // partially cancelled before payment failed would be double-credited.
+
+  describe('handlePaymentFailure — stock restore respects cancelledQuantity', () => {
+    const buildFailureTx = (capturedState: {
+      stockRestored?: Array<{ id: string; increment: number }>;
+    }) =>
+      async (fn: any) => {
+        capturedState.stockRestored = [];
+        await fn({
+          $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.stockRestored!.push({
+                id: args.where.id,
+                increment: args.data.stock.increment,
+              });
+            }),
+          },
+        });
+      };
+
+    it('restores only the active quantity (quantity - cancelledQuantity) for a partially cancelled item', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        order: {
+          ...mockPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+            { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFailureTx(state));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(state.stockRestored).toEqual(
+        expect.arrayContaining([
+          { id: 'pv-1', increment: 2 },
+          { id: 'pv-2', increment: 2 },
+        ]),
+      );
+    });
+
+    it('does not credit stock for an item that was already fully cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        order: {
+          ...mockPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0
+            { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 }, // activeQty = 1
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFailureTx(state));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(state.stockRestored).toEqual([
+        { id: 'pv-1', increment: 0 },
+        { id: 'pv-2', increment: 1 },
+      ]);
+    });
+
+    it('restores the full quantity when cancelledQuantity is absent (treated as 0)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment); // items: [{ productVariantId: 'pv-1', quantity: 2 }]
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFailureTx(state));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(state.stockRestored).toEqual([{ id: 'pv-1', increment: 2 }]);
+    });
+  });
+
   // ── pruneProcessedStripeEvents ─────────────────────────────────────────
   // Invariant: nightly cron must delete rows older than 7 days so the
   // dedup table does not grow unboundedly and cause Postgres disk exhaustion.

@@ -1539,7 +1539,7 @@ export class PaymentsService {
   private async handlePaymentFailure(
     paymentId: string,
     orderId: string,
-    orderItems: Array<{ productVariantId: string; quantity: number }>,
+    orderItems: Array<{ productVariantId: string; quantity: number; cancelledQuantity: number }>,
     failureReason: string,
     eventId?: string,
     sessionId?: string,
@@ -1584,9 +1584,10 @@ export class PaymentsService {
         });
 
         for (const item of orderItems) {
+          const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
           await tx.productVariant.update({
             where: { id: item.productVariantId },
-            data: { stock: { increment: item.quantity } },
+            data: { stock: { increment: activeQuantity } },
           });
         }
 
