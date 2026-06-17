@@ -931,33 +931,113 @@ export class PaymentsService {
       include: { order: { include: { items: true } } },
     });
 
-    if (stale.length === 0) return;
-    this.logger.log(`Reconciliation: found ${stale.length} stale PENDING payment(s)`);
+    if (stale.length > 0) {
+      this.logger.log(`Reconciliation: found ${stale.length} stale PENDING payment(s)`);
 
-    for (const payment of stale) {
-      try {
-        const session = await this.stripeClient.retrieveCheckoutSession(
-          payment.stripeCheckoutSessionId!,
-        );
-
-        if (session.payment_status === 'paid') {
-          await this.markSessionPaid(session);
-        } else if (session.status === 'expired') {
-          await this.handlePaymentFailure(
-            payment.id,
-            payment.orderId,
-            payment.order.items,
-            'Reconciliation: session expired',
+      for (const payment of stale) {
+        try {
+          const session = await this.stripeClient.retrieveCheckoutSession(
+            payment.stripeCheckoutSessionId!,
           );
+
+          if (session.payment_status === 'paid') {
+            await this.markSessionPaid(session);
+          } else if (session.status === 'expired') {
+            await this.handlePaymentFailure(
+              payment.id,
+              payment.orderId,
+              payment.order.items,
+              'Reconciliation: session expired',
+            );
+          }
+          // status=open means the customer may still complete payment — leave it
+        } catch (err) {
+          this.logger.error(
+            `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
+          );
+          Sentry.withScope((scope) => {
+            scope.setTag('payment.event', 'reconciliation_failed');
+            scope.setContext('payment', { paymentId: payment.id });
+            Sentry.captureException(err);
+          });
         }
-        // status=open means the customer may still complete payment — leave it
-      } catch (err) {
-        this.logger.error(
-          `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
+      }
+    }
+
+    await this.sweepOrphanedPendingOrders();
+  }
+
+  /**
+   * Secondary sweep: catches orders stuck in PENDING_PAYMENT whose payment
+   * attempt failed before any Stripe Checkout Session ID was recorded (e.g.
+   * coupon re-validation or the Stripe API call itself threw on a retry path
+   * that doesn't roll back synchronously). These are invisible to the sweep
+   * above, which can only reconcile against a session ID. Cancels the order
+   * and restores stock + coupon capacity, mirroring the synchronous rollback
+   * already used by OrdersService.createFromCart / retryPayment.
+   */
+  private async sweepOrphanedPendingOrders(): Promise<void> {
+    const orphanCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const orphaned = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.PENDING_PAYMENT,
+        createdAt: { lt: orphanCutoff },
+        OR: [{ payment: { is: null } }, { payment: { stripeCheckoutSessionId: null } }],
+      },
+      include: { items: true },
+    });
+
+    if (orphaned.length === 0) return;
+    this.logger.warn(
+      `Reconciliation: found ${orphaned.length} orphaned PENDING_PAYMENT order(s) with no Stripe session — auto-cancelling`,
+    );
+
+    for (const order of orphaned) {
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          for (const item of order.items) {
+            await tx.productVariant.update({
+              where: { id: item.productVariantId },
+              data: { stock: { increment: item.quantity } },
+            });
+          }
+          await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+          if (order.couponId) {
+            await tx.$executeRaw`
+              UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+              WHERE id = ${order.couponId}::uuid
+            `;
+            await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+          }
+          await tx.orderEvent.create({
+            data: {
+              orderId: order.id,
+              fromStatus: OrderStatus.PENDING_PAYMENT,
+              toStatus: OrderStatus.CANCELLED,
+              actor: 'SYSTEM:reconcile-cron',
+              note: 'Auto-cancelled: no Stripe session was ever recorded for this order',
+            },
+          });
+        });
+
+        this.logger.warn(
+          `Auto-cancelled orphaned order ${order.orderNumber} (${order.id}) — stock and coupon capacity restored`,
         );
         Sentry.withScope((scope) => {
-          scope.setTag('payment.event', 'reconciliation_failed');
-          scope.setContext('payment', { paymentId: payment.id });
+          scope.setTag('payment.event', 'orphaned_pending_order_cancelled');
+          scope.setContext('order', { orderId: order.id, orderNumber: order.orderNumber });
+          Sentry.captureMessage(
+            'Auto-cancelled orphaned PENDING_PAYMENT order with no Stripe session',
+            'warning',
+          );
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to auto-cancel orphaned order ${order.id}: ${(err as Error).message}`,
+        );
+        Sentry.withScope((scope) => {
+          scope.setTag('payment.event', 'orphaned_order_cancel_failed');
+          scope.setContext('order', { orderId: order.id });
           Sentry.captureException(err);
         });
       }

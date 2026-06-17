@@ -96,6 +96,7 @@ describe('PaymentsService', () => {
               findUniqueOrThrow: jest.fn(),
               update: jest.fn(),
               count: jest.fn().mockResolvedValue(0),
+              findMany: jest.fn().mockResolvedValue([]),
             },
             orderEvent: {
               create: jest.fn(),
@@ -107,6 +108,9 @@ describe('PaymentsService', () => {
             productVariant: {
               update: jest.fn(),
             },
+            couponUse: {
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
             processedStripeEvent: {
               create: jest.fn().mockResolvedValue({}),
               deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -117,6 +121,7 @@ describe('PaymentsService', () => {
               findMany: jest.fn().mockResolvedValue([]),
             },
             $transaction: jest.fn(),
+            $executeRaw: jest.fn().mockResolvedValue(0),
           },
         },
         {
@@ -186,12 +191,14 @@ describe('PaymentsService', () => {
       if (typeof fn === 'function') {
         return fn({
           $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+          $executeRaw: jest.fn().mockResolvedValue(0),
           processedStripeEvent: prisma.processedStripeEvent,
           payment: prisma.payment,
           order: prisma.order,
           orderEvent: prisma.orderEvent,
           productVariant: prisma.productVariant,
           outboxMessage: prisma.outboxMessage,
+          couponUse: prisma.couponUse,
         });
       }
       return Promise.all(fn);
@@ -1593,6 +1600,114 @@ describe('PaymentsService', () => {
       await service.reconcilePendingPayments();
 
       expect(prisma.payment.findMany).not.toHaveBeenCalled();
+      expect(prisma.order.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Secondary sweep: orders left PENDING_PAYMENT with no Stripe session ──
+  describe('reconcilePendingPayments — orphaned PENDING_PAYMENT sweep', () => {
+    const orphanedOrder = {
+      id: 'order-orphan-1',
+      orderNumber: 'ORD-2026-000099',
+      couponId: null as string | null,
+      items: [{ productVariantId: 'pv-9', quantity: 3 }],
+    };
+
+    beforeEach(() => {
+      // No stale Stripe-session payments this tick — isolates the orphan sweep
+      prisma.payment.findMany.mockResolvedValue([]);
+    });
+
+    it('does nothing when no orphaned orders exist', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('cancels the order and restores stock for an orphaned order', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-orphan-1' },
+        data: { status: OrderStatus.CANCELLED },
+      });
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'pv-9' },
+        data: { stock: { increment: 3 } },
+      });
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          orderId: 'order-orphan-1',
+          fromStatus: OrderStatus.PENDING_PAYMENT,
+          toStatus: OrderStatus.CANCELLED,
+          actor: 'SYSTEM:reconcile-cron',
+        }),
+      });
+    });
+
+    it('surfaces the auto-cancellation via Sentry for manual review', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+      await service.reconcilePendingPayments();
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        'Auto-cancelled orphaned PENDING_PAYMENT order with no Stripe session',
+        'warning',
+      );
+    });
+
+    it('releases coupon capacity when the orphaned order used a coupon', async () => {
+      prisma.order.findMany.mockResolvedValue([{ ...orphanedOrder, couponId: 'coupon-1' }]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.couponUse.deleteMany).toHaveBeenCalledWith({
+        where: { orderId: 'order-orphan-1' },
+      });
+    });
+
+    it('does not touch coupon tables when the orphaned order has no coupon', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.couponUse.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('logs and captures the exception but does not throw when auto-cancellation fails', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+      prisma.$transaction.mockImplementationOnce(async () => {
+        throw new Error('DB unavailable');
+      });
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+      expect(Sentry.captureException).toHaveBeenCalled();
+    });
+
+    it('queries order.findMany for PENDING_PAYMENT older than 2h with no session on the Payment row', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+      const before = Date.now();
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.order.findMany).toHaveBeenCalledTimes(1);
+      const [callArg] = prisma.order.findMany.mock.calls[0];
+      expect(callArg.where.status).toBe(OrderStatus.PENDING_PAYMENT);
+      expect(callArg.where.OR).toEqual([
+        { payment: { is: null } },
+        { payment: { stripeCheckoutSessionId: null } },
+      ]);
+      const cutoff: Date = callArg.where.createdAt.lt;
+      expect(cutoff).toBeInstanceOf(Date);
+      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+      const after = Date.now();
+      expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - TWO_HOURS_MS - 1000);
+      expect(cutoff.getTime()).toBeLessThanOrEqual(after - TWO_HOURS_MS + 1000);
     });
   });
 
