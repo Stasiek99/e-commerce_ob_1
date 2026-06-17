@@ -1302,6 +1302,8 @@ describe('PaymentsService', () => {
         'SUMMER20',
         mockOrderWithCoupon.itemsTotalInCents,
         mockOrderWithCoupon.userId,
+        undefined,
+        mockOrderWithCoupon.id,
       );
     });
 
@@ -1320,7 +1322,28 @@ describe('PaymentsService', () => {
         'SUMMER20',
         mockOrderWithCoupon.itemsTotalInCents,
         undefined,
+        undefined,
+        mockOrderWithCoupon.id,
       );
+    });
+
+    // ── self-reservation exclusion (round 12 fix) ───────────────────────────
+    // Invariant: re-validation must pass the order's own id as excludeOrderId
+    // so CouponService can exclude this order's already-reserved CouponUse row
+    // from the maxUsesTotal/maxUsesPerUser caps it already passed at order
+    // creation. Without this, the order that consumed the coupon's last slot
+    // can never pass re-validation again — not even on its first retry.
+
+    it('passes the order id as excludeOrderId so the order does not get re-counted against its own cap', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const [, , , , excludeOrderId] = couponService.validate.mock.calls[0];
+      expect(excludeOrderId).toBe('order-1');
     });
   });
 

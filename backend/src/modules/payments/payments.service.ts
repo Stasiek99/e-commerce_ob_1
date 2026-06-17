@@ -43,6 +43,8 @@ export class PaymentsService {
         order.couponCode,
         order.itemsTotalInCents,
         order.userId ?? undefined,
+        undefined,
+        order.id,
       );
       if (!couponCheck.valid) {
         throw new BadRequestException(
