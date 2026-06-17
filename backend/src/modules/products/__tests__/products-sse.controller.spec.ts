@@ -37,9 +37,13 @@ describe('ProductsController — streamVariantStock global connection cap', () =
     const subject = new Subject<any>();
     productsService.createStockStream.mockReturnValue(subject.asObservable());
 
-    controller.streamVariantStock('pv-1').subscribe();
+    const subscription = controller.streamVariantStock('pv-1').subscribe();
 
     expect((controller as any).sseConnCount).toBe(1);
+
+    // subject never completes — without unsubscribing, the real (non-faked)
+    // SSE idle-timeout setTimeout stays scheduled and blocks Jest from exiting.
+    subscription.unsubscribe();
   });
 
   // ── happy path: connection within global cap ──────────────────────────────
