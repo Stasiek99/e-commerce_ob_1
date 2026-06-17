@@ -526,6 +526,147 @@ describe('PaymentsService', () => {
         );
       });
     });
+
+    // ── Defense-in-depth: Stripe captured-amount assertion ────────────────────
+    // markSessionPaid must never trust payment.amountInCents blindly — it has to
+    // confirm Stripe actually collected that amount before marking the order PAID.
+
+    describe('amount mismatch guard', () => {
+      const mockPaymentForAmountCheck = {
+        ...mockPayment,
+        amountInCents: 14999,
+        order: {
+          ...mockPayment.order,
+          snapshotLastName: 'Kowalski',
+          snapshotStreet: 'ul. Testowa 1',
+          snapshotCity: 'Kraków',
+          snapshotPostalCode: '30-001',
+          snapshotCompany: null,
+          snapshotNip: null,
+          itemsTotalInCents: 13500,
+          shippingCostInCents: 1499,
+          discountInCents: 0,
+          couponCode: null,
+          carrierCode: 'INPOST',
+          createdAt: new Date('2026-01-15'),
+          items: [
+            { snapshotName: 'Dior 100ml', snapshotPrice: 13500, snapshotVatRate: 2300, quantity: 1 },
+          ],
+        },
+      };
+
+      it('holds the order for review instead of PAID when Stripe captured a different amount', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
+        );
+      });
+
+      it('still marks the payment COMPLETED on amount mismatch — Stripe did collect money, just not the expected amount', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(prisma.payment.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ status: PaymentStatus.COMPLETED }) }),
+        );
+      });
+
+      it('does not dispatch customer/admin post-payment notifications on amount mismatch', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
+        expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
+      });
+
+      it('does not send the Radar fraud-review email for a pure amount mismatch with normal risk', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'normal' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        await Promise.resolve();
+        expect(emailService.sendFraudReviewAlert).not.toHaveBeenCalled();
+      });
+
+      it('raises a fatal Sentry alert tagged amount_mismatch', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(Sentry.withScope).toHaveBeenCalled();
+        const scopeCallback = (Sentry.withScope as jest.Mock).mock.calls.at(-1)[0];
+        const mockScope = { setLevel: jest.fn(), setTag: jest.fn(), setContext: jest.fn() };
+        scopeCallback(mockScope);
+        expect(mockScope.setLevel).toHaveBeenCalledWith('fatal');
+        expect(mockScope.setTag).toHaveBeenCalledWith('payment.event', 'amount_mismatch');
+        expect(Sentry.captureMessage).toHaveBeenCalledWith(
+          expect.stringContaining(mockPaymentForAmountCheck.order.orderNumber),
+          'fatal',
+        );
+      });
+
+      it('includes expected vs captured amounts in the orderEvent note', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              note: expect.stringContaining('100'),
+            }),
+          }),
+        );
+      });
+
+      it('proceeds to PAID when the captured amount matches the expected amount exactly', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', {
+            ...mockSession,
+            amount_total: mockPaymentForAmountCheck.amountInCents,
+          }),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+        );
+      });
+
+      it('does not flag a mismatch when Stripe omits amount_total (cannot prove a discrepancy)', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: null }),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+        );
+      });
+    });
   });
 
   // ── fromStatus audit trail fix ───────────────────────────────────────────────

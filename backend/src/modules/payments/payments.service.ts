@@ -292,6 +292,37 @@ export class PaymentsService {
       return;
     }
 
+    // Defense-in-depth: every other safeguard in this module assumes
+    // payment.amountInCents (== order.totalInCents at session-creation time)
+    // is what Stripe actually collected. Assert it here so a bug elsewhere
+    // (stale price, concurrent shipping-rate change, wrong line items) can
+    // never silently mark an order PAID for the wrong amount. amount_total
+    // can be null in Stripe's types for non-payment modes — this app only
+    // uses 'payment' mode, but we don't flag a mismatch we can't prove.
+    const capturedAmountInCents = session.amount_total;
+    const amountMismatch =
+      capturedAmountInCents != null && capturedAmountInCents !== payment.amountInCents;
+
+    if (amountMismatch) {
+      this.logger.error(
+        `[CRITICAL] Amount mismatch for order ${payment.order.orderNumber}: Stripe captured ${capturedAmountInCents} but expected ${payment.amountInCents} (session ${session.id}) — holding for review instead of marking PAID`,
+      );
+      Sentry.withScope((scope) => {
+        scope.setLevel('fatal');
+        scope.setTag('payment.event', 'amount_mismatch');
+        scope.setContext('payment', {
+          orderNumber: payment.order.orderNumber,
+          sessionId: session.id,
+          expectedAmountInCents: payment.amountInCents,
+          capturedAmountInCents,
+        });
+        Sentry.captureMessage(
+          `Stripe amount mismatch: order ${payment.order.orderNumber} expected ${payment.amountInCents} but Stripe captured ${capturedAmountInCents}`,
+          'fatal',
+        );
+      });
+    }
+
     const paymentIntentId =
       typeof session.payment_intent === 'string'
         ? session.payment_intent
@@ -312,7 +343,8 @@ export class PaymentsService {
     }
 
     const isFraudFlagged = radarRiskLevel === 'elevated' || radarRiskLevel === 'highest';
-    const newOrderStatus = isFraudFlagged ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
+    const requiresReview = isFraudFlagged || amountMismatch;
+    const newOrderStatus = requiresReview ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
 
     let outboxId: string | undefined;
     try {
@@ -345,16 +377,18 @@ export class PaymentsService {
             fromStatus: payment.order.status as OrderStatus,
             toStatus: newOrderStatus,
             actor: 'SYSTEM:stripe-webhook',
-            note: isFraudFlagged
-              ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
-              : `Stripe session ${session.id}`,
+            note: amountMismatch
+              ? `Stripe session ${session.id} — held for review: captured ${capturedAmountInCents} but expected ${payment.amountInCents}`
+              : isFraudFlagged
+                ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
+                : `Stripe session ${session.id}`,
           },
         });
 
         // Insert outbox row atomically alongside the payment flip so a crash
         // between this commit and the in-process dispatch can be recovered by
         // the OutboxProcessorService poller without relying on Stripe retries.
-        if (!isFraudFlagged) {
+        if (!requiresReview) {
           const outbox = await tx.outboxMessage.create({
             data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: payment.orderId },
           });
@@ -379,32 +413,39 @@ export class PaymentsService {
     const paidSessionCouponId = this.extractSessionCouponId(session);
     if (paidSessionCouponId) await this.stripeClient.deleteCoupon(paidSessionCouponId);
 
-    if (isFraudFlagged) {
-      this.logger.warn(
-        `Order ${payment.order.orderNumber} held for FRAUD_REVIEW — Radar risk level: ${radarRiskLevel}`,
-      );
-      const adminEmail =
-        this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
-        this.configService.get<string>('EMAIL_FROM');
-      if (adminEmail) {
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
-        this.emailService
-          .sendFraudReviewAlert({
-            to: adminEmail,
-            orderNumber: payment.order.orderNumber,
-            customerEmail: payment.order.snapshotEmail,
-            totalInCents: payment.order.totalInCents,
-            radarRiskLevel,
-            adminUrl: frontendUrl
-              ? `${frontendUrl}/admin/orders/${payment.orderId}`
-              : undefined,
-          })
-          .catch((err: Error) => {
-            this.logger.error(
-              `Fraud review alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
-            );
-            Sentry.captureException(err);
-          });
+    if (requiresReview) {
+      if (amountMismatch) {
+        this.logger.warn(
+          `Order ${payment.order.orderNumber} held for review — Stripe captured amount mismatch (session ${session.id})`,
+        );
+      }
+      if (isFraudFlagged) {
+        this.logger.warn(
+          `Order ${payment.order.orderNumber} held for FRAUD_REVIEW — Radar risk level: ${radarRiskLevel}`,
+        );
+        const adminEmail =
+          this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+          this.configService.get<string>('EMAIL_FROM');
+        if (adminEmail) {
+          const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+          this.emailService
+            .sendFraudReviewAlert({
+              to: adminEmail,
+              orderNumber: payment.order.orderNumber,
+              customerEmail: payment.order.snapshotEmail,
+              totalInCents: payment.order.totalInCents,
+              radarRiskLevel,
+              adminUrl: frontendUrl
+                ? `${frontendUrl}/admin/orders/${payment.orderId}`
+                : undefined,
+            })
+            .catch((err: Error) => {
+              this.logger.error(
+                `Fraud review alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
+              );
+              Sentry.captureException(err);
+            });
+        }
       }
       // Customer is NOT notified until admin approves — do not reveal the hold.
       return;
