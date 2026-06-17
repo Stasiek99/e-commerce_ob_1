@@ -2,7 +2,7 @@
 *Generated: 2026-06-16 — 5-agent stochastic consensus*
 *Agents: Domain Expert (payments/architecture) · Skeptic (fix-verification) · Pragmatist (ops/deploy) · First-Principles (invariant tracing) · Risk Analyst (security/IDOR/injection)*
 
-> **Excludes** everything already in `audit-weak-points.md`, `audit-round-2.md` through `audit-round-11.md`, and `project-gaps-audit.md` — condensed into `docs/audit-round-12-exclusion-list.md` (~280 prior findings).
+> **Excludes** everything already in `audit-weak-points.md`, `audit-round-2.md` through `audit-round-11.md`, and `project-gaps-audit.md` — condensed into `docs/audit-exclusion-list.md` (~280 prior findings; this round's 21 resolved findings have since been folded in too).
 > **Excludes** Phase 7 (pre-launch checklist) items in ROADMAP.md.
 
 A theme of this round, distinct from rounds 1-11: several findings here are **fixes from round 11 itself that re-introduce or relocate the bug they were meant to close** (corrective-invoice idempotency, dispute-lost stock restore, bounce suppression). The codebase has converged enough on auth/IDOR/injection basics that the Risk Analyst pass came back mostly clean — the remaining risk surface is now concentrated in **state-machine edge cases and the gap between independently-correct pieces of code composed in new contexts**, not missing guards.
@@ -174,18 +174,6 @@ Railway's Railpack builder resolves "Node 20 or later" at build time with no loc
 
 ---
 
-
-Not yet:
-
-
-
-
-
-
-
-
-
-
 ## 🟡 MEDIUM — `reconcilePendingPayments` cannot recover orders whose `initiatePayment` failed before any Stripe session existed *(First-Principles)*
 
 **File:** `backend/src/modules/payments/payments.service.ts:866-873`
@@ -245,7 +233,6 @@ After `refundPayment` already writes the correct `PAID → REFUNDED` transition 
 **Fix:** Attach `reason` to the original transition event instead of inserting a second nonsensical one — pass `reason` through to `refundPayment`'s own event-creation call.
 
 ---
-
 ## Notes — verified clean, not findings
 
 The Risk Analyst pass specifically targeted IDOR, injection, SSRF, hardcoded secrets, and coupon/cart fraud vectors not already in the exclusion list, and came back largely clean: all 15 controllers correctly scope "me"/"mine" endpoints off `@CurrentUser()`; no unparameterized SQL outside the two year-interpolation sites above; no new SSRF surface (all outbound calls hit hardcoded carrier/Stripe/Resend/Cloudflare/location-API domains); no hardcoded secrets beyond what prior rounds found; coupon discount is always recomputed server-side against fresh prices inside the order transaction, never trusted from a client preview call. This convergence is itself a useful signal — 11 rounds in, the auth/ownership/injection layer has largely stabilized, and remaining risk is concentrated in state-machine edge cases and the interaction between independently-shipped fixes (see the Skeptic and First-Principles findings above).

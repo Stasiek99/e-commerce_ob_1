@@ -1,6 +1,8 @@
-# Audit Round 12 — Exclusion List
+# Audit Exclusion List
 
-Condensed digest of every distinct finding already raised across `audit-weak-points.md`, `audit-round-2.md` through `audit-round-11.md`, `project-gaps-audit.md`, and ROADMAP.md's Phase 7 pre-launch checklist. Used to keep the round-12 stochastic-consensus audit focused on genuinely new gaps instead of re-discovering known ones.
+Condensed digest of every distinct finding already raised across `audit-weak-points.md`, `audit-round-2.md` through `audit-round-12.md`, `project-gaps-audit.md`, and ROADMAP.md's Phase 7 pre-launch checklist. Used to keep each new stochastic-consensus audit round focused on genuinely new gaps instead of re-discovering known ones.
+
+After each round wraps up, fold its resolved findings into the relevant category below (condensed to one line, in the same terse style) before starting the next round. This file has no round number in its name on purpose — it is cumulative and never gets rewritten from scratch.
 
 ## Auth / Sessions / OAuth
 - Login throttle per-IP only, no per-email lockout; `trust proxy` never set so all clients share one bucket (`auth.controller.ts`, `app.module.ts`, `main.ts`)
@@ -19,7 +21,7 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - Multi-tab logout (Tab B stays authed up to 15 min) — no `BroadcastChannel`
 - Concurrent 401 refresh races across tabs can orphan a token
 - Guest/auth guard gaps: `authGuard` drops `returnUrl`; no `guestGuard` on login/register; `/wishlist`,`/returns` missing `canActivate`
-- Admin: AdminJS no `session.regenerate()` (session fixation) — and the regen-guard fix itself checks wrong session key (`adminUser` vs `passport.user`), making it inert; password not validated as bcrypt hash format; session secret falls back to admin password hash; session cookie missing `secure`/`sameSite`; admin email enumerable via bcrypt timing; admin credentials not rotatable without redeploy + no audit trail; `deleteVariant()` guard bypassed by AdminJS default delete; `User.show` access not logged
+- Admin: AdminJS no `session.regenerate()` (session fixation) — and the regen-guard fix itself checks wrong session key (`adminUser` vs `passport.user`), making it inert; password not validated as bcrypt hash format; session secret falls back to admin password hash; session cookie missing `secure`/`sameSite`; admin email enumerable via bcrypt timing; admin credentials not rotatable without redeploy + no audit trail; `deleteVariant()` guard bypassed by AdminJS default delete; `User.show` access not logged — later: the regen-guard fix itself didn't cover `/admin/picklist`/`/admin/fulfillment-gap`, two custom routes registered (and `res.send`-terminated) before the guard middleware in Express dispatch order
 
 ## Payments / Stripe
 - BLIK/P24 advertised but not in `payment_method_types` (fixed in code per ROADMAP but needs Stripe Dashboard activation — still a Phase 7 item)
@@ -49,6 +51,12 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - `markRefunded` (returns) issues full refund regardless of partial return items — doesn't call `partialRefund`
 - `ProductsModule` local `REDIS_CLIENT` provider with `retryStrategy: null` permanently disconnects, shadows global client
 - `pruneProcessedStripeEvents` lock TTL causes 48h cleanup gap after Railway sleep
+- "Always restore stock on lost dispute" fix overcorrected — unconditional restore creates phantom inventory for the majority of real chargebacks where goods were genuinely delivered; fixed to require explicit admin confirmation via a `DISPUTE_LOST_REVIEW` status instead of auto-restoring
+- Stripe PLN minimum-charge floor hardcoded to 50gr instead of Stripe's actual 200gr minimum; `retryPayment` called `initiatePayment` with no try/catch/rollback at all, unlike `createFromCart`
+- `markSessionPaid` never cross-checks Stripe's captured `session.amount_total` against the order's stored total — no defense-in-depth against a Checkout Session built with the wrong amount
+- `approveFraudReview` dispatched invoice/confirmation notifications purely in-process with no `OutboxMessage` row — a crash between commit and send permanently lost them, with no recovery path
+- `reconcilePendingPayments` only selects payments with a non-null `stripeCheckoutSessionId` — orders whose `initiatePayment` failed before any session was created are invisible to reconciliation, a slow invisible leak of stock/coupon capacity
+- `handlePaymentFailure` stock-restore credited the full original `quantity` instead of `quantity - cancelledQuantity`, unlike the other three restore sites in the module (dead code at the time, but a landmine for the next state-machine change)
 
 ## Cart
 - Stock oversell race (`addItem` no transaction) — original finding, later found to be structurally broken under pgbouncer (see above)
@@ -77,6 +85,8 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - `termsVersion`/`termsAcceptedAt` optional at order creation — no proof of T&C acceptance
 - Order cancel token (HMAC) shares `JWT_ACCESS_SECRET` instead of dedicated secret (later ROADMAP added `ORDER_CANCEL_SECRET` — confirm still consistent)
 - Dispute-lost flow stock-restore heuristic keyed on `labelUrl` presence is wrong signal
+- Order-number sequence DDL (`onModuleInit`, `generateOrderNumber`) interpolated the year via `$executeRawUnsafe`/`$queryRawUnsafe` with no bounds-check — same gap independently present in a second location besides `invoice.service.ts`
+- `cancelByUser` inserted a redundant `REFUNDED → REFUNDED` self-loop `OrderEvent` directly via Prisma (bypassing the `ORDER_STATUS_TRANSITIONS` guard, which defines `REFUNDED` as terminal) solely to attach the withdrawal reason — duplicated the order-timeline entry; fixed by folding the reason into `refundPayment`'s own transition event
 
 ## Returns / Withdrawal
 - `ReturnRequest` no FK to Order (fixed) — returns no-op refund/stock-restore (fixed)
@@ -98,6 +108,8 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - `SELLER_NIP` boots with empty string passing Joi `.required()`; not checksum-validated
 - `processInvoice` holds `SELECT FOR UPDATE` during Supabase upload — connection pool exhaustion risk
 - Invoice bucket has no RLS (cross-user PDF access) — later fixed to signed URLs; shipping-label bucket has same public-URL PII exposure issue, separately
+- Corrective-invoice idempotency keyed on `correctedAmountInCents` (the refund amount) rather than correction identity — two unrelated partial cancellations totaling the same refund (common with shared price points like 99/149 PLN) collided on the unique constraint and the second correction was silently never generated; fixed to key on a `correctionRequestKey` derived from the specific items/quantities being cancelled
+- Per-rate VAT breakdown on corrective invoices recomputed `originalGross` from the pristine original-order total on every call instead of the post-prior-correction base, producing an internal inconsistency between sequential corrective invoices for the same order (same "stale base on repeated partial cancellation" bug class as the discount-proration fix, reintroduced in new VAT-breakdown code)
 
 ## Coupons
 - `CouponUse @@unique([couponId,userId])` race fix vs `maxUsesPerUser>1` contradiction; correct fix is row lock + `@@unique([couponId,orderId])`
@@ -111,6 +123,7 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - Coupon not re-validated on `retryPayment` (deactivated/expired coupon still honored)
 - `CouponUse` no cascade on Coupon deletion (FK error in reconciliation cron)
 - Coupon percentage `Math.round` rounds in customer's favor (documented as acceptable, not a bug)
+- `retryPayment` re-validates the coupon on every call with no rollback — if the order's own creation consumed the coupon's last `maxUsesTotal`/`maxUsesPerUser` slot, a transient retry sees the cap as already (self-)exceeded and permanently strands stock + the coupon slot
 
 ## Shipping / Carriers
 - GLS `labelUrl` always empty string in real mode
@@ -142,6 +155,9 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - Back-in-stock notifications tied to Product not Variant (wrong-variant notify) + excludes users who bought a different variant
 - Railway rolling deploy: `worker.close(true)` exceeds SIGKILL window → duplicate emails on restart
 - Sentry captures plaintext passwords/PII in request body (top-level only, recursive scrub still missing for nested address fields); captures raw email address in tags; captures `Authorization` header/live JWT; Sentry source maps never uploaded to CI
+- Bounce-suppression bypass for transactional emails fired identically for permanent (hard) and transient (soft) bounces — sustained hard-bounce sends risk the sending identity getting rate-limited/suspended for every customer, not just the one with the dead address; fixed to bypass only for transient bounces
+- `OutboxProcessorService.recoverPendingMessages` had no distributed lock or atomic row-claiming (`SELECT ... FOR UPDATE SKIP LOCKED`), unlike the sibling `@Cron` jobs that take a Redis `SET NX` lock first — every Railway replica raced the same `PENDING` rows
+- `email_logs` 365-day blanket deletion could destroy the audit trail proving a bounce-suppression decision was correct while the `User.emailBounced` flag itself persists far longer — undermines the merchant's own defense if a customer disputes non-delivery
 
 ## Products / Catalog / Search
 - `pg_trgm` extension never installed — search crashes
@@ -217,7 +233,7 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - File upload accepts any MIME type (no magic-byte check) — stored XSS via CDN
 - Sentry frontend DSN hardcoded in committed source
 - No `pnpm audit`/Dependabot in CI; CI doesn't trigger on `fix/**` branches
-- Prisma migrations directory gitignored (no-op `migrate deploy` on fresh Railway)
+- Prisma migrations directory gitignored (no-op `migrate deploy` on fresh Railway) — later: gitignore rule fixed, but five new migrations still showed as untracked (`??`) on a feature branch with nothing enforcing they get `git add`ed before merge; fixed by committing them and adding a CI `prisma migrate diff --exit-code` gate
 - Source maps shipped in production backend container
 - `connect-pg-simple` session pool bypasses Prisma's capped pool (connection exhaustion)
 - `MERCHANT_SLACK_WEBHOOK_URL` not validated as Slack-only (SSRF)
@@ -230,6 +246,11 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 - `Prisma.P2024` pool-timeout cold start returns unhandled 500; Supabase auto-pause → Railway health-check restart loop
 - `@Cron` decorators run in UTC not Warsaw time; fire on every replica independently (no distributed lock)
 - `railway.json` missing explicit `installCommand --frozen-lockfile`
+- `pnpm audit` step in CI was `continue-on-error: true` — a HIGH/CRITICAL CVE never actually blocked merge despite the audit step existing; fixed to fail the build on high/critical findings
+- Coverage gate (`test:cov`) ran with `--passWithNoTests` while the 70%-branch threshold is scoped only to `auth`/`cart`/`orders`/`payments` `.service.ts` — a deleted/renamed/excluded spec for exactly those four money-path files would silently pass instead of failing; fixed by dropping the flag
+- No documented rollback runbook for "migration applied cleanly, new app code is broken" — Prisma migrations are forward-only and a naive "redeploy previous version" click can be unsafe; fixed with `deploy-rollback-runbook.md`
+- Node engine range was unbounded (`>=20`) with no `.nvmrc`/pinned Railway runtime — Railway (Railpack, reads `engines.node`) and CI (`actions/setup-node`, reads `.nvmrc`) could silently drift to different Node versions; fixed by pinning both to the same exact version
+- `backend/coverage/` had 101 files tracked in git despite being gitignored, with machine-specific absolute paths causing a 100%-changed diff and guaranteed merge conflicts on every test run; fixed via `git rm -r --cached`
 
 ## GDPR / Privacy / Data Retention
 - `deleteAccount` doesn't scrub `ReturnRequest` PII; `snapshotStreet`/`City`/`PostalCode` never nulled in erasure (only name/email/phone/company/nip)
@@ -256,4 +277,4 @@ Condensed digest of every distinct finding already raised across `audit-weak-poi
 
 ---
 
-This list spans ~280 distinct findings. The round-12 audit actively avoids restating any of the above and focuses on genuinely new angles.
+This list spans ~301 distinct findings (21 folded in from round 12). Each new audit round should avoid restating any of the above and focus on genuinely new angles.
