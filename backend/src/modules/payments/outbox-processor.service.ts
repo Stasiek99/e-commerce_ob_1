@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { InvoiceService } from '../invoice/invoice.service';
@@ -10,6 +11,9 @@ const MAX_RETRIES = 3;
 // Only attempt recovery for messages older than 30s — the in-process fast path
 // (dispatchPostPaymentNotifications) needs time to complete and mark PROCESSED.
 const RECOVERY_DELAY_MS = 30_000;
+// Slightly under the 30s @Interval period so the lock self-clears before the
+// next tick on a normal run, while still preventing overlapping replicas.
+const LOCK_TTL_SECONDS = 25;
 
 @Injectable()
 export class OutboxProcessorService {
@@ -20,10 +24,20 @@ export class OutboxProcessorService {
     private readonly emailQueueService: EmailQueueService,
     private readonly invoiceService: InvoiceService,
     private readonly configService: ConfigService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   @Interval(30_000)
   async recoverPendingMessages(): Promise<void> {
+    const acquired = await this.redis.set(
+      'cron:outbox-recovery:lock',
+      '1',
+      'EX',
+      LOCK_TTL_SECONDS,
+      'NX',
+    );
+    if (!acquired) return;
+
     const cutoff = new Date(Date.now() - RECOVERY_DELAY_MS);
     const messages = await this.prisma.outboxMessage.findMany({
       where: {
