@@ -28,6 +28,7 @@ describe('ShippingService', () => {
   let dpd: jest.Mocked<DpdClient>;
   let storage: jest.Mocked<StorageService>;
   let emailService: jest.Mocked<EmailQueueService>;
+  let redis: { set: jest.Mock };
 
   const mockOrderBase = {
     id: 'order-1',
@@ -117,6 +118,12 @@ describe('ShippingService', () => {
             getRateForCarrier: jest.fn((code: CarrierCode) => Promise.resolve(MOCK_RATE_MAP[code])),
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'),
+          },
+        },
       ],
     }).compile();
 
@@ -128,6 +135,7 @@ describe('ShippingService', () => {
     dpd = module.get(DpdClient);
     storage = module.get(StorageService);
     emailService = module.get(EmailQueueService);
+    redis = module.get('REDIS_CLIENT');
 
     // Default: no existing shipment — tests that need a different value override this
     prisma.shipment.findUnique.mockResolvedValue(null);
@@ -710,6 +718,29 @@ describe('ShippingService', () => {
         where: { id: 'ship-ok' },
         data: { labelUrl: null },
       });
+    });
+
+    it('skips the cleanup when another replica already holds the lock', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(prisma.shipment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock with NX and an 82000-second TTL', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.shipment.findMany.mockResolvedValue([]);
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(redis.set).toHaveBeenCalledWith(
+        'cron:cleanup-stale-shipping-labels:lock',
+        '1',
+        'EX',
+        82000,
+        'NX',
+      );
     });
   });
 });
