@@ -1003,12 +1003,14 @@ export class PaymentsService {
       try {
         const deltas: Array<{ variantId: string; delta: number }> = [];
         await this.prisma.$transaction(async (tx) => {
+          // Restore stock only for units not already cancelled (mirrors handlePaymentFailure).
           for (const item of order.items) {
+            const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
             await tx.productVariant.update({
               where: { id: item.productVariantId },
-              data: { stock: { increment: item.quantity } },
+              data: { stock: { increment: activeQuantity } },
             });
-            deltas.push({ variantId: item.productVariantId, delta: item.quantity });
+            deltas.push({ variantId: item.productVariantId, delta: activeQuantity });
           }
           await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
           if (order.couponId) {

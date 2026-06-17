@@ -1669,6 +1669,19 @@ describe('PaymentsService', () => {
       );
     });
 
+    it('restores stock minus cancelledQuantity when an orphaned order item was already partially cancelled', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { ...orphanedOrder, items: [{ productVariantId: 'pv-9', quantity: 3, cancelledQuantity: 1 }] },
+      ]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'pv-9' },
+        data: { stock: { increment: 2 } },
+      });
+    });
+
     it('releases coupon capacity when the orphaned order used a coupon', async () => {
       prisma.order.findMany.mockResolvedValue([{ ...orphanedOrder, couponId: 'coupon-1' }]);
 
