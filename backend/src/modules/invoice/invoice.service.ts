@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import * as path from 'path';
 import * as PDFDocument from 'pdfkit';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,6 +9,7 @@ import { StorageService } from '../storage/storage.service';
 const FONTS_DIR = path.join(__dirname, 'fonts');
 
 export interface CorrectiveInvoiceItem {
+  orderItemId: string;
   quantity: number;
   priceInCents: number; // per-unit price actually refunded (post-discount)
   vatRate: number; // basis points — 2300 = 23%, 500 = 5%, 0 = exempt
@@ -196,8 +198,12 @@ export class InvoiceService implements OnModuleInit {
    * BullMQ retries: only one caller can allocate the sequence and insert the
    * InvoiceCorrection row; a retry sees the existing row and returns early,
    * preventing gaps in the FK/YYYY/NNNNNN series (Art. 106e ust. 1 pkt 2
-   * Ustawy o VAT). The composite unique index on (orderId, correctedAmountInCents)
+   * Ustawy o VAT). The composite unique index on (orderId, correctionRequestKey)
    * is the DB-level backstop if two callers race past the application check.
+   * correctionRequestKey is derived from the specific orderItemIds/quantities
+   * being cancelled in this call — not from the refund amount — so two
+   * unrelated cancellations that happen to total the same refund (common with
+   * shared price points) are never treated as the same correction.
    */
   async processCorrectiveInvoice(
     orderId: string,
@@ -207,6 +213,7 @@ export class InvoiceService implements OnModuleInit {
     cancelledItems: CorrectiveInvoiceItem[] = [],
   ): Promise<{ correctiveUrl: string; correctiveStoragePath: string; correctiveInvoiceNumber: string }> {
     const correctedAmountInCents = -Math.abs(refundAmountInCents);
+    const correctionRequestKey = this.buildCorrectionRequestKey(cancelledItems);
     const year = new Date().getFullYear();
 
     // TX1 — short lock: check idempotency and reserve the corrective invoice number.
@@ -215,7 +222,7 @@ export class InvoiceService implements OnModuleInit {
       await tx.$queryRawUnsafe(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, orderId);
 
       const existing = await tx.invoiceCorrection.findFirst({
-        where: { orderId, correctedAmountInCents },
+        where: { orderId, correctionRequestKey },
         select: { correctiveInvoiceNumber: true, correctiveStoragePath: true },
       });
 
@@ -246,7 +253,13 @@ export class InvoiceService implements OnModuleInit {
 
       // Insert with null storage path to reserve the number before the upload
       await tx.invoiceCorrection.create({
-        data: { orderId, correctiveInvoiceNumber, correctedAmountInCents, refundReasonCode: reasonCode },
+        data: {
+          orderId,
+          correctiveInvoiceNumber,
+          correctedAmountInCents,
+          correctionRequestKey,
+          refundReasonCode: reasonCode,
+        },
       });
 
       return { correctiveInvoiceNumber, correctiveStoragePath: null, alreadyDone: false as const };
@@ -291,7 +304,7 @@ export class InvoiceService implements OnModuleInit {
 
     // TX2 — short write: persist the storage path now that upload succeeded
     await this.prisma.invoiceCorrection.update({
-      where: { orderId_correctedAmountInCents: { orderId, correctedAmountInCents } },
+      where: { orderId_correctionRequestKey: { orderId, correctionRequestKey } },
       data: { correctiveStoragePath },
     });
 
@@ -313,6 +326,20 @@ export class InvoiceService implements OnModuleInit {
     if (!correction || !correction.correctiveStoragePath) return null;
     const correctiveInvoiceUrl = await this.storage.getInvoiceSignedUrl(correction.correctiveStoragePath);
     return { correctiveInvoiceUrl, correctiveInvoiceNumber: correction.correctiveInvoiceNumber };
+  }
+
+  /**
+   * Deterministic identity for "the set of order items being cancelled in
+   * this call" — sorted by orderItemId so argument order never matters.
+   * Used as the idempotency key instead of the resulting refund amount,
+   * which two distinct corrections can otherwise share.
+   */
+  private buildCorrectionRequestKey(cancelledItems: CorrectiveInvoiceItem[]): string {
+    const fingerprint = cancelledItems
+      .map((item) => `${item.orderItemId}:${item.quantity}`)
+      .sort()
+      .join('|');
+    return createHash('sha256').update(fingerprint).digest('hex');
   }
 
   /**

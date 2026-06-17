@@ -984,7 +984,12 @@ export class OrdersService implements OnModuleInit {
           order.invoiceNumber,
           refundAmountInCents,
           'PARTIAL_CANCELLATION',
-          resolvedItems.map((i) => ({ quantity: i.quantity, priceInCents: i.priceInCents, vatRate: i.vatRate })),
+          resolvedItems.map((i) => ({
+            orderItemId: i.orderItemId,
+            quantity: i.quantity,
+            priceInCents: i.priceInCents,
+            vatRate: i.vatRate,
+          })),
         )
         .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
     }

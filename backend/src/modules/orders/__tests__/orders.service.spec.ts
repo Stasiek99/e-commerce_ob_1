@@ -3519,7 +3519,7 @@ describe('OrdersService', () => {
         'FV/2026/000001',
         69800,
         'PARTIAL_CANCELLATION',
-        [{ quantity: 2, priceInCents: 34900, vatRate: 2300 }],
+        [{ orderItemId: 'item-1', quantity: 2, priceInCents: 34900, vatRate: 2300 }],
       );
     });
 

@@ -1139,6 +1139,7 @@ describe('InvoiceService', () => {
           correctedAmountInCents: CORRECTED_AMOUNT,
           refundReasonCode: REASON,
         });
+        expect(createCall.data.correctionRequestKey).toBeDefined();
         expect(createCall.data).not.toHaveProperty('correctiveStoragePath');
       });
 
@@ -1146,7 +1147,7 @@ describe('InvoiceService', () => {
         await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
 
         expect(corrPrisma.invoiceCorrection.update).toHaveBeenCalledWith({
-          where: { orderId_correctedAmountInCents: { orderId: ORDER_ID, correctedAmountInCents: CORRECTED_AMOUNT } },
+          where: { orderId_correctionRequestKey: { orderId: ORDER_ID, correctionRequestKey: expect.any(String) } },
           data: { correctiveStoragePath: MOCK_CORRECTIVE_PATH },
         });
       });
@@ -1239,6 +1240,97 @@ describe('InvoiceService', () => {
 
         expect(corrTx.$executeRawUnsafe).not.toHaveBeenCalled();
         expect(corrTx.invoiceCorrection.create).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── distinct corrections with identical refund amounts ────────────────
+    // Regression guard: the idempotency key must identify the correction
+    // (which orderItemIds/quantities are being cancelled), not the resulting
+    // refund amount. Two unrelated cancellations that happen to net to the
+    // same amount (common with shared price points) must each get their own
+    // corrective invoice, not silently collide on the first one's row.
+
+    describe('distinct corrections with identical refund amounts', () => {
+      it('generates two separate corrective invoices for two unrelated cancellations that net to the same amount', async () => {
+        corrTx.$queryRawUnsafe = jest.fn()
+          .mockResolvedValueOnce([{ id: ORDER_ID }])
+          .mockResolvedValueOnce([{ nextval: 1n }])
+          .mockResolvedValueOnce([{ id: ORDER_ID }])
+          .mockResolvedValueOnce([{ nextval: 2n }]);
+
+        corrStorage.uploadInvoice
+          .mockResolvedValueOnce('invoices/FK-correction-1.pdf')
+          .mockResolvedValueOnce('invoices/FK-correction-2.pdf');
+
+        const firstCancelledItems = [
+          { orderItemId: 'item-aaa', quantity: 1, priceInCents: REFUND_CENTS, vatRate: 2300 },
+        ];
+        const secondCancelledItems = [
+          { orderItemId: 'item-bbb', quantity: 1, priceInCents: REFUND_CENTS, vatRate: 2300 },
+        ];
+
+        const first = await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, firstCancelledItems,
+        );
+        const second = await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, secondCancelledItems,
+        );
+
+        expect(first.correctiveInvoiceNumber).not.toBe(second.correctiveInvoiceNumber);
+        expect(first.correctiveStoragePath).not.toBe(second.correctiveStoragePath);
+        expect(corrTx.invoiceCorrection.create).toHaveBeenCalledTimes(2);
+      });
+
+      it('uses different correctionRequestKey values for the two distinct corrections', async () => {
+        corrTx.$queryRawUnsafe = jest.fn()
+          .mockResolvedValueOnce([{ id: ORDER_ID }])
+          .mockResolvedValueOnce([{ nextval: 1n }])
+          .mockResolvedValueOnce([{ id: ORDER_ID }])
+          .mockResolvedValueOnce([{ nextval: 2n }]);
+
+        const firstCancelledItems = [
+          { orderItemId: 'item-aaa', quantity: 1, priceInCents: REFUND_CENTS, vatRate: 2300 },
+        ];
+        const secondCancelledItems = [
+          { orderItemId: 'item-bbb', quantity: 1, priceInCents: REFUND_CENTS, vatRate: 2300 },
+        ];
+
+        await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, firstCancelledItems,
+        );
+        await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, secondCancelledItems,
+        );
+
+        const firstKey = corrTx.invoiceCorrection.create.mock.calls[0][0].data.correctionRequestKey;
+        const secondKey = corrTx.invoiceCorrection.create.mock.calls[1][0].data.correctionRequestKey;
+        expect(firstKey).not.toBe(secondKey);
+      });
+
+      it('reuses the same corrective invoice on a true retry of the same cancellation (same orderItemIds and quantities)', async () => {
+        const cancelledItems = [
+          { orderItemId: 'item-aaa', quantity: 1, priceInCents: REFUND_CENTS, vatRate: 2300 },
+        ];
+
+        await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, cancelledItems,
+        );
+        const reservedKey = corrTx.invoiceCorrection.create.mock.calls[0][0].data.correctionRequestKey;
+
+        // Simulate the retry seeing the already-completed row for the same key.
+        corrTx.invoiceCorrection.findFirst.mockResolvedValue({
+          correctiveInvoiceNumber: MOCK_CORRECTIVE_NUM,
+          correctiveStoragePath: MOCK_CORRECTIVE_PATH,
+        });
+
+        const retry = await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, cancelledItems,
+        );
+
+        expect(retry.correctiveInvoiceNumber).toBe(MOCK_CORRECTIVE_NUM);
+        expect(retry.correctiveStoragePath).toBe(MOCK_CORRECTIVE_PATH);
+        expect(corrTx.invoiceCorrection.create).toHaveBeenCalledTimes(1);
+        expect(reservedKey).toBeDefined();
       });
     });
 

@@ -765,11 +765,15 @@ model InvoiceCorrection {
   correctiveInvoiceNumber String   @unique
   correctiveStoragePath   String?
   correctedAmountInCents  Int
+  // sha256 fingerprint of the cancelled orderItemId:quantity pairs for this
+  // specific correction — identifies the correction itself, not its refund
+  // amount, so two unrelated corrections that net to the same amount don't collide.
+  correctionRequestKey    String
   refundReasonCode        String   @default("PARTIAL_CANCELLATION")
   issuedAt                DateTime @default(now())
   createdAt               DateTime @default(now())
 
-  @@unique([orderId, correctedAmountInCents])
+  @@unique([orderId, correctionRequestKey])
   @@index([orderId])
   @@map("invoice_corrections")
 }
