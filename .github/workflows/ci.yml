@@ -42,7 +42,6 @@ jobs:
 
       - name: Security audit
         run: pnpm audit --audit-level=high
-        continue-on-error: true
 
       - name: Build shared-types
         run: pnpm --filter @fragrance-store/shared-types build
