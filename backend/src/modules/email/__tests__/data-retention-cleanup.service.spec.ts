@@ -17,6 +17,7 @@ describe('DataRetentionCleanupService', () => {
             outboxMessage: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
             emailLog: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
             consentLog: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+            user: { findMany: jest.fn().mockResolvedValue([]) },
           },
         },
         {
@@ -87,6 +88,44 @@ describe('DataRetentionCleanupService', () => {
     });
 
     jest.useRealTimers();
+  });
+
+  it('queries only currently-bounced users before deciding what to exclude', async () => {
+    redis.set.mockResolvedValue('OK');
+
+    await service.purgeStaleOperationalLogs();
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { emailBounced: true },
+      select: { email: true },
+    });
+  });
+
+  it('excludes email logs for addresses with an active emailBounced flag, regardless of age', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-16T00:00:00Z'));
+    redis.set.mockResolvedValue('OK');
+    prisma.user.findMany.mockResolvedValue([{ email: 'bounced@example.com' }, { email: 'also-bounced@example.com' }]);
+
+    await service.purgeStaleOperationalLogs();
+
+    expect(prisma.emailLog.deleteMany).toHaveBeenCalledWith({
+      where: {
+        createdAt: { lt: new Date('2025-06-16T00:00:00Z') },
+        to: { notIn: ['bounced@example.com', 'also-bounced@example.com'] },
+      },
+    });
+
+    jest.useRealTimers();
+  });
+
+  it('does not add a to/notIn filter when no users are currently bounced', async () => {
+    redis.set.mockResolvedValue('OK');
+    prisma.user.findMany.mockResolvedValue([]);
+
+    await service.purgeStaleOperationalLogs();
+
+    const call = prisma.emailLog.deleteMany.mock.calls[0][0];
+    expect(call.where.to).toBeUndefined();
   });
 
   it('resolves without error when nothing is purged', async () => {

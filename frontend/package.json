@@ -10,7 +10,7 @@
     "sitemap:generate": "node scripts/generate-sitemap.mjs",
     "watch": "ng build --watch --configuration development",
     "serve:ssr:frontend": "node dist/frontend/server/server.mjs",
-    "test": "jest --passWithNoTests"
+    "test": "jest"
   },
   "dependencies": {
     "@angular/animations": "^20.3.23",

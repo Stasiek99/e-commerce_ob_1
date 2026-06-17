@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import * as path from 'path';
 import * as PDFDocument from 'pdfkit';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,6 +9,7 @@ import { StorageService } from '../storage/storage.service';
 const FONTS_DIR = path.join(__dirname, 'fonts');
 
 export interface CorrectiveInvoiceItem {
+  orderItemId: string;
   quantity: number;
   priceInCents: number; // per-unit price actually refunded (post-discount)
   vatRate: number; // basis points — 2300 = 23%, 500 = 5%, 0 = exempt
@@ -196,8 +198,12 @@ export class InvoiceService implements OnModuleInit {
    * BullMQ retries: only one caller can allocate the sequence and insert the
    * InvoiceCorrection row; a retry sees the existing row and returns early,
    * preventing gaps in the FK/YYYY/NNNNNN series (Art. 106e ust. 1 pkt 2
-   * Ustawy o VAT). The composite unique index on (orderId, correctedAmountInCents)
+   * Ustawy o VAT). The composite unique index on (orderId, correctionRequestKey)
    * is the DB-level backstop if two callers race past the application check.
+   * correctionRequestKey is derived from the specific orderItemIds/quantities
+   * being cancelled in this call — not from the refund amount — so two
+   * unrelated cancellations that happen to total the same refund (common with
+   * shared price points) are never treated as the same correction.
    */
   async processCorrectiveInvoice(
     orderId: string,
@@ -207,6 +213,7 @@ export class InvoiceService implements OnModuleInit {
     cancelledItems: CorrectiveInvoiceItem[] = [],
   ): Promise<{ correctiveUrl: string; correctiveStoragePath: string; correctiveInvoiceNumber: string }> {
     const correctedAmountInCents = -Math.abs(refundAmountInCents);
+    const correctionRequestKey = this.buildCorrectionRequestKey(cancelledItems);
     const year = new Date().getFullYear();
 
     // TX1 — short lock: check idempotency and reserve the corrective invoice number.
@@ -215,7 +222,7 @@ export class InvoiceService implements OnModuleInit {
       await tx.$queryRawUnsafe(`SELECT id FROM orders WHERE id = $1 FOR UPDATE`, orderId);
 
       const existing = await tx.invoiceCorrection.findFirst({
-        where: { orderId, correctedAmountInCents },
+        where: { orderId, correctionRequestKey },
         select: { correctiveInvoiceNumber: true, correctiveStoragePath: true },
       });
 
@@ -246,7 +253,13 @@ export class InvoiceService implements OnModuleInit {
 
       // Insert with null storage path to reserve the number before the upload
       await tx.invoiceCorrection.create({
-        data: { orderId, correctiveInvoiceNumber, correctedAmountInCents, refundReasonCode: reasonCode },
+        data: {
+          orderId,
+          correctiveInvoiceNumber,
+          correctedAmountInCents,
+          correctionRequestKey,
+          refundReasonCode: reasonCode,
+        },
       });
 
       return { correctiveInvoiceNumber, correctiveStoragePath: null, alreadyDone: false as const };
@@ -277,7 +290,24 @@ export class InvoiceService implements OnModuleInit {
       },
     });
 
-    const vatBreakdown = this.buildCorrectiveVatBreakdown(order.items, cancelledItems);
+    // Sum every earlier correction's per-rate delta so the breakdown below
+    // uses the taxable base as it stood immediately before THIS correction
+    // (Art. 106j ust. 2), not the order's pristine pre-any-correction total.
+    const priorCorrections = await this.prisma.invoiceCorrection.findMany({
+      where: { orderId, correctionRequestKey: { not: correctionRequestKey } },
+      select: { vatBreakdownByRate: true },
+    });
+    const priorDeltaGrossByRate = new Map<number, number>();
+    for (const correction of priorCorrections) {
+      const breakdown = correction.vatBreakdownByRate as Record<string, number> | null;
+      if (!breakdown) continue;
+      for (const [rateBasisPoints, deltaGross] of Object.entries(breakdown)) {
+        const rate = Number(rateBasisPoints);
+        priorDeltaGrossByRate.set(rate, (priorDeltaGrossByRate.get(rate) ?? 0) + deltaGross);
+      }
+    }
+
+    const vatBreakdown = this.buildCorrectiveVatBreakdown(order.items, cancelledItems, priorDeltaGrossByRate);
 
     const pdf = await this.generateCorrectivePdf(
       order,
@@ -289,10 +319,18 @@ export class InvoiceService implements OnModuleInit {
     const filename = `${reserved.correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
     const correctiveStoragePath = await this.storage.uploadInvoice(pdf, filename);
 
+    // This correction's own per-rate delta, persisted so later corrections
+    // can include it in their prior-corrections sum above.
+    const thisDeltaGrossByRate: Record<string, number> = {};
+    for (const item of cancelledItems) {
+      const key = String(item.vatRate);
+      thisDeltaGrossByRate[key] = (thisDeltaGrossByRate[key] ?? 0) + item.priceInCents * item.quantity;
+    }
+
     // TX2 — short write: persist the storage path now that upload succeeded
     await this.prisma.invoiceCorrection.update({
-      where: { orderId_correctedAmountInCents: { orderId, correctedAmountInCents } },
-      data: { correctiveStoragePath },
+      where: { orderId_correctionRequestKey: { orderId, correctionRequestKey } },
+      data: { correctiveStoragePath, vatBreakdownByRate: thisDeltaGrossByRate },
     });
 
     this.logger.log(
@@ -316,39 +354,63 @@ export class InvoiceService implements OnModuleInit {
   }
 
   /**
+   * Deterministic identity for "the set of order items being cancelled in
+   * this call" — sorted by orderItemId so argument order never matters.
+   * Used as the idempotency key instead of the resulting refund amount,
+   * which two distinct corrections can otherwise share.
+   */
+  private buildCorrectionRequestKey(cancelledItems: CorrectiveInvoiceItem[]): string {
+    const fingerprint = cancelledItems
+      .map((item) => `${item.orderItemId}:${item.quantity}`)
+      .sort()
+      .join('|');
+    return createHash('sha256').update(fingerprint).digest('hex');
+  }
+
+  /**
    * Groups the original order items and the items being cancelled in this
    * correction by VAT rate, so the corrective invoice can show, per rate,
    * the taxable base before and after the correction plus the net/VAT delta
    * — required by Art. 106j ust. 2 Ustawy o VAT. Rates untouched by this
    * correction (no cancelled items) are omitted from the breakdown.
+   *
+   * priorDeltaGrossByRate (keyed by VAT rate basis points, e.g. 2300 for 23%)
+   * is the sum of every earlier correction's deltaGross for that rate. It is
+   * subtracted from the pristine per-rate total so "original" reflects the
+   * taxable base as of immediately before THIS correction — not the order's
+   * pristine pre-any-correction total — keeping sequential corrective
+   * invoices internally consistent (corrected_invoice_N.original ==
+   * corrected_invoice_N-1.corrected).
    */
   private buildCorrectiveVatBreakdown(
     originalItems: Array<{ snapshotPrice: number; quantity: number; snapshotVatRate: number }>,
     cancelledItems: CorrectiveInvoiceItem[],
+    priorDeltaGrossByRate: Map<number, number> = new Map(),
   ): CorrectiveVatBreakdownRow[] {
     const byRate = new Map<number, { originalGross: number; deltaGross: number }>();
 
     for (const item of originalItems) {
-      const rate = item.snapshotVatRate / 10000;
-      const bucket = byRate.get(rate) ?? { originalGross: 0, deltaGross: 0 };
+      const bucket = byRate.get(item.snapshotVatRate) ?? { originalGross: 0, deltaGross: 0 };
       bucket.originalGross += item.snapshotPrice * item.quantity;
-      byRate.set(rate, bucket);
+      byRate.set(item.snapshotVatRate, bucket);
     }
 
     for (const item of cancelledItems) {
-      const rate = item.vatRate / 10000;
-      const bucket = byRate.get(rate) ?? { originalGross: 0, deltaGross: 0 };
+      const bucket = byRate.get(item.vatRate) ?? { originalGross: 0, deltaGross: 0 };
       bucket.deltaGross += item.priceInCents * item.quantity;
-      byRate.set(rate, bucket);
+      byRate.set(item.vatRate, bucket);
     }
 
     return Array.from(byRate.entries())
       .filter(([, bucket]) => bucket.deltaGross !== 0)
       .sort(([a], [b]) => b - a)
-      .map(([rate, bucket]) => {
-        const originalNetCents = Math.round(bucket.originalGross / (1 + rate));
-        const originalVatCents = bucket.originalGross - originalNetCents;
-        const correctedGross = bucket.originalGross - bucket.deltaGross;
+      .map(([vatRateBasisPoints, bucket]) => {
+        const rate = vatRateBasisPoints / 10000;
+        const priorDeltaGross = priorDeltaGrossByRate.get(vatRateBasisPoints) ?? 0;
+        const adjustedOriginalGross = bucket.originalGross - priorDeltaGross;
+        const originalNetCents = Math.round(adjustedOriginalGross / (1 + rate));
+        const originalVatCents = adjustedOriginalGross - originalNetCents;
+        const correctedGross = adjustedOriginalGross - bucket.deltaGross;
         const correctedNetCents = Math.round(correctedGross / (1 + rate));
         const correctedVatCents = correctedGross - correctedNetCents;
         return {

@@ -96,6 +96,7 @@ describe('PaymentsService', () => {
               findUniqueOrThrow: jest.fn(),
               update: jest.fn(),
               count: jest.fn().mockResolvedValue(0),
+              findMany: jest.fn().mockResolvedValue([]),
             },
             orderEvent: {
               create: jest.fn(),
@@ -107,6 +108,9 @@ describe('PaymentsService', () => {
             productVariant: {
               update: jest.fn(),
             },
+            couponUse: {
+              deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
             processedStripeEvent: {
               create: jest.fn().mockResolvedValue({}),
               deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -117,6 +121,7 @@ describe('PaymentsService', () => {
               findMany: jest.fn().mockResolvedValue([]),
             },
             $transaction: jest.fn(),
+            $executeRaw: jest.fn().mockResolvedValue(0),
           },
         },
         {
@@ -186,12 +191,14 @@ describe('PaymentsService', () => {
       if (typeof fn === 'function') {
         return fn({
           $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+          $executeRaw: jest.fn().mockResolvedValue(0),
           processedStripeEvent: prisma.processedStripeEvent,
           payment: prisma.payment,
           order: prisma.order,
           orderEvent: prisma.orderEvent,
           productVariant: prisma.productVariant,
           outboxMessage: prisma.outboxMessage,
+          couponUse: prisma.couponUse,
         });
       }
       return Promise.all(fn);
@@ -523,6 +530,147 @@ describe('PaymentsService', () => {
               note: expect.stringContaining('elevated'),
             }),
           }),
+        );
+      });
+    });
+
+    // ── Defense-in-depth: Stripe captured-amount assertion ────────────────────
+    // markSessionPaid must never trust payment.amountInCents blindly — it has to
+    // confirm Stripe actually collected that amount before marking the order PAID.
+
+    describe('amount mismatch guard', () => {
+      const mockPaymentForAmountCheck = {
+        ...mockPayment,
+        amountInCents: 14999,
+        order: {
+          ...mockPayment.order,
+          snapshotLastName: 'Kowalski',
+          snapshotStreet: 'ul. Testowa 1',
+          snapshotCity: 'Kraków',
+          snapshotPostalCode: '30-001',
+          snapshotCompany: null,
+          snapshotNip: null,
+          itemsTotalInCents: 13500,
+          shippingCostInCents: 1499,
+          discountInCents: 0,
+          couponCode: null,
+          carrierCode: 'INPOST',
+          createdAt: new Date('2026-01-15'),
+          items: [
+            { snapshotName: 'Dior 100ml', snapshotPrice: 13500, snapshotVatRate: 2300, quantity: 1 },
+          ],
+        },
+      };
+
+      it('holds the order for review instead of PAID when Stripe captured a different amount', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
+        );
+      });
+
+      it('still marks the payment COMPLETED on amount mismatch — Stripe did collect money, just not the expected amount', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(prisma.payment.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ status: PaymentStatus.COMPLETED }) }),
+        );
+      });
+
+      it('does not dispatch customer/admin post-payment notifications on amount mismatch', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(emailService.sendPaymentConfirmedWithInvoice).not.toHaveBeenCalled();
+        expect(emailService.sendPaymentConfirmed).not.toHaveBeenCalled();
+      });
+
+      it('does not send the Radar fraud-review email for a pure amount mismatch with normal risk', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+        stripeClient.retrievePaymentIntentWithCharge.mockResolvedValue({
+          latest_charge: { outcome: { risk_level: 'normal' } },
+        } as any);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        await Promise.resolve();
+        expect(emailService.sendFraudReviewAlert).not.toHaveBeenCalled();
+      });
+
+      it('raises a fatal Sentry alert tagged amount_mismatch', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(Sentry.withScope).toHaveBeenCalled();
+        const scopeCallback = (Sentry.withScope as jest.Mock).mock.calls.at(-1)[0];
+        const mockScope = { setLevel: jest.fn(), setTag: jest.fn(), setContext: jest.fn() };
+        scopeCallback(mockScope);
+        expect(mockScope.setLevel).toHaveBeenCalledWith('fatal');
+        expect(mockScope.setTag).toHaveBeenCalledWith('payment.event', 'amount_mismatch');
+        expect(Sentry.captureMessage).toHaveBeenCalledWith(
+          expect.stringContaining(mockPaymentForAmountCheck.order.orderNumber),
+          'fatal',
+        );
+      });
+
+      it('includes expected vs captured amounts in the orderEvent note', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
+        );
+
+        expect(prisma.orderEvent.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              note: expect.stringContaining('100'),
+            }),
+          }),
+        );
+      });
+
+      it('proceeds to PAID when the captured amount matches the expected amount exactly', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', {
+            ...mockSession,
+            amount_total: mockPaymentForAmountCheck.amountInCents,
+          }),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
+        );
+      });
+
+      it('does not flag a mismatch when Stripe omits amount_total (cannot prove a discrepancy)', async () => {
+        prisma.payment.findUnique.mockResolvedValue(mockPaymentForAmountCheck);
+
+        await service.handleWebhookEvent(
+          buildEvent('checkout.session.completed', { ...mockSession, amount_total: null }),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: OrderStatus.PAID } }),
         );
       });
     });
@@ -1161,6 +1309,8 @@ describe('PaymentsService', () => {
         'SUMMER20',
         mockOrderWithCoupon.itemsTotalInCents,
         mockOrderWithCoupon.userId,
+        undefined,
+        mockOrderWithCoupon.id,
       );
     });
 
@@ -1179,7 +1329,28 @@ describe('PaymentsService', () => {
         'SUMMER20',
         mockOrderWithCoupon.itemsTotalInCents,
         undefined,
+        undefined,
+        mockOrderWithCoupon.id,
       );
+    });
+
+    // ── self-reservation exclusion (round 12 fix) ───────────────────────────
+    // Invariant: re-validation must pass the order's own id as excludeOrderId
+    // so CouponService can exclude this order's already-reserved CouponUse row
+    // from the maxUsesTotal/maxUsesPerUser caps it already passed at order
+    // creation. Without this, the order that consumed the coupon's last slot
+    // can never pass re-validation again — not even on its first retry.
+
+    it('passes the order id as excludeOrderId so the order does not get re-counted against its own cap', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockOrderWithCoupon);
+      couponService.validate.mockResolvedValue({ valid: true });
+      stripeClient.createCheckoutSession.mockResolvedValue(mockSession as any);
+      prisma.payment.create.mockResolvedValue({ id: 'payment-1' } as any);
+
+      await service.initiatePayment('order-1');
+
+      const [, , , , excludeOrderId] = couponService.validate.mock.calls[0];
+      expect(excludeOrderId).toBe('order-1');
     });
   });
 
@@ -1429,6 +1600,114 @@ describe('PaymentsService', () => {
       await service.reconcilePendingPayments();
 
       expect(prisma.payment.findMany).not.toHaveBeenCalled();
+      expect(prisma.order.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Secondary sweep: orders left PENDING_PAYMENT with no Stripe session ──
+  describe('reconcilePendingPayments — orphaned PENDING_PAYMENT sweep', () => {
+    const orphanedOrder = {
+      id: 'order-orphan-1',
+      orderNumber: 'ORD-2026-000099',
+      couponId: null as string | null,
+      items: [{ productVariantId: 'pv-9', quantity: 3 }],
+    };
+
+    beforeEach(() => {
+      // No stale Stripe-session payments this tick — isolates the orphan sweep
+      prisma.payment.findMany.mockResolvedValue([]);
+    });
+
+    it('does nothing when no orphaned orders exist', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('cancels the order and restores stock for an orphaned order', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-orphan-1' },
+        data: { status: OrderStatus.CANCELLED },
+      });
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'pv-9' },
+        data: { stock: { increment: 3 } },
+      });
+      expect(prisma.orderEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          orderId: 'order-orphan-1',
+          fromStatus: OrderStatus.PENDING_PAYMENT,
+          toStatus: OrderStatus.CANCELLED,
+          actor: 'SYSTEM:reconcile-cron',
+        }),
+      });
+    });
+
+    it('surfaces the auto-cancellation via Sentry for manual review', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+      await service.reconcilePendingPayments();
+
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        'Auto-cancelled orphaned PENDING_PAYMENT order with no Stripe session',
+        'warning',
+      );
+    });
+
+    it('releases coupon capacity when the orphaned order used a coupon', async () => {
+      prisma.order.findMany.mockResolvedValue([{ ...orphanedOrder, couponId: 'coupon-1' }]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.couponUse.deleteMany).toHaveBeenCalledWith({
+        where: { orderId: 'order-orphan-1' },
+      });
+    });
+
+    it('does not touch coupon tables when the orphaned order has no coupon', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.couponUse.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('logs and captures the exception but does not throw when auto-cancellation fails', async () => {
+      prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+      prisma.$transaction.mockImplementationOnce(async () => {
+        throw new Error('DB unavailable');
+      });
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+      expect(Sentry.captureException).toHaveBeenCalled();
+    });
+
+    it('queries order.findMany for PENDING_PAYMENT older than 2h with no session on the Payment row', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+      const before = Date.now();
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.order.findMany).toHaveBeenCalledTimes(1);
+      const [callArg] = prisma.order.findMany.mock.calls[0];
+      expect(callArg.where.status).toBe(OrderStatus.PENDING_PAYMENT);
+      expect(callArg.where.OR).toEqual([
+        { payment: { is: null } },
+        { payment: { stripeCheckoutSessionId: null } },
+      ]);
+      const cutoff: Date = callArg.where.createdAt.lt;
+      expect(cutoff).toBeInstanceOf(Date);
+      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+      const after = Date.now();
+      expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - TWO_HOURS_MS - 1000);
+      expect(cutoff.getTime()).toBeLessThanOrEqual(after - TWO_HOURS_MS + 1000);
     });
   });
 
@@ -2221,6 +2500,63 @@ describe('PaymentsService', () => {
       expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123', 'order-1');
       expect(stockRestored).toContain('pv-1');
     });
+
+    it('omits the withdrawal reason from the orderEvent note when none is given', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+
+      let capturedNote: string | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          productVariant: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedNote = args.data.note;
+            }),
+          },
+        });
+      });
+
+      await service.refundPayment('order-1', 'CUSTOMER');
+
+      expect(capturedNote).toBe('Stripe refund issued for PaymentIntent pi_test_abc123');
+    });
+
+    it('appends the withdrawal reason to the same orderEvent note instead of creating a second event', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+
+      const orderEventCreate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          productVariant: { update: jest.fn() },
+          orderEvent: { create: orderEventCreate },
+        });
+      });
+
+      await service.refundPayment('order-1', 'CUSTOMER', 'Changed my mind');
+
+      expect(orderEventCreate).toHaveBeenCalledTimes(1);
+      expect(orderEventCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            fromStatus: mockPayment.order.status,
+            toStatus: OrderStatus.REFUNDED,
+            note: 'Stripe refund issued for PaymentIntent pi_test_abc123. Withdrawal reason: Changed my mind',
+          }),
+        }),
+      );
+    });
   });
 
   // ── Sentry error reporting ───────────────────────────────────────────────
@@ -2673,7 +3009,6 @@ describe('PaymentsService', () => {
         orderId: 'order-1',
         stripePaymentIntentId: 'pi_test_abc123',
       });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.approveFraudReview('order-1', 'ADMIN');
 
@@ -2697,7 +3032,6 @@ describe('PaymentsService', () => {
         orderId: 'order-1',
         stripePaymentIntentId: 'pi_test_abc123',
       });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.approveFraudReview('order-1', 'ADMIN');
 
@@ -2712,7 +3046,6 @@ describe('PaymentsService', () => {
         orderId: 'order-1',
         stripePaymentIntentId: null,
       });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.approveFraudReview('order-1', 'ADMIN:analyst');
 
@@ -2721,6 +3054,59 @@ describe('PaymentsService', () => {
           data: expect.objectContaining({ actor: 'ADMIN:analyst' }),
         }),
       );
+    });
+
+    // ── Outbox recovery safety net ──────────────────────────────────────────
+    // Regression coverage for: a crash between the PAID commit and the
+    // in-process notification dispatch used to permanently lose the invoice +
+    // confirmation email, because no OutboxMessage row backed this path.
+
+    it('inserts a POST_PAYMENT_NOTIFICATIONS outbox row atomically with the PAID transition', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(prisma.outboxMessage.create).toHaveBeenCalledWith({
+        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: 'order-1' },
+      });
+    });
+
+    it('marks the outbox row PROCESSED once the fast-path dispatch completes', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await Promise.resolve();
+
+      expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
+        where: { id: 'outbox-fraud-1' },
+        data: { status: 'PROCESSED', processedAt: expect.any(Date) },
+      });
+    });
+
+    it('still inserts the outbox row even if the order has no recoverable payment intent', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: null,
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(prisma.outboxMessage.create).toHaveBeenCalledWith({
+        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: 'order-1' },
+      });
     });
   });
 
@@ -2920,6 +3306,92 @@ describe('PaymentsService', () => {
       await expect(
         service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession)),
       ).resolves.not.toThrow();
+    });
+  });
+
+  // ── handlePaymentFailure — stock restore respects cancelledQuantity ────────
+  // Invariant: stock restore must credit only the still-active units
+  // (quantity - cancelledQuantity), matching the other three restore sites in
+  // payments.service.ts and orders.service.ts. Without this, an item that was
+  // partially cancelled before payment failed would be double-credited.
+
+  describe('handlePaymentFailure — stock restore respects cancelledQuantity', () => {
+    const buildFailureTx = (capturedState: {
+      stockRestored?: Array<{ id: string; increment: number }>;
+    }) =>
+      async (fn: any) => {
+        capturedState.stockRestored = [];
+        await fn({
+          $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+          processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedState.stockRestored!.push({
+                id: args.where.id,
+                increment: args.data.stock.increment,
+              });
+            }),
+          },
+        });
+      };
+
+    it('restores only the active quantity (quantity - cancelledQuantity) for a partially cancelled item', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        order: {
+          ...mockPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
+            { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFailureTx(state));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(state.stockRestored).toEqual(
+        expect.arrayContaining([
+          { id: 'pv-1', increment: 2 },
+          { id: 'pv-2', increment: 2 },
+        ]),
+      );
+    });
+
+    it('does not credit stock for an item that was already fully cancelled', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        order: {
+          ...mockPayment.order,
+          items: [
+            { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0
+            { productVariantId: 'pv-2', quantity: 1, cancelledQuantity: 0 }, // activeQty = 1
+          ],
+        },
+      });
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFailureTx(state));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(state.stockRestored).toEqual([
+        { id: 'pv-1', increment: 0 },
+        { id: 'pv-2', increment: 1 },
+      ]);
+    });
+
+    it('restores the full quantity when cancelledQuantity is absent (treated as 0)', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment); // items: [{ productVariantId: 'pv-1', quantity: 2 }]
+      const state: { stockRestored?: Array<{ id: string; increment: number }> } = {};
+      prisma.$transaction.mockImplementation(buildFailureTx(state));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(state.stockRestored).toEqual([{ id: 'pv-1', increment: 2 }]);
     });
   });
 
@@ -3349,7 +3821,7 @@ describe('PaymentsService', () => {
 
     // ── charge.dispute.closed — LOST ────────────────────────────────────────
 
-    it('cancels the order when dispute is lost', async () => {
+    it('moves the order to DISPUTE_LOST_REVIEW when dispute is lost', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
 
       let capturedOrderStatus: OrderStatus | undefined;
@@ -3370,10 +3842,14 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(capturedOrderStatus).toBe(OrderStatus.CANCELLED);
+      expect(capturedOrderStatus).toBe(OrderStatus.DISPUTE_LOST_REVIEW);
     });
 
-    it('restores stock when dispute is lost', async () => {
+    it('does not restore stock when dispute is lost — requires explicit admin confirmation first', async () => {
+      // Most real chargebacks involve goods that were genuinely delivered and aren't
+      // coming back. Auto-restoring stock here would oversell the SKU to a second
+      // customer. Stock is only restored once an admin confirms non-delivery via the
+      // standard admin status-update endpoint (DISPUTE_LOST_REVIEW → CANCELLED).
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
@@ -3385,16 +3861,12 @@ describe('PaymentsService', () => {
         },
       });
 
-      const stockRestored: Array<{ id: string; increment: number }> = [];
+      const productVariantUpdate = jest.fn();
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           order: { update: jest.fn() },
-          productVariant: {
-            update: jest.fn().mockImplementation((args: any) => {
-              stockRestored.push({ id: args.where.id, increment: args.data.stock.increment });
-            }),
-          },
+          productVariant: { update: productVariantUpdate },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -3403,17 +3875,12 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(stockRestored).toEqual(
-        expect.arrayContaining([
-          { id: 'pv-1', increment: 2 },
-          { id: 'pv-2', increment: 1 },
-        ]),
-      );
+      expect(productVariantUpdate).not.toHaveBeenCalled();
     });
 
-    it('still restores stock when dispute is lost even though a shipping label was generated (labelUrl set)', async () => {
-      // Regression guard: a generated label only proves a label was created, not that the
-      // parcel was delivered — the old labelUrl heuristic incorrectly skipped stock restore here.
+    it('does not restore stock when dispute is lost even though a shipping label was generated (labelUrl set)', async () => {
+      // A generated label only proves a label was created, not that the parcel was
+      // delivered — irrelevant either way now, since this path never auto-restores stock.
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
@@ -3423,16 +3890,12 @@ describe('PaymentsService', () => {
         },
       });
 
-      const stockUpdates: any[] = [];
+      const productVariantUpdate = jest.fn();
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           order: { update: jest.fn() },
-          productVariant: {
-            update: jest.fn().mockImplementation((args: any) => {
-              stockUpdates.push({ id: args.where.id, increment: args.data.stock.increment });
-            }),
-          },
+          productVariant: { update: productVariantUpdate },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -3441,7 +3904,7 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(stockUpdates).toEqual([{ id: 'pv-1', increment: 2 }]);
+      expect(productVariantUpdate).not.toHaveBeenCalled();
     });
 
     it('captures a Sentry fatal event when dispute is lost', async () => {

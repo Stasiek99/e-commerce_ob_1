@@ -572,24 +572,37 @@ describe('EmailQueueService', () => {
       );
     });
 
-    it('selects emailBounced, emailBouncedAt and emailComplained fields — avoids pulling full user row', async () => {
+    it('selects emailBounced, emailBouncedAt, emailBouncedType and emailComplained fields — avoids pulling full user row', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
 
       await service.sendEmailVerification({ to: 'u@t.com', firstName: 'Jan', verifyUrl: 'https://x' });
 
       const [callArg] = mockPrisma.user.findFirst.mock.calls[0];
-      expect(callArg.select).toEqual({ emailBounced: true, emailBouncedAt: true, emailComplained: true });
+      expect(callArg.select).toEqual({
+        emailBounced: true,
+        emailBouncedAt: true,
+        emailBouncedType: true,
+        emailComplained: true,
+      });
     });
   });
 
-  // ── transactional order emails bypass bounce suppression ───────────────────
+  // ── transactional order emails bypass bounce suppression — soft bounces only ─
   // Invariant: UoK Art. 21 requires order confirmation/payment/shipping emails
-  // to reach the customer on a durable medium even with a hard bounce on
-  // record — only non-order emails (e.g. marketing-adjacent) stay suppressed.
+  // to reach the customer on a durable medium even with a bounce on record —
+  // but only when the mailbox is still reachable (a Transient/soft bounce, e.g.
+  // mailbox full). A Permanent/hard bounce means the mailbox no longer exists,
+  // so there is no channel left and suppression must hold even for these
+  // emails — sustained sends to a dead address risk the sender's domain
+  // reputation for every customer, not just this one.
 
-  describe('transactional order emails bypass bounce suppression', () => {
-    it('still enqueues sendOrderConfirmation despite a fresh hard bounce', async () => {
-      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: new Date() });
+  describe('transactional order emails bypass bounce suppression for soft (transient) bounces only', () => {
+    it('still enqueues sendOrderConfirmation on a fresh soft (transient) bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailBouncedType: 'Transient',
+      });
 
       await service.sendOrderConfirmation({
         to: 'bounced@example.com',
@@ -602,8 +615,12 @@ describe('EmailQueueService', () => {
       expect(queueAdd).toHaveBeenCalledTimes(1);
     });
 
-    it('still enqueues sendShippingNotification despite a fresh hard bounce', async () => {
-      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: new Date() });
+    it('still enqueues sendShippingNotification on a fresh soft (transient) bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailBouncedType: 'Transient',
+      });
 
       await service.sendShippingNotification({
         to: 'bounced@example.com',
@@ -616,18 +633,77 @@ describe('EmailQueueService', () => {
       expect(queueAdd).toHaveBeenCalledTimes(1);
     });
 
-    it('still suppresses non-order emails (e.g. magic_link_login) on a fresh hard bounce', async () => {
-      mockPrisma.user.findFirst.mockResolvedValue({ emailBounced: true, emailBouncedAt: new Date() });
+    it('still suppresses sendOrderConfirmation on a fresh PERMANENT (hard) bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailBouncedType: 'Permanent',
+      });
+
+      await service.sendOrderConfirmation({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('still suppresses sendShippingNotification on a fresh PERMANENT (hard) bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailBouncedType: 'Permanent',
+      });
+
+      await service.sendShippingNotification({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        carrier: 'InPost',
+        trackingNumber: 'INP123',
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('suppresses a transactional order email when emailBouncedType is unknown (defaults closed, not open)', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailBouncedType: null,
+      });
+
+      await service.sendOrderConfirmation({
+        to: 'bounced@example.com',
+        orderNumber: 'ORD-1',
+        firstName: 'Jan',
+        items: [],
+        totalInCents: 9999,
+      });
+
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('still suppresses non-order emails (e.g. magic_link_login) on a fresh soft bounce', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue({
+        emailBounced: true,
+        emailBouncedAt: new Date(),
+        emailBouncedType: 'Transient',
+      });
 
       await service.sendMagicLink({ to: 'bounced@example.com', firstName: 'Jan', magicUrl: 'https://x' });
 
       expect(queueAdd).not.toHaveBeenCalled();
     });
 
-    it('a transactional order email bypassing suppression is still blocked by a spam complaint', async () => {
+    it('a transactional order email bypassing suppression on a soft bounce is still blocked by a spam complaint', async () => {
       mockPrisma.user.findFirst.mockResolvedValue({
         emailBounced: true,
         emailBouncedAt: new Date(),
+        emailBouncedType: 'Transient',
         emailComplained: true,
       });
 
@@ -657,7 +733,7 @@ describe('EmailQueueService', () => {
 
       expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
         where: { email: 'recovered@example.com' },
-        data: { emailBounced: false, emailBouncedAt: null, emailBouncedReason: null },
+        data: { emailBounced: false, emailBouncedAt: null, emailBouncedReason: null, emailBouncedType: null },
       });
       expect(queueAdd).toHaveBeenCalledTimes(1);
     });

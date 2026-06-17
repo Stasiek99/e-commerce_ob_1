@@ -26,6 +26,7 @@ enum OrderStatus {
   REFUNDED
   PARTIALLY_REFUNDED
   DISPUTE_HOLD
+  DISPUTE_LOST_REVIEW
 }
 
 enum PaymentStatus {
@@ -121,6 +122,7 @@ model User {
   emailBounced       Boolean   @default(false)
   emailBouncedAt     DateTime?
   emailBouncedReason String?
+  emailBouncedType   String?
   emailComplained       Boolean   @default(false)
   emailComplainedAt     DateTime?
   createdAt          DateTime  @default(now())
@@ -765,11 +767,20 @@ model InvoiceCorrection {
   correctiveInvoiceNumber String   @unique
   correctiveStoragePath   String?
   correctedAmountInCents  Int
+  // Per-VAT-rate gross delta for THIS correction only, keyed by rate in basis
+  // points (e.g. "2300"). Lets later corrections compute their taxable base
+  // as pristine-total-for-rate minus the sum of all prior corrections'
+  // deltas for that rate (Art. 106j ust. 2), instead of the pristine total.
+  vatBreakdownByRate      Json?
+  // sha256 fingerprint of the cancelled orderItemId:quantity pairs for this
+  // specific correction — identifies the correction itself, not its refund
+  // amount, so two unrelated corrections that net to the same amount don't collide.
+  correctionRequestKey    String
   refundReasonCode        String   @default("PARTIAL_CANCELLATION")
   issuedAt                DateTime @default(now())
   createdAt               DateTime @default(now())
 
-  @@unique([orderId, correctedAmountInCents])
+  @@unique([orderId, correctionRequestKey])
   @@index([orderId])
   @@map("invoice_corrections")
 }

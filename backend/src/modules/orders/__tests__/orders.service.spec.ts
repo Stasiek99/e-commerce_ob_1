@@ -193,6 +193,16 @@ describe('OrdersService', () => {
       prisma.$executeRawUnsafe.mockResolvedValue(undefined);
     });
 
+    it('validates the current year and next year before running any DDL', async () => {
+      const guardSpy = jest.spyOn(service as any, 'assertValidOrderSequenceYear');
+
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(guardSpy).toHaveBeenCalledWith(year);
+      expect(guardSpy).toHaveBeenCalledWith(year + 1);
+    });
+
     it('creates order_number_seq for the current year directly on the client', async () => {
       await service.onModuleInit();
 
@@ -258,6 +268,41 @@ describe('OrdersService', () => {
         // 6 attempts × 1 failing call each (rejects before the second sequence DDL)
         expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(6);
       });
+    });
+  });
+
+  // ─── assertValidOrderSequenceYear — year validation guard ────────────────────
+  // Regression guard for the $executeRawUnsafe/$queryRawUnsafe interpolation
+  // hardening shared by onModuleInit and generateOrderNumber, mirroring
+  // InvoiceService.ensureSequence. year is server-derived today, but this
+  // closes the gap if a future change ever threads a stored/client-influenced
+  // date into either raw-SQL path.
+
+  describe('assertValidOrderSequenceYear — year validation guard', () => {
+    it('throws for year below 2020 (lower boundary breach)', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2019)).toThrow(
+        'Invalid order sequence year: 2019',
+      );
+    });
+
+    it('throws for year above 2100 (upper boundary breach)', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2101)).toThrow(
+        'Invalid order sequence year: 2101',
+      );
+    });
+
+    it('throws for a non-integer year (floating-point injection vector)', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2024.5)).toThrow(
+        'Invalid order sequence year: 2024.5',
+      );
+    });
+
+    it('accepts year 2020 (lower boundary) without throwing', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2020)).not.toThrow();
+    });
+
+    it('accepts year 2100 (upper boundary) without throwing', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2100)).not.toThrow();
     });
   });
 
@@ -1018,11 +1063,11 @@ describe('OrdersService', () => {
       });
     });
 
-    // ─── sub-50gr total guard ─────────────────────────────────────────────────
-    // Stripe rejects PLN amounts below 50 gr with amount_too_small.
+    // ─── sub-200gr total guard ────────────────────────────────────────────────
+    // Stripe rejects PLN amounts below 2,00 zł with amount_too_small.
     // The guard must fire inside the transaction so the DB write never commits.
 
-    describe('sub-50gr total guard', () => {
+    describe('sub-200gr total guard', () => {
       const makeSingleItemCart = (priceInCents: number) => ({
         id: 'cart-1',
         items: [{
@@ -1058,7 +1103,7 @@ describe('OrdersService', () => {
         carrierCode: CarrierCode.DHL,
       };
 
-      it('throws BadRequestException when txTotal is 1 cent (below Stripe 50 gr minimum)', async () => {
+      it('throws BadRequestException when txTotal is 1 cent (below Stripe 200 gr minimum)', async () => {
         cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(1) as any);
         mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
         const tx = makeSubTx(1);
@@ -1069,7 +1114,7 @@ describe('OrdersService', () => {
         ).rejects.toThrow(BadRequestException);
       });
 
-      it('throws with the Polish minimum-amount message for sub-50gr totals', async () => {
+      it('throws with the Polish minimum-amount message for sub-200gr totals', async () => {
         cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(25) as any);
         mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
         const tx = makeSubTx(25);
@@ -1077,13 +1122,13 @@ describe('OrdersService', () => {
 
         await expect(
           service.createFromCart('user-1', undefined, 'test@example.com', guardDto),
-        ).rejects.toThrow('Kwota zamówienia jest zbyt niska (minimum 0,50 zł po rabacie).');
+        ).rejects.toThrow('Kwota zamówienia jest zbyt niska (minimum 2,00 zł po rabacie).');
       });
 
-      it('throws BadRequestException when txTotal is 49 cents (boundary just below Stripe minimum)', async () => {
-        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(49) as any);
+      it('throws BadRequestException when txTotal is 199 cents (boundary just below Stripe minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(199) as any);
         mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
-        const tx = makeSubTx(49);
+        const tx = makeSubTx(199);
         prisma.$transaction.mockImplementation((fn: any) => fn(tx));
 
         await expect(
@@ -1091,7 +1136,7 @@ describe('OrdersService', () => {
         ).rejects.toThrow(BadRequestException);
       });
 
-      it('does not call tx.order.create when the sub-50gr guard fires', async () => {
+      it('does not call tx.order.create when the sub-200gr guard fires', async () => {
         cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(10) as any);
         mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
         const tx = makeSubTx(10);
@@ -1104,10 +1149,10 @@ describe('OrdersService', () => {
         expect(tx.order.create).not.toHaveBeenCalled();
       });
 
-      it('does NOT fire the guard when txTotal is exactly 50 cents (at Stripe minimum)', async () => {
-        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(50) as any);
+      it('does NOT fire the guard when txTotal is exactly 200 cents (at Stripe minimum)', async () => {
+        cartService.getOrCreate.mockResolvedValue(makeSingleItemCart(200) as any);
         mockShippingRatesService.getRateForCarrier.mockResolvedValueOnce(0);
-        const tx = makeSubTx(50);
+        const tx = makeSubTx(200);
         prisma.$transaction.mockImplementation((fn: any) => fn(tx));
         paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe/pay' });
 
@@ -2225,6 +2270,44 @@ describe('OrdersService', () => {
         service.updateStatus('o-1', OrderStatus.PAID),
       ).resolves.not.toThrow();
     });
+
+    // ── DISPUTE_LOST_REVIEW → CANCELLED | REFUNDED ────────────────────────────
+    // A lost dispute lands here without auto-restoring stock (payments.service.ts).
+    // Only an explicit admin transition to CANCELLED (goods confirmed never
+    // delivered/returned) restores stock; REFUNDED (chargeback stands, goods kept
+    // by the customer) must not, or the oversell risk this gate exists to close
+    // reopens via a different status name.
+
+    it('restores stock on DISPUTE_LOST_REVIEW → CANCELLED (admin confirms non-delivery)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const tx = makeTx();
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(tx.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'pv-1' },
+        data: { stock: { increment: 2 } },
+      });
+    });
+
+    it('does not restore stock on DISPUTE_LOST_REVIEW → REFUNDED (chargeback stands)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const tx = makeTx();
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(tx.productVariant.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('createFromCart (coupon branches)', () => {
@@ -2518,7 +2601,7 @@ describe('OrdersService', () => {
 
       await service.cancelByUser('order-1', 'user-1');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER', undefined);
     });
 
     it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {
@@ -2571,11 +2654,11 @@ describe('OrdersService', () => {
 
       await service.cancelByUser('order-1', 'user-1');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER', undefined);
       expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
-    it('creates extra orderEvent when refunding a PAID order with a reason', async () => {
+    it('passes the withdrawal reason through to refundPayment for a PAID order', async () => {
       prisma.order.findFirst.mockResolvedValue({
         ...mockOrderWithItems,
         status: OrderStatus.PAID,
@@ -2583,10 +2666,10 @@ describe('OrdersService', () => {
 
       await service.cancelByUser('order-1', 'user-1', 'Withdrawal reason');
 
-      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ note: expect.stringContaining('Withdrawal reason') }),
-        }),
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith(
+        'order-1',
+        'CUSTOMER',
+        'Withdrawal reason',
       );
     });
   });
@@ -2932,6 +3015,118 @@ describe('OrdersService', () => {
       await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(BadRequestException);
 
       expect(paymentsService.initiatePayment).not.toHaveBeenCalled();
+    });
+
+    // ─── Stripe failure rollback ───────────────────────────────────────────
+    // Without this rollback, a Stripe error on retry left the order stuck in
+    // PENDING_PAYMENT with stock already decremented and no recovery path.
+
+    describe('Stripe failure rollback', () => {
+      const mockOrderNoCoupon = {
+        id: 'order-1',
+        userId: 'user-1',
+        orderNumber: 'ORD-2026-000050',
+        status: OrderStatus.PENDING_PAYMENT,
+        couponId: null,
+        items: [
+          { productVariantId: 'pv-1', quantity: 2 },
+          { productVariantId: 'pv-2', quantity: 1 },
+        ],
+      };
+
+      const buildRollbackTx = () => ({
+        productVariant: { update: jest.fn().mockResolvedValue({}) },
+        order: { update: jest.fn().mockResolvedValue({}) },
+        orderEvent: { create: jest.fn().mockResolvedValue({}) },
+        $executeRaw: jest.fn().mockResolvedValue(undefined),
+        couponUse: { deleteMany: jest.fn().mockResolvedValue({}) },
+      });
+
+      it('rethrows the Stripe error after rollback', async () => {
+        prisma.order.findFirst.mockResolvedValue(mockOrderNoCoupon);
+        paymentsService.initiatePayment.mockRejectedValue(new Error('Amount must be at least 2,00 zł'));
+        const tx = buildRollbackTx();
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow(
+          'Amount must be at least 2,00 zł',
+        );
+      });
+
+      it('restores stock for every order item on Stripe failure', async () => {
+        prisma.order.findFirst.mockResolvedValue(mockOrderNoCoupon);
+        paymentsService.initiatePayment.mockRejectedValue(new Error('Stripe down'));
+        const tx = buildRollbackTx();
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow('Stripe down');
+
+        expect(tx.productVariant.update).toHaveBeenCalledWith({
+          where: { id: 'pv-1' },
+          data: { stock: { increment: 2 } },
+        });
+        expect(tx.productVariant.update).toHaveBeenCalledWith({
+          where: { id: 'pv-2' },
+          data: { stock: { increment: 1 } },
+        });
+      });
+
+      it('cancels the order and records an order event on Stripe failure', async () => {
+        prisma.order.findFirst.mockResolvedValue(mockOrderNoCoupon);
+        paymentsService.initiatePayment.mockRejectedValue(new Error('Stripe down'));
+        const tx = buildRollbackTx();
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow('Stripe down');
+
+        expect(tx.order.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: { status: OrderStatus.CANCELLED },
+        });
+        expect(tx.orderEvent.create).toHaveBeenCalledWith({
+          data: {
+            orderId: 'order-1',
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM',
+            note: expect.stringContaining('Stripe down'),
+          },
+        });
+      });
+
+      it('releases coupon usage when the order had a coupon applied', async () => {
+        prisma.order.findFirst.mockResolvedValue({ ...mockOrderNoCoupon, couponId: 'coupon-1' });
+        paymentsService.initiatePayment.mockRejectedValue(new Error('Stripe down'));
+        const tx = buildRollbackTx();
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow('Stripe down');
+
+        expect(tx.$executeRaw).toHaveBeenCalled();
+        expect(tx.couponUse.deleteMany).toHaveBeenCalledWith({ where: { orderId: 'order-1' } });
+      });
+
+      it('does not touch coupon usage when the order had no coupon', async () => {
+        prisma.order.findFirst.mockResolvedValue(mockOrderNoCoupon);
+        paymentsService.initiatePayment.mockRejectedValue(new Error('Stripe down'));
+        const tx = buildRollbackTx();
+        prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+        await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow('Stripe down');
+
+        expect(tx.$executeRaw).not.toHaveBeenCalled();
+        expect(tx.couponUse.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('does not roll back when initiatePayment succeeds', async () => {
+        prisma.order.findFirst.mockResolvedValue(mockOrderNoCoupon);
+        paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://stripe.com/pay/session-xyz' });
+
+        const result = await service.retryPayment('order-1', 'user-1');
+
+        expect(result).toEqual({ paymentUrl: 'https://stripe.com/pay/session-xyz' });
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -3519,7 +3714,7 @@ describe('OrdersService', () => {
         'FV/2026/000001',
         69800,
         'PARTIAL_CANCELLATION',
-        [{ quantity: 2, priceInCents: 34900, vatRate: 2300 }],
+        [{ orderItemId: 'item-1', quantity: 2, priceInCents: 34900, vatRate: 2300 }],
       );
     });
 
@@ -3980,6 +4175,38 @@ describe('OrdersService', () => {
 
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000001`);
+    });
+
+    it('validates the year before querying the sequence', async () => {
+      const guardSpy = jest.spyOn(service as any, 'assertValidOrderSequenceYear');
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+          },
+          order: {
+            create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(guardSpy).toHaveBeenCalledWith(new Date().getFullYear());
     });
   });
 

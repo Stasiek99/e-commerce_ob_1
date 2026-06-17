@@ -103,6 +103,7 @@ export class EmailWebhookController {
             emailBounced: true,
             emailBouncedAt: new Date(),
             emailBouncedReason: data.bounce?.subType ?? data.bounce?.type ?? null,
+            emailBouncedType: data.bounce?.type ?? null,
           },
         });
       }

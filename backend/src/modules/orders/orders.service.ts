@@ -20,6 +20,7 @@ import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus } from '@p
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
 import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
+import { getStripeMinimumChargeInCents } from '../payments/stripe-minimum-charge.util';
 import type IORedis from 'ioredis';
 import { randomUUID } from 'node:crypto';
 
@@ -58,6 +59,9 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
   [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+  // Admin must explicitly confirm the goods were never delivered (→ CANCELLED, restores
+  // stock) or that the chargeback stands with goods kept by the customer (→ REFUNDED).
+  [OrderStatus.DISPUTE_LOST_REVIEW]: [OrderStatus.CANCELLED, OrderStatus.REFUNDED],
 };
 
 @Injectable()
@@ -76,10 +80,21 @@ export class OrdersService implements OnModuleInit {
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
+  // year is server-derived (Date.now()), never attacker input — this guards
+  // against a future change threading a stored/client-influenced date into
+  // this DDL/raw-SQL path, mirroring InvoiceService.ensureSequence.
+  private assertValidOrderSequenceYear(year: number): void {
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+      throw new Error(`Invalid order sequence year: ${year}`);
+    }
+  }
+
   async onModuleInit(): Promise<void> {
     const maxAttempts = 6;
     const baseDelayMs = 3_000;
     const year = new Date().getFullYear();
+    this.assertValidOrderSequenceYear(year);
+    this.assertValidOrderSequenceYear(year + 1);
     // CREATE SEQUENCE IF NOT EXISTS is idempotent — concurrent pod startups
     // are safe without an advisory lock. pg_advisory_xact_lock is ineffective
     // here because DATABASE_URL goes through pgbouncer in transaction mode,
@@ -309,9 +324,14 @@ export class OrdersService implements OnModuleInit {
 
       const txTotalInCents = Math.max(0, txItemsTotalInCents + shippingCostInCents - txDiscountInCents);
 
-      if (txTotalInCents > 0 && txTotalInCents < 50) {
+      const stripeCurrency = this.configService.get<string>('STRIPE_CURRENCY', 'pln');
+      const minimumChargeInCents = getStripeMinimumChargeInCents(stripeCurrency);
+      if (txTotalInCents > 0 && txTotalInCents < minimumChargeInCents) {
+        const minimumLabel = stripeCurrency.toLowerCase() === 'pln'
+          ? `${(minimumChargeInCents / 100).toFixed(2).replace('.', ',')} zł`
+          : `${(minimumChargeInCents / 100).toFixed(2)} ${stripeCurrency.toUpperCase()}`;
         throw new BadRequestException(
-          'Kwota zamówienia jest zbyt niska (minimum 0,50 zł po rabacie).',
+          `Kwota zamówienia jest zbyt niska (minimum ${minimumLabel} po rabacie).`,
         );
       }
 
@@ -777,18 +797,7 @@ export class OrdersService implements OnModuleInit {
       });
     } else {
       // PAID or PROCESSING — issue a full Stripe refund (handles stock + event)
-      await this.paymentsService.refundPayment(orderId, 'CUSTOMER');
-      if (reason) {
-        await this.prisma.orderEvent.create({
-          data: {
-            orderId,
-            fromStatus: OrderStatus.REFUNDED,
-            toStatus: OrderStatus.REFUNDED,
-            actor: 'CUSTOMER',
-            note: `Withdrawal reason: ${reason}`,
-          },
-        });
-      }
+      await this.paymentsService.refundPayment(orderId, 'CUSTOMER', reason);
     }
 
     // Cancellation / withdrawal confirmation email (fire-and-forget)
@@ -858,14 +867,53 @@ export class OrdersService implements OnModuleInit {
   }
 
   async retryPayment(orderId: string, userId: string): Promise<{ paymentUrl: string }> {
-    const order = await this.prisma.order.findFirst({ where: { id: orderId, userId } });
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true },
+    });
     if (!order) throw new NotFoundException('Order not found');
     if (order.status !== OrderStatus.PENDING_PAYMENT) {
       throw new BadRequestException(
         `Cannot retry payment for an order in status ${order.status}`,
       );
     }
-    return this.paymentsService.initiatePayment(orderId);
+
+    // Mirrors the rollback in createFromCart: if Stripe rejects the session
+    // (e.g. a pre-fix order below the minimum chargeable amount), the order
+    // must not stay PENDING_PAYMENT with stock decremented and no way out.
+    try {
+      return await this.paymentsService.initiatePayment(orderId);
+    } catch (stripeErr) {
+      this.logger.error(
+        `Payment retry failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
+      );
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+        await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+        if (order.couponId) {
+          await tx.$executeRaw`
+            UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+            WHERE id = ${order.couponId}::uuid
+          `;
+          await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+        }
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM',
+            note: `Payment retry failed: ${(stripeErr as Error).message}`,
+          },
+        });
+      });
+      throw stripeErr;
+    }
   }
 
   async cancelItemsByUser(
@@ -984,7 +1032,12 @@ export class OrdersService implements OnModuleInit {
           order.invoiceNumber,
           refundAmountInCents,
           'PARTIAL_CANCELLATION',
-          resolvedItems.map((i) => ({ quantity: i.quantity, priceInCents: i.priceInCents, vatRate: i.vatRate })),
+          resolvedItems.map((i) => ({
+            orderItemId: i.orderItemId,
+            quantity: i.quantity,
+            priceInCents: i.priceInCents,
+            vatRate: i.vatRate,
+          })),
         )
         .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
     }
@@ -1074,8 +1127,17 @@ export class OrdersService implements OnModuleInit {
     const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
     const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
 
+    // From DISPUTE_LOST_REVIEW, REFUNDED means the admin confirmed the chargeback
+    // stands (goods were delivered, not coming back) — restoring stock there would
+    // recreate the exact oversell risk this review gate exists to prevent. Only
+    // CANCELLED (admin confirms goods were never delivered/were returned) restores it.
+    const isUnverifiedDisputeLossPayout =
+      current.status === OrderStatus.DISPUTE_LOST_REVIEW && status === OrderStatus.REFUNDED;
+
     const shouldRestoreStock =
-      stockRestoringStatuses.includes(status) && !stockAlreadyRestored.includes(current.status);
+      stockRestoringStatuses.includes(status) &&
+      !stockAlreadyRestored.includes(current.status) &&
+      !isUnverifiedDisputeLossPayout;
 
     await this.prisma.$transaction(async (tx) => {
       if (shouldRestoreStock) {
@@ -1369,6 +1431,7 @@ export class OrdersService implements OnModuleInit {
     tx: Prisma.TransactionClient,
   ): Promise<string> {
     const year = new Date().getFullYear();
+    this.assertValidOrderSequenceYear(year);
 
     const result: Array<{ nextval: bigint }> = await tx.$queryRawUnsafe(
       `SELECT nextval('order_number_seq_${year}')`,

@@ -1,5 +1,5 @@
 import * as bcrypt from 'bcrypt';
-import { buildAdminAuthenticator } from '../admin.setup';
+import { buildAdminAuthenticator, regenerateSessionOnLogin } from '../admin.setup';
 
 jest.mock('bcrypt');
 
@@ -92,5 +92,56 @@ describe('buildAdminAuthenticator', () => {
 
       expect(mockBcrypt.compare).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('regenerateSessionOnLogin', () => {
+  it('calls next without regenerating when there is no authenticated passport user', () => {
+    const next = jest.fn();
+    const req: any = { session: {} };
+
+    regenerateSessionOnLogin(req, {} as any, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('regenerates the session and re-attaches the passport user on first authenticated request', () => {
+    const next = jest.fn();
+    const regenerate = jest.fn((cb: (err: Error | null) => void) => cb(null));
+    const session: any = { passport: { user: 'admin@example.com' }, regenerate };
+    const req: any = { session };
+
+    regenerateSessionOnLogin(req, {} as any, next);
+
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(session.passport).toEqual({ user: 'admin@example.com' });
+    expect(session._regenerated).toBe(true);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('does not regenerate again once the session has already been regenerated', () => {
+    const next = jest.fn();
+    const regenerate = jest.fn();
+    const session: any = { passport: { user: 'admin@example.com' }, _regenerated: true, regenerate };
+    const req: any = { session };
+
+    regenerateSessionOnLogin(req, {} as any, next);
+
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('forwards the error to next and does not mark the session as regenerated when regenerate fails', () => {
+    const next = jest.fn();
+    const error = new Error('store unavailable');
+    const regenerate = jest.fn((cb: (err: Error | null) => void) => cb(error));
+    const session: any = { passport: { user: 'admin@example.com' }, regenerate };
+    const req: any = { session };
+
+    regenerateSessionOnLogin(req, {} as any, next);
+
+    expect(next).toHaveBeenCalledWith(error);
+    expect(session._regenerated).toBeUndefined();
   });
 });

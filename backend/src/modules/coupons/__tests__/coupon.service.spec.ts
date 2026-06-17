@@ -50,6 +50,7 @@ describe('CouponService', () => {
             couponUse: {
               count: jest.fn(),
               create: jest.fn(),
+              findFirst: jest.fn(),
             },
             productVariant: {
               findMany: jest.fn(),
@@ -199,6 +200,83 @@ describe('CouponService', () => {
         const result = await service.validate('SAVE10', 5000);
 
         expect(result.valid).toBe(true);
+      });
+    });
+
+    describe('excludeOrderId — self-reservation exclusion on re-validation', () => {
+      it('does not query couponUse.findFirst when excludeOrderId is not provided', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ maxUsesTotal: 100, currentUses: 50 }));
+
+        await service.validate('SAVE10', 5000);
+
+        expect(prisma.couponUse.findFirst).not.toHaveBeenCalled();
+      });
+
+      it('queries couponUse.findFirst for the excluded order when excludeOrderId is provided', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon());
+        prisma.couponUse.findFirst.mockResolvedValue(null);
+
+        await service.validate('SAVE10', 5000, undefined, [], 'order-self');
+
+        expect(prisma.couponUse.findFirst).toHaveBeenCalledWith({
+          where: { couponId: 'coupon-1', orderId: 'order-self' },
+        });
+      });
+
+      it('treats the order own reservation as not counted — passes global cap it already reserved the last slot for', async () => {
+        // currentUses=100 includes this order's own +1 reservation from order creation.
+        // Without exclusion, 100 >= 100 would always fail re-validation for this order.
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ maxUsesTotal: 100, currentUses: 100 }));
+        prisma.couponUse.findFirst.mockResolvedValue({ id: 'use-1', orderId: 'order-self' });
+
+        const result = await service.validate('SAVE10', 5000, undefined, [], 'order-self');
+
+        expect(result.valid).toBe(true);
+      });
+
+      it('still fails the global cap when excludeOrderId is given but the order holds no reservation', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ maxUsesTotal: 100, currentUses: 100 }));
+        prisma.couponUse.findFirst.mockResolvedValue(null);
+
+        const result = await service.validate('SAVE10', 5000, undefined, [], 'order-self');
+
+        expect(result.valid).toBe(false);
+        expect(result.message).toMatch(/limit/);
+      });
+
+      it('still fails the global cap when uses exceed the limit even after excluding the own reservation', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ maxUsesTotal: 100, currentUses: 105 }));
+        prisma.couponUse.findFirst.mockResolvedValue({ id: 'use-1', orderId: 'order-self' });
+
+        const result = await service.validate('SAVE10', 5000, undefined, [], 'order-self');
+
+        expect(result.valid).toBe(false);
+      });
+
+      it('excludes the order own CouponUse row from the per-user count query', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ maxUsesPerUser: 1 }));
+        prisma.couponUse.findFirst.mockResolvedValue({ id: 'use-1', orderId: 'order-self' });
+        // 0 remaining uses once this order's own reservation is excluded from the count
+        prisma.couponUse.count.mockResolvedValue(0);
+
+        const result = await service.validate('SAVE10', 5000, 'user-1', [], 'order-self');
+
+        expect(prisma.couponUse.count).toHaveBeenCalledWith({
+          where: { couponId: 'coupon-1', userId: 'user-1', NOT: { orderId: 'order-self' } },
+        });
+        expect(result.valid).toBe(true);
+      });
+
+      it('does not add a NOT filter to the per-user count when the order holds no reservation', async () => {
+        prisma.coupon.findUnique.mockResolvedValue(makeCoupon({ maxUsesPerUser: 1 }));
+        prisma.couponUse.findFirst.mockResolvedValue(null);
+        prisma.couponUse.count.mockResolvedValue(0);
+
+        await service.validate('SAVE10', 5000, 'user-1', [], 'order-self');
+
+        expect(prisma.couponUse.count).toHaveBeenCalledWith({
+          where: { couponId: 'coupon-1', userId: 'user-1' },
+        });
       });
     });
 

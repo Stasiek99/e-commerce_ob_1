@@ -46,6 +46,7 @@ export class CouponService {
     cartTotalInCents: number,
     userId?: string,
     variantIds: string[] = [],
+    excludeOrderId?: string,
   ): Promise<CouponValidationResult> {
     const coupon = await this.prisma.coupon.findUnique({
       where: { code: code.trim().toUpperCase() },
@@ -62,7 +63,19 @@ export class CouponService {
     if (coupon.expiresAt && coupon.expiresAt < now) {
       return { valid: false, message: 'Ten kod wygasł.' };
     }
-    if (coupon.maxUsesTotal !== null && coupon.currentUses >= coupon.maxUsesTotal) {
+
+    // excludeOrderId is passed when re-validating an order's OWN already-reserved
+    // coupon use (payment initiation/retry) — that reservation was already counted
+    // against the caps atomically at order-creation time, so it must not be counted
+    // again here. Without this, the order that consumes the last maxUsesTotal/
+    // maxUsesPerUser slot can never pass re-validation, even on its very first
+    // payment attempt.
+    const ownUse = excludeOrderId
+      ? await this.prisma.couponUse.findFirst({ where: { couponId: coupon.id, orderId: excludeOrderId } })
+      : null;
+    const effectiveCurrentUses = ownUse ? coupon.currentUses - 1 : coupon.currentUses;
+
+    if (coupon.maxUsesTotal !== null && effectiveCurrentUses >= coupon.maxUsesTotal) {
       return { valid: false, message: 'Ten kod osiągnął limit użyć.' };
     }
 
@@ -71,7 +84,7 @@ export class CouponService {
         return { valid: false, message: 'Zaloguj się, aby użyć tego kodu rabatowego.' };
       }
       const userUses = await this.prisma.couponUse.count({
-        where: { couponId: coupon.id, userId },
+        where: { couponId: coupon.id, userId, ...(ownUse && { NOT: { orderId: excludeOrderId } } ) },
       });
       if (userUses >= coupon.maxUsesPerUser) {
         return { valid: false, message: 'Wykorzystałeś już limit użyć tego kodu.' };

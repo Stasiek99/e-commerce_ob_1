@@ -14,7 +14,7 @@
     "test:e2e:ui": "pnpm --filter e2e test:ui"
   },
   "engines": {
-    "node": ">=20",
+    "node": "22.20.0",
     "pnpm": ">=9"
   },
   "devDependencies": {
@@ -42,7 +42,39 @@
       "@tiptap/extension-text": "2.1.13",
       "@tiptap/extension-text-align": "2.1.13",
       "@tiptap/pm": "2.1.13",
-      "@tiptap/starter-kit": "2.1.13"
+      "@tiptap/starter-kit": "2.1.13",
+      "tar": "^7.5.16",
+      "minimatch@>=10.0.0 <10.2.5": "^10.2.5",
+      "serialize-javascript": "^7.0.5",
+      "hono": "^4.12.25",
+      "fast-uri": "^3.1.2",
+      "i18next-http-backend": "^3.0.5",
+      "ip-address": "^10.2.0",
+      "webpack-dev-server": "^5.2.5",
+      "ws": "^8.21.0",
+      "uuid": "^14.0.0",
+      "qs": "^6.15.2",
+      "react-router": "^6.30.4",
+      "@babel/plugin-transform-modules-systemjs": "^7.29.4",
+      "brace-expansion": "^5.0.6",
+      "shell-quote": "^1.8.4",
+      "js-cookie": "^3.0.8",
+      "esbuild": "^0.28.1",
+      "form-data": "^4.0.6",
+      "vite": "^7.3.5",
+      "launch-editor": "^2.14.1",
+      "js-yaml": "^4.2.0",
+      "@babel/core": "^7.29.6",
+      "markdown-it": "^14.2.0",
+      "@opentelemetry/core": "^2.8.0"
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-47759",
+        "CVE-2026-47760",
+        "CVE-2026-47761",
+        "CVE-2026-47762"
+      ]
     }
   },
   "dependencies": {

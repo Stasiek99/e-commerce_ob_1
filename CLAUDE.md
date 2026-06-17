@@ -145,6 +145,8 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 
 **Build-layout gotcha:** `backend/tsconfig.build.json` must include `"include": ["src/**/*"]`. Without it, any stray `.ts` file at `backend/` root (e.g. old smoke-test scripts) shifts TypeScript's computed rootDir up one level and the compiled entrypoint ends up at `dist/src/main.js` instead of `dist/main.js` — breaking the Railway start command.
 
+**Node version pin:** the root `.nvmrc` and the root `package.json` `engines.node` must always be set to the same exact version. CI's `actions/setup-node` reads `.nvmrc` via `node-version-file`. Railway's Railpack builder reads `engines.node` first (higher priority than `.nvmrc` — see [railpack.com/languages/node](https://railpack.com/languages/node/)), so `.nvmrc` alone would not pin the Railway runtime. Bumping the Node version means editing both files together, never just one.
+
 **Required Railway env vars** (set in the service's Variables tab — `backend/.env` is not used in production): all variables from `.env.example` — database URLs, JWT secrets, Google OAuth (with the Railway callback URL), Stripe keys + webhook secret, Resend API key, Supabase keys, Sentry DSN (optional), admin credentials, and `FRONTEND_URL` pointing at the deployed Vercel frontend.
 
 #### Production env var checklist

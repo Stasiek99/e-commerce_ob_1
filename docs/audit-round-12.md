@@ -2,7 +2,7 @@
 *Generated: 2026-06-16 — 5-agent stochastic consensus*
 *Agents: Domain Expert (payments/architecture) · Skeptic (fix-verification) · Pragmatist (ops/deploy) · First-Principles (invariant tracing) · Risk Analyst (security/IDOR/injection)*
 
-> **Excludes** everything already in `audit-weak-points.md`, `audit-round-2.md` through `audit-round-11.md`, and `project-gaps-audit.md` — condensed into `docs/audit-round-12-exclusion-list.md` (~280 prior findings).
+> **Excludes** everything already in `audit-weak-points.md`, `audit-round-2.md` through `audit-round-11.md`, and `project-gaps-audit.md` — condensed into `docs/audit-exclusion-list.md` (~280 prior findings; this round's 21 resolved findings have since been folded in too).
 > **Excludes** Phase 7 (pre-launch checklist) items in ROADMAP.md.
 
 A theme of this round, distinct from rounds 1-11: several findings here are **fixes from round 11 itself that re-introduce or relocate the bug they were meant to close** (corrective-invoice idempotency, dispute-lost stock restore, bounce suppression). The codebase has converged enough on auth/IDOR/injection basics that the Risk Analyst pass came back mostly clean — the remaining risk surface is now concentrated in **state-machine edge cases and the gap between independently-correct pieces of code composed in new contexts**, not missing guards.
@@ -21,11 +21,6 @@ This is exactly the failure mode the now-fixed `.gitignore` issue was supposed t
 
 ---
 
-
-
-
-
-Not yet:
 
 ## 🔴 CRITICAL — Corrective-invoice idempotency key collides on refund amount, not correction identity — silently swallows distinct partial cancellations *(Skeptic)*
 
@@ -147,6 +142,10 @@ The audit step exists, so it superficially looks like the "no CVE scanning" gap 
 
 **Fix:** Remove `continue-on-error` for `high`/`critical` findings, or at minimum pipe the audit output to a required status check separate from the main test job.
 
+**Resolved:** `continue-on-error` removed (commit `c95d30b`). That immediately turned up 69 real findings (1 critical, 27 high) — almost all transitive build-tooling deps (Angular CLI, webpack-dev-server, NestJS CLI), plus a handful with genuine production reach: `tar` (bcrypt's native-binary install step), `form-data`/`fast-uri` (axios, ajv), `serialize-javascript`/`@babel/*` (AdminJS theme bundling), `js-cookie` (resend's react-email renderer), and TinyMCE (AdminJS's product-description rich-text editor). Fixed via scoped `pnpm.overrides` in the root `package.json` — each pinned to a `^`-anchored patched version on the *same major* the tree already resolved, not a bare `>=floor` (an early pass using `pnpm audit --fix`'s raw output let `@babel/core` jump 7→8 silently and broke the Angular build; same latent risk existed for `vite`, `fast-uri`, `react-router`, `i18next-http-backend`, all now corrected and reverified with a full `pnpm install` + `pnpm build:backend` + `pnpm build:frontend`).
+
+One irreducible gap remains: **TinyMCE 6.8.6** (4 high CVEs, `CVE-2026-47759/60/61/62`) and a low-severity **`@tiptap/extension-link`** finding are both hard-pinned by `@adminjs/design-system@4.1.1` (latest published release — no newer version exists upstream). `@tinymce/tinymce-react@4.3.2` declares `tinymce: "^6.0.0 || ^5.5.1"` as a real (non-peer) dependency, so forcing `tinymce@^7.9.3` would contradict the package's own declared compatibility and risks silently breaking the editor's skin/icon loading at runtime — a class of regression that wouldn't surface in a build, only in the browser. Decision (confirmed with Stan 2026-06-17): accept this as tracked risk rather than force an unverified major bump — the admin panel is auth-gated, limiting blast radius to a compromised/malicious admin session. The 4 CVEs are explicitly allow-listed via `pnpm.auditConfig.ignoreCves` in `package.json` (so they fail loudly if anyone removes the entry, rather than silently passing). **Revisit when `@adminjs/design-system` ships a release with an updated `@tinymce/tinymce-react`.**
+
 ---
 
 ## 🟡 MEDIUM — Coverage gate is bypassable via `--passWithNoTests` on exactly the four money-path files it's meant to protect *(Pragmatist)*
@@ -238,7 +237,6 @@ After `refundPayment` already writes the correct `PAID → REFUNDED` transition 
 **Fix:** Attach `reason` to the original transition event instead of inserting a second nonsensical one — pass `reason` through to `refundPayment`'s own event-creation call.
 
 ---
-
 ## Notes — verified clean, not findings
 
 The Risk Analyst pass specifically targeted IDOR, injection, SSRF, hardcoded secrets, and coupon/cart fraud vectors not already in the exclusion list, and came back largely clean: all 15 controllers correctly scope "me"/"mine" endpoints off `@CurrentUser()`; no unparameterized SQL outside the two year-interpolation sites above; no new SSRF surface (all outbound calls hit hardcoded carrier/Stripe/Resend/Cloudflare/location-API domains); no hardcoded secrets beyond what prior rounds found; coupon discount is always recomputed server-side against fresh prices inside the order transaction, never trusted from a client preview call. This convergence is itself a useful signal — 11 rounds in, the auth/ownership/injection layer has largely stabilized, and remaining risk is concentrated in state-machine edge cases and the interaction between independently-shipped fixes (see the Skeptic and First-Principles findings above).

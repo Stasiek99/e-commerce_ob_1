@@ -30,9 +30,22 @@ export class DataRetentionCleanupService {
       this.logger.log(`Retention purge: deleted ${outboxCount} processed outbox message(s) older than ${OUTBOX_RETENTION_DAYS} days`);
     }
 
+    // Preserve the audit trail for still-bounced addresses: deleting these
+    // EmailLog rows would destroy the only evidence of *why* transactional
+    // emails were suppressed, while the emailBounced flag itself can persist
+    // far longer than the 365-day log retention window.
+    const bouncedUsers = await this.prisma.user.findMany({
+      where: { emailBounced: true },
+      select: { email: true },
+    });
+    const bouncedEmails = bouncedUsers.map((u) => u.email);
+
     const emailLogCutoff = new Date(Date.now() - EMAIL_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
     const { count: emailLogCount } = await this.prisma.emailLog.deleteMany({
-      where: { createdAt: { lt: emailLogCutoff } },
+      where: {
+        createdAt: { lt: emailLogCutoff },
+        ...(bouncedEmails.length > 0 && { to: { notIn: bouncedEmails } }),
+      },
     });
     if (emailLogCount > 0) {
       this.logger.log(`Retention purge: deleted ${emailLogCount} email log(s) older than ${EMAIL_LOG_RETENTION_DAYS} days`);

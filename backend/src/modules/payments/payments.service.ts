@@ -43,6 +43,8 @@ export class PaymentsService {
         order.couponCode,
         order.itemsTotalInCents,
         order.userId ?? undefined,
+        undefined,
+        order.id,
       );
       if (!couponCheck.valid) {
         throw new BadRequestException(
@@ -292,6 +294,37 @@ export class PaymentsService {
       return;
     }
 
+    // Defense-in-depth: every other safeguard in this module assumes
+    // payment.amountInCents (== order.totalInCents at session-creation time)
+    // is what Stripe actually collected. Assert it here so a bug elsewhere
+    // (stale price, concurrent shipping-rate change, wrong line items) can
+    // never silently mark an order PAID for the wrong amount. amount_total
+    // can be null in Stripe's types for non-payment modes — this app only
+    // uses 'payment' mode, but we don't flag a mismatch we can't prove.
+    const capturedAmountInCents = session.amount_total;
+    const amountMismatch =
+      capturedAmountInCents != null && capturedAmountInCents !== payment.amountInCents;
+
+    if (amountMismatch) {
+      this.logger.error(
+        `[CRITICAL] Amount mismatch for order ${payment.order.orderNumber}: Stripe captured ${capturedAmountInCents} but expected ${payment.amountInCents} (session ${session.id}) — holding for review instead of marking PAID`,
+      );
+      Sentry.withScope((scope) => {
+        scope.setLevel('fatal');
+        scope.setTag('payment.event', 'amount_mismatch');
+        scope.setContext('payment', {
+          orderNumber: payment.order.orderNumber,
+          sessionId: session.id,
+          expectedAmountInCents: payment.amountInCents,
+          capturedAmountInCents,
+        });
+        Sentry.captureMessage(
+          `Stripe amount mismatch: order ${payment.order.orderNumber} expected ${payment.amountInCents} but Stripe captured ${capturedAmountInCents}`,
+          'fatal',
+        );
+      });
+    }
+
     const paymentIntentId =
       typeof session.payment_intent === 'string'
         ? session.payment_intent
@@ -312,7 +345,8 @@ export class PaymentsService {
     }
 
     const isFraudFlagged = radarRiskLevel === 'elevated' || radarRiskLevel === 'highest';
-    const newOrderStatus = isFraudFlagged ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
+    const requiresReview = isFraudFlagged || amountMismatch;
+    const newOrderStatus = requiresReview ? OrderStatus.FRAUD_REVIEW : OrderStatus.PAID;
 
     let outboxId: string | undefined;
     try {
@@ -345,16 +379,18 @@ export class PaymentsService {
             fromStatus: payment.order.status as OrderStatus,
             toStatus: newOrderStatus,
             actor: 'SYSTEM:stripe-webhook',
-            note: isFraudFlagged
-              ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
-              : `Stripe session ${session.id}`,
+            note: amountMismatch
+              ? `Stripe session ${session.id} — held for review: captured ${capturedAmountInCents} but expected ${payment.amountInCents}`
+              : isFraudFlagged
+                ? `Stripe session ${session.id} — held for fraud review (Radar risk: ${radarRiskLevel})`
+                : `Stripe session ${session.id}`,
           },
         });
 
         // Insert outbox row atomically alongside the payment flip so a crash
         // between this commit and the in-process dispatch can be recovered by
         // the OutboxProcessorService poller without relying on Stripe retries.
-        if (!isFraudFlagged) {
+        if (!requiresReview) {
           const outbox = await tx.outboxMessage.create({
             data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: payment.orderId },
           });
@@ -379,32 +415,39 @@ export class PaymentsService {
     const paidSessionCouponId = this.extractSessionCouponId(session);
     if (paidSessionCouponId) await this.stripeClient.deleteCoupon(paidSessionCouponId);
 
-    if (isFraudFlagged) {
-      this.logger.warn(
-        `Order ${payment.order.orderNumber} held for FRAUD_REVIEW — Radar risk level: ${radarRiskLevel}`,
-      );
-      const adminEmail =
-        this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
-        this.configService.get<string>('EMAIL_FROM');
-      if (adminEmail) {
-        const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
-        this.emailService
-          .sendFraudReviewAlert({
-            to: adminEmail,
-            orderNumber: payment.order.orderNumber,
-            customerEmail: payment.order.snapshotEmail,
-            totalInCents: payment.order.totalInCents,
-            radarRiskLevel,
-            adminUrl: frontendUrl
-              ? `${frontendUrl}/admin/orders/${payment.orderId}`
-              : undefined,
-          })
-          .catch((err: Error) => {
-            this.logger.error(
-              `Fraud review alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
-            );
-            Sentry.captureException(err);
-          });
+    if (requiresReview) {
+      if (amountMismatch) {
+        this.logger.warn(
+          `Order ${payment.order.orderNumber} held for review — Stripe captured amount mismatch (session ${session.id})`,
+        );
+      }
+      if (isFraudFlagged) {
+        this.logger.warn(
+          `Order ${payment.order.orderNumber} held for FRAUD_REVIEW — Radar risk level: ${radarRiskLevel}`,
+        );
+        const adminEmail =
+          this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
+          this.configService.get<string>('EMAIL_FROM');
+        if (adminEmail) {
+          const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+          this.emailService
+            .sendFraudReviewAlert({
+              to: adminEmail,
+              orderNumber: payment.order.orderNumber,
+              customerEmail: payment.order.snapshotEmail,
+              totalInCents: payment.order.totalInCents,
+              radarRiskLevel,
+              adminUrl: frontendUrl
+                ? `${frontendUrl}/admin/orders/${payment.orderId}`
+                : undefined,
+            })
+            .catch((err: Error) => {
+              this.logger.error(
+                `Fraud review alert email failed for order ${payment.order.orderNumber}: ${err.message}`,
+              );
+              Sentry.captureException(err);
+            });
+        }
       }
       // Customer is NOT notified until admin approves — do not reveal the hold.
       return;
@@ -451,9 +494,13 @@ export class PaymentsService {
 
     const payment = await this.prisma.payment.findUniqueOrThrow({ where: { orderId } });
 
-    await this.prisma.$transaction([
-      this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } }),
-      this.prisma.orderEvent.create({
+    // Insert the outbox row atomically alongside the PAID transition — mirrors
+    // markSessionPaid — so a crash between this commit and the in-process
+    // dispatch below can still be recovered by OutboxProcessorService instead
+    // of permanently losing the invoice + confirmation email.
+    const outboxId = await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } });
+      await tx.orderEvent.create({
         data: {
           orderId,
           fromStatus: OrderStatus.FRAUD_REVIEW,
@@ -461,11 +508,23 @@ export class PaymentsService {
           actor,
           note: 'Fraud review cleared — order approved',
         },
-      }),
-    ]);
+      });
+      const outbox = await tx.outboxMessage.create({
+        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId },
+      });
+      return outbox.id;
+    });
 
     this.logger.log(`Fraud review approved for order ${order.orderNumber} by ${actor}`);
+
+    // Fast path: dispatch notifications immediately for low latency. If the
+    // process crashes here before the outbox can be marked PROCESSED,
+    // OutboxProcessorService will recover after its 30s delay.
     this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
+
+    this.prisma.outboxMessage
+      .update({ where: { id: outboxId }, data: { status: 'PROCESSED', processedAt: new Date() } })
+      .catch((err) => this.logger.warn(`Outbox mark-processed failed: ${(err as Error).message}`));
   }
 
   private dispatchPostPaymentNotifications(
@@ -872,33 +931,113 @@ export class PaymentsService {
       include: { order: { include: { items: true } } },
     });
 
-    if (stale.length === 0) return;
-    this.logger.log(`Reconciliation: found ${stale.length} stale PENDING payment(s)`);
+    if (stale.length > 0) {
+      this.logger.log(`Reconciliation: found ${stale.length} stale PENDING payment(s)`);
 
-    for (const payment of stale) {
-      try {
-        const session = await this.stripeClient.retrieveCheckoutSession(
-          payment.stripeCheckoutSessionId!,
-        );
-
-        if (session.payment_status === 'paid') {
-          await this.markSessionPaid(session);
-        } else if (session.status === 'expired') {
-          await this.handlePaymentFailure(
-            payment.id,
-            payment.orderId,
-            payment.order.items,
-            'Reconciliation: session expired',
+      for (const payment of stale) {
+        try {
+          const session = await this.stripeClient.retrieveCheckoutSession(
+            payment.stripeCheckoutSessionId!,
           );
+
+          if (session.payment_status === 'paid') {
+            await this.markSessionPaid(session);
+          } else if (session.status === 'expired') {
+            await this.handlePaymentFailure(
+              payment.id,
+              payment.orderId,
+              payment.order.items,
+              'Reconciliation: session expired',
+            );
+          }
+          // status=open means the customer may still complete payment — leave it
+        } catch (err) {
+          this.logger.error(
+            `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
+          );
+          Sentry.withScope((scope) => {
+            scope.setTag('payment.event', 'reconciliation_failed');
+            scope.setContext('payment', { paymentId: payment.id });
+            Sentry.captureException(err);
+          });
         }
-        // status=open means the customer may still complete payment — leave it
-      } catch (err) {
-        this.logger.error(
-          `Reconciliation failed for payment ${payment.id}: ${(err as Error).message}`,
+      }
+    }
+
+    await this.sweepOrphanedPendingOrders();
+  }
+
+  /**
+   * Secondary sweep: catches orders stuck in PENDING_PAYMENT whose payment
+   * attempt failed before any Stripe Checkout Session ID was recorded (e.g.
+   * coupon re-validation or the Stripe API call itself threw on a retry path
+   * that doesn't roll back synchronously). These are invisible to the sweep
+   * above, which can only reconcile against a session ID. Cancels the order
+   * and restores stock + coupon capacity, mirroring the synchronous rollback
+   * already used by OrdersService.createFromCart / retryPayment.
+   */
+  private async sweepOrphanedPendingOrders(): Promise<void> {
+    const orphanCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const orphaned = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.PENDING_PAYMENT,
+        createdAt: { lt: orphanCutoff },
+        OR: [{ payment: { is: null } }, { payment: { stripeCheckoutSessionId: null } }],
+      },
+      include: { items: true },
+    });
+
+    if (orphaned.length === 0) return;
+    this.logger.warn(
+      `Reconciliation: found ${orphaned.length} orphaned PENDING_PAYMENT order(s) with no Stripe session — auto-cancelling`,
+    );
+
+    for (const order of orphaned) {
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          for (const item of order.items) {
+            await tx.productVariant.update({
+              where: { id: item.productVariantId },
+              data: { stock: { increment: item.quantity } },
+            });
+          }
+          await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+          if (order.couponId) {
+            await tx.$executeRaw`
+              UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+              WHERE id = ${order.couponId}::uuid
+            `;
+            await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+          }
+          await tx.orderEvent.create({
+            data: {
+              orderId: order.id,
+              fromStatus: OrderStatus.PENDING_PAYMENT,
+              toStatus: OrderStatus.CANCELLED,
+              actor: 'SYSTEM:reconcile-cron',
+              note: 'Auto-cancelled: no Stripe session was ever recorded for this order',
+            },
+          });
+        });
+
+        this.logger.warn(
+          `Auto-cancelled orphaned order ${order.orderNumber} (${order.id}) — stock and coupon capacity restored`,
         );
         Sentry.withScope((scope) => {
-          scope.setTag('payment.event', 'reconciliation_failed');
-          scope.setContext('payment', { paymentId: payment.id });
+          scope.setTag('payment.event', 'orphaned_pending_order_cancelled');
+          scope.setContext('order', { orderId: order.id, orderNumber: order.orderNumber });
+          Sentry.captureMessage(
+            'Auto-cancelled orphaned PENDING_PAYMENT order with no Stripe session',
+            'warning',
+          );
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to auto-cancel orphaned order ${order.id}: ${(err as Error).message}`,
+        );
+        Sentry.withScope((scope) => {
+          scope.setTag('payment.event', 'orphaned_order_cancel_failed');
+          scope.setContext('order', { orderId: order.id });
           Sentry.captureException(err);
         });
       }
@@ -937,7 +1076,7 @@ export class PaymentsService {
    * Issues a full Stripe refund, restores stock, and marks order as REFUNDED.
    * Call from the admin panel or an admin-only API endpoint.
    */
-  async refundPayment(orderId: string, actor = 'ADMIN'): Promise<void> {
+  async refundPayment(orderId: string, actor = 'ADMIN', reason?: string): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
       include: { order: { select: { orderNumber: true, status: true, items: true } } },
@@ -992,7 +1131,9 @@ export class PaymentsService {
             fromStatus: payment.order.status,
             toStatus: OrderStatus.REFUNDED,
             actor,
-            note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
+            note: reason
+              ? `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}. Withdrawal reason: ${reason}`
+              : `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
           },
         });
       });
@@ -1282,9 +1423,12 @@ export class PaymentsService {
         `Dispute ${dispute.id} WON: order ${payment.order.orderNumber} restored to ${restoreStatus}`,
       );
     } else if (dispute.status === 'lost') {
-      // Funds already taken by Stripe. A generated shipping label only proves a label was
-      // created, not that the parcel was delivered — restore stock by default and let an
-      // admin manually adjust if goods are provably delivered.
+      // Funds already taken by Stripe. Most real chargebacks involve goods that were
+      // genuinely delivered and aren't coming back — auto-restoring stock here would
+      // oversell that SKU to a second customer. Land the order in DISPUTE_LOST_REVIEW
+      // instead and require an admin to explicitly confirm non-delivery (via the
+      // standard admin status-update endpoint, transitioning to CANCELLED) before
+      // stock is incremented.
       try {
         await this.prisma.$transaction(async (tx) => {
           if (eventId) {
@@ -1292,24 +1436,15 @@ export class PaymentsService {
           }
           await tx.order.update({
             where: { id: payment.orderId },
-            data: { status: OrderStatus.CANCELLED },
+            data: { status: OrderStatus.DISPUTE_LOST_REVIEW },
           });
-          for (const item of payment.order.items) {
-            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-            if (activeQty > 0) {
-              await tx.productVariant.update({
-                where: { id: item.productVariantId },
-                data: { stock: { increment: activeQty } },
-              });
-            }
-          }
           await tx.orderEvent.create({
             data: {
               orderId: payment.orderId,
               fromStatus: OrderStatus.DISPUTE_HOLD,
-              toStatus: OrderStatus.CANCELLED,
+              toStatus: OrderStatus.DISPUTE_LOST_REVIEW,
               actor: 'SYSTEM:stripe-webhook',
-              note: `Dispute ${dispute.id} closed LOST — stock restored`,
+              note: `Dispute ${dispute.id} closed LOST — stock NOT restored, pending admin confirmation of non-delivery`,
             },
           });
         });
@@ -1322,18 +1457,19 @@ export class PaymentsService {
       }
 
       this.logger.error(
-        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled, stock restored.`,
+        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} moved to DISPUTE_LOST_REVIEW — stock NOT restored, admin review required.`,
       );
       Sentry.withScope((scope) => {
         scope.setLevel('fatal');
         scope.setTag('payment.event', 'dispute_lost');
+        scope.setTag('stock_restored', 'false');
         scope.setContext('dispute', {
           disputeId: dispute.id,
           orderNumber: payment.order.orderNumber,
           amount: dispute.amount,
         });
         Sentry.captureMessage(
-          `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed`,
+          `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed, stock NOT restored, admin must confirm non-delivery before restoring`,
           'fatal',
         );
       });
@@ -1405,7 +1541,7 @@ export class PaymentsService {
   private async handlePaymentFailure(
     paymentId: string,
     orderId: string,
-    orderItems: Array<{ productVariantId: string; quantity: number }>,
+    orderItems: Array<{ productVariantId: string; quantity: number; cancelledQuantity: number }>,
     failureReason: string,
     eventId?: string,
     sessionId?: string,
@@ -1450,9 +1586,10 @@ export class PaymentsService {
         });
 
         for (const item of orderItems) {
+          const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
           await tx.productVariant.update({
             where: { id: item.productVariantId },
-            data: { stock: { increment: item.quantity } },
+            data: { stock: { increment: activeQuantity } },
           });
         }
 

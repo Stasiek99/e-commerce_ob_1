@@ -292,6 +292,26 @@ describe('EmailWebhookController', () => {
           expect(callArg.data.emailBouncedReason).toBe('General');
         });
 
+        it('sets emailBouncedType from the bounce type (Permanent vs Transient) — drives suppression bypass', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-bounce-perm', ['bounced@customer.com']));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          const [callArg] = prisma.user.updateMany.mock.calls[0];
+          expect(callArg.data.emailBouncedType).toBe('Permanent');
+        });
+
+        it('sets emailBouncedType to Transient for a soft bounce (e.g. mailbox full)', async () => {
+          const event = makeEvent('email.bounced', 'em-bounce-soft', ['bounced@customer.com']);
+          event.data.bounce = { message: 'Mailbox full', subType: 'MailboxFull', type: 'Transient' };
+          const req = makeReq(event);
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          const [callArg] = prisma.user.updateMany.mock.calls[0];
+          expect(callArg.data.emailBouncedType).toBe('Transient');
+        });
+
         it('still calls user.updateMany even when the bounced address has no user row (updateMany is safe for 0 matches)', async () => {
           prisma.user.updateMany.mockResolvedValue({ count: 0 });
           const req = makeReq(makeEvent('email.bounced', 'em-guest', ['guest@nonexistent.com']));
