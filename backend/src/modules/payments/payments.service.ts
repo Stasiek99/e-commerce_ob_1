@@ -1189,7 +1189,11 @@ export class PaymentsService {
     // Cap against the remaining balance to prevent over-refund from rounding accumulation
     // across multiple partial cancels of the same order.
     const refundAmountInCents = Math.min(rawRefundAmountInCents, available);
-    const idempotencyKey = `${orderId}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
+    // refundedAmountInCents is the running total before this refund — baking it in
+    // disambiguates sequential calls that happen to cancel the same item/quantity twice
+    // (e.g. cancel 1 of A, 2 of B, then 1 more of A), which would otherwise produce an
+    // identical key and make Stripe replay the cached result of the earlier call.
+    const idempotencyKey = `${orderId}-${payment.refundedAmountInCents}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
 
     await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
 

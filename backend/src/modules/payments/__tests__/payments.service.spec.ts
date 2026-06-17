@@ -1841,6 +1841,26 @@ describe('PaymentsService', () => {
       expect(key1).toBe(key2);
     });
 
+    it('produces a different idempotency key for identical item/quantity pairs when refundedAmountInCents differs', async () => {
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      prisma.payment.findUnique.mockResolvedValue({ ...completedPayment, refundedAmountInCents: 0 });
+      prisma.$transaction.mockImplementation(buildPartialTx());
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+      const firstCallKey = (stripeClient.createPartialRefund as jest.Mock).mock.calls[0][2];
+
+      (stripeClient.createPartialRefund as jest.Mock).mockClear();
+
+      // Simulates a later, unrelated cancellation that happens to repeat the same
+      // orderItemId:quantity pairs — refundedAmountInCents has moved on from the first call.
+      prisma.payment.findUnique.mockResolvedValue({ ...completedPayment, refundedAmountInCents: 50000 });
+      prisma.$transaction.mockImplementation(buildPartialTx());
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+      const laterCallKey = (stripeClient.createPartialRefund as jest.Mock).mock.calls[0][2];
+
+      expect(firstCallKey).not.toBe(laterCallKey);
+    });
+
     it('increments cancelledQuantity for each item', async () => {
       prisma.payment.findUnique.mockResolvedValue(completedPayment);
       stripeClient.createPartialRefund.mockResolvedValue({} as any);
