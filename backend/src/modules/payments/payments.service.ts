@@ -492,9 +492,13 @@ export class PaymentsService {
 
     const payment = await this.prisma.payment.findUniqueOrThrow({ where: { orderId } });
 
-    await this.prisma.$transaction([
-      this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } }),
-      this.prisma.orderEvent.create({
+    // Insert the outbox row atomically alongside the PAID transition — mirrors
+    // markSessionPaid — so a crash between this commit and the in-process
+    // dispatch below can still be recovered by OutboxProcessorService instead
+    // of permanently losing the invoice + confirmation email.
+    const outboxId = await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } });
+      await tx.orderEvent.create({
         data: {
           orderId,
           fromStatus: OrderStatus.FRAUD_REVIEW,
@@ -502,11 +506,23 @@ export class PaymentsService {
           actor,
           note: 'Fraud review cleared — order approved',
         },
-      }),
-    ]);
+      });
+      const outbox = await tx.outboxMessage.create({
+        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId },
+      });
+      return outbox.id;
+    });
 
     this.logger.log(`Fraud review approved for order ${order.orderNumber} by ${actor}`);
+
+    // Fast path: dispatch notifications immediately for low latency. If the
+    // process crashes here before the outbox can be marked PROCESSED,
+    // OutboxProcessorService will recover after its 30s delay.
     this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
+
+    this.prisma.outboxMessage
+      .update({ where: { id: outboxId }, data: { status: 'PROCESSED', processedAt: new Date() } })
+      .catch((err) => this.logger.warn(`Outbox mark-processed failed: ${(err as Error).message}`));
   }
 
   private dispatchPostPaymentNotifications(

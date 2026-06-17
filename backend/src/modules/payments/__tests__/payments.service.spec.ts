@@ -2814,7 +2814,6 @@ describe('PaymentsService', () => {
         orderId: 'order-1',
         stripePaymentIntentId: 'pi_test_abc123',
       });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.approveFraudReview('order-1', 'ADMIN');
 
@@ -2838,7 +2837,6 @@ describe('PaymentsService', () => {
         orderId: 'order-1',
         stripePaymentIntentId: 'pi_test_abc123',
       });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.approveFraudReview('order-1', 'ADMIN');
 
@@ -2853,7 +2851,6 @@ describe('PaymentsService', () => {
         orderId: 'order-1',
         stripePaymentIntentId: null,
       });
-      prisma.$transaction.mockResolvedValue([{}, {}]);
 
       await service.approveFraudReview('order-1', 'ADMIN:analyst');
 
@@ -2862,6 +2859,59 @@ describe('PaymentsService', () => {
           data: expect.objectContaining({ actor: 'ADMIN:analyst' }),
         }),
       );
+    });
+
+    // ── Outbox recovery safety net ──────────────────────────────────────────
+    // Regression coverage for: a crash between the PAID commit and the
+    // in-process notification dispatch used to permanently lose the invoice +
+    // confirmation email, because no OutboxMessage row backed this path.
+
+    it('inserts a POST_PAYMENT_NOTIFICATIONS outbox row atomically with the PAID transition', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(prisma.outboxMessage.create).toHaveBeenCalledWith({
+        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: 'order-1' },
+      });
+    });
+
+    it('marks the outbox row PROCESSED once the fast-path dispatch completes', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await Promise.resolve();
+
+      expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
+        where: { id: 'outbox-fraud-1' },
+        data: { status: 'PROCESSED', processedAt: expect.any(Date) },
+      });
+    });
+
+    it('still inserts the outbox row even if the order has no recoverable payment intent', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: null,
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(prisma.outboxMessage.create).toHaveBeenCalledWith({
+        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: 'order-1' },
+      });
     });
   });
 
