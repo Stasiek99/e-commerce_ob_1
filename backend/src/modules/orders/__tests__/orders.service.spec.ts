@@ -2225,6 +2225,44 @@ describe('OrdersService', () => {
         service.updateStatus('o-1', OrderStatus.PAID),
       ).resolves.not.toThrow();
     });
+
+    // ── DISPUTE_LOST_REVIEW → CANCELLED | REFUNDED ────────────────────────────
+    // A lost dispute lands here without auto-restoring stock (payments.service.ts).
+    // Only an explicit admin transition to CANCELLED (goods confirmed never
+    // delivered/returned) restores stock; REFUNDED (chargeback stands, goods kept
+    // by the customer) must not, or the oversell risk this gate exists to close
+    // reopens via a different status name.
+
+    it('restores stock on DISPUTE_LOST_REVIEW → CANCELLED (admin confirms non-delivery)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const tx = makeTx();
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
+
+      expect(tx.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'pv-1' },
+        data: { stock: { increment: 2 } },
+      });
+    });
+
+    it('does not restore stock on DISPUTE_LOST_REVIEW → REFUNDED (chargeback stands)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const tx = makeTx();
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+
+      expect(tx.productVariant.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('createFromCart (coupon branches)', () => {

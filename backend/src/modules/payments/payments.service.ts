@@ -1282,9 +1282,12 @@ export class PaymentsService {
         `Dispute ${dispute.id} WON: order ${payment.order.orderNumber} restored to ${restoreStatus}`,
       );
     } else if (dispute.status === 'lost') {
-      // Funds already taken by Stripe. A generated shipping label only proves a label was
-      // created, not that the parcel was delivered — restore stock by default and let an
-      // admin manually adjust if goods are provably delivered.
+      // Funds already taken by Stripe. Most real chargebacks involve goods that were
+      // genuinely delivered and aren't coming back — auto-restoring stock here would
+      // oversell that SKU to a second customer. Land the order in DISPUTE_LOST_REVIEW
+      // instead and require an admin to explicitly confirm non-delivery (via the
+      // standard admin status-update endpoint, transitioning to CANCELLED) before
+      // stock is incremented.
       try {
         await this.prisma.$transaction(async (tx) => {
           if (eventId) {
@@ -1292,24 +1295,15 @@ export class PaymentsService {
           }
           await tx.order.update({
             where: { id: payment.orderId },
-            data: { status: OrderStatus.CANCELLED },
+            data: { status: OrderStatus.DISPUTE_LOST_REVIEW },
           });
-          for (const item of payment.order.items) {
-            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-            if (activeQty > 0) {
-              await tx.productVariant.update({
-                where: { id: item.productVariantId },
-                data: { stock: { increment: activeQty } },
-              });
-            }
-          }
           await tx.orderEvent.create({
             data: {
               orderId: payment.orderId,
               fromStatus: OrderStatus.DISPUTE_HOLD,
-              toStatus: OrderStatus.CANCELLED,
+              toStatus: OrderStatus.DISPUTE_LOST_REVIEW,
               actor: 'SYSTEM:stripe-webhook',
-              note: `Dispute ${dispute.id} closed LOST — stock restored`,
+              note: `Dispute ${dispute.id} closed LOST — stock NOT restored, pending admin confirmation of non-delivery`,
             },
           });
         });
@@ -1322,18 +1316,19 @@ export class PaymentsService {
       }
 
       this.logger.error(
-        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} cancelled, stock restored.`,
+        `Dispute ${dispute.id} LOST: order ${payment.order.orderNumber} moved to DISPUTE_LOST_REVIEW — stock NOT restored, admin review required.`,
       );
       Sentry.withScope((scope) => {
         scope.setLevel('fatal');
         scope.setTag('payment.event', 'dispute_lost');
+        scope.setTag('stock_restored', 'false');
         scope.setContext('dispute', {
           disputeId: dispute.id,
           orderNumber: payment.order.orderNumber,
           amount: dispute.amount,
         });
         Sentry.captureMessage(
-          `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed`,
+          `Stripe dispute LOST: order ${payment.order.orderNumber} — double loss confirmed, stock NOT restored, admin must confirm non-delivery before restoring`,
           'fatal',
         );
       });

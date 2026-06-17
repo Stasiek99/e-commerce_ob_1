@@ -26,6 +26,7 @@ enum OrderStatus {
   REFUNDED
   PARTIALLY_REFUNDED
   DISPUTE_HOLD
+  DISPUTE_LOST_REVIEW
 }
 
 enum PaymentStatus {

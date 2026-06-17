@@ -3349,7 +3349,7 @@ describe('PaymentsService', () => {
 
     // ── charge.dispute.closed — LOST ────────────────────────────────────────
 
-    it('cancels the order when dispute is lost', async () => {
+    it('moves the order to DISPUTE_LOST_REVIEW when dispute is lost', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPaymentForDisputeClosed);
 
       let capturedOrderStatus: OrderStatus | undefined;
@@ -3370,10 +3370,14 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(capturedOrderStatus).toBe(OrderStatus.CANCELLED);
+      expect(capturedOrderStatus).toBe(OrderStatus.DISPUTE_LOST_REVIEW);
     });
 
-    it('restores stock when dispute is lost', async () => {
+    it('does not restore stock when dispute is lost — requires explicit admin confirmation first', async () => {
+      // Most real chargebacks involve goods that were genuinely delivered and aren't
+      // coming back. Auto-restoring stock here would oversell the SKU to a second
+      // customer. Stock is only restored once an admin confirms non-delivery via the
+      // standard admin status-update endpoint (DISPUTE_LOST_REVIEW → CANCELLED).
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
@@ -3385,16 +3389,12 @@ describe('PaymentsService', () => {
         },
       });
 
-      const stockRestored: Array<{ id: string; increment: number }> = [];
+      const productVariantUpdate = jest.fn();
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           order: { update: jest.fn() },
-          productVariant: {
-            update: jest.fn().mockImplementation((args: any) => {
-              stockRestored.push({ id: args.where.id, increment: args.data.stock.increment });
-            }),
-          },
+          productVariant: { update: productVariantUpdate },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -3403,17 +3403,12 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(stockRestored).toEqual(
-        expect.arrayContaining([
-          { id: 'pv-1', increment: 2 },
-          { id: 'pv-2', increment: 1 },
-        ]),
-      );
+      expect(productVariantUpdate).not.toHaveBeenCalled();
     });
 
-    it('still restores stock when dispute is lost even though a shipping label was generated (labelUrl set)', async () => {
-      // Regression guard: a generated label only proves a label was created, not that the
-      // parcel was delivered — the old labelUrl heuristic incorrectly skipped stock restore here.
+    it('does not restore stock when dispute is lost even though a shipping label was generated (labelUrl set)', async () => {
+      // A generated label only proves a label was created, not that the parcel was
+      // delivered — irrelevant either way now, since this path never auto-restores stock.
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPaymentForDisputeClosed,
         order: {
@@ -3423,16 +3418,12 @@ describe('PaymentsService', () => {
         },
       });
 
-      const stockUpdates: any[] = [];
+      const productVariantUpdate = jest.fn();
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           order: { update: jest.fn() },
-          productVariant: {
-            update: jest.fn().mockImplementation((args: any) => {
-              stockUpdates.push({ id: args.where.id, increment: args.data.stock.increment });
-            }),
-          },
+          productVariant: { update: productVariantUpdate },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -3441,7 +3432,7 @@ describe('PaymentsService', () => {
         buildEvent('charge.dispute.closed', buildDispute({ status: 'lost' })),
       );
 
-      expect(stockUpdates).toEqual([{ id: 'pv-1', increment: 2 }]);
+      expect(productVariantUpdate).not.toHaveBeenCalled();
     });
 
     it('captures a Sentry fatal event when dispute is lost', async () => {

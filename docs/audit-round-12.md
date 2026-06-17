@@ -22,10 +22,6 @@ This is exactly the failure mode the now-fixed `.gitignore` issue was supposed t
 ---
 
 
-
-
-Not yet:
-
 ## 🔴 CRITICAL — Corrective-invoice idempotency key collides on refund amount, not correction identity — silently swallows distinct partial cancellations *(Skeptic)*
 
 **Files:** `backend/src/modules/invoice/invoice.service.ts:202-253`, unique constraint in `backend/prisma/migrations/20260615110000_invoice_correction_idempotency/migration.sql`
@@ -49,6 +45,16 @@ The fix swapped one wrong default (never restore) for the opposite wrong default
 **Fix:** Set order to a `DISPUTE_LOST_REVIEW` flag/status instead of auto-restoring stock; require explicit admin confirmation that goods were never delivered before incrementing stock.
 
 ---
+
+
+
+
+
+
+
+
+Not yet:
+
 
 ## 🟠 HIGH — Stripe minimum-charge floor hardcoded to 50gr but Stripe's actual PLN minimum is 200gr *(Domain Expert)*
 

@@ -58,6 +58,9 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
   [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
+  // Admin must explicitly confirm the goods were never delivered (→ CANCELLED, restores
+  // stock) or that the chargeback stands with goods kept by the customer (→ REFUNDED).
+  [OrderStatus.DISPUTE_LOST_REVIEW]: [OrderStatus.CANCELLED, OrderStatus.REFUNDED],
 };
 
 @Injectable()
@@ -1079,8 +1082,17 @@ export class OrdersService implements OnModuleInit {
     const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
     const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
 
+    // From DISPUTE_LOST_REVIEW, REFUNDED means the admin confirmed the chargeback
+    // stands (goods were delivered, not coming back) — restoring stock there would
+    // recreate the exact oversell risk this review gate exists to prevent. Only
+    // CANCELLED (admin confirms goods were never delivered/were returned) restores it.
+    const isUnverifiedDisputeLossPayout =
+      current.status === OrderStatus.DISPUTE_LOST_REVIEW && status === OrderStatus.REFUNDED;
+
     const shouldRestoreStock =
-      stockRestoringStatuses.includes(status) && !stockAlreadyRestored.includes(current.status);
+      stockRestoringStatuses.includes(status) &&
+      !stockAlreadyRestored.includes(current.status) &&
+      !isUnverifiedDisputeLossPayout;
 
     await this.prisma.$transaction(async (tx) => {
       if (shouldRestoreStock) {
