@@ -797,18 +797,7 @@ export class OrdersService implements OnModuleInit {
       });
     } else {
       // PAID or PROCESSING — issue a full Stripe refund (handles stock + event)
-      await this.paymentsService.refundPayment(orderId, 'CUSTOMER');
-      if (reason) {
-        await this.prisma.orderEvent.create({
-          data: {
-            orderId,
-            fromStatus: OrderStatus.REFUNDED,
-            toStatus: OrderStatus.REFUNDED,
-            actor: 'CUSTOMER',
-            note: `Withdrawal reason: ${reason}`,
-          },
-        });
-      }
+      await this.paymentsService.refundPayment(orderId, 'CUSTOMER', reason);
     }
 
     // Cancellation / withdrawal confirmation email (fire-and-forget)

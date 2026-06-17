@@ -2601,7 +2601,7 @@ describe('OrdersService', () => {
 
       await service.cancelByUser('order-1', 'user-1');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER', undefined);
     });
 
     it('cancels PENDING_PAYMENT order: expires session, restores stock, creates event', async () => {
@@ -2654,11 +2654,11 @@ describe('OrdersService', () => {
 
       await service.cancelByUser('order-1', 'user-1');
 
-      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('order-1', 'CUSTOMER', undefined);
       expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
-    it('creates extra orderEvent when refunding a PAID order with a reason', async () => {
+    it('passes the withdrawal reason through to refundPayment for a PAID order', async () => {
       prisma.order.findFirst.mockResolvedValue({
         ...mockOrderWithItems,
         status: OrderStatus.PAID,
@@ -2666,10 +2666,10 @@ describe('OrdersService', () => {
 
       await service.cancelByUser('order-1', 'user-1', 'Withdrawal reason');
 
-      expect(prisma.orderEvent.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ note: expect.stringContaining('Withdrawal reason') }),
-        }),
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith(
+        'order-1',
+        'CUSTOMER',
+        'Withdrawal reason',
       );
     });
   });

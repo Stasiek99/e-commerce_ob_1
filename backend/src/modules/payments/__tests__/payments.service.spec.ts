@@ -2500,6 +2500,63 @@ describe('PaymentsService', () => {
       expect(stripeClient.createRefund).toHaveBeenCalledWith('pi_test_abc123', 'order-1');
       expect(stockRestored).toContain('pv-1');
     });
+
+    it('omits the withdrawal reason from the orderEvent note when none is given', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+
+      let capturedNote: string | undefined;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          productVariant: { update: jest.fn() },
+          orderEvent: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedNote = args.data.note;
+            }),
+          },
+        });
+      });
+
+      await service.refundPayment('order-1', 'CUSTOMER');
+
+      expect(capturedNote).toBe('Stripe refund issued for PaymentIntent pi_test_abc123');
+    });
+
+    it('appends the withdrawal reason to the same orderEvent note instead of creating a second event', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+
+      const orderEventCreate = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          productVariant: { update: jest.fn() },
+          orderEvent: { create: orderEventCreate },
+        });
+      });
+
+      await service.refundPayment('order-1', 'CUSTOMER', 'Changed my mind');
+
+      expect(orderEventCreate).toHaveBeenCalledTimes(1);
+      expect(orderEventCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            fromStatus: mockPayment.order.status,
+            toStatus: OrderStatus.REFUNDED,
+            note: 'Stripe refund issued for PaymentIntent pi_test_abc123. Withdrawal reason: Changed my mind',
+          }),
+        }),
+      );
+    });
   });
 
   // ── Sentry error reporting ───────────────────────────────────────────────

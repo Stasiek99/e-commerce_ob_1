@@ -1076,7 +1076,7 @@ export class PaymentsService {
    * Issues a full Stripe refund, restores stock, and marks order as REFUNDED.
    * Call from the admin panel or an admin-only API endpoint.
    */
-  async refundPayment(orderId: string, actor = 'ADMIN'): Promise<void> {
+  async refundPayment(orderId: string, actor = 'ADMIN', reason?: string): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { orderId },
       include: { order: { select: { orderNumber: true, status: true, items: true } } },
@@ -1131,7 +1131,9 @@ export class PaymentsService {
             fromStatus: payment.order.status,
             toStatus: OrderStatus.REFUNDED,
             actor,
-            note: `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
+            note: reason
+              ? `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}. Withdrawal reason: ${reason}`
+              : `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
           },
         });
       });
