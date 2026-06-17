@@ -11,6 +11,7 @@ import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 import { CouponService } from '../../coupons/coupon.service';
+import { ProductsService } from '../../products/products.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -32,6 +33,7 @@ describe('PaymentsService', () => {
   let emailService: jest.Mocked<EmailQueueService>;
   let invoiceService: jest.Mocked<InvoiceService>;
   let couponService: jest.Mocked<CouponService>;
+  let productsService: { notifyStockChangesByDelta: jest.Mock };
   let redis: any;
 
   const mockSession: Partial<Stripe.Checkout.Session> = {
@@ -173,6 +175,12 @@ describe('PaymentsService', () => {
             validate: jest.fn().mockResolvedValue({ valid: true }),
           },
         },
+        {
+          provide: ProductsService,
+          useValue: {
+            notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -183,6 +191,7 @@ describe('PaymentsService', () => {
     emailService = module.get(EmailQueueService);
     invoiceService = module.get(InvoiceService);
     couponService = module.get(CouponService);
+    productsService = module.get(ProductsService);
 
     // Default: pass prisma mock methods as tx so callback-form $transaction
     // executes the callback and tests can assert on prisma.* directly.
@@ -2521,6 +2530,30 @@ describe('PaymentsService', () => {
       expect(stockRestored).toContain('pv-1');
     });
 
+    // FIX: refund stock restores previously never reached the live-stock SSE
+    // stream or the back-in-stock notifier.
+    it('notifies ProductsService of the restored variant after the refund transaction commits', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: { update: jest.fn() },
+        });
+      });
+
+      await service.refundPayment('order-1');
+
+      expect(productsService.notifyStockChangesByDelta).toHaveBeenCalledWith([
+        { variantId: 'pv-1', delta: 2 },
+      ]);
+    });
+
     it('omits the withdrawal reason from the orderEvent note when none is given', async () => {
       prisma.payment.findUnique.mockResolvedValue({
         ...mockPayment,
@@ -2809,6 +2842,10 @@ describe('PaymentsService', () => {
           {
             provide: CouponService,
             useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
+          },
+          {
+            provide: ProductsService,
+            useValue: { notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined) },
           },
         ],
       }).compile();
@@ -4220,6 +4257,10 @@ describe('PaymentsService', () => {
           {
             provide: CouponService,
             useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
+          },
+          {
+            provide: ProductsService,
+            useValue: { notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined) },
           },
         ],
       }).compile();

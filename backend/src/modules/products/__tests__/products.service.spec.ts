@@ -72,7 +72,8 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
-    productVariant: { updateMany: jest.fn() },
+    productVariant: { updateMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+    wishlistItem: { findMany: jest.fn().mockResolvedValue([]) },
     $transaction: jest.fn(),
   };
 
@@ -97,7 +98,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       providers: [
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EmailQueueService, useValue: { queueOrderConfirmation: jest.fn() } },
+        { provide: EmailQueueService, useValue: { queueOrderConfirmation: jest.fn(), sendBackInStock: jest.fn().mockResolvedValue(undefined) } },
         { provide: StorageService, useValue: { delete: jest.fn() } },
         {
           provide: ConfigService,
@@ -197,6 +198,179 @@ describe('ProductsService — slug P2002 conflict handling', () => {
 
       expect(result).toMatchObject({ id: PRODUCT_ID, slug: 'new-slug' });
       expect(mockPrisma.product.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // --- notifyStockChange() / notifyStockChangesByDelta() ---
+  // FIX: real stock mutations from orders/payments (checkout decrements,
+  // cancellation/payment-failure/dispute restores) previously never published
+  // to the stock:updates SSE channel or triggered the back-in-stock notifier —
+  // only the admin manual stock-edit endpoint did. These two methods are now
+  // the single choke point every mutation site outside this service must call.
+
+  const VARIANT_ID = 'pv-uuid-1';
+
+  describe('notifyStockChange()', () => {
+    it('publishes the new stock to the stock:updates Redis channel', () => {
+      service.notifyStockChange({
+        variantId: VARIANT_ID,
+        productId: PRODUCT_ID,
+        variantLabel: '100ml',
+        previousStock: 5,
+        newStock: 3,
+      });
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'stock:updates',
+        JSON.stringify({ id: VARIANT_ID, stock: 3 }),
+      );
+    });
+
+    it('fires the back-in-stock notifier when stock crosses 0 -> >0', async () => {
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([
+        { id: 'wi-1', user: { email: 'fan@example.com', firstName: 'Ola' }, product: { name: 'Rose Oud', slug: 'rose-oud' } },
+      ]);
+
+      service.notifyStockChange({
+        variantId: VARIANT_ID,
+        productId: PRODUCT_ID,
+        variantLabel: '100ml',
+        previousStock: 0,
+        newStock: 5,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ productId: PRODUCT_ID, notifyOnRestock: true }) }),
+      );
+    });
+
+    it('does not fire the back-in-stock notifier when stock was already > 0', async () => {
+      service.notifyStockChange({
+        variantId: VARIANT_ID,
+        productId: PRODUCT_ID,
+        variantLabel: '100ml',
+        previousStock: 2,
+        newStock: 5,
+      });
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).not.toHaveBeenCalled();
+    });
+
+    it('does not fire the back-in-stock notifier when stock is still 0', async () => {
+      service.notifyStockChange({
+        variantId: VARIANT_ID,
+        productId: PRODUCT_ID,
+        variantLabel: '100ml',
+        previousStock: 0,
+        newStock: 0,
+      });
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notifyStockChangesByDelta()', () => {
+    it('is a no-op when given an empty deltas array', async () => {
+      await service.notifyStockChangesByDelta([]);
+
+      expect(mockPrisma.productVariant.findMany).not.toHaveBeenCalled();
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('derives previousStock from the current stock minus the known delta and publishes newStock', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 8 },
+      ]);
+
+      // A restore of +3 landed on a variant now sitting at 8 -> it was at 5 before.
+      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 3 }]);
+
+      expect(mockPrisma.productVariant.findMany).toHaveBeenCalledWith({
+        where: { id: { in: [VARIANT_ID] } },
+        select: { id: true, productId: true, label: true, stock: true },
+      });
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'stock:updates',
+        JSON.stringify({ id: VARIANT_ID, stock: 8 }),
+      );
+    });
+
+    it('fires the back-in-stock notifier when the delta restores stock from 0', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 4 },
+      ]);
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([
+        { id: 'wi-1', user: { email: 'fan@example.com', firstName: 'Ola' }, product: { name: 'Rose Oud', slug: 'rose-oud' } },
+      ]);
+
+      // Variant is now at 4, restore delta was +4 -> previousStock = 0.
+      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 4 }]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ productId: PRODUCT_ID }) }),
+      );
+    });
+
+    it('handles multiple variants independently in a single call', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: 'pv-a', productId: PRODUCT_ID, label: '50ml', stock: 0 },
+        { id: 'pv-b', productId: PRODUCT_ID, label: '100ml', stock: 10 },
+      ]);
+
+      // pv-a: decremented by 2 down to 0 (checkout). pv-b: restored by 5 up to 10.
+      await service.notifyStockChangesByDelta([
+        { variantId: 'pv-a', delta: -2 },
+        { variantId: 'pv-b', delta: 5 },
+      ]);
+
+      expect(mockRedis.publish).toHaveBeenCalledWith('stock:updates', JSON.stringify({ id: 'pv-a', stock: 0 }));
+      expect(mockRedis.publish).toHaveBeenCalledWith('stock:updates', JSON.stringify({ id: 'pv-b', stock: 10 }));
+    });
+  });
+
+  describe('updateVariantStock()', () => {
+    it('throws NotFoundException when the variant does not exist', async () => {
+      mockPrisma.productVariant.findUnique.mockResolvedValue(null);
+
+      await expect(service.updateVariantStock(VARIANT_ID, { set: 10 })).rejects.toThrow(NotFoundException);
+    });
+
+    it('publishes the new stock after a manual set', async () => {
+      mockPrisma.productVariant.findUnique.mockResolvedValue({
+        id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 5,
+      });
+      mockPrisma.productVariant.update.mockResolvedValue({ id: VARIANT_ID, stock: 12 });
+
+      await service.updateVariantStock(VARIANT_ID, { set: 12 });
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'stock:updates',
+        JSON.stringify({ id: VARIANT_ID, stock: 12 }),
+      );
+    });
+
+    it('fires the back-in-stock notifier when an adjustment brings stock from 0 to positive', async () => {
+      mockPrisma.productVariant.findUnique.mockResolvedValue({
+        id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 0,
+      });
+      mockPrisma.productVariant.update.mockResolvedValue({ id: VARIANT_ID, stock: 6 });
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([
+        { id: 'wi-1', user: { email: 'fan@example.com', firstName: 'Ola' }, product: { name: 'Rose Oud', slug: 'rose-oud' } },
+      ]);
+
+      await service.updateVariantStock(VARIANT_ID, { adjustment: 6 });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ productId: PRODUCT_ID }) }),
+      );
     });
   });
 });

@@ -44,6 +44,18 @@ const PRODUCT_SELECT = {
   category: { select: { id: true, name: true, slug: true } },
 };
 
+// Shape required by ProductsService.notifyStockChange — every site outside this
+// service that mutates ProductVariant.stock (orders/payments checkout decrements,
+// cancellation/refund/dispute restores) collects these and calls notifyStockChange
+// once its transaction has committed.
+export interface StockChange {
+  variantId: string;
+  productId: string;
+  variantLabel: string;
+  previousStock: number;
+  newStock: number;
+}
+
 type FindAllQuery = {
   page?: number;
   limit?: number;
@@ -559,7 +571,6 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('Variant not found');
 
-    const wasOutOfStock = variant.stock === 0;
     const newStock = dto.set !== undefined
       ? dto.set
       : Math.max(0, variant.stock + (dto.adjustment ?? 0));
@@ -571,13 +582,57 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       data: { stock: newStock },
     });
 
-    if (wasOutOfStock && newStock > 0) {
-      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
-    }
-
-    this.redis.publish('stock:updates', JSON.stringify({ id: variantId, stock: newStock })).catch(() => {});
+    this.notifyStockChange({
+      variantId,
+      productId: variant.productId,
+      variantLabel: variant.label,
+      previousStock: variant.stock,
+      newStock,
+    });
     this.invalidateProductCaches();
     return updated;
+  }
+
+  /**
+   * Single choke point for every ProductVariant.stock mutation, in this service
+   * or any other (orders/payments checkout decrements, cancellation/refund/
+   * dispute restores). Publishes the live-stock SSE update and, when stock
+   * crosses 0 → >0, fires the back-in-stock notifier. Call this once a stock
+   * mutation has committed — never from inside an open transaction, since the
+   * write could still roll back.
+   */
+  notifyStockChange(change: StockChange): void {
+    const { variantId, productId, variantLabel, previousStock, newStock } = change;
+    if (previousStock === 0 && newStock > 0) {
+      this.dispatchBackInStockNotifications(productId, variantLabel).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
+    }
+    this.redis.publish('stock:updates', JSON.stringify({ id: variantId, stock: newStock })).catch(() => {});
+  }
+
+  /**
+   * Same choke point as notifyStockChange, for callers that only know the net
+   * change applied inside a transaction (e.g. `{ stock: { increment: qty } }`)
+   * rather than the before/after values. Re-reads current stock once the
+   * transaction has committed and derives previousStock from the known delta
+   * (positive for a restore, negative for a decrement).
+   */
+  async notifyStockChangesByDelta(deltas: Array<{ variantId: string; delta: number }>): Promise<void> {
+    if (!deltas.length) return;
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: deltas.map((d) => d.variantId) } },
+      select: { id: true, productId: true, label: true, stock: true },
+    });
+    const deltaByVariantId = new Map(deltas.map((d) => [d.variantId, d.delta]));
+    for (const variant of variants) {
+      const delta = deltaByVariantId.get(variant.id) ?? 0;
+      this.notifyStockChange({
+        variantId: variant.id,
+        productId: variant.productId,
+        variantLabel: variant.label,
+        previousStock: variant.stock - delta,
+        newStock: variant.stock,
+      });
+    }
   }
 
   private async dispatchBackInStockNotifications(productId: string, variantLabel: string): Promise<void> {

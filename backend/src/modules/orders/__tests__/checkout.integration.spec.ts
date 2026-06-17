@@ -23,6 +23,7 @@ import { InvoiceService } from '../../invoice/invoice.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { ConfigService } from '@nestjs/config';
 import { ShippingRatesService } from '../../shipping/shipping-rates.service';
+import { ProductsService } from '../../products/products.service';
 
 // Fixed IDs shared across the test scenarios
 const IDS = {
@@ -192,6 +193,10 @@ describe('Checkout Integration Flow', () => {
             getRateForCarrier: jest.fn().mockResolvedValue(1499),
             getRateMap: jest.fn().mockResolvedValue({ INPOST: 1499, DHL: 1999, GLS: 1799, DPD: 1599, DPD_COURIER: 1699 }),
           },
+        },
+        {
+          provide: ProductsService,
+          useValue: { notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined) },
         },
         {
           provide: 'REDIS_CLIENT',

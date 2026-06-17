@@ -10,6 +10,7 @@ import { EmailQueueService } from '../../email/email-queue.service';
 import { CouponService } from '../../coupons/coupon.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ShippingRatesService } from '../../shipping/shipping-rates.service';
+import { ProductsService } from '../../products/products.service';
 
 const MOCK_RATES: Record<CarrierCode, number> = {
   [CarrierCode.INPOST]:      1499,
@@ -31,6 +32,7 @@ describe('OrdersService', () => {
   let paymentsService: jest.Mocked<PaymentsService>;
   let invoiceService: jest.Mocked<InvoiceService>;
   let emailService: jest.Mocked<EmailQueueService>;
+  let productsService: { notifyStockChangesByDelta: jest.Mock };
   let redisClient: { set: jest.Mock; eval: jest.Mock };
 
   const mockAddress = {
@@ -154,6 +156,12 @@ describe('OrdersService', () => {
           useValue: mockShippingRatesService,
         },
         {
+          provide: ProductsService,
+          useValue: {
+            notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
           provide: 'REDIS_CLIENT',
           useValue: {
             set: jest.fn().mockResolvedValue('OK'), // NX acquired by default
@@ -174,6 +182,7 @@ describe('OrdersService', () => {
     paymentsService = module.get(PaymentsService);
     invoiceService = module.get(InvoiceService);
     emailService = module.get(EmailQueueService);
+    productsService = module.get(ProductsService);
     invoiceService.processCorrectiveInvoice.mockResolvedValue({
       correctiveUrl: 'https://cdn.example.com/corrective.pdf',
       correctiveStoragePath: 'invoices/corrective.pdf',
@@ -691,6 +700,39 @@ describe('OrdersService', () => {
       expect(stockUpdates).toEqual([
         { id: 'pv-1', decrement: 2 },
         { id: 'pv-2', decrement: 1 },
+      ]);
+    });
+
+    // FIX: checkout decrements previously never reached the live-stock SSE stream
+    // or the back-in-stock notifier — only the admin manual stock-edit endpoint did.
+    it('notifies ProductsService of each decremented variant after the transaction commits', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(productsService.notifyStockChangesByDelta).toHaveBeenCalledWith([
+        { variantId: 'pv-1', delta: -2 },
+        { variantId: 'pv-2', delta: -1 },
       ]);
     });
 
@@ -2626,6 +2668,25 @@ describe('OrdersService', () => {
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
     });
 
+    // FIX: cancellation stock restores previously never reached the live-stock
+    // SSE stream or the back-in-stock notifier.
+    it('notifies ProductsService of the restored variant after cancelling a PENDING_PAYMENT order', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(productsService.notifyStockChangesByDelta).toHaveBeenCalledWith([
+        { variantId: 'pv-1', delta: 2 },
+      ]);
+    });
+
     it('cancels PENDING_PAYMENT order with reason logged in event note', async () => {
       prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
       let capturedNote: string | undefined;
@@ -3847,6 +3908,10 @@ describe('OrdersService', () => {
           },
           { provide: InvoiceService, useValue: { processInvoice: jest.fn() } },
           { provide: ShippingRatesService, useValue: mockShippingRatesService },
+          {
+            provide: ProductsService,
+            useValue: { notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined) },
+          },
           {
             provide: 'REDIS_CLIENT',
             useValue: { set: jest.fn().mockResolvedValue('OK'), eval: jest.fn().mockResolvedValue(1) },

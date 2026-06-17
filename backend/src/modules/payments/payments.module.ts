@@ -8,9 +8,10 @@ import { EmailModule } from '../email/email.module';
 import { InvoiceModule } from '../invoice/invoice.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CouponModule } from '../coupons/coupon.module';
+import { ProductsModule } from '../products/products.module';
 
 @Module({
-  imports: [ConfigModule, EmailModule, InvoiceModule, PrismaModule, CouponModule],
+  imports: [ConfigModule, EmailModule, InvoiceModule, PrismaModule, CouponModule, ProductsModule],
   providers: [PaymentsService, StripeClient, OutboxProcessorService],
   controllers: [PaymentsController],
   exports: [PaymentsService],

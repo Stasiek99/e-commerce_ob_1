@@ -19,6 +19,7 @@ import { CouponService } from '../coupons/coupon.service';
 import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
+import { ProductsService } from '../products/products.service';
 import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
 import { getStripeMinimumChargeInCents } from '../payments/stripe-minimum-charge.util';
 import type IORedis from 'ioredis';
@@ -77,6 +78,7 @@ export class OrdersService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly invoiceService: InvoiceService,
     private readonly shippingRatesService: ShippingRatesService,
+    private readonly productsService: ProductsService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
@@ -254,6 +256,11 @@ export class OrdersService implements OnModuleInit {
       snapshotNip = user?.nip ?? null;
     }
 
+    // Stock deltas applied inside the transaction below — published to the SSE
+    // stream only after a successful commit (see notifyStockChangesByDelta
+    // calls after each $transaction in this method).
+    const decrementDeltas: Array<{ variantId: string; delta: number }> = [];
+
     // Use the transaction for everything: stock decrement, order creation, cart clearing
     const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number using raw SQL to avoid race conditions
@@ -285,6 +292,7 @@ export class OrdersService implements OnModuleInit {
             `Insufficient stock for: ${item.productName} ${item.variantLabel}`,
           );
         }
+        decrementDeltas.push({ variantId: item.productVariantId, delta: -item.quantity });
       }
 
       // Re-fetch prices from the rows we just locked so snapshotPrice and all totals
@@ -409,6 +417,10 @@ export class OrdersService implements OnModuleInit {
       return newOrder;
     });
 
+    this.productsService.notifyStockChangesByDelta(decrementDeltas).catch((err) =>
+      this.logger.warn('notifyStockChangesByDelta failed', err),
+    );
+
     // Initiate Stripe Checkout Session outside the transaction (external API call).
     // If Stripe throws, the committed order is cancelled and stock + coupon are restored
     // atomically so the customer's cart remains intact and they can retry immediately.
@@ -419,12 +431,14 @@ export class OrdersService implements OnModuleInit {
       this.logger.error(
         `Payment initiation failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
       );
+      const rollbackDeltas: Array<{ variantId: string; delta: number }> = [];
       await this.prisma.$transaction(async (tx) => {
         for (const item of cart.items) {
           await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
           });
+          rollbackDeltas.push({ variantId: item.productVariantId, delta: item.quantity });
         }
         await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
         if (resolvedCouponId) {
@@ -444,6 +458,9 @@ export class OrdersService implements OnModuleInit {
           },
         });
       });
+      this.productsService.notifyStockChangesByDelta(rollbackDeltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
       throw stripeErr;
     }
 
@@ -775,12 +792,14 @@ export class OrdersService implements OnModuleInit {
       // No payment made — expire the Stripe session (best-effort) and cancel
       await this.paymentsService.expirePendingCheckoutSession(orderId);
 
+      const deltas: Array<{ variantId: string; delta: number }> = [];
       await this.prisma.$transaction(async (tx) => {
         for (const item of order.items) {
           await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
           });
+          deltas.push({ variantId: item.productVariantId, delta: item.quantity });
         }
         await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
         await tx.orderEvent.create({
@@ -795,6 +814,9 @@ export class OrdersService implements OnModuleInit {
           },
         });
       });
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
     } else {
       // PAID or PROCESSING — issue a full Stripe refund (handles stock + event)
       await this.paymentsService.refundPayment(orderId, 'CUSTOMER', reason);
@@ -834,12 +856,14 @@ export class OrdersService implements OnModuleInit {
 
     await this.paymentsService.expirePendingCheckoutSession(orderId);
 
+    const deltas: Array<{ variantId: string; delta: number }> = [];
     await this.prisma.$transaction(async (tx) => {
       for (const item of order.items) {
         await tx.productVariant.update({
           where: { id: item.productVariantId },
           data: { stock: { increment: item.quantity } },
         });
+        deltas.push({ variantId: item.productVariantId, delta: item.quantity });
       }
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
       await tx.orderEvent.create({
@@ -854,6 +878,9 @@ export class OrdersService implements OnModuleInit {
         },
       });
     });
+    this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+      this.logger.warn('notifyStockChangesByDelta failed', err),
+    );
 
     this.emailService
       .sendOrderCancellation({
@@ -887,12 +914,14 @@ export class OrdersService implements OnModuleInit {
       this.logger.error(
         `Payment retry failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
       );
+      const deltas: Array<{ variantId: string; delta: number }> = [];
       await this.prisma.$transaction(async (tx) => {
         for (const item of order.items) {
           await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
           });
+          deltas.push({ variantId: item.productVariantId, delta: item.quantity });
         }
         await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
         if (order.couponId) {
@@ -912,6 +941,9 @@ export class OrdersService implements OnModuleInit {
           },
         });
       });
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
       throw stripeErr;
     }
   }
@@ -1139,6 +1171,7 @@ export class OrdersService implements OnModuleInit {
       !stockAlreadyRestored.includes(current.status) &&
       !isUnverifiedDisputeLossPayout;
 
+    const deltas: Array<{ variantId: string; delta: number }> = [];
     await this.prisma.$transaction(async (tx) => {
       if (shouldRestoreStock) {
         for (const item of current.items) {
@@ -1148,6 +1181,7 @@ export class OrdersService implements OnModuleInit {
               where: { id: item.productVariantId },
               data: { stock: { increment: activeQty } },
             });
+            deltas.push({ variantId: item.productVariantId, delta: activeQty });
           }
         }
       }
@@ -1164,6 +1198,9 @@ export class OrdersService implements OnModuleInit {
         });
       }
     });
+    this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+      this.logger.warn('notifyStockChangesByDelta failed', err),
+    );
 
     if (status === OrderStatus.DELIVERED) {
       this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
@@ -1261,6 +1298,7 @@ export class OrdersService implements OnModuleInit {
             await this.paymentsService.refundPayment(order.id, actor);
           } else {
             // PENDING_PAYMENT: no payment taken, cancel in-place.
+            const deltas: Array<{ variantId: string; delta: number }> = [];
             await this.prisma.$transaction(async (tx) => {
               for (const item of order.items) {
                 const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
@@ -1269,6 +1307,7 @@ export class OrdersService implements OnModuleInit {
                     where: { id: item.productVariantId },
                     data: { stock: { increment: activeQty } },
                   });
+                  deltas.push({ variantId: item.productVariantId, delta: activeQty });
                 }
               }
               await tx.order.update({
@@ -1285,6 +1324,9 @@ export class OrdersService implements OnModuleInit {
                 },
               });
             });
+            this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+              this.logger.warn('notifyStockChangesByDelta failed', err),
+            );
           }
 
           this.emailService

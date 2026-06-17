@@ -8,9 +8,10 @@ import { EmailModule } from '../email/email.module';
 import { CouponModule } from '../coupons/coupon.module';
 import { InvoiceModule } from '../invoice/invoice.module';
 import { ShippingModule } from '../shipping/shipping.module';
+import { ProductsModule } from '../products/products.module';
 
 @Module({
-  imports: [CartModule, PaymentsModule, EmailModule, CouponModule, InvoiceModule, ShippingModule],
+  imports: [CartModule, PaymentsModule, EmailModule, CouponModule, InvoiceModule, ShippingModule, ProductsModule],
   providers: [OrdersService, OrdersCleanupService],
   controllers: [OrdersController],
   exports: [OrdersService],
