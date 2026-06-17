@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "User" ADD COLUMN "emailBouncedType" TEXT;
+ALTER TABLE "users" ADD COLUMN "emailBouncedType" TEXT;
