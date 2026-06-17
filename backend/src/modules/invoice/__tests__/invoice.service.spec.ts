@@ -1020,7 +1020,7 @@ describe('InvoiceService', () => {
       $transaction: jest.Mock;
       $executeRawUnsafe: jest.Mock;
       order: { update: jest.Mock; findUniqueOrThrow: jest.Mock };
-      invoiceCorrection: { findFirst: jest.Mock; update: jest.Mock };
+      invoiceCorrection: { findFirst: jest.Mock; update: jest.Mock; findMany: jest.Mock };
     };
 
     const mockOrderData = {
@@ -1067,6 +1067,7 @@ describe('InvoiceService', () => {
         invoiceCorrection: {
           findFirst: jest.fn().mockResolvedValue(null),
           update: jest.fn().mockResolvedValue({}),
+          findMany: jest.fn().mockResolvedValue([]),
         },
       };
 
@@ -1148,7 +1149,7 @@ describe('InvoiceService', () => {
 
         expect(corrPrisma.invoiceCorrection.update).toHaveBeenCalledWith({
           where: { orderId_correctionRequestKey: { orderId: ORDER_ID, correctionRequestKey: expect.any(String) } },
-          data: { correctiveStoragePath: MOCK_CORRECTIVE_PATH },
+          data: { correctiveStoragePath: MOCK_CORRECTIVE_PATH, vatBreakdownByRate: {} },
         });
       });
 
@@ -1226,7 +1227,7 @@ describe('InvoiceService', () => {
           `FK-${YEAR}-000099.pdf`,
         );
         expect(corrPrisma.invoiceCorrection.update).toHaveBeenCalledWith(
-          expect.objectContaining({ data: { correctiveStoragePath: RESERVED_PATH } }),
+          expect.objectContaining({ data: { correctiveStoragePath: RESERVED_PATH, vatBreakdownByRate: {} } }),
         );
       });
 
@@ -1359,6 +1360,68 @@ describe('InvoiceService', () => {
       });
     });
 
+    // ── prior-corrections VAT base (Art. 106j ust. 2) ──────────────────────
+    // Regression coverage for: buildCorrectiveVatBreakdown used the order's
+    // pristine total as "original" on every correction, so a second partial
+    // cancellation touching an already-corrected rate showed an "original"
+    // inconsistent with the first correction's "corrected" column. The fix
+    // sums every earlier correction's persisted vatBreakdownByRate (excluding
+    // this correction's own row) and subtracts it from the pristine total.
+
+    describe('prior-corrections VAT base', () => {
+      it('looks up prior corrections for this order, excluding the current correctionRequestKey', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrPrisma.invoiceCorrection.findMany).toHaveBeenCalledWith({
+          where: { orderId: ORDER_ID, correctionRequestKey: { not: expect.any(String) } },
+          select: { vatBreakdownByRate: true },
+        });
+      });
+
+      it('sums vatBreakdownByRate across all prior corrections per rate before building the breakdown', async () => {
+        corrPrisma.invoiceCorrection.findMany.mockResolvedValue([
+          { vatBreakdownByRate: { '2300': 4000 } },
+          { vatBreakdownByRate: { '2300': 1000, '500': 200 } },
+        ]);
+        const spy = jest.spyOn(corrService as any, 'buildCorrectiveVatBreakdown');
+
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        const priorDeltaArg = spy.mock.calls[0][2] as Map<number, number>;
+        expect(priorDeltaArg.get(2300)).toBe(5000);
+        expect(priorDeltaArg.get(500)).toBe(200);
+      });
+
+      it('treats a missing (null) vatBreakdownByRate on a legacy prior row as contributing no delta', async () => {
+        corrPrisma.invoiceCorrection.findMany.mockResolvedValue([{ vatBreakdownByRate: null }]);
+        const spy = jest.spyOn(corrService as any, 'buildCorrectiveVatBreakdown');
+
+        await expect(
+          corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON),
+        ).resolves.toBeDefined();
+
+        const priorDeltaArg = spy.mock.calls[0][2] as Map<number, number>;
+        expect(priorDeltaArg.size).toBe(0);
+      });
+
+      it('persists this correction’s own per-rate delta as vatBreakdownByRate on the TX2 update', async () => {
+        const cancelledItems = [
+          { orderItemId: 'item-aaa', quantity: 2, priceInCents: 1000, vatRate: 2300 },
+          { orderItemId: 'item-bbb', quantity: 1, priceInCents: 500, vatRate: 500 },
+        ];
+
+        await corrService.processCorrectiveInvoice(
+          ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON, cancelledItems,
+        );
+
+        expect(corrPrisma.invoiceCorrection.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ vatBreakdownByRate: { '2300': 2000, '500': 500 } }),
+          }),
+        );
+      });
+    });
+
     // ── getCorrectiveInvoiceUrl — nullable storagePath guard ───────────────
 
     describe('getCorrectiveInvoiceUrl — nullable storagePath guard', () => {
@@ -1463,6 +1526,60 @@ describe('InvoiceService', () => {
         const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, []);
 
         expect(rows).toEqual([]);
+      });
+
+      // ── prior-corrections adjustment (Art. 106j ust. 2 continuity) ────────
+      // Regression for: "original" used the pristine total on every
+      // correction instead of the base immediately preceding this one.
+
+      it('subtracts the prior corrections delta for the same rate from the pristine total', () => {
+        const originalItems = [{ snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 }];
+        const cancelledItems = [{ priceInCents: 3000, quantity: 1, vatRate: 2300 }];
+        const priorDeltaGrossByRate = new Map([[2300, 4000]]);
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(
+          originalItems, cancelledItems, priorDeltaGrossByRate,
+        );
+
+        // pristine 10000 - prior correction's 4000 = 6000 adjusted base
+        expect(rows[0].originalNetCents).toBe(Math.round(6000 / 1.23));
+      });
+
+      it('falls back to the pristine total when no prior delta map is passed', () => {
+        const originalItems = [{ snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 }];
+        const cancelledItems = [{ priceInCents: 3000, quantity: 1, vatRate: 2300 }];
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, cancelledItems);
+
+        expect(rows[0].originalNetCents).toBe(Math.round(10000 / 1.23));
+      });
+
+      it('ignores prior deltas recorded for a different VAT rate', () => {
+        const originalItems = [{ snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 }];
+        const cancelledItems = [{ priceInCents: 3000, quantity: 1, vatRate: 2300 }];
+        const priorDeltaGrossByRate = new Map([[500, 4000]]); // unrelated rate
+
+        const rows = (corrService as any).buildCorrectiveVatBreakdown(
+          originalItems, cancelledItems, priorDeltaGrossByRate,
+        );
+
+        expect(rows[0].originalNetCents).toBe(Math.round(10000 / 1.23));
+      });
+
+      it('keeps sequential corrective invoices internally consistent: invoice 2 original == invoice 1 corrected', () => {
+        const originalItems = [{ snapshotPrice: 10000, quantity: 1, snapshotVatRate: 2300 }];
+
+        const firstCancelled = [{ priceInCents: 4000, quantity: 1, vatRate: 2300 }];
+        const firstRows = (corrService as any).buildCorrectiveVatBreakdown(originalItems, firstCancelled);
+
+        const secondCancelled = [{ priceInCents: 1000, quantity: 1, vatRate: 2300 }];
+        const priorDeltaGrossByRate = new Map([[2300, 4000]]); // first correction's deltaGross
+        const secondRows = (corrService as any).buildCorrectiveVatBreakdown(
+          originalItems, secondCancelled, priorDeltaGrossByRate,
+        );
+
+        expect(secondRows[0].originalNetCents).toBe(firstRows[0].correctedNetCents);
+        expect(secondRows[0].originalVatCents).toBe(firstRows[0].correctedVatCents);
       });
     });
 
