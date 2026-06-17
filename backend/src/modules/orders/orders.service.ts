@@ -20,6 +20,7 @@ import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus } from '@p
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
 import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-token.util';
+import { getStripeMinimumChargeInCents } from '../payments/stripe-minimum-charge.util';
 import type IORedis from 'ioredis';
 import { randomUUID } from 'node:crypto';
 
@@ -312,9 +313,14 @@ export class OrdersService implements OnModuleInit {
 
       const txTotalInCents = Math.max(0, txItemsTotalInCents + shippingCostInCents - txDiscountInCents);
 
-      if (txTotalInCents > 0 && txTotalInCents < 50) {
+      const stripeCurrency = this.configService.get<string>('STRIPE_CURRENCY', 'pln');
+      const minimumChargeInCents = getStripeMinimumChargeInCents(stripeCurrency);
+      if (txTotalInCents > 0 && txTotalInCents < minimumChargeInCents) {
+        const minimumLabel = stripeCurrency.toLowerCase() === 'pln'
+          ? `${(minimumChargeInCents / 100).toFixed(2).replace('.', ',')} zł`
+          : `${(minimumChargeInCents / 100).toFixed(2)} ${stripeCurrency.toUpperCase()}`;
         throw new BadRequestException(
-          'Kwota zamówienia jest zbyt niska (minimum 0,50 zł po rabacie).',
+          `Kwota zamówienia jest zbyt niska (minimum ${minimumLabel} po rabacie).`,
         );
       }
 
@@ -861,14 +867,53 @@ export class OrdersService implements OnModuleInit {
   }
 
   async retryPayment(orderId: string, userId: string): Promise<{ paymentUrl: string }> {
-    const order = await this.prisma.order.findFirst({ where: { id: orderId, userId } });
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true },
+    });
     if (!order) throw new NotFoundException('Order not found');
     if (order.status !== OrderStatus.PENDING_PAYMENT) {
       throw new BadRequestException(
         `Cannot retry payment for an order in status ${order.status}`,
       );
     }
-    return this.paymentsService.initiatePayment(orderId);
+
+    // Mirrors the rollback in createFromCart: if Stripe rejects the session
+    // (e.g. a pre-fix order below the minimum chargeable amount), the order
+    // must not stay PENDING_PAYMENT with stock decremented and no way out.
+    try {
+      return await this.paymentsService.initiatePayment(orderId);
+    } catch (stripeErr) {
+      this.logger.error(
+        `Payment retry failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
+      );
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+        await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+        if (order.couponId) {
+          await tx.$executeRaw`
+            UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+            WHERE id = ${order.couponId}::uuid
+          `;
+          await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+        }
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM',
+            note: `Payment retry failed: ${(stripeErr as Error).message}`,
+          },
+        });
+      });
+      throw stripeErr;
+    }
   }
 
   async cancelItemsByUser(
