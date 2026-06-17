@@ -31,6 +31,24 @@ export async function logAdminAction(
   }
 }
 
+/** Session-fixation guard: regenerates the session ID on the first request after
+ *  login. Without this, an attacker who plants a known session ID before login
+ *  inherits the authenticated session after the admin logs in. Exported so it can
+ *  be applied directly in custom route chains, not just the AdminJS router mount. */
+export function regenerateSessionOnLogin(req: any, res: any, next: any): void {
+  if (req.session?.passport?.user && !req.session._regenerated) {
+    const passportUser = req.session.passport.user;
+    req.session.regenerate((err: Error | null) => {
+      if (err) return next(err);
+      req.session.passport = { user: passportUser };
+      req.session._regenerated = true;
+      next();
+    });
+  } else {
+    next();
+  }
+}
+
 /** Exported for unit testing. Precomputes a dummy hash once so bcrypt.compare
  *  always runs on every login attempt regardless of email match, preventing
  *  timing-based email enumeration. */
@@ -1089,31 +1107,41 @@ export async function setupAdmin(
   // router so Express resolves it here instead of handing it to AdminJS's SPA.
   const sessionMw = session(sessionOpts);
   const expressApp = app.getHttpAdapter().getInstance();
-  expressApp.get('/admin/picklist', sessionMw, async (req: any, res: any) => {
-    if (!req.session?.passport?.user) {
-      return res.redirect('/admin/login');
-    }
-    try {
-      const html = await generatePicklistHtml(prisma);
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(html);
-    } catch (err) {
-      res.status(500).send(`<pre>Błąd generowania listy: ${(err as Error).message}</pre>`);
-    }
-  });
+  expressApp.get(
+    '/admin/picklist',
+    sessionMw,
+    regenerateSessionOnLogin,
+    async (req: any, res: any) => {
+      if (!req.session?.passport?.user) {
+        return res.redirect('/admin/login');
+      }
+      try {
+        const html = await generatePicklistHtml(prisma);
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+      } catch (err) {
+        res.status(500).send(`<pre>Błąd generowania listy: ${(err as Error).message}</pre>`);
+      }
+    },
+  );
 
-  expressApp.get('/admin/fulfillment-gap', sessionMw, async (req: any, res: any) => {
-    if (!req.session?.passport?.user) {
-      return res.redirect('/admin/login');
-    }
-    try {
-      const html = await generateFulfillmentGapHtml(prisma);
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(html);
-    } catch (err) {
-      res.status(500).send(`<pre>Błąd generowania raportu: ${(err as Error).message}</pre>`);
-    }
-  });
+  expressApp.get(
+    '/admin/fulfillment-gap',
+    sessionMw,
+    regenerateSessionOnLogin,
+    async (req: any, res: any) => {
+      if (!req.session?.passport?.user) {
+        return res.redirect('/admin/login');
+      }
+      try {
+        const html = await generateFulfillmentGapHtml(prisma);
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+      } catch (err) {
+        res.status(500).send(`<pre>Błąd generowania raportu: ${(err as Error).message}</pre>`);
+      }
+    },
+  );
 
   const router = AdminJSExpress.buildAuthenticatedRouter(
     admin,
@@ -1128,22 +1156,11 @@ export async function setupAdmin(
 
   app.use(admin.options.rootPath, router);
 
-  // Session fixation guard: regenerate the session ID on the first request after
-  // login. Without this, an attacker who plants a known session ID before login
-  // inherits the authenticated session after the admin logs in.
-  expressApp.use('/admin', (req: any, res: any, next: any) => {
-    if (req.session?.passport?.user && !req.session._regenerated) {
-      const passportUser = req.session.passport.user;
-      req.session.regenerate((err: Error | null) => {
-        if (err) return next(err);
-        req.session.passport = { user: passportUser };
-        req.session._regenerated = true;
-        next();
-      });
-    } else {
-      next();
-    }
-  });
+  // Session fixation guard for requests handled by the AdminJS router itself.
+  // The custom /admin/picklist and /admin/fulfillment-gap routes above apply
+  // regenerateSessionOnLogin directly in their own chain, since they terminate
+  // the request before this mount (registered after them) would ever run.
+  expressApp.use('/admin', regenerateSessionOnLogin);
 
   logger.log(`AdminJS panel available at ${admin.options.rootPath}`);
 }
