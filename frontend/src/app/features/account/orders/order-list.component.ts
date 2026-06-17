@@ -18,15 +18,17 @@ interface OrderSummary {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT:    'Oczekuje na płatność',
-  FRAUD_REVIEW:       'Weryfikacja',
-  PAID:               'Opłacone',
-  PROCESSING:         'W realizacji',
-  SHIPPED:            'Wysłane',
-  DELIVERED:          'Dostarczone',
-  CANCELLED:          'Anulowane',
-  REFUNDED:           'Zwrócone',
-  PARTIALLY_REFUNDED: 'Częściowo zwrócone',
+  PENDING_PAYMENT:     'Oczekuje na płatność',
+  FRAUD_REVIEW:        'Weryfikacja',
+  PAID:                'Opłacone',
+  PROCESSING:          'W realizacji',
+  SHIPPED:             'Wysłane',
+  DELIVERED:           'Dostarczone',
+  CANCELLED:           'Anulowane',
+  REFUNDED:            'Zwrócone',
+  PARTIALLY_REFUNDED:  'Częściowo zwrócone',
+  DISPUTE_HOLD:        'Spór płatniczy',
+  DISPUTE_LOST_REVIEW: 'Weryfikacja zwrotu',
 };
 
 const PAGE_SIZE = 20;
