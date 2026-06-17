@@ -87,3 +87,121 @@ jobs:
 
       - name: Run frontend tests
         run: pnpm --filter frontend test
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: prisma
+          POSTGRES_PASSWORD: prisma
+          POSTGRES_DB: e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U prisma"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    # The e2e suite (e2e/tests/*.spec.ts) is API-level only — it drives the
+    # backend at localhost:3000 via Playwright's `request` fixture, no browser
+    # or frontend involved. If browser-based tests are added later (see the
+    # comment in e2e/playwright.config.ts), this job also needs to build and
+    # serve the frontend.
+    env:
+      NODE_ENV: test
+      PORT: 3000
+      DATABASE_URL: postgresql://prisma:prisma@localhost:5432/e2e
+      DIRECT_URL: postgresql://prisma:prisma@localhost:5432/e2e
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-e2e-jwt-access-secret-placeholder
+      JWT_REFRESH_SECRET: ci-e2e-jwt-refresh-secret-placeholder
+      ORDER_CANCEL_SECRET: ci-e2e-order-cancel-secret-needs-32-chars-min
+      GOOGLE_CLIENT_ID: ci-e2e-google-client-id
+      GOOGLE_CLIENT_SECRET: ci-e2e-google-client-secret
+      GOOGLE_CALLBACK_URL: http://localhost:3000/auth/google/callback
+      STRIPE_SECRET_KEY: sk_test_ci_e2e_placeholder
+      STRIPE_PUBLISHABLE_KEY: pk_test_ci_e2e_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_ci_e2e_placeholder
+      STRIPE_SUCCESS_URL: http://localhost:4200/checkout/success
+      STRIPE_CANCEL_URL: http://localhost:4200/checkout/failure
+      PAYMENTS_RECONCILE_SECRET: ci-e2e-reconcile-secret-placeholder
+      SUPABASE_URL: https://ci-e2e-placeholder.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-e2e-service-role-key-placeholder
+      INPOST_MOCK_ENABLED: 'true'
+      DHL_MOCK_ENABLED: 'true'
+      GLS_MOCK_ENABLED: 'true'
+      DPD_MOCK_ENABLED: 'true'
+      ADMIN_DEFAULT_EMAIL: admin@ci.local
+      ADMIN_DEFAULT_PASSWORD: ci-e2e-admin-password-placeholder
+      ADMIN_SESSION_SECRET: ci-e2e-admin-session-secret-placeholder
+      FRONTEND_URL: http://localhost:4200
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared-types
+        run: pnpm --filter @fragrance-store/shared-types build
+
+      - name: Generate Prisma client
+        run: pnpm --filter backend prisma:generate
+
+      - name: Apply database migrations
+        run: pnpm --filter backend prisma:migrate:prod
+
+      - name: Build backend
+        run: pnpm build:backend
+
+      - name: Start backend
+        run: |
+          node backend/dist/main > backend.log 2>&1 &
+          echo $! > backend.pid
+
+      - name: Wait for backend to become healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null; then
+              echo "Backend is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become healthy in time"
+          cat backend.log
+          exit 1
+
+      - name: Run Playwright e2e suite
+        run: pnpm test:e2e
+
+      - name: Backend logs (on failure)
+        if: failure()
+        run: cat backend.log
+
+      - name: Stop backend
+        if: always()
+        run: kill "$(cat backend.pid)" 2>/dev/null || true
