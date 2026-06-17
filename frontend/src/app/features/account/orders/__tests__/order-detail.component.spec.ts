@@ -84,3 +84,32 @@ describe('OrderDetailComponent — statusLabel', () => {
     expect(component.statusLabel('SOME_FUTURE_STATUS')).toBe('SOME_FUTURE_STATUS');
   });
 });
+
+describe('OrderDetailComponent — canCancel', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).match(() => true).forEach((r) => r.flush(null));
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('does not allow cancelling a PARTIALLY_REFUNDED order (backend rejects it with a 409)', () => {
+    const { component } = setup();
+
+    expect(component.canCancel('PARTIALLY_REFUNDED')).toBe(false);
+  });
+
+  it('allows cancelling PENDING_PAYMENT, PAID, and PROCESSING orders', () => {
+    const { component } = setup();
+
+    expect(component.canCancel('PENDING_PAYMENT')).toBe(true);
+    expect(component.canCancel('PAID')).toBe(true);
+    expect(component.canCancel('PROCESSING')).toBe(true);
+  });
+
+  it('still allows the partial-cancel flow for PARTIALLY_REFUNDED orders', () => {
+    const { component } = setup();
+
+    expect(component.canPartialCancel('PARTIALLY_REFUNDED')).toBe(true);
+  });
+});
+

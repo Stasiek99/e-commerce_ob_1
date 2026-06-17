@@ -416,7 +416,7 @@ export class OrderDetailComponent implements OnInit {
   }
 
   canCancel(status: string): boolean {
-    return ['PENDING_PAYMENT', 'PAID', 'PROCESSING', 'PARTIALLY_REFUNDED'].includes(status);
+    return ['PENDING_PAYMENT', 'PAID', 'PROCESSING'].includes(status);
   }
 
   canPartialCancel(status: string): boolean {
