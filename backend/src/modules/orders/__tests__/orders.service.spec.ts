@@ -193,6 +193,16 @@ describe('OrdersService', () => {
       prisma.$executeRawUnsafe.mockResolvedValue(undefined);
     });
 
+    it('validates the current year and next year before running any DDL', async () => {
+      const guardSpy = jest.spyOn(service as any, 'assertValidOrderSequenceYear');
+
+      await service.onModuleInit();
+
+      const year = new Date().getFullYear();
+      expect(guardSpy).toHaveBeenCalledWith(year);
+      expect(guardSpy).toHaveBeenCalledWith(year + 1);
+    });
+
     it('creates order_number_seq for the current year directly on the client', async () => {
       await service.onModuleInit();
 
@@ -258,6 +268,41 @@ describe('OrdersService', () => {
         // 6 attempts × 1 failing call each (rejects before the second sequence DDL)
         expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(6);
       });
+    });
+  });
+
+  // ─── assertValidOrderSequenceYear — year validation guard ────────────────────
+  // Regression guard for the $executeRawUnsafe/$queryRawUnsafe interpolation
+  // hardening shared by onModuleInit and generateOrderNumber, mirroring
+  // InvoiceService.ensureSequence. year is server-derived today, but this
+  // closes the gap if a future change ever threads a stored/client-influenced
+  // date into either raw-SQL path.
+
+  describe('assertValidOrderSequenceYear — year validation guard', () => {
+    it('throws for year below 2020 (lower boundary breach)', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2019)).toThrow(
+        'Invalid order sequence year: 2019',
+      );
+    });
+
+    it('throws for year above 2100 (upper boundary breach)', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2101)).toThrow(
+        'Invalid order sequence year: 2101',
+      );
+    });
+
+    it('throws for a non-integer year (floating-point injection vector)', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2024.5)).toThrow(
+        'Invalid order sequence year: 2024.5',
+      );
+    });
+
+    it('accepts year 2020 (lower boundary) without throwing', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2020)).not.toThrow();
+    });
+
+    it('accepts year 2100 (upper boundary) without throwing', () => {
+      expect(() => (service as any).assertValidOrderSequenceYear(2100)).not.toThrow();
     });
   });
 
@@ -4130,6 +4175,38 @@ describe('OrdersService', () => {
 
       const year = new Date().getFullYear();
       expect(generatedOrderNumber).toBe(`ORD-${year}-000001`);
+    });
+
+    it('validates the year before querying the sequence', async () => {
+      const guardSpy = jest.spyOn(service as any, 'assertValidOrderSequenceYear');
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+          },
+          order: {
+            create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      expect(guardSpy).toHaveBeenCalledWith(new Date().getFullYear());
     });
   });
 

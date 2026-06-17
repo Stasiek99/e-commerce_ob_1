@@ -80,10 +80,21 @@ export class OrdersService implements OnModuleInit {
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
+  // year is server-derived (Date.now()), never attacker input — this guards
+  // against a future change threading a stored/client-influenced date into
+  // this DDL/raw-SQL path, mirroring InvoiceService.ensureSequence.
+  private assertValidOrderSequenceYear(year: number): void {
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) {
+      throw new Error(`Invalid order sequence year: ${year}`);
+    }
+  }
+
   async onModuleInit(): Promise<void> {
     const maxAttempts = 6;
     const baseDelayMs = 3_000;
     const year = new Date().getFullYear();
+    this.assertValidOrderSequenceYear(year);
+    this.assertValidOrderSequenceYear(year + 1);
     // CREATE SEQUENCE IF NOT EXISTS is idempotent — concurrent pod startups
     // are safe without an advisory lock. pg_advisory_xact_lock is ineffective
     // here because DATABASE_URL goes through pgbouncer in transaction mode,
@@ -1431,6 +1442,7 @@ export class OrdersService implements OnModuleInit {
     tx: Prisma.TransactionClient,
   ): Promise<string> {
     const year = new Date().getFullYear();
+    this.assertValidOrderSequenceYear(year);
 
     const result: Array<{ nextval: bigint }> = await tx.$queryRawUnsafe(
       `SELECT nextval('order_number_seq_${year}')`,
