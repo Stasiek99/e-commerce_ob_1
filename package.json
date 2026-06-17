@@ -14,7 +14,7 @@
     "test:e2e:ui": "pnpm --filter e2e test:ui"
   },
   "engines": {
-    "node": ">=20",
+    "node": "22.20.0",
     "pnpm": ">=9"
   },
   "devDependencies": {

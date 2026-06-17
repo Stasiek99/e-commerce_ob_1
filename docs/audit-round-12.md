@@ -46,16 +46,6 @@ The fix swapped one wrong default (never restore) for the opposite wrong default
 
 ---
 
-
-
-
-
-
-
-
-Not yet:
-
-
 ## 🟠 HIGH — Stripe minimum-charge floor hardcoded to 50gr but Stripe's actual PLN minimum is 200gr *(Domain Expert)*
 
 **File:** `backend/src/modules/orders/orders.service.ts:312`
@@ -183,6 +173,18 @@ Railway's Railpack builder resolves "Node 20 or later" at build time with no loc
 **Fix:** Add a `.nvmrc` pinning an exact Node version and reference it both in CI's `setup-node` and (if supported) Railway's build config.
 
 ---
+
+
+Not yet:
+
+
+
+
+
+
+
+
+
 
 ## 🟡 MEDIUM — `reconcilePendingPayments` cannot recover orders whose `initiatePayment` failed before any Stripe session existed *(First-Principles)*
 
