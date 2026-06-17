@@ -14,7 +14,9 @@ const JOB_OPTIONS = {
 } as const;
 
 // UoK Art. 21 requires order confirmation on a durable medium — these must reach
-// the customer even if a (possibly stale) hard bounce is on record.
+// the customer even on a soft (transient) bounce, since the mailbox is still live.
+// A hard (permanent) bounce means the mailbox no longer exists, so there is no
+// channel left to deliver on — suppression applies regardless of email type.
 const TRANSACTIONAL_ORDER_EMAIL_TYPES = new Set<EmailJobData['type']>([
   'order_confirmation',
   'payment_confirmed',
@@ -58,23 +60,26 @@ export class EmailQueueService {
     if (to) {
       const user = await this.prisma.user.findFirst({
         where: { email: to },
-        select: { emailBounced: true, emailBouncedAt: true, emailComplained: true },
+        select: { emailBounced: true, emailBouncedAt: true, emailBouncedType: true, emailComplained: true },
       });
       if (user?.emailBounced) {
         const bounceIsStale =
           !!user.emailBouncedAt && Date.now() - user.emailBouncedAt.getTime() > BOUNCE_AUTO_RESET_MS;
+        const isSoftBounce = user.emailBouncedType === 'Transient';
         if (bounceIsStale) {
           await this.prisma.user.updateMany({
             where: { email: to },
-            data: { emailBounced: false, emailBouncedAt: null, emailBouncedReason: null },
+            data: { emailBounced: false, emailBouncedAt: null, emailBouncedReason: null, emailBouncedType: null },
           });
           this.logger.log(`Bounce flag auto-reset for ${to} after 30 days — retrying delivery`);
-        } else if (TRANSACTIONAL_ORDER_EMAIL_TYPES.has(data.type)) {
+        } else if (TRANSACTIONAL_ORDER_EMAIL_TYPES.has(data.type) && isSoftBounce) {
           this.logger.warn(
-            `Email job "${name}" sent despite hard bounce on record — transactional order email required by law (${to})`,
+            `Email job "${name}" sent despite soft bounce on record — transactional order email required by law (${to})`,
           );
         } else {
-          this.logger.warn(`Email job "${name}" suppressed — ${to} has a hard bounce on record`);
+          this.logger.warn(
+            `Email job "${name}" suppressed — ${to} has a${isSoftBounce ? ' soft' : ' hard'} bounce on record`,
+          );
           return;
         }
       }

@@ -122,6 +122,7 @@ model User {
   emailBounced       Boolean   @default(false)
   emailBouncedAt     DateTime?
   emailBouncedReason String?
+  emailBouncedType   String?
   emailComplained       Boolean   @default(false)
   emailComplainedAt     DateTime?
   createdAt          DateTime  @default(now())

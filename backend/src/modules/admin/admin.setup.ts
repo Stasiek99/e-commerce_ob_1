@@ -667,7 +667,7 @@ export async function setupAdmin(
           navigation: { name: 'Użytkownicy' },
           sort: { sortBy: 'createdAt', direction: 'desc' },
           listProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'emailBounced', 'createdAt'],
-          showProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'isEmailVerified', 'nip', 'emailBounced', 'emailBouncedAt', 'emailBouncedReason', 'createdAt'],
+          showProperties: ['email', 'firstName', 'lastName', 'phone', 'role', 'isEmailVerified', 'nip', 'emailBounced', 'emailBouncedAt', 'emailBouncedReason', 'emailBouncedType', 'createdAt'],
           filterProperties: ['email', 'role', 'isEmailVerified', 'emailBounced'],
           properties: {
             passwordHash: { isVisible: false },
