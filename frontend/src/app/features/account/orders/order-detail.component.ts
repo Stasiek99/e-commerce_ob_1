@@ -424,7 +424,7 @@ export class OrderDetailComponent implements OnInit {
   }
 
   canDownloadInvoice(status: string): boolean {
-    return !['PENDING_PAYMENT', 'CANCELLED'].includes(status);
+    return !['PENDING_PAYMENT', 'CANCELLED', 'FRAUD_REVIEW', 'DISPUTE_HOLD'].includes(status);
   }
 
   downloadInvoice(): void {

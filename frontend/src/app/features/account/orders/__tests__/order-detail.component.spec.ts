@@ -113,3 +113,29 @@ describe('OrderDetailComponent — canCancel', () => {
   });
 });
 
+describe('OrderDetailComponent — canDownloadInvoice', () => {
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).match(() => true).forEach((r) => r.flush(null));
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it.each(['PENDING_PAYMENT', 'CANCELLED', 'FRAUD_REVIEW', 'DISPUTE_HOLD'])(
+    'hides the invoice button for %s, matching the backend nonInvoiceable list',
+    (status) => {
+      const { component } = setup();
+
+      expect(component.canDownloadInvoice(status)).toBe(false);
+    },
+  );
+
+  it.each(['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'PARTIALLY_REFUNDED', 'REFUNDED'])(
+    'shows the invoice button for %s',
+    (status) => {
+      const { component } = setup();
+
+      expect(component.canDownloadInvoice(status)).toBe(true);
+    },
+  );
+});
+
