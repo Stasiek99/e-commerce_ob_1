@@ -145,7 +145,7 @@ jobs:
       DHL_MOCK_ENABLED: 'true'
       GLS_MOCK_ENABLED: 'true'
       DPD_MOCK_ENABLED: 'true'
-      ADMIN_DEFAULT_EMAIL: admin@ci.local
+      ADMIN_DEFAULT_EMAIL: admin@e2e.example.com
       ADMIN_DEFAULT_PASSWORD: ci-e2e-admin-password-placeholder
       ADMIN_SESSION_SECRET: ci-e2e-admin-session-secret-placeholder
       FRONTEND_URL: http://localhost:4200
