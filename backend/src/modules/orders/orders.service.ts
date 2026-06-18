@@ -955,6 +955,18 @@ export class OrdersService implements OnModuleInit {
   ): Promise<void> {
     if (!dto.items.length) throw new BadRequestException('No items provided for cancellation');
 
+    // Distributed lock: prevents two concurrent cancellation requests on the same order
+    // (double-click, two tabs) from both reading stale cancelledQuantity/refundedAmountInCents
+    // and double-restoring stock. Mirrors the checkout-lock pattern in createFromCart above.
+    const lockKey = `cancel-lock:${orderId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException('A cancellation for this order is already in progress — please wait a moment before trying again', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    try {
+
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, userId },
       include: { items: true },
@@ -1092,6 +1104,16 @@ export class OrdersService implements OnModuleInit {
         isRefund: true,
       })
       .catch((err) => this.logger.warn('Partial refund cancellation email failed', err));
+
+    } finally {
+      // Release the lock only if we still own it (Lua script is atomic).
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
   }
 
   async getCorrectiveInvoiceForUser(orderId: string, userId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string }> {

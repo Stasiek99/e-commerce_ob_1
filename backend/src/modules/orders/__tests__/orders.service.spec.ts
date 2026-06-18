@@ -3877,6 +3877,56 @@ describe('OrdersService', () => {
 
       expect(invoiceService.processCorrectiveInvoice).not.toHaveBeenCalled();
     });
+
+    // Guards against the double-submit race: two concurrent cancellation requests on the
+    // same order must not both read stale cancelledQuantity/refundedAmountInCents and both
+    // proceed to double-restore stock. Mirrors the checkout-lock tests for createFromCart.
+    describe('per-order cancellation lock', () => {
+      it('throws 429 when the cancel lock is already held by a concurrent request', async () => {
+        redisClient.set.mockResolvedValue(null); // SET NX returns null = not acquired
+        prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+        await expect(
+          service.cancelItemsByUser('order-1', 'user-1', {
+            items: [{ orderItemId: 'item-1', quantity: 1 }],
+          }),
+        ).rejects.toMatchObject({ status: 429 });
+
+        expect(prisma.order.findFirst).not.toHaveBeenCalled();
+        expect(paymentsService.partialRefund).not.toHaveBeenCalled();
+      });
+
+      it('acquires and releases the lock keyed by orderId on success', async () => {
+        redisClient.set.mockResolvedValue('OK');
+        prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+
+        await service.cancelItemsByUser('order-1', 'user-1', {
+          items: [{ orderItemId: 'item-1', quantity: 1 }],
+        });
+
+        expect(redisClient.set).toHaveBeenCalledWith(
+          'cancel-lock:order-1',
+          expect.any(String),
+          'EX',
+          30,
+          'NX',
+        );
+        expect(redisClient.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock in the finally block even when cancellation fails', async () => {
+        redisClient.set.mockResolvedValue('OK');
+        prisma.order.findFirst.mockResolvedValue(null);
+
+        await expect(
+          service.cancelItemsByUser('order-1', 'user-1', {
+            items: [{ orderItemId: 'item-1', quantity: 1 }],
+          }),
+        ).rejects.toThrow(NotFoundException);
+
+        expect(redisClient.eval).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   // Fix #27: order confirmation email moved to markSessionPaid() (Stripe webhook).
