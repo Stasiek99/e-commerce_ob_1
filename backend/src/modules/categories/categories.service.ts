@@ -6,12 +6,31 @@ import { Prisma } from '@prisma/client';
 export class CategoriesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
-    return this.prisma.category.findMany({
-      where: { parentId: null },
-      include: { children: { include: { children: true } } },
+  // Builds the full category tree from a single flat query instead of a manually
+  // nested Prisma `include`, which silently dropped any category past a fixed
+  // depth. The self-referential parentId relation supports arbitrary depth, so
+  // the tree must too — every node gets a `children` array, however deep it goes.
+  async findAll() {
+    const categories = await this.prisma.category.findMany({
       orderBy: { name: 'asc' },
     });
+
+    type CategoryNode = (typeof categories)[number] & { children: CategoryNode[] };
+    const byId = new Map<string, CategoryNode>(
+      categories.map((category) => [category.id, { ...category, children: [] }]),
+    );
+
+    const roots: CategoryNode[] = [];
+    for (const node of byId.values()) {
+      const parent = node.parentId ? byId.get(node.parentId) : undefined;
+      if (parent) {
+        parent.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+
+    return roots;
   }
 
   async findBySlug(slug: string) {
