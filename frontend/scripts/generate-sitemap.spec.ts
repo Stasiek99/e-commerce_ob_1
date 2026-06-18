@@ -251,3 +251,135 @@ describe('prerender-routes.txt generation', () => {
     expect(routes).toHaveLength(STATIC_PRERENDER.length + products.length + categories.length);
   });
 });
+
+// ── fetchJson retry-with-backoff ─────────────────────────────────────────────
+// Mirrors generate-sitemap.mjs:fetchJson. The real function calls the global
+// `fetch` directly; here the per-attempt fetch and the sleep are injected so
+// the retry/backoff behaviour can be tested without real network or timers.
+
+const FETCH_MAX_ATTEMPTS = 3;
+const FETCH_RETRY_BASE_MS = 1000;
+
+async function fetchJsonWithRetry(
+  attemptFetch: (attempt: number) => Promise<{ ok: boolean; status?: number; json: () => Promise<unknown> }>,
+  sleep: (ms: number) => Promise<void>,
+  attempt = 1,
+): Promise<unknown> {
+  try {
+    const res = await attemptFetch(attempt);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch {
+    if (attempt < FETCH_MAX_ATTEMPTS) {
+      await sleep(FETCH_RETRY_BASE_MS * 2 ** (attempt - 1));
+      return fetchJsonWithRetry(attemptFetch, sleep, attempt + 1);
+    }
+    return null;
+  }
+}
+
+describe('fetchJson() — retry with backoff', () => {
+  it('returns parsed JSON on the first successful attempt without retrying', async () => {
+    const attemptFetch = jest.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ data: ['ok'] }) });
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    const result = await fetchJsonWithRetry(attemptFetch, sleep);
+
+    expect(result).toEqual({ data: ['ok'] });
+    expect(attemptFetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('retries after a network error and succeeds on the second attempt', async () => {
+    const attemptFetch = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: ['ok'] }) });
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    const result = await fetchJsonWithRetry(attemptFetch, sleep);
+
+    expect(result).toEqual({ data: ['ok'] });
+    expect(attemptFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries after a non-2xx HTTP response and succeeds once the backend recovers', async () => {
+    const attemptFetch = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => null })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: ['ok'] }) });
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    const result = await fetchJsonWithRetry(attemptFetch, sleep);
+
+    expect(result).toEqual({ data: ['ok'] });
+    expect(attemptFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null after exhausting all attempts when the backend never recovers', async () => {
+    const attemptFetch = jest.fn().mockRejectedValue(new Error('fetch failed'));
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    const result = await fetchJsonWithRetry(attemptFetch, sleep);
+
+    expect(result).toBeNull();
+    expect(attemptFetch).toHaveBeenCalledTimes(FETCH_MAX_ATTEMPTS);
+  });
+
+  it('backs off with exponentially increasing delay between attempts', async () => {
+    const attemptFetch = jest.fn().mockRejectedValue(new Error('fetch failed'));
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    await fetchJsonWithRetry(attemptFetch, sleep);
+
+    expect(sleep).toHaveBeenNthCalledWith(1, FETCH_RETRY_BASE_MS);
+    expect(sleep).toHaveBeenNthCalledWith(2, FETCH_RETRY_BASE_MS * 2);
+  });
+});
+
+// ── minimum prerender route gate ─────────────────────────────────────────────
+// Mirrors the MIN_PRERENDER_ROUTES guard in generate-sitemap.mjs:main. Fails
+// the build instead of silently shipping a sitemap with only static routes
+// when every backend fetch failed — but only when SITEMAP_BACKEND_URL was
+// explicitly set (production builds). CI/local builds use the localhost
+// default with no backend running by design, so they must keep degrading
+// gracefully instead of failing — see ci.yml's `Build frontend` step, which
+// never starts the backend in the build-and-test job.
+
+const MIN_PRERENDER_ROUTES = STATIC_PRERENDER.length + 1;
+
+function shouldAbortBuild(prerenderRoutes: string[], enforceMinRoutes: boolean): boolean {
+  return enforceMinRoutes && prerenderRoutes.length < MIN_PRERENDER_ROUTES;
+}
+
+describe('minimum prerender route gate', () => {
+  it('aborts the build when only the static routes resolved AND a backend URL was explicitly configured', () => {
+    const routes = buildPrerenderRoutes([], []);
+    expect(shouldAbortBuild(routes, true)).toBe(true);
+  });
+
+  it('does not abort when only the static routes resolved but no backend URL was configured (CI/local default)', () => {
+    const routes = buildPrerenderRoutes([], []);
+    expect(shouldAbortBuild(routes, false)).toBe(false);
+  });
+
+  it('proceeds when at least one product route resolved', () => {
+    const routes = buildPrerenderRoutes([{ slug: 'chanel-no5' }], []);
+    expect(shouldAbortBuild(routes, true)).toBe(false);
+  });
+
+  it('proceeds when at least one category route resolved', () => {
+    const routes = buildPrerenderRoutes([], [{ slug: 'perfumy' }]);
+    expect(shouldAbortBuild(routes, true)).toBe(false);
+  });
+
+  it('proceeds when products and categories both resolved with many routes', () => {
+    const routes = buildPrerenderRoutes(
+      [{ slug: 'p1' }, { slug: 'p2' }],
+      [{ slug: 'c1' }, { slug: 'c2' }],
+    );
+    expect(shouldAbortBuild(routes, true)).toBe(false);
+  });
+});

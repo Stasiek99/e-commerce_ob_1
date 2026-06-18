@@ -6,9 +6,9 @@
  *   - src/sitemap.xml         — submitted to Google Search Console
  *   - prerender-routes.txt    — Angular static prerender target list
  *
- * Runs automatically as a `prebuild` hook. On fetch failure the script
- * degrades gracefully: it still emits the static routes so production
- * builds never hard-fail because the backend is temporarily down.
+ * Runs automatically as a `prebuild` hook. Backend fetches are retried
+ * with backoff; if they still fail, the build fails rather than silently
+ * shipping a sitemap/prerender list with only the static routes.
  *
  * Environment overrides:
  *   SITEMAP_BACKEND_URL  default: http://localhost:3000/api
@@ -21,10 +21,17 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SITEMAP_PATH = resolve(__dirname, '../src/sitemap.xml');
 const PRERENDER_PATH = resolve(__dirname, '../prerender-routes.txt');
+// Only enforce the minimum-route gate when a backend target was explicitly
+// configured (Vercel production builds set this). Local/CI builds fall back
+// to localhost with no backend running by design, so they keep degrading
+// gracefully instead of failing.
+const ENFORCE_MIN_ROUTES = Boolean(process.env.SITEMAP_BACKEND_URL);
 const BACKEND_URL = (process.env.SITEMAP_BACKEND_URL || 'http://localhost:3000/api').replace(/\/$/, '');
 const SITE_URL = (process.env.SITEMAP_SITE_URL || 'https://fragrance-store.pl').replace(/\/$/, '');
 const FETCH_TIMEOUT_MS = 8000;
 const PAGE_LIMIT = 100; // backend's per-page cap
+const FETCH_MAX_ATTEMPTS = 3;
+const FETCH_RETRY_BASE_MS = 1000;
 
 const STATIC_ROUTES = [
   { path: '', priority: '1.0', changefreq: 'weekly' },
@@ -41,16 +48,21 @@ const STATIC_PRERENDER_ROUTES = [
   '/legal/withdrawal',
 ];
 
-async function fetchJson(url) {
+async function fetchJson(url, attempt = 1) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) {
-      console.warn(`[sitemap] WARN: could not fetch ${url} — HTTP ${res.status}`);
-      return null;
+      throw new Error(`HTTP ${res.status}`);
     }
     return await res.json();
   } catch (err) {
-    console.warn(`[sitemap] WARN: could not fetch ${url} — ${err.message}`);
+    if (attempt < FETCH_MAX_ATTEMPTS) {
+      const delayMs = FETCH_RETRY_BASE_MS * 2 ** (attempt - 1);
+      console.warn(`[sitemap] WARN: fetch ${url} failed (attempt ${attempt}/${FETCH_MAX_ATTEMPTS}) — ${err.message}. Retrying in ${delayMs}ms...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      return fetchJson(url, attempt + 1);
+    }
+    console.warn(`[sitemap] WARN: could not fetch ${url} after ${FETCH_MAX_ATTEMPTS} attempts — ${err.message}`);
     return null;
   }
 }
@@ -176,6 +188,20 @@ ${entries.join('\n')}
     ...products.filter(p => p?.slug).map(p => `/products/${p.slug}`),
     ...categories.filter(c => c?.slug).map(c => `/category/${c.slug}`),
   ];
+
+  // Anything at or below the static-only count means every backend fetch
+  // failed (products and categories both came back empty). When a real
+  // backend was configured (production builds), fail the build instead of
+  // silently shipping a near-empty prerender list.
+  const MIN_PRERENDER_ROUTES = STATIC_PRERENDER_ROUTES.length + 1;
+  if (prerenderRoutes.length < MIN_PRERENDER_ROUTES) {
+    const message = `only ${prerenderRoutes.length} prerender route(s) resolved (minimum ${MIN_PRERENDER_ROUTES}) — backend fetch likely failed.`;
+    if (ENFORCE_MIN_ROUTES) {
+      console.error(`[sitemap] FATAL: ${message} Aborting build.`);
+      process.exit(1);
+    }
+    console.warn(`[sitemap] WARN: ${message} SITEMAP_BACKEND_URL not set — continuing with static routes only.`);
+  }
 
   writeFileSync(PRERENDER_PATH, prerenderRoutes.join('\n') + '\n', 'utf8');
   console.log(`[sitemap] wrote ${PRERENDER_PATH} (${prerenderRoutes.length} routes to prerender)`);
