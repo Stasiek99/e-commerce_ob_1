@@ -112,9 +112,12 @@ export class ReturnsService {
       // Art. 27 UoK: 14-day period starts the day AFTER delivery.
       // +15 sets the window end to the end of the 14th day after delivery,
       // ensuring the full delivery-date + 14 days is always available.
+      // authoritativeDate is UTC-anchored (DB timestamps, and date-only strings parse
+      // as UTC midnight) — must mutate in UTC too, or a server running ahead of UTC
+      // would silently shave hours off this legally mandated window.
       const windowEnd = new Date(authoritativeDate);
-      windowEnd.setDate(windowEnd.getDate() + 15);
-      windowEnd.setHours(23, 59, 59, 999);
+      windowEnd.setUTCDate(windowEnd.getUTCDate() + 15);
+      windowEnd.setUTCHours(23, 59, 59, 999);
       if (Date.now() > windowEnd.getTime()) {
         throw new BadRequestException(
           'Termin na odstąpienie od umowy (14 dni od daty dostarczenia) już minął ' +
