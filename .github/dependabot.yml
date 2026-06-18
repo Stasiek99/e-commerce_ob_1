@@ -42,3 +42,45 @@ updates:
         update-types:
           - version-update:semver-major
     open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+    groups:
+      root-patch:
+        update-types:
+          - patch
+      root-minor:
+        update-types:
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/shared-types
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+    groups:
+      shared-types-patch:
+        update-types:
+          - patch
+      shared-types-minor:
+        update-types:
+          - minor
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
