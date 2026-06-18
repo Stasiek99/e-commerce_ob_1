@@ -8,6 +8,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CartService } from './cart.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -35,6 +36,10 @@ export class CartController {
   @Public()
   @Post('items')
   @UseGuards(TurnstileGuard)
+  // Explicit, intentional cap — without it this bot-sensitive, Turnstile-guarded
+  // endpoint falls back to the generic 'burst' floor (5 req/s), letting a scripted
+  // client with one valid token hammer addItem and worsen the cart stock-hoarding race.
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
   addItem(
     @CurrentUser() user: User | undefined,
     @SessionId() sessionId: string | undefined,
