@@ -145,21 +145,6 @@ The health-wait loop correctly fails fast (30×2s, then `exit 1`), but the `Run 
 
 ---
 
-
-
-
-
-
-
-
-
-Not yet:
-
-
-
-
-
-
 ## 🟡 MEDIUM — Dependabot's "consolidation" comment overclaims coverage vs. a prior fix it silently reverted *(Pragmatist)*
 
 **File:** `.github/dependabot.yml:1-9` (from `2f26114`)
