@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
@@ -167,7 +167,11 @@ describe('PaymentsService', () => {
         },
         {
           provide: 'REDIS_CLIENT',
-          useValue: { set: jest.fn().mockResolvedValue('OK'), get: jest.fn() },
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'),
+            get: jest.fn(),
+            eval: jest.fn().mockResolvedValue(1),
+          },
         },
         {
           provide: CouponService,
@@ -2249,6 +2253,51 @@ describe('PaymentsService', () => {
 
       expect(capturedPaymentData.refundedAmountInCents).toEqual({ increment: 90000 });
     });
+
+    // ─── per-order refund lock (covers concurrent callers: cancelItemsByUser,
+    // markRefunded, etc. all funnel through this method) ──────────────────────
+
+    it('throws 429 when another refund/cancellation for the order is already in progress', async () => {
+      redis.set.mockResolvedValueOnce(null);
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow(HttpException);
+      // The payment lookup happens inside the lock — must never run if the lock was not acquired.
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(stripeClient.createPartialRefund).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock keyed on refund-lock:<orderId>', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(redis.set).toHaveBeenCalledWith('refund-lock:order-1', expect.any(String), 'EX', 30, 'NX');
+    });
+
+    it('releases the Redis lock after a successful partial refund', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
+
+    it('releases the Redis lock even when the Stripe call throws', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockRejectedValue(new Error('Stripe API down'));
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+      ).rejects.toThrow('Stripe API down');
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
   });
 
   describe('handleRefundUpdate (via charge.refund.updated / refund.updated)', () => {
@@ -2670,6 +2719,84 @@ describe('PaymentsService', () => {
           }),
         }),
       );
+    });
+
+    // ─── DISPUTE_LOST_REVIEW guard — admin refund endpoint had no status check ──
+    // (cancelByUser/bulkCancel/rejectFraudReview already deny this status before
+    // calling refundPayment; this is the only call site without its own guard.)
+
+    it('throws ConflictException and skips the Stripe call when order is in DISPUTE_LOST_REVIEW', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+        order: { ...mockPayment.order, status: OrderStatus.DISPUTE_LOST_REVIEW },
+      });
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow(ConflictException);
+      expect(stripeClient.createRefund).not.toHaveBeenCalled();
+    });
+
+    // ─── per-order refund lock (covers concurrent callers: cancelByUser,
+    // rejectFraudReview, bulkCancel, the admin refund endpoint) ─────────────────
+
+    it('throws 429 when another refund/cancellation for the order is already in progress', async () => {
+      redis.set.mockResolvedValueOnce(null);
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow(HttpException);
+      expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+      expect(stripeClient.createRefund).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock keyed on refund-lock:<orderId>', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        });
+      });
+
+      await service.refundPayment('order-1');
+
+      expect(redis.set).toHaveBeenCalledWith('refund-lock:order-1', expect.any(String), 'EX', 30, 'NX');
+    });
+
+    it('releases the Redis lock after a successful refund', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        });
+      });
+
+      await service.refundPayment('order-1');
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
+
+    it('releases the Redis lock even when the Stripe refund call throws', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockRejectedValue(new Error('Stripe API down'));
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow('Stripe API down');
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
     });
   });
 

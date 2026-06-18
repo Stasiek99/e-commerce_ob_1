@@ -1,6 +1,6 @@
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { generateOrderToken } from '../../common/utils/order-token.util';
-import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -1087,87 +1087,131 @@ export class PaymentsService {
   }
 
   /**
+   * Serializes every refund/cancellation mutation for a given order. Customer
+   * cancel, guest cancel-link admin refund, bulk cancel, fraud-review rejection,
+   * and return approval all eventually call refundPayment/partialRefund below —
+   * without this, two concurrent callers can both read the same stale
+   * refundedAmountInCents/cancelledQuantity, build an identical Stripe
+   * idempotency key, and each still run their own DB transaction, double-restoring
+   * stock and double-counting refundedAmountInCents even though Stripe itself
+   * dedupes the charge-side refund call.
+   */
+  private async withOrderRefundLock<T>(orderId: string, fn: () => Promise<T>): Promise<T> {
+    const lockKey = `refund-lock:${orderId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        'A refund or cancellation for this order is already in progress — please wait a moment before trying again',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    try {
+      return await fn();
+    } finally {
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
+  }
+
+  /**
    * Issues a full Stripe refund, restores stock, and marks order as REFUNDED.
    * Call from the admin panel or an admin-only API endpoint.
    */
   async refundPayment(orderId: string, actor = 'ADMIN', reason?: string): Promise<void> {
-    const payment = await this.prisma.payment.findUnique({
-      where: { orderId },
-      include: { order: { select: { orderNumber: true, status: true, items: true } } },
-    });
-
-    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
-
-    if (payment.status === PaymentStatus.REFUNDED) {
-      this.logger.warn(`Payment for order ${orderId} is already refunded`);
-      return;
-    }
-
-    if (payment.status !== PaymentStatus.COMPLETED) {
-      throw new Error(`Cannot refund payment with status ${payment.status}`);
-    }
-
-    if (!payment.stripePaymentIntentId) {
-      throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
-    }
-
-    await this.stripeClient.createRefund(payment.stripePaymentIntentId, orderId);
-
-    // Stripe refund is now in flight. If the DB transaction below fails or the process
-    // crashes, the charge.refund.updated webhook will fire and handleRefundUpdate() will
-    // apply this state idempotently.
-    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
-    try {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: { status: PaymentStatus.REFUNDED },
-        });
-
-        await tx.order.update({
-          where: { id: orderId },
-          data: { status: OrderStatus.REFUNDED },
-        });
-
-        // Only restore units not already returned by a prior partial refund
-        for (const item of payment.order.items) {
-          const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
-          if (activeQuantity > 0) {
-            const updated = await tx.productVariant.update({
-              where: { id: item.productVariantId },
-              data: { stock: { increment: activeQuantity } },
-            });
-            deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
-          }
-        }
-
-        await tx.orderEvent.create({
-          data: {
-            orderId,
-            fromStatus: payment.order.status,
-            toStatus: OrderStatus.REFUNDED,
-            actor,
-            note: reason
-              ? `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}. Withdrawal reason: ${reason}`
-              : `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
-          },
-        });
+    await this.withOrderRefundLock(orderId, async () => {
+      const payment = await this.prisma.payment.findUnique({
+        where: { orderId },
+        include: { order: { select: { orderNumber: true, status: true, items: true } } },
       });
-    } catch (dbErr) {
-      this.logger.error(
-        `[CRITICAL] Full refund DB update failed for order ${payment.order.orderNumber} after Stripe refund succeeded. ` +
-          `PaymentIntent: ${payment.stripePaymentIntentId}. ` +
-          `charge.refund.updated webhook will recover automatically. DB error: ${(dbErr as Error).message}`,
-      );
-      throw dbErr;
-    }
-    this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
-      this.logger.warn('notifyStockChangesByDelta failed', err),
-    );
 
-    this.logger.log(
-      `Refund issued for order ${payment.order.orderNumber} — stock restored`,
-    );
+      if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+
+      if (payment.status === PaymentStatus.REFUNDED) {
+        this.logger.warn(`Payment for order ${orderId} is already refunded`);
+        return;
+      }
+
+      // Funds were already taken by Stripe via chargeback — stock is deliberately
+      // withheld pending an admin's explicit non-delivery confirmation (see
+      // handleDisputeClosed). Refunding here would pay the customer back a second
+      // time while bypassing that confirmation gate.
+      if (payment.order.status === OrderStatus.DISPUTE_LOST_REVIEW) {
+        throw new ConflictException(
+          `Order ${orderId} is in DISPUTE_LOST_REVIEW — an admin must confirm non-delivery via the order status endpoint before a refund can be issued.`,
+        );
+      }
+
+      if (payment.status !== PaymentStatus.COMPLETED) {
+        throw new Error(`Cannot refund payment with status ${payment.status}`);
+      }
+
+      if (!payment.stripePaymentIntentId) {
+        throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
+      }
+
+      await this.stripeClient.createRefund(payment.stripePaymentIntentId, orderId);
+
+      // Stripe refund is now in flight. If the DB transaction below fails or the process
+      // crashes, the charge.refund.updated webhook will fire and handleRefundUpdate() will
+      // apply this state idempotently.
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { status: PaymentStatus.REFUNDED },
+          });
+
+          await tx.order.update({
+            where: { id: orderId },
+            data: { status: OrderStatus.REFUNDED },
+          });
+
+          // Only restore units not already returned by a prior partial refund
+          for (const item of payment.order.items) {
+            const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
+            if (activeQuantity > 0) {
+              const updated = await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQuantity } },
+              });
+              deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
+            }
+          }
+
+          await tx.orderEvent.create({
+            data: {
+              orderId,
+              fromStatus: payment.order.status,
+              toStatus: OrderStatus.REFUNDED,
+              actor,
+              note: reason
+                ? `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}. Withdrawal reason: ${reason}`
+                : `Stripe refund issued for PaymentIntent ${payment.stripePaymentIntentId}`,
+            },
+          });
+        });
+      } catch (dbErr) {
+        this.logger.error(
+          `[CRITICAL] Full refund DB update failed for order ${payment.order.orderNumber} after Stripe refund succeeded. ` +
+            `PaymentIntent: ${payment.stripePaymentIntentId}. ` +
+            `charge.refund.updated webhook will recover automatically. DB error: ${(dbErr as Error).message}`,
+        );
+        throw dbErr;
+      }
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
+
+      this.logger.log(
+        `Refund issued for order ${payment.order.orderNumber} — stock restored`,
+      );
+    });
   }
 
   /**
@@ -1186,108 +1230,110 @@ export class PaymentsService {
     currentOrderStatus: OrderStatus,
     actor: string,
   ): Promise<void> {
-    const payment = await this.prisma.payment.findUnique({
-      where: { orderId },
-      select: {
-        id: true,
-        status: true,
-        stripePaymentIntentId: true,
-        amountInCents: true,
-        refundedAmountInCents: true,
-        order: { select: { orderNumber: true } },
-      },
-    });
+    await this.withOrderRefundLock(orderId, async () => {
+      const payment = await this.prisma.payment.findUnique({
+        where: { orderId },
+        select: {
+          id: true,
+          status: true,
+          stripePaymentIntentId: true,
+          amountInCents: true,
+          refundedAmountInCents: true,
+          order: { select: { orderNumber: true } },
+        },
+      });
 
-    if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
-    if (payment.status !== PaymentStatus.COMPLETED) {
-      throw new Error(`Cannot issue a partial refund for payment with status ${payment.status}`);
-    }
-    if (!payment.stripePaymentIntentId) {
-      throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
-    }
-
-    const rawRefundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
-    const available = payment.amountInCents - payment.refundedAmountInCents;
-    if (available <= 0) {
-      throw new Error(`No refundable balance remaining for order ${orderId}`);
-    }
-    // Cap against the remaining balance to prevent over-refund from rounding accumulation
-    // across multiple partial cancels of the same order.
-    const refundAmountInCents = Math.min(rawRefundAmountInCents, available);
-    // refundedAmountInCents is the running total before this refund — baking it in
-    // disambiguates sequential calls that happen to cancel the same item/quantity twice
-    // (e.g. cancel 1 of A, 2 of B, then 1 more of A), which would otherwise produce an
-    // identical key and make Stripe replay the cached result of the earlier call.
-    const idempotencyKey = `${orderId}-${payment.refundedAmountInCents}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
-
-    await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
-
-    // Stripe partial refund is now in flight. If the DB transaction below fails or the
-    // process crashes, the charge.refund.updated webhook fires and handleRefundUpdate()
-    // will apply best-effort recovery (order → PARTIALLY_REFUNDED; cancelledQuantity
-    // may need manual correction since per-item details aren't available to the webhook).
-    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
-    try {
-    await this.prisma.$transaction(async (tx) => {
-      for (const item of items) {
-        await tx.orderItem.update({
-          where: { id: item.orderItemId },
-          data: {
-            cancelledQuantity: { increment: item.quantity },
-            cancelledDiscountInCents: { increment: item.discountAppliedInCents ?? 0 },
-          },
-        });
-        const updated = await tx.productVariant.update({
-          where: { id: item.productVariantId },
-          data: { stock: { increment: item.quantity } },
-        });
-        deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
+      if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
+      if (payment.status !== PaymentStatus.COMPLETED) {
+        throw new Error(`Cannot issue a partial refund for payment with status ${payment.status}`);
+      }
+      if (!payment.stripePaymentIntentId) {
+        throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
       }
 
-      const updatedItems = await tx.orderItem.findMany({ where: { orderId } });
-      const allCancelled = updatedItems.every(i => i.cancelledQuantity >= i.quantity);
-      const newOrderStatus = allCancelled ? OrderStatus.REFUNDED : OrderStatus.PARTIALLY_REFUNDED;
+      const rawRefundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+      const available = payment.amountInCents - payment.refundedAmountInCents;
+      if (available <= 0) {
+        throw new Error(`No refundable balance remaining for order ${orderId}`);
+      }
+      // Cap against the remaining balance to prevent over-refund from rounding accumulation
+      // across multiple partial cancels of the same order.
+      const refundAmountInCents = Math.min(rawRefundAmountInCents, available);
+      // refundedAmountInCents is the running total before this refund — baking it in
+      // disambiguates sequential calls that happen to cancel the same item/quantity twice
+      // (e.g. cancel 1 of A, 2 of B, then 1 more of A), which would otherwise produce an
+      // identical key and make Stripe replay the cached result of the earlier call.
+      const idempotencyKey = `${orderId}-${payment.refundedAmountInCents}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
 
-      await tx.order.update({
-        where: { id: orderId },
-        data: { status: newOrderStatus },
-      });
+      await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
 
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: {
-          refundedAmountInCents: { increment: refundAmountInCents },
-          ...(allCancelled && { status: PaymentStatus.REFUNDED }),
-        },
-      });
+      // Stripe partial refund is now in flight. If the DB transaction below fails or the
+      // process crashes, the charge.refund.updated webhook fires and handleRefundUpdate()
+      // will apply best-effort recovery (order → PARTIALLY_REFUNDED; cancelledQuantity
+      // may need manual correction since per-item details aren't available to the webhook).
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+      try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of items) {
+          await tx.orderItem.update({
+            where: { id: item.orderItemId },
+            data: {
+              cancelledQuantity: { increment: item.quantity },
+              cancelledDiscountInCents: { increment: item.discountAppliedInCents ?? 0 },
+            },
+          });
+          const updated = await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+          deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
+        }
 
-      await tx.orderEvent.create({
-        data: {
-          orderId,
-          fromStatus: currentOrderStatus,
-          toStatus: newOrderStatus,
-          actor,
-          note: `Partial refund of ${refundAmountInCents} gr for ${items.length} item line(s)`,
-        },
+        const updatedItems = await tx.orderItem.findMany({ where: { orderId } });
+        const allCancelled = updatedItems.every(i => i.cancelledQuantity >= i.quantity);
+        const newOrderStatus = allCancelled ? OrderStatus.REFUNDED : OrderStatus.PARTIALLY_REFUNDED;
+
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: newOrderStatus },
+        });
+
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            refundedAmountInCents: { increment: refundAmountInCents },
+            ...(allCancelled && { status: PaymentStatus.REFUNDED }),
+          },
+        });
+
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: currentOrderStatus,
+            toStatus: newOrderStatus,
+            actor,
+            note: `Partial refund of ${refundAmountInCents} gr for ${items.length} item line(s)`,
+          },
+        });
       });
-    });
-    } catch (dbErr) {
-      this.logger.error(
-        `[CRITICAL] Partial refund DB update failed for order ${payment.order.orderNumber} after Stripe refund succeeded. ` +
-          `PaymentIntent: ${payment.stripePaymentIntentId}. ` +
-          `Refund: ${refundAmountInCents} gr. ` +
-          `Items: ${JSON.stringify(items.map(i => ({ orderItemId: i.orderItemId, qty: i.quantity })))}. ` +
-          `charge.refund.updated webhook will attempt best-effort recovery. DB error: ${(dbErr as Error).message}`,
+      } catch (dbErr) {
+        this.logger.error(
+          `[CRITICAL] Partial refund DB update failed for order ${payment.order.orderNumber} after Stripe refund succeeded. ` +
+            `PaymentIntent: ${payment.stripePaymentIntentId}. ` +
+            `Refund: ${refundAmountInCents} gr. ` +
+            `Items: ${JSON.stringify(items.map(i => ({ orderItemId: i.orderItemId, qty: i.quantity })))}. ` +
+            `charge.refund.updated webhook will attempt best-effort recovery. DB error: ${(dbErr as Error).message}`,
+        );
+        throw dbErr;
+      }
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
       );
-      throw dbErr;
-    }
-    this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
-      this.logger.warn('notifyStockChangesByDelta failed', err),
-    );
 
-    this.logger.log(
-      `Partial refund of ${refundAmountInCents} gr issued for order ${payment.order.orderNumber}`,
-    );
+      this.logger.log(
+        `Partial refund of ${refundAmountInCents} gr issued for order ${payment.order.orderNumber}`,
+      );
+    });
   }
 
   private async handleDisputeCreated(dispute: Stripe.Dispute, eventId?: string): Promise<void> {
