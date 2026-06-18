@@ -196,6 +196,7 @@ jobs:
           exit 1
 
       - name: Run Playwright e2e suite
+        timeout-minutes: 10
         run: pnpm test:e2e
 
       - name: Backend logs (on failure)

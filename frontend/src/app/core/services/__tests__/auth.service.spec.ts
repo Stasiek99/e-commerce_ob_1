@@ -3,6 +3,7 @@ import { PLATFORM_ID } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
+import { Role } from '@fragrance-store/shared-types';
 import { AuthService } from '../auth.service';
 import { environment } from '../../../../environments/environment';
 
@@ -16,7 +17,7 @@ const noop = () => {};
 const REFRESH_URL = `${environment.apiUrl}/auth/refresh`;
 const ME_URL = `${environment.apiUrl}/users/me`;
 const MOCK_TOKEN = { accessToken: 'tok-abc' };
-const MOCK_USER = { id: 'u1', email: 'a@b.com', role: 'USER', isEmailVerified: true };
+const MOCK_USER = { id: 'u1', email: 'a@b.com', role: Role.CUSTOMER, isEmailVerified: true };
 
 function setup() {
   TestBed.configureTestingModule({
@@ -216,5 +217,43 @@ describe('AuthService — BroadcastChannel multi-tab logout', () => {
     it('does not create a BroadcastChannel on the server platform', () => {
       expect(BroadcastChannelSpy).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ── isAdmin ──────────────────────────────────────────────────────────────
+
+describe('AuthService — isAdmin', () => {
+  let service: AuthService;
+  let http: HttpTestingController;
+
+  beforeEach(() => {
+    // The BroadcastChannel describe block above deletes the global stub in its
+    // afterEach — restore it so AuthService's constructor doesn't throw here too.
+    (global as any).BroadcastChannel = jest.fn(() => ({ postMessage: noop, addEventListener: noop, close: noop }));
+    ({ service, http } = setup());
+  });
+
+  afterEach(() => http.verify());
+
+  it('is false when no user is loaded', () => {
+    expect(service.isAdmin()).toBe(false);
+  });
+
+  it('is true when the current user has the Role.ADMIN enum value', () => {
+    service.updateCurrentUser({ ...MOCK_USER, role: Role.ADMIN });
+    expect(service.isAdmin()).toBe(true);
+  });
+
+  it('is false when the current user has the Role.CUSTOMER enum value', () => {
+    service.updateCurrentUser({ ...MOCK_USER, role: Role.CUSTOMER });
+    expect(service.isAdmin()).toBe(false);
+  });
+
+  it('reflects the role returned by GET /users/me after refresh', () => {
+    service.refresh().subscribe();
+    http.expectOne(REFRESH_URL).flush(MOCK_TOKEN);
+    http.expectOne(ME_URL).flush({ ...MOCK_USER, role: Role.ADMIN });
+
+    expect(service.isAdmin()).toBe(true);
   });
 });

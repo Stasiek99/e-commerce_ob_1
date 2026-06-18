@@ -1,7 +1,7 @@
 import { Injectable, PLATFORM_ID, computed, effect, inject, signal, untracked } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { switchMap, catchError } from 'rxjs';
+import { switchMap, catchError, forkJoin, of, map } from 'rxjs';
 import { ProductCardData } from '../../shared/product-card/product-card.component';
 import { AuthService } from './auth.service';
 import { LOCAL_STORAGE } from '../tokens/storage.tokens';
@@ -33,7 +33,9 @@ export class WishlistService {
         const guestIds = untracked(() => this._items().map((p) => p.id));
         this.syncFromBackend(guestIds);
       } else {
-        this._items.set(this.loadFromStorage());
+        const stored = this.loadFromStorage();
+        this._items.set(stored);
+        this.revalidateGuestItems(stored);
       }
     });
   }
@@ -107,6 +109,38 @@ export class WishlistService {
         if (this.isBrowser) this.storage.removeItem(this.STORAGE_KEY);
         this.loading.set(false);
       },
+    });
+  }
+
+  // Guest items are a frozen localStorage snapshot with no isActive field. Re-fetch each
+  // by slug — the same public endpoint the catalog uses, which already 404s on inactive
+  // products — so a deactivated/re-priced/restocked product never displays stale data.
+  private revalidateGuestItems(items: WishlistItemData[]): void {
+    if (!this.isBrowser || !items.length) return;
+
+    this.loading.set(true);
+    forkJoin(
+      items.map((item) =>
+        this.http.get<ProductCardData>(`${environment.apiUrl}/products/${item.slug}`).pipe(
+          map((fresh): WishlistItemData => ({
+            id: fresh.id,
+            name: fresh.name,
+            slug: fresh.slug,
+            brand: fresh.brand,
+            gender: fresh.gender,
+            catalogNumber: fresh.catalogNumber,
+            images: fresh.images,
+            variants: fresh.variants,
+            notifyOnRestock: item.notifyOnRestock,
+          })),
+          catchError(() => of(null)),
+        ),
+      ),
+    ).subscribe((results) => {
+      const valid = results.filter((r): r is WishlistItemData => r !== null);
+      this._items.set(valid);
+      this.saveToStorage();
+      this.loading.set(false);
     });
   }
 

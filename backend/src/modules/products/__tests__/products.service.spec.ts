@@ -285,17 +285,19 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       expect(mockRedis.publish).not.toHaveBeenCalled();
     });
 
-    it('derives previousStock from the current stock minus the known delta and publishes newStock', async () => {
+    it('publishes the caller-supplied newStock directly, without re-reading stock from the DB', async () => {
       mockPrisma.productVariant.findMany.mockResolvedValue([
-        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 8 },
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
       ]);
 
-      // A restore of +3 landed on a variant now sitting at 8 -> it was at 5 before.
-      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 3 }]);
+      // Caller captured newStock=8 itself, inside its own transaction, after a +3 restore.
+      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 3, newStock: 8 }]);
 
+      // No `stock` in the select — the only DB round-trip left is to resolve productId/label,
+      // which are static and unaffected by concurrent stock mutations.
       expect(mockPrisma.productVariant.findMany).toHaveBeenCalledWith({
         where: { id: { in: [VARIANT_ID] } },
-        select: { id: true, productId: true, label: true, stock: true },
+        select: { id: true, productId: true, label: true },
       });
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'stock:updates',
@@ -303,16 +305,34 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       );
     });
 
-    it('fires the back-in-stock notifier when the delta restores stock from 0', async () => {
+    // Regression test for the fix: a post-commit re-read can't tell this batch's own
+    // before-state apart from a concurrent batch's committed effect on the same variant.
+    it('derives previousStock from the caller-supplied newStock/delta, not from the variant row returned by findMany', async () => {
+      // findMany intentionally returns no `stock` field at all (only productId/label) —
+      // if the implementation tried to fall back to a DB-read stock value, this would
+      // surface as `undefined` in the published payload instead of the expected 4.
       mockPrisma.productVariant.findMany.mockResolvedValue([
-        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 4 },
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
+      ]);
+
+      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 4, newStock: 4 }]);
+
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'stock:updates',
+        JSON.stringify({ id: VARIANT_ID, stock: 4 }),
+      );
+    });
+
+    it('fires the back-in-stock notifier when the caller-supplied before/after crosses 0 -> >0', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
       ]);
       mockPrisma.wishlistItem.findMany.mockResolvedValue([
         { id: 'wi-1', user: { email: 'fan@example.com', firstName: 'Ola' }, product: { name: 'Rose Oud', slug: 'rose-oud' } },
       ]);
 
-      // Variant is now at 4, restore delta was +4 -> previousStock = 0.
-      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 4 }]);
+      // newStock=4, delta=+4 -> previousStock=0
+      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 4, newStock: 4 }]);
       await Promise.resolve();
       await Promise.resolve();
 
@@ -321,20 +341,51 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       );
     });
 
+    it('does not fire the back-in-stock notifier when the caller-supplied before-state was already > 0', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
+      ]);
+
+      // newStock=10, delta=+4 -> previousStock=6 (already in stock before this restore)
+      await service.notifyStockChangesByDelta([{ variantId: VARIANT_ID, delta: 4, newStock: 10 }]);
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).not.toHaveBeenCalled();
+    });
+
     it('handles multiple variants independently in a single call', async () => {
       mockPrisma.productVariant.findMany.mockResolvedValue([
-        { id: 'pv-a', productId: PRODUCT_ID, label: '50ml', stock: 0 },
-        { id: 'pv-b', productId: PRODUCT_ID, label: '100ml', stock: 10 },
+        { id: 'pv-a', productId: PRODUCT_ID, label: '50ml' },
+        { id: 'pv-b', productId: PRODUCT_ID, label: '100ml' },
       ]);
 
       // pv-a: decremented by 2 down to 0 (checkout). pv-b: restored by 5 up to 10.
       await service.notifyStockChangesByDelta([
-        { variantId: 'pv-a', delta: -2 },
-        { variantId: 'pv-b', delta: 5 },
+        { variantId: 'pv-a', delta: -2, newStock: 0 },
+        { variantId: 'pv-b', delta: 5, newStock: 10 },
       ]);
 
       expect(mockRedis.publish).toHaveBeenCalledWith('stock:updates', JSON.stringify({ id: 'pv-a', stock: 0 }));
       expect(mockRedis.publish).toHaveBeenCalledWith('stock:updates', JSON.stringify({ id: 'pv-b', stock: 10 }));
+    });
+
+    it('aggregates multiple deltas for the same variant within one batch into a single notification', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
+      ]);
+
+      // Two order items restoring the same variant within one transaction: +2 then +3,
+      // ending at newStock=10 -> the variant started this batch at 5 (10 - (2+3)).
+      await service.notifyStockChangesByDelta([
+        { variantId: VARIANT_ID, delta: 2, newStock: 7 },
+        { variantId: VARIANT_ID, delta: 3, newStock: 10 },
+      ]);
+
+      expect(mockRedis.publish).toHaveBeenCalledTimes(1);
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'stock:updates',
+        JSON.stringify({ id: VARIANT_ID, stock: 10 }),
+      );
     });
   });
 

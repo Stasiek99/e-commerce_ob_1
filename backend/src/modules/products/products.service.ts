@@ -613,25 +613,42 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
   /**
    * Same choke point as notifyStockChange, for callers that only know the net
    * change applied inside a transaction (e.g. `{ stock: { increment: qty } }`)
-   * rather than the before/after values. Re-reads current stock once the
-   * transaction has committed and derives previousStock from the known delta
-   * (positive for a restore, negative for a decrement).
+   * rather than the before/after values directly. `newStock` must be captured
+   * by the caller from within its own transaction (e.g. the row returned by
+   * `tx.productVariant.update()`, or a `SELECT` issued right after an
+   * `updateMany`) — never re-read here after commit, since a concurrent
+   * delta batch for the same variant may have already committed its own
+   * change in between, making a post-commit read indistinguishable from
+   * this batch's own effect.
    */
-  async notifyStockChangesByDelta(deltas: Array<{ variantId: string; delta: number }>): Promise<void> {
+  async notifyStockChangesByDelta(deltas: Array<{ variantId: string; delta: number; newStock: number }>): Promise<void> {
     if (!deltas.length) return;
+
+    // A single batch can carry more than one delta for the same variant (e.g.
+    // two order items pointing at the same variant) — aggregate so each variant
+    // fires exactly one notification with its net before/after stock for this batch.
+    const aggregated = new Map<string, { delta: number; newStock: number }>();
+    for (const { variantId, delta, newStock } of deltas) {
+      const existing = aggregated.get(variantId);
+      aggregated.set(variantId, {
+        delta: (existing?.delta ?? 0) + delta,
+        newStock, // later entries reflect the cumulative post-update value for this variant
+      });
+    }
+
     const variants = await this.prisma.productVariant.findMany({
-      where: { id: { in: deltas.map((d) => d.variantId) } },
-      select: { id: true, productId: true, label: true, stock: true },
+      where: { id: { in: [...aggregated.keys()] } },
+      select: { id: true, productId: true, label: true },
     });
-    const deltaByVariantId = new Map(deltas.map((d) => [d.variantId, d.delta]));
     for (const variant of variants) {
-      const delta = deltaByVariantId.get(variant.id) ?? 0;
+      const agg = aggregated.get(variant.id);
+      if (!agg) continue;
       this.notifyStockChange({
         variantId: variant.id,
         productId: variant.productId,
         variantLabel: variant.label,
-        previousStock: variant.stock - delta,
-        newStock: variant.stock,
+        previousStock: agg.newStock - agg.delta,
+        newStock: agg.newStock,
       });
     }
   }

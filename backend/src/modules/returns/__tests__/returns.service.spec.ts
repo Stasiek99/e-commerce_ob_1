@@ -1297,6 +1297,90 @@ describe('ReturnsService', () => {
         'RETURN_APPROVAL',
       );
     });
+
+    // ── dispute/fraud hold guard ────────────────────────────────────────────
+    // A return can sit APPROVED for days awaiting the customer's physical return
+    // shipment. If Stripe opens a dispute in that window, handleDisputeCreated flips
+    // the order straight to DISPUTE_HOLD (bypassing the normal transition guard).
+    // markRefunded() must re-check the freshly-fetched order.status and refuse to fire
+    // a Stripe refund while the payment_intent is simultaneously under dispute/review.
+
+    it('throws ConflictException when order status is DISPUTE_HOLD', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'DISPUTE_HOLD' });
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException when order status is FRAUD_REVIEW', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'FRAUD_REVIEW' });
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException when order status is DISPUTE_LOST_REVIEW', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'DISPUTE_LOST_REVIEW' });
+      await createModule(mock);
+
+      await expect(service.markRefunded('return-id-001')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not call partialRefund when the order is under an active dispute hold', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'DISPUTE_HOLD' });
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001').catch(() => undefined);
+
+      expect(paymentsService.partialRefund).not.toHaveBeenCalled();
+    });
+
+    it('does not flip the return request to COMPLETED when blocked by a dispute hold', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'DISPUTE_HOLD' });
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001').catch(() => undefined);
+
+      expect(mock.returnRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('still allows the refund when order status is a normal post-purchase status (e.g. DELIVERED)', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      mock.order.findUniqueOrThrow.mockResolvedValue({ status: 'DELIVERED' });
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        expect.any(Array),
+        'DELIVERED',
+        'RETURN_APPROVAL',
+      );
+    });
   });
 
   // ── recordReturnTracking() ────────────────────────────────────────────────

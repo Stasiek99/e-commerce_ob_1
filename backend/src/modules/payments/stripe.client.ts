@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const StripeSDK = require('stripe') as { new(key: string): import('stripe/cjs/stripe.core').Stripe };
+const StripeSDK = require('stripe') as {
+  new(key: string, config?: { apiVersion: '2026-05-27.dahlia' }): import('stripe/cjs/stripe.core').Stripe;
+};
 import type { Stripe } from 'stripe/cjs/stripe.core';
 
 // Stripe's minimum is 30 minutes; default matches the reconciliation cron window.
@@ -41,9 +43,16 @@ export class StripeClient {
       '',
     );
 
-    // Omit apiVersion to pin to the account default — avoids hardcoding a
-    // version string that rots and requires manual bumps every few months.
-    this.stripe = new StripeSDK(apiKey);
+    // Explicitly pinned (accepted-tradeoffs.md "Stripe API version"): stripe-node
+    // always sends a Stripe-Version header — `version: props.apiVersion || DEFAULT_API_VERSION`
+    // in the SDK core — so leaving this unset never actually tracked the Stripe
+    // account's Dashboard-configured default. It silently tracked whatever
+    // version happened to be bundled with the installed `stripe` package instead,
+    // which Dependabot's root-minor/root-patch groups can bump without anyone
+    // reviewing a webhook/session payload shape change. Bump this string
+    // deliberately, in its own commit, when intentionally upgrading the
+    // integration — not as a side effect of a routine dependency bump.
+    this.stripe = new StripeSDK(apiKey, { apiVersion: '2026-05-27.dahlia' });
 
     if (!this.webhookSecret) {
       this.logger.warn(

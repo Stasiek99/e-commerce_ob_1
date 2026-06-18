@@ -1,0 +1,46 @@
+name: Promote develop to main
+
+# main is a deploy-only mirror of develop (Railway/Vercel track main). This
+# workflow keeps it in sync so it can never silently drift more than one
+# release cycle behind — see docs/audit-round-14.md.
+on:
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check develop's latest CI run
+        id: ci_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DEVELOP_SHA=$(git rev-parse origin/develop)
+          echo "develop_sha=$DEVELOP_SHA" >> "$GITHUB_OUTPUT"
+
+          RUN_JSON=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch develop \
+            --json headSha,conclusion,status,createdAt --limit 30)
+
+          CONCLUSION=$(echo "$RUN_JSON" | jq -r --arg sha "$DEVELOP_SHA" \
+            '[.[] | select(.headSha == $sha)] | sort_by(.createdAt) | reverse | .[0].conclusion // "missing"')
+
+          echo "develop@$DEVELOP_SHA latest CI conclusion: $CONCLUSION"
+          echo "conclusion=$CONCLUSION" >> "$GITHUB_OUTPUT"
+
+      - name: Promote (fast-forward main to develop)
+        if: steps.ci_check.outputs.conclusion == 'success'
+        run: git push origin "${{ steps.ci_check.outputs.develop_sha }}:refs/heads/main"
+
+      - name: Skip notice
+        if: steps.ci_check.outputs.conclusion != 'success'
+        run: |
+          echo "::notice::Skipping promotion — develop@${{ steps.ci_check.outputs.develop_sha }} latest CI conclusion is '${{ steps.ci_check.outputs.conclusion }}', not 'success'."

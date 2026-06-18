@@ -3,10 +3,12 @@ import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { catchError, switchMap, throwError } from 'rxjs';
 import { AuthService } from '../services/auth.service';
+import { ToastService } from '../services/toast.service';
 
 export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
   const router = inject(Router);
+  const toastService = inject(ToastService);
 
   return next(req).pipe(
     catchError((err: HttpErrorResponse) => {
@@ -34,6 +36,15 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
           }),
         );
       }
+
+      if (err.status === 429) {
+        const retryAfterSeconds = parseInt(err.headers.get('Retry-After') ?? '', 10);
+        const message = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+          ? `Za dużo żądań, spróbuj ponownie za ${retryAfterSeconds}s.`
+          : 'Za dużo żądań, spróbuj ponownie za chwilę.';
+        toastService.error(message);
+      }
+
       return throwError(() => err);
     }),
   );

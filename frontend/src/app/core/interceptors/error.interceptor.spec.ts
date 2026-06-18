@@ -13,6 +13,7 @@ import { of, throwError } from 'rxjs';
 import { Router } from '@angular/router';
 import { errorInterceptor } from './error.interceptor';
 import { AuthService } from '../services/auth.service';
+import { ToastService } from '../services/toast.service';
 
 describe('errorInterceptor', () => {
   let http: HttpClient;
@@ -24,6 +25,7 @@ describe('errorInterceptor', () => {
     getAccessToken: jest.Mock;
   };
   let mockRouter: { navigate: jest.Mock };
+  let toastService: { error: jest.Mock; success: jest.Mock; info: jest.Mock };
 
   beforeEach(() => {
     authService = {
@@ -33,6 +35,7 @@ describe('errorInterceptor', () => {
       getAccessToken: jest.fn().mockReturnValue(null),
     };
     mockRouter = { navigate: jest.fn() };
+    toastService = { error: jest.fn(), success: jest.fn(), info: jest.fn() };
 
     TestBed.configureTestingModule({
       providers: [
@@ -40,6 +43,7 @@ describe('errorInterceptor', () => {
         provideHttpClientTesting(),
         { provide: AuthService, useValue: authService },
         { provide: Router, useValue: mockRouter },
+        { provide: ToastService, useValue: toastService },
       ],
     });
 
@@ -165,6 +169,54 @@ describe('errorInterceptor', () => {
     httpMock.expectOne('/api/orders').flush(null, {
       status: 401,
       statusText: 'Unauthorized',
+    });
+  });
+
+  it('shows a localized toast with the Retry-After seconds on 429', (done) => {
+    http.post('/api/reviews', {}).subscribe({
+      error: (err: HttpErrorResponse) => {
+        expect(err.status).toBe(429);
+        expect(toastService.error).toHaveBeenCalledWith(
+          'Za dużo żądań, spróbuj ponownie za 30s.',
+        );
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/reviews').flush(
+      { message: 'ThrottlerException: Too Many Requests' },
+      { status: 429, statusText: 'Too Many Requests', headers: { 'Retry-After': '30' } },
+    );
+  });
+
+  it('shows a generic localized toast on 429 when Retry-After is missing', (done) => {
+    http.get('/api/orders/123/status').subscribe({
+      error: (err: HttpErrorResponse) => {
+        expect(err.status).toBe(429);
+        expect(toastService.error).toHaveBeenCalledWith(
+          'Za dużo żądań, spróbuj ponownie za chwilę.',
+        );
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/orders/123/status').flush(null, {
+      status: 429,
+      statusText: 'Too Many Requests',
+    });
+  });
+
+  it('does not show a toast for non-429 errors', (done) => {
+    http.get('/api/products').subscribe({
+      error: () => {
+        expect(toastService.error).not.toHaveBeenCalled();
+        done();
+      },
+    });
+
+    httpMock.expectOne('/api/products').flush(null, {
+      status: 500,
+      statusText: 'Server Error',
     });
   });
 });

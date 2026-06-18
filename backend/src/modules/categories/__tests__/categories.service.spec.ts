@@ -38,6 +38,120 @@ describe('CategoriesService', () => {
 
   afterEach(() => jest.clearAllMocks());
 
+  // ── findAll — arbitrary-depth tree assembly ───────────────────────────────
+  // Invariant: every category must appear in the tree no matter how deep its
+  // ancestor chain goes. The old implementation used a Prisma `include` nested
+  // exactly 2 levels (children.children), which silently dropped any category
+  // at the 4th level or deeper. The fix fetches the table flat and assembles
+  // the tree in memory, so depth is bounded only by the data itself.
+
+  describe('findAll — arbitrary-depth tree assembly', () => {
+    it('returns an empty array when there are no categories', async () => {
+      prisma.category.findMany.mockResolvedValue([]);
+
+      const result = await service.findAll();
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns root categories with an empty children array when none have children', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'a', name: 'A', slug: 'a', parentId: null },
+        { id: 'b', name: 'B', slug: 'b', parentId: null },
+      ]);
+
+      const result = await service.findAll();
+
+      expect(result).toEqual([
+        { id: 'a', name: 'A', slug: 'a', parentId: null, children: [] },
+        { id: 'b', name: 'B', slug: 'b', parentId: null, children: [] },
+      ]);
+    });
+
+    it('nests a direct child under its parent', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'parent', name: 'Parent', slug: 'parent', parentId: null },
+        { id: 'child', name: 'Child', slug: 'child', parentId: 'parent' },
+      ]);
+
+      const result = await service.findAll();
+
+      expect(result).toHaveLength(1);
+      expect(result[0].children).toEqual([
+        { id: 'child', name: 'Child', slug: 'child', parentId: 'parent', children: [] },
+      ]);
+    });
+
+    it('builds a tree 5 levels deep — regression guard for the fixed depth cap', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'l1', name: 'L1', slug: 'l1', parentId: null },
+        { id: 'l2', name: 'L2', slug: 'l2', parentId: 'l1' },
+        { id: 'l3', name: 'L3', slug: 'l3', parentId: 'l2' },
+        { id: 'l4', name: 'L4', slug: 'l4', parentId: 'l3' },
+        { id: 'l5', name: 'L5', slug: 'l5', parentId: 'l4' },
+      ]);
+
+      const result = await service.findAll();
+
+      const l1 = result[0];
+      const l2 = l1.children[0];
+      const l3 = l2.children[0];
+      const l4 = l3.children[0];
+      const l5 = l4.children[0];
+
+      expect(l1.id).toBe('l1');
+      expect(l2.id).toBe('l2');
+      expect(l3.id).toBe('l3');
+      expect(l4.id).toBe('l4');
+      expect(l5).toMatchObject({ id: 'l5', children: [] });
+    });
+
+    it('passes orderBy: { name: "asc" } to findMany', async () => {
+      prisma.category.findMany.mockResolvedValue([]);
+
+      await service.findAll();
+
+      expect(prisma.category.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { name: 'asc' } }),
+      );
+    });
+
+    it('does not scope the query with a parentId filter — must fetch the whole table', async () => {
+      prisma.category.findMany.mockResolvedValue([]);
+
+      await service.findAll();
+
+      const callArg = prisma.category.findMany.mock.calls[0][0];
+      expect(callArg).not.toHaveProperty('where');
+    });
+
+    it('keeps siblings at every level in the name-ascending order returned by the DB', async () => {
+      // findMany already returns name-sorted rows (orderBy: asc) — children should
+      // inherit that order since the tree is built by a single pass over that array.
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'parent', name: 'Parent', slug: 'parent', parentId: null },
+        { id: 'child-a', name: 'Child A', slug: 'child-a', parentId: 'parent' },
+        { id: 'child-b', name: 'Child B', slug: 'child-b', parentId: 'parent' },
+      ]);
+
+      const result = await service.findAll();
+
+      expect(result[0].children.map((c: any) => c.id)).toEqual(['child-a', 'child-b']);
+    });
+
+    it('treats a category with a dangling parentId (no matching row) as a root, defensively', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'orphan', name: 'Orphan', slug: 'orphan', parentId: 'does-not-exist' },
+      ]);
+
+      const result = await service.findAll();
+
+      expect(result).toEqual([
+        { id: 'orphan', name: 'Orphan', slug: 'orphan', parentId: 'does-not-exist', children: [] },
+      ]);
+    });
+  });
+
   // ── remove — pre-checks against FK violation ─────────────────────────────
   // Invariant: remove() must check for assigned products and child categories
   // before calling prisma.category.delete. Without the pre-check Postgres

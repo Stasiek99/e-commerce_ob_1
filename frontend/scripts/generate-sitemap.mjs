@@ -89,7 +89,7 @@ async function fetchAllProducts() {
   return all;
 }
 
-/** Recursively flattens a category tree (up to 3 levels). */
+/** Recursively flattens a category tree of any depth. */
 function flattenCategories(categories) {
   const all = [];
   for (const cat of categories ?? []) {
