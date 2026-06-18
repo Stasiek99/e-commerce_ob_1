@@ -75,7 +75,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       update: jest.fn(),
     },
     productVariant: { updateMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
-    productVariantPriceHistory: { findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]) },
+    productVariantPriceHistory: { findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), create: jest.fn() },
     wishlistItem: { findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn(),
     $transaction: jest.fn(),
@@ -386,6 +386,80 @@ describe('ProductsService — slug P2002 conflict handling', () => {
         'stock:updates',
         JSON.stringify({ id: VARIANT_ID, stock: 10 }),
       );
+    });
+  });
+
+  describe('updateVariant()', () => {
+    // FIX: the general variant editor (PATCH /products/:id/variants/:variantId)
+    // mutates `stock` via UpdateVariantDto but, unlike updateVariantStock(), never
+    // called notifyStockChange — wishlisted customers and the live SSE stock badge
+    // never heard about a stock change made through this endpoint.
+    const mockTx = {
+      $queryRaw: jest.fn(),
+      productVariant: { update: jest.fn() },
+    };
+
+    beforeEach(() => {
+      mockPrisma.$transaction.mockImplementation((fn: any) => fn(mockTx));
+    });
+
+    it('throws NotFoundException when stock is part of the update and the variant does not exist', async () => {
+      mockTx.$queryRaw.mockResolvedValue([]);
+
+      await expect(service.updateVariant(VARIANT_ID, { stock: 10 })).rejects.toThrow(NotFoundException);
+    });
+
+    it('publishes the new stock and reports the locked pre-update value as previousStock', async () => {
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 5 }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 12 });
+
+      const notifySpy = jest.spyOn(service, 'notifyStockChange');
+
+      await service.updateVariant(VARIANT_ID, { stock: 12 });
+
+      expect(notifySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ variantId: VARIANT_ID, productId: PRODUCT_ID, previousStock: 5, newStock: 12 }),
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'stock:updates',
+        JSON.stringify({ id: VARIANT_ID, stock: 12 }),
+      );
+    });
+
+    it('fires the back-in-stock notifier when the edit brings stock from 0 to positive', async () => {
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 0 }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 6 });
+      mockPrisma.wishlistItem.findMany.mockResolvedValue([
+        { id: 'wi-1', user: { email: 'fan@example.com', firstName: 'Ola' }, product: { name: 'Rose Oud', slug: 'rose-oud' } },
+      ]);
+
+      await service.updateVariant(VARIANT_ID, { stock: 6 });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ productId: PRODUCT_ID }) }),
+      );
+    });
+
+    it('does not read stock or publish a notification when the edit does not touch stock', async () => {
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: 'New label', stock: 5 });
+
+      await service.updateVariant(VARIANT_ID, { label: 'New label' });
+
+      expect(mockTx.$queryRaw).not.toHaveBeenCalled();
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('still creates a price history row when priceInCents changes alongside stock', async () => {
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 5 }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 8, priceInCents: 9900 });
+
+      await service.updateVariant(VARIANT_ID, { stock: 8, priceInCents: 9900 });
+
+      expect(mockPrisma.productVariantPriceHistory.create).toHaveBeenCalledWith({
+        data: { variantId: VARIANT_ID, priceInCents: 9900 },
+      });
     });
   });
 

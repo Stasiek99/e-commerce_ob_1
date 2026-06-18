@@ -539,12 +539,39 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     stock?: number;
     isActive?: boolean;
   }) {
-    const variant = await this.prisma.productVariant.update({ where: { id: variantId }, data });
+    const { variant, previousStock } = await this.prisma.$transaction(async (tx) => {
+      let previousStock: number | undefined;
+      if (data.stock !== undefined) {
+        // Same FOR UPDATE pattern as updateVariantStock — holds the row lock so the
+        // before-value reported to notifyStockChange can't be clobbered by a concurrent
+        // mutation landing between this read and the write below.
+        const rows = await tx.$queryRaw<Array<{ stock: number }>>`
+          SELECT stock FROM "product_variants" WHERE id = ${variantId} FOR UPDATE
+        `;
+        const current = rows[0];
+        if (!current) throw new NotFoundException('Variant not found');
+        previousStock = current.stock;
+      }
+      const variant = await tx.productVariant.update({ where: { id: variantId }, data });
+      return { variant, previousStock };
+    });
+
     if (data.priceInCents !== undefined) {
       await this.prisma.productVariantPriceHistory.create({
         data: { variantId: variant.id, priceInCents: variant.priceInCents },
       });
     }
+
+    if (previousStock !== undefined) {
+      this.notifyStockChange({
+        variantId: variant.id,
+        productId: variant.productId,
+        variantLabel: variant.label,
+        previousStock,
+        newStock: variant.stock,
+      });
+    }
+
     return variant;
   }
 
