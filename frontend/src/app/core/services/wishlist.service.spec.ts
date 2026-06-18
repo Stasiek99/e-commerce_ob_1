@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { PLATFORM_ID } from '@angular/core';
+import { PLATFORM_ID, signal } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { WishlistService, WishlistItemData } from './wishlist.service';
@@ -283,6 +283,98 @@ describe('WishlistService', () => {
       TestBed.tick();
 
       httpMock.expectNone('/api/products/rose-oud');
+    });
+  });
+
+  // ── Revalidation overwrite races ──────────────────────────────────────────
+  // Guards the fix: revalidateGuestItems()'s completion callback must not blindly
+  // replace `_items` once the in-flight forkJoin resolves, since auth state or a
+  // user toggle() can have changed `_items` underneath it in the meantime.
+
+  describe('revalidation overwrite races', () => {
+    let httpMock: HttpTestingController;
+
+    afterEach(() => httpMock.verify());
+
+    it('does not overwrite the authenticated wishlist when guest revalidation resolves after login', () => {
+      const authState = signal(false);
+      mockStorage = createMockStorage({ [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+
+      TestBed.configureTestingModule({
+        providers: [
+          WishlistService,
+          { provide: PLATFORM_ID, useValue: 'browser' },
+          { provide: LOCAL_STORAGE, useValue: mockStorage },
+          { provide: AuthService, useValue: { isAuthenticated: authState } },
+          provideHttpClient(),
+          provideHttpClientTesting(),
+        ],
+      });
+      service = TestBed.inject(WishlistService);
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      // Guest revalidation request is now in flight — do not resolve it yet.
+      const revalidateReq = httpMock.expectOne('/api/products/rose-oud');
+
+      // User logs in while that request is still pending.
+      authState.set(true);
+      TestBed.tick();
+
+      const backendItems: WishlistItemData[] = [
+        { id: 'backend-item', name: 'Backend Item', slug: 'backend-item', notifyOnRestock: true },
+      ];
+      httpMock.expectOne('/api/wishlist/merge').flush({});
+      httpMock.expectOne('/api/wishlist').flush(backendItems);
+
+      expect(service.items()).toEqual(backendItems);
+
+      // The slow guest revalidation resolves after login finished syncing — it must
+      // not clobber the now-authenticated state.
+      revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml', slug: 'rose-oud' });
+
+      expect(service.items()).toEqual(backendItems);
+      expect(mockStorage.setItem).not.toHaveBeenCalled();
+    });
+
+    it('preserves an item added by toggle() while guest revalidation is still in flight', () => {
+      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      const revalidateReq = httpMock.expectOne('/api/products/rose-oud');
+
+      const newItem: WishlistItemData = {
+        id: 'product-2',
+        name: 'Amber Oud',
+        slug: 'amber-oud',
+        notifyOnRestock: false,
+      };
+      service.toggle(newItem);
+
+      revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml (Updated)', slug: 'rose-oud' });
+
+      expect(service.items()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: 'product-2' }),
+          expect.objectContaining({ id: 'product-1', name: 'Rose Oud 50ml (Updated)' }),
+        ]),
+      );
+      expect(service.items().length).toBe(2);
+    });
+
+    it('does not resurrect an item removed by toggle() while its revalidation request is still in flight', () => {
+      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      const revalidateReq = httpMock.expectOne('/api/products/rose-oud');
+
+      service.toggle(MOCK_ITEM); // removes product-1 before revalidation resolves
+
+      revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml', slug: 'rose-oud' });
+
+      expect(service.items()).toEqual([]);
     });
   });
 });
