@@ -7,8 +7,10 @@ import { StripeClient, CreateCheckoutSessionInput } from '../stripe.client';
 const mockSessionsCreate = jest.fn();
 const mockCouponsCreate = jest.fn();
 const mockCouponsDel = jest.fn();
+const mockStripeConstructor = jest.fn();
 jest.mock('stripe', () => {
-  return function MockStripe() {
+  return function MockStripe(...args: unknown[]) {
+    mockStripeConstructor(...args);
     return {
       checkout: {
         sessions: {
@@ -62,6 +64,33 @@ async function buildClient(ttlMinutes?: number) {
   }).compile();
   return module.get(StripeClient);
 }
+
+// ─── StripeClient construction ─────────────────────────────────────────────
+// Guards the fix: apiVersion must be pinned explicitly rather than left to
+// whatever DEFAULT_API_VERSION happens to ship with the installed `stripe`
+// package (see docs/accepted-tradeoffs.md "Stripe API version").
+
+describe('StripeClient construction', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('constructs the Stripe SDK with the pinned apiVersion', async () => {
+    await buildClient();
+
+    expect(mockStripeConstructor).toHaveBeenCalledWith(
+      'sk_test_dummy',
+      { apiVersion: '2026-05-27.dahlia' },
+    );
+  });
+
+  it('passes the API key from STRIPE_SECRET_KEY as the first constructor argument', async () => {
+    await buildClient();
+
+    const [apiKey] = mockStripeConstructor.mock.calls[0];
+    expect(apiKey).toBe('sk_test_dummy');
+  });
+});
 
 describe('StripeClient.createCheckoutSession', () => {
   beforeEach(() => {
