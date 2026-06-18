@@ -6,6 +6,8 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: 'list',
+  // Fail with a Playwright report before CI's harder job-level timeout-minutes kicks in.
+  globalTimeout: 8 * 60 * 1000,
   use: {
     baseURL: 'http://localhost:3000',
     extraHTTPHeaders: {
