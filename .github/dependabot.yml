@@ -1,25 +1,12 @@
 version: 2
 updates:
+  # pnpm workspaces can only be updated from the workspace root — Dependabot
+  # errors with "misconfigured_tooling" if directory points at /backend,
+  # /frontend, or /packages/shared-types individually, since pnpm-lock.yaml
+  # and pnpm-workspace.yaml live here. This single entry covers every
+  # package in the monorepo.
   - package-ecosystem: npm
-    directory: /backend
-    schedule:
-      interval: weekly
-    versioning-strategy: lockfile-only
-    groups:
-      backend-patch:
-        update-types:
-          - patch
-      backend-minor:
-        update-types:
-          - minor
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-major
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: npm
-    directory: /frontend
+    directory: /
     schedule:
       interval: weekly
     versioning-strategy: lockfile-only
@@ -31,46 +18,10 @@ updates:
       taiga-ui:
         patterns:
           - "@taiga-ui/*"
-      frontend-patch:
-        update-types:
-          - patch
-      frontend-minor:
-        update-types:
-          - minor
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-major
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    versioning-strategy: lockfile-only
-    groups:
       root-patch:
         update-types:
           - patch
       root-minor:
-        update-types:
-          - minor
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-major
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: npm
-    directory: /packages/shared-types
-    schedule:
-      interval: weekly
-    versioning-strategy: lockfile-only
-    groups:
-      shared-types-patch:
-        update-types:
-          - patch
-      shared-types-minor:
         update-types:
           - minor
     ignore:
