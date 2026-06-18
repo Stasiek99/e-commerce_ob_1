@@ -17,7 +17,7 @@ import {
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { User } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PaymentsService } from './payments.service';
@@ -52,6 +52,7 @@ export class PaymentsController {
    */
   @Public()
   @Throttle({ default: { ttl: 60000, limit: 60 } })
+  @SkipThrottle({ burst: true, sustained: true })
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
   async webhook(
