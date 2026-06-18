@@ -9,7 +9,7 @@ import { Controller, Get, INestApplication } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { Throttle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { THROTTLER_CONFIGS } from '../app.module';
+import { THROTTLER_CONFIGS } from '../throttler.config';
 
 @Controller('probe')
 class ThrottleProbeController {
