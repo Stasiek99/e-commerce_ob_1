@@ -413,6 +413,7 @@ describe('Checkout Integration Flow', () => {
             productVariant: {
               update: jest.fn().mockImplementation((args: any) => {
                 stockRestored.push(args.where.id);
+                return { stock: 0 };
               }),
             },
           });

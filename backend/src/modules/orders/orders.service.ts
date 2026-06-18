@@ -259,7 +259,7 @@ export class OrdersService implements OnModuleInit {
     // Stock deltas applied inside the transaction below — published to the SSE
     // stream only after a successful commit (see notifyStockChangesByDelta
     // calls after each $transaction in this method).
-    const decrementDeltas: Array<{ variantId: string; delta: number }> = [];
+    const decrementDeltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
 
     // Use the transaction for everything: stock decrement, order creation, cart clearing
     const order = await this.prisma.$transaction(async (tx) => {
@@ -292,16 +292,25 @@ export class OrdersService implements OnModuleInit {
             `Insufficient stock for: ${item.productName} ${item.variantLabel}`,
           );
         }
-        decrementDeltas.push({ variantId: item.productVariantId, delta: -item.quantity });
       }
 
-      // Re-fetch prices from the rows we just locked so snapshotPrice and all totals
-      // reflect the price that was authoritative at commit time, not the stale cart read.
+      // Re-fetch prices and post-decrement stock from the rows we just locked, still
+      // inside this transaction — reading stock here (rather than after commit) ties
+      // each variant's newStock to this transaction's own decrement, not whatever a
+      // concurrently-committing transaction left behind.
       const freshVariants = await tx.productVariant.findMany({
         where: { id: { in: cart.items.map((i: CartItem) => i.productVariantId) } },
-        select: { id: true, priceInCents: true },
+        select: { id: true, priceInCents: true, stock: true },
       });
       const freshPriceMap = new Map(freshVariants.map((v) => [v.id, v.priceInCents]));
+      const freshStockMap = new Map(freshVariants.map((v) => [v.id, v.stock]));
+      for (const item of cart.items) {
+        decrementDeltas.push({
+          variantId: item.productVariantId,
+          delta: -item.quantity,
+          newStock: freshStockMap.get(item.productVariantId)!,
+        });
+      }
 
       const txItemsTotalInCents = cart.items.reduce((sum: number, item: CartItem) => {
         return sum + (freshPriceMap.get(item.productVariantId) ?? item.priceInCents) * item.quantity;
@@ -431,14 +440,14 @@ export class OrdersService implements OnModuleInit {
       this.logger.error(
         `Payment initiation failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
       );
-      const rollbackDeltas: Array<{ variantId: string; delta: number }> = [];
+      const rollbackDeltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
       await this.prisma.$transaction(async (tx) => {
         for (const item of cart.items) {
-          await tx.productVariant.update({
+          const updated = await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
           });
-          rollbackDeltas.push({ variantId: item.productVariantId, delta: item.quantity });
+          rollbackDeltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
         }
         await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
         if (resolvedCouponId) {
@@ -792,14 +801,14 @@ export class OrdersService implements OnModuleInit {
       // No payment made — expire the Stripe session (best-effort) and cancel
       await this.paymentsService.expirePendingCheckoutSession(orderId);
 
-      const deltas: Array<{ variantId: string; delta: number }> = [];
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
       await this.prisma.$transaction(async (tx) => {
         for (const item of order.items) {
-          await tx.productVariant.update({
+          const updated = await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
           });
-          deltas.push({ variantId: item.productVariantId, delta: item.quantity });
+          deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
         }
         await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
         await tx.orderEvent.create({
@@ -856,14 +865,14 @@ export class OrdersService implements OnModuleInit {
 
     await this.paymentsService.expirePendingCheckoutSession(orderId);
 
-    const deltas: Array<{ variantId: string; delta: number }> = [];
+    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
     await this.prisma.$transaction(async (tx) => {
       for (const item of order.items) {
-        await tx.productVariant.update({
+        const updated = await tx.productVariant.update({
           where: { id: item.productVariantId },
           data: { stock: { increment: item.quantity } },
         });
-        deltas.push({ variantId: item.productVariantId, delta: item.quantity });
+        deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
       }
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
       await tx.orderEvent.create({
@@ -914,14 +923,14 @@ export class OrdersService implements OnModuleInit {
       this.logger.error(
         `Payment retry failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
       );
-      const deltas: Array<{ variantId: string; delta: number }> = [];
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
       await this.prisma.$transaction(async (tx) => {
         for (const item of order.items) {
-          await tx.productVariant.update({
+          const updated = await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: item.quantity } },
           });
-          deltas.push({ variantId: item.productVariantId, delta: item.quantity });
+          deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
         }
         await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
         if (order.couponId) {
@@ -1202,17 +1211,17 @@ export class OrdersService implements OnModuleInit {
       !stockAlreadyRestored.includes(current.status) &&
       !isUnverifiedDisputeLossPayout;
 
-    const deltas: Array<{ variantId: string; delta: number }> = [];
+    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
     await this.prisma.$transaction(async (tx) => {
       if (shouldRestoreStock) {
         for (const item of current.items) {
           const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
           if (activeQty > 0) {
-            await tx.productVariant.update({
+            const updated = await tx.productVariant.update({
               where: { id: item.productVariantId },
               data: { stock: { increment: activeQty } },
             });
-            deltas.push({ variantId: item.productVariantId, delta: activeQty });
+            deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
           }
         }
       }
@@ -1329,16 +1338,16 @@ export class OrdersService implements OnModuleInit {
             await this.paymentsService.refundPayment(order.id, actor);
           } else {
             // PENDING_PAYMENT: no payment taken, cancel in-place.
-            const deltas: Array<{ variantId: string; delta: number }> = [];
+            const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
             await this.prisma.$transaction(async (tx) => {
               for (const item of order.items) {
                 const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
                 if (activeQty > 0) {
-                  await tx.productVariant.update({
+                  const updated = await tx.productVariant.update({
                     where: { id: item.productVariantId },
                     data: { stock: { increment: activeQty } },
                   });
-                  deltas.push({ variantId: item.productVariantId, delta: activeQty });
+                  deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
                 }
               }
               await tx.order.update({

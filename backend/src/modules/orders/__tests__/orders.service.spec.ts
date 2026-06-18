@@ -714,7 +714,10 @@ describe('OrdersService', () => {
           $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
           productVariant: {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'pv-1', priceInCents: 34900, stock: 8 },
+              { id: 'pv-2', priceInCents: 44900, stock: 19 },
+            ]),
           },
           order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
           cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
@@ -731,8 +734,8 @@ describe('OrdersService', () => {
       });
 
       expect(productsService.notifyStockChangesByDelta).toHaveBeenCalledWith([
-        { variantId: 'pv-1', delta: -2 },
-        { variantId: 'pv-2', delta: -1 },
+        { variantId: 'pv-1', delta: -2, newStock: 8 },
+        { variantId: 'pv-2', delta: -1, newStock: 19 },
       ]);
     });
 
@@ -1967,7 +1970,7 @@ describe('OrdersService', () => {
 
   describe('updateStatus', () => {
     const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock; shipmentUpdateMany: jest.Mock }> = {}) => ({
-      productVariant: { update: overrides.variantUpdate ?? jest.fn() },
+      productVariant: { update: overrides.variantUpdate ?? jest.fn().mockResolvedValue({ stock: 0 }) },
       order: { update: overrides.orderUpdate ?? jest.fn() },
       orderEvent: { create: jest.fn() },
       shipment: { updateMany: overrides.shipmentUpdateMany ?? jest.fn() },
@@ -2003,6 +2006,7 @@ describe('OrdersService', () => {
         fn(makeTx({
           variantUpdate: jest.fn().mockImplementation((args: any) => {
             increments.push({ id: args.where.id, amount: args.data.stock.increment });
+            return { stock: 0 };
           }),
         })),
       );
@@ -2025,6 +2029,7 @@ describe('OrdersService', () => {
         fn(makeTx({
           variantUpdate: jest.fn().mockImplementation((args: any) => {
             increments.push({ id: args.where.id, amount: args.data.stock.increment });
+            return { stock: 0 };
           }),
         })),
       );
@@ -2084,6 +2089,7 @@ describe('OrdersService', () => {
         fn(makeTx({
           variantUpdate: jest.fn().mockImplementation((args: any) => {
             increments.push({ id: args.where.id, amount: args.data.stock.increment });
+            return { stock: 0 };
           }),
         })),
       );
@@ -2153,7 +2159,7 @@ describe('OrdersService', () => {
 
   describe('updateStatus — state machine transition guard', () => {
     const makeTx = () => ({
-      productVariant: { update: jest.fn() },
+      productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
       order: { update: jest.fn() },
       orderEvent: { create: jest.fn() },
       shipment: { updateMany: jest.fn() },
@@ -2654,6 +2660,7 @@ describe('OrdersService', () => {
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
               stockRestored.push(args.where.id);
+              return { stock: 0 };
             }),
           },
           order: { update: jest.fn() },
@@ -2674,7 +2681,7 @@ describe('OrdersService', () => {
       prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 9 }) },
           order: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
         });
@@ -2683,7 +2690,7 @@ describe('OrdersService', () => {
       await service.cancelByUser('order-1', 'user-1');
 
       expect(productsService.notifyStockChangesByDelta).toHaveBeenCalledWith([
-        { variantId: 'pv-1', delta: 2 },
+        { variantId: 'pv-1', delta: 2, newStock: 9 },
       ]);
     });
 
@@ -2692,7 +2699,7 @@ describe('OrdersService', () => {
       let capturedNote: string | undefined;
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -2861,6 +2868,7 @@ describe('OrdersService', () => {
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
               stockRestored.push(args.where.id);
+              return { stock: 0 };
             }),
           },
           order: { update: jest.fn() },
@@ -2918,7 +2926,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
         });
@@ -2939,7 +2947,7 @@ describe('OrdersService', () => {
       let capturedActor: string | undefined;
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -3003,6 +3011,7 @@ describe('OrdersService', () => {
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
               increments.push({ id: args.where.id, amount: args.data.stock.increment });
+              return { stock: 0 };
             }),
           },
           order: { update: jest.fn() },
@@ -4409,7 +4418,7 @@ describe('OrdersService', () => {
       });
       prisma.$transaction.mockImplementation(async (fn: any) =>
         fn({
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
         }),

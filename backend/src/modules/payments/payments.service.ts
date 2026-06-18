@@ -717,7 +717,7 @@ export class PaymentsService {
     const isFullRefund = refund.amount >= payment.amountInCents;
 
     if (isFullRefund) {
-      const deltas: Array<{ variantId: string; delta: number }> = [];
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
       try {
         await this.prisma.$transaction(async (tx) => {
           if (eventId) {
@@ -735,11 +735,11 @@ export class PaymentsService {
           for (const item of payment.order.items) {
             const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
             if (activeQty > 0) {
-              await tx.productVariant.update({
+              const updated = await tx.productVariant.update({
                 where: { id: item.productVariantId },
                 data: { stock: { increment: activeQty } },
               });
-              deltas.push({ variantId: item.productVariantId, delta: activeQty });
+              deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
             }
           }
           await tx.orderEvent.create({
@@ -1001,16 +1001,16 @@ export class PaymentsService {
 
     for (const order of orphaned) {
       try {
-        const deltas: Array<{ variantId: string; delta: number }> = [];
+        const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
         await this.prisma.$transaction(async (tx) => {
           // Restore stock only for units not already cancelled (mirrors handlePaymentFailure).
           for (const item of order.items) {
             const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
-            await tx.productVariant.update({
+            const updated = await tx.productVariant.update({
               where: { id: item.productVariantId },
               data: { stock: { increment: activeQuantity } },
             });
-            deltas.push({ variantId: item.productVariantId, delta: activeQuantity });
+            deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
           }
           await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
           if (order.couponId) {
@@ -1116,7 +1116,7 @@ export class PaymentsService {
     // Stripe refund is now in flight. If the DB transaction below fails or the process
     // crashes, the charge.refund.updated webhook will fire and handleRefundUpdate() will
     // apply this state idempotently.
-    const deltas: Array<{ variantId: string; delta: number }> = [];
+    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.payment.update({
@@ -1133,11 +1133,11 @@ export class PaymentsService {
         for (const item of payment.order.items) {
           const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
           if (activeQuantity > 0) {
-            await tx.productVariant.update({
+            const updated = await tx.productVariant.update({
               where: { id: item.productVariantId },
               data: { stock: { increment: activeQuantity } },
             });
-            deltas.push({ variantId: item.productVariantId, delta: activeQuantity });
+            deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
           }
         }
 
@@ -1226,7 +1226,7 @@ export class PaymentsService {
     // process crashes, the charge.refund.updated webhook fires and handleRefundUpdate()
     // will apply best-effort recovery (order → PARTIALLY_REFUNDED; cancelledQuantity
     // may need manual correction since per-item details aren't available to the webhook).
-    const deltas: Array<{ variantId: string; delta: number }> = [];
+    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
     try {
     await this.prisma.$transaction(async (tx) => {
       for (const item of items) {
@@ -1237,11 +1237,11 @@ export class PaymentsService {
             cancelledDiscountInCents: { increment: item.discountAppliedInCents ?? 0 },
           },
         });
-        await tx.productVariant.update({
+        const updated = await tx.productVariant.update({
           where: { id: item.productVariantId },
           data: { stock: { increment: item.quantity } },
         });
-        deltas.push({ variantId: item.productVariantId, delta: item.quantity });
+        deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
       }
 
       const updatedItems = await tx.orderItem.findMany({ where: { orderId } });
@@ -1583,7 +1583,7 @@ export class PaymentsService {
     eventId?: string,
     sessionId?: string,
   ) {
-    const deltas: Array<{ variantId: string; delta: number }> = [];
+    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
     try {
       await this.prisma.$transaction(async (tx) => {
         // Acquire a row-level exclusive lock before checking payment status.
@@ -1625,11 +1625,11 @@ export class PaymentsService {
 
         for (const item of orderItems) {
           const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
-          await tx.productVariant.update({
+          const updated = await tx.productVariant.update({
             where: { id: item.productVariantId },
             data: { stock: { increment: activeQuantity } },
           });
-          deltas.push({ variantId: item.productVariantId, delta: activeQuantity });
+          deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
         }
 
         await tx.orderEvent.create({

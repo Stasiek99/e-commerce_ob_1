@@ -108,7 +108,7 @@ describe('PaymentsService', () => {
               findMany: jest.fn(),
             },
             productVariant: {
-              update: jest.fn(),
+              update: jest.fn().mockResolvedValue({ stock: 0 }),
             },
             couponUse: {
               deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -278,7 +278,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -301,7 +301,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -1548,7 +1548,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -1772,6 +1772,7 @@ describe('PaymentsService', () => {
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedVariantUpdates.push(args);
+              return { stock: 0 };
             }),
           },
           order: {
@@ -1899,7 +1900,7 @@ describe('PaymentsService', () => {
               { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -1938,7 +1939,7 @@ describe('PaymentsService', () => {
               { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
@@ -1983,6 +1984,7 @@ describe('PaymentsService', () => {
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
               stockRestored.push({ id: args.where.id, increment: args.data.stock.increment });
+              return { stock: 0 };
             }),
           },
           order: { update: jest.fn() },
@@ -2016,7 +2018,7 @@ describe('PaymentsService', () => {
               { id: 'item-2', quantity: 2, cancelledQuantity: 2 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedOrderStatus = args.data.status;
@@ -2046,7 +2048,7 @@ describe('PaymentsService', () => {
               { id: 'item-2', quantity: 2, cancelledQuantity: 2 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedOrderStatus = args.data.status;
@@ -2075,7 +2077,7 @@ describe('PaymentsService', () => {
               { id: 'item-1', quantity: 2, cancelledQuantity: 2 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
@@ -2104,7 +2106,7 @@ describe('PaymentsService', () => {
               { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
@@ -2134,7 +2136,7 @@ describe('PaymentsService', () => {
               { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
@@ -2163,7 +2165,7 @@ describe('PaymentsService', () => {
               { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: { update: jest.fn() },
           orderEvent: {
@@ -2232,7 +2234,7 @@ describe('PaymentsService', () => {
               { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
             ]),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: { update: jest.fn() },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
@@ -2302,6 +2304,7 @@ describe('PaymentsService', () => {
                 id: args.where.id,
                 increment: args.data.stock.increment,
               });
+              return { stock: 0 };
             }),
           },
           orderEvent: {
@@ -2575,6 +2578,7 @@ describe('PaymentsService', () => {
             productVariant: {
               update: jest.fn().mockImplementation((args: any) => {
                 stockRestored.push(args.where.id);
+                return { stock: 0 };
               }),
             },
           });
@@ -2600,14 +2604,14 @@ describe('PaymentsService', () => {
           payment: { update: jest.fn() },
           order: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
         });
       });
 
       await service.refundPayment('order-1');
 
       expect(productsService.notifyStockChangesByDelta).toHaveBeenCalledWith([
-        { variantId: 'pv-1', delta: 2 },
+        { variantId: 'pv-1', delta: 2, newStock: 0 },
       ]);
     });
 
@@ -2623,7 +2627,7 @@ describe('PaymentsService', () => {
         await fn({
           payment: { update: jest.fn() },
           order: { update: jest.fn() },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedNote = args.data.note;
@@ -2649,7 +2653,7 @@ describe('PaymentsService', () => {
         await fn({
           payment: { update: jest.fn() },
           order: { update: jest.fn() },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: { create: orderEventCreate },
         });
       });
@@ -2847,7 +2851,7 @@ describe('PaymentsService', () => {
               order: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
               orderEvent: { create: jest.fn() },
               orderItem: { update: jest.fn(), findMany: jest.fn() },
-              productVariant: { update: jest.fn() },
+              productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
               processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
               outboxMessage: {
                 create: jest.fn().mockResolvedValue({ id: 'outbox-notif-1' }),
@@ -3318,7 +3322,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: txOrderUpdate },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -3342,7 +3346,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: txOrderUpdate },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -3368,7 +3372,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -3393,7 +3397,7 @@ describe('PaymentsService', () => {
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
-            productVariant: { update: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
         }
       });
@@ -3447,6 +3451,7 @@ describe('PaymentsService', () => {
                 id: args.where.id,
                 increment: args.data.stock.increment,
               });
+              return { stock: 0 };
             }),
           },
         });
@@ -3947,7 +3952,7 @@ describe('PaymentsService', () => {
               capturedOrderStatus = args.data.status;
             }),
           },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -4027,7 +4032,7 @@ describe('PaymentsService', () => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           order: { update: jest.fn() },
-          productVariant: { update: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -4117,7 +4122,7 @@ describe('PaymentsService', () => {
               payment: { update: jest.fn() },
               order: { update: jest.fn() },
               orderEvent: { create: jest.fn() },
-              productVariant: { update: jest.fn() },
+              productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
             });
           }
         });
@@ -4266,7 +4271,7 @@ describe('PaymentsService', () => {
               order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), count: jest.fn().mockResolvedValue(0) },
               orderEvent: { create: jest.fn() },
               orderItem: { update: jest.fn(), findMany: jest.fn() },
-              productVariant: { update: jest.fn() },
+              productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
               processedStripeEvent: { create: jest.fn().mockResolvedValue({}), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
               $transaction: jest.fn(),
             },
