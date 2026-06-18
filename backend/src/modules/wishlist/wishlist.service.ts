@@ -7,7 +7,7 @@ export class WishlistService {
 
   async getItems(userId: string) {
     const items = await this.prisma.wishlistItem.findMany({
-      where: { userId },
+      where: { userId, product: { isActive: true } },
       take: 200,
       include: {
         product: {
@@ -39,7 +39,7 @@ export class WishlistService {
   }
 
   async addItem(userId: string, productId: string) {
-    const product = await this.prisma.product.findUnique({ where: { id: productId } });
+    const product = await this.prisma.product.findFirst({ where: { id: productId, isActive: true } });
     if (!product) throw new NotFoundException('Product not found');
 
     await this.prisma.wishlistItem.upsert({

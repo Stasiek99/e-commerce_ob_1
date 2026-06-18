@@ -39,7 +39,7 @@ describe('WishlistService', () => {
               createMany: jest.fn(),
             },
             product: {
-              findUnique: jest.fn(),
+              findFirst: jest.fn(),
               findMany: jest.fn(),
             },
           },
@@ -86,6 +86,18 @@ describe('WishlistService', () => {
       );
     });
 
+    it('filters out wishlist items whose product has been deactivated', async () => {
+      prisma.wishlistItem.findMany.mockResolvedValue([]);
+
+      await service.getItems('user-1');
+
+      expect(prisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user-1', product: { isActive: true } },
+        }),
+      );
+    });
+
     it('filters images to primary only', async () => {
       prisma.wishlistItem.findMany.mockResolvedValue([]);
 
@@ -128,13 +140,32 @@ describe('WishlistService', () => {
 
   describe('addItem', () => {
     it('throws NotFoundException when product does not exist', async () => {
-      prisma.product.findUnique.mockResolvedValue(null);
+      prisma.product.findFirst.mockResolvedValue(null);
 
       await expect(service.addItem('user-1', 'product-999')).rejects.toThrow(NotFoundException);
     });
 
-    it('upserts the wishlist item when product exists', async () => {
-      prisma.product.findUnique.mockResolvedValue(makeProduct());
+    it('throws NotFoundException when product has been deactivated', async () => {
+      // findFirst with isActive: true filter returns null for a deactivated product
+      prisma.product.findFirst.mockResolvedValue(null);
+
+      await expect(service.addItem('user-1', 'product-1')).rejects.toThrow(NotFoundException);
+      expect(prisma.wishlistItem.upsert).not.toHaveBeenCalled();
+    });
+
+    it('looks up the product with an isActive:true filter', async () => {
+      prisma.product.findFirst.mockResolvedValue(makeProduct());
+      prisma.wishlistItem.upsert.mockResolvedValue({});
+
+      await service.addItem('user-1', 'product-1');
+
+      expect(prisma.product.findFirst).toHaveBeenCalledWith({
+        where: { id: 'product-1', isActive: true },
+      });
+    });
+
+    it('upserts the wishlist item when product exists and is active', async () => {
+      prisma.product.findFirst.mockResolvedValue(makeProduct());
       prisma.wishlistItem.upsert.mockResolvedValue({});
 
       await service.addItem('user-1', 'product-1');
@@ -147,7 +178,7 @@ describe('WishlistService', () => {
     });
 
     it('is idempotent — upsert with empty update does not throw on duplicate', async () => {
-      prisma.product.findUnique.mockResolvedValue(makeProduct());
+      prisma.product.findFirst.mockResolvedValue(makeProduct());
       prisma.wishlistItem.upsert.mockResolvedValue({});
 
       await service.addItem('user-1', 'product-1');
