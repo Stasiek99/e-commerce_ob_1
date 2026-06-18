@@ -20,6 +20,11 @@ const outOfStockVariant = {
 
 const inStockVariant = { ...outOfStockVariant, stock: 5 };
 
+// Shape returned by the `tx.$queryRaw` SELECT ... FOR UPDATE inside updateVariantStock().
+const lockedRow = (variant: { productId: string; label: string; stock: number }) => [
+  { stock: variant.stock, productId: variant.productId, label: variant.label },
+];
+
 const wishlistSubscribers = [
   {
     id: 'wl-1',
@@ -36,11 +41,16 @@ const wishlistSubscribers = [
 describe('ProductsService — back-in-stock notification dispatch', () => {
   let service: ProductsService;
 
+  // updateVariantStock() reads via `tx.$queryRaw` (SELECT ... FOR UPDATE) inside
+  // `prisma.$transaction`, then writes via `tx.productVariant.update` — see
+  // products.service.ts for why a bare findUnique + update would be a TOCTOU race.
+  const mockTx = {
+    $queryRaw: jest.fn(),
+    productVariant: { update: jest.fn() },
+  };
+
   const mockPrisma = {
-    productVariant: {
-      findUnique: jest.fn(),
-      update: jest.fn(),
-    },
+    $transaction: jest.fn((fn: any) => fn(mockTx)),
     wishlistItem: {
       findMany: jest.fn(),
       updateMany: jest.fn(),
@@ -85,8 +95,8 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
 
   describe('when stock transitions from 0 to positive', () => {
     beforeEach(() => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue(outOfStockVariant);
-      mockPrisma.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 10 });
+      mockTx.$queryRaw.mockResolvedValue(lockedRow(outOfStockVariant));
+      mockTx.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 10 });
       mockPrisma.wishlistItem.findMany.mockResolvedValue(wishlistSubscribers);
       mockEmailQueue.sendBackInStock.mockResolvedValue(undefined);
     });
@@ -135,8 +145,8 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
 
   describe('when stock was already positive (no restock event)', () => {
     it('does not enqueue any back-in-stock notifications', async () => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue(inStockVariant);
-      mockPrisma.productVariant.update.mockResolvedValue({ ...inStockVariant, stock: 15 });
+      mockTx.$queryRaw.mockResolvedValue(lockedRow(inStockVariant));
+      mockTx.productVariant.update.mockResolvedValue({ ...inStockVariant, stock: 15 });
 
       await service.updateVariantStock(VARIANT_ID, { adjustment: 10 });
       await flushMicrotasks();
@@ -148,8 +158,8 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
 
   describe('when stock remains 0 after adjustment', () => {
     it('does not enqueue any back-in-stock notifications', async () => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue(outOfStockVariant);
-      mockPrisma.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 0 });
+      mockTx.$queryRaw.mockResolvedValue(lockedRow(outOfStockVariant));
+      mockTx.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 0 });
 
       await service.updateVariantStock(VARIANT_ID, { adjustment: 0 });
       await flushMicrotasks();
@@ -160,7 +170,7 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
 
   describe('guard: variant not found', () => {
     it('throws NotFoundException before touching wishlist or email queue', async () => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue(null);
+      mockTx.$queryRaw.mockResolvedValue([]);
 
       await expect(service.updateVariantStock(VARIANT_ID, { set: 10 })).rejects.toThrow(NotFoundException);
 
@@ -171,8 +181,8 @@ describe('ProductsService — back-in-stock notification dispatch', () => {
 
   describe('ownership exclusion guard', () => {
     beforeEach(() => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue(outOfStockVariant);
-      mockPrisma.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 10 });
+      mockTx.$queryRaw.mockResolvedValue(lockedRow(outOfStockVariant));
+      mockTx.productVariant.update.mockResolvedValue({ ...outOfStockVariant, stock: 10 });
       mockEmailQueue.sendBackInStock.mockResolvedValue(undefined);
     });
 

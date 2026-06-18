@@ -569,26 +569,37 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }, actorId?: string) {
-    const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
-    if (!variant) throw new NotFoundException('Variant not found');
+    const { updated, previousStock } = await this.prisma.$transaction(async (tx) => {
+      // SELECT ... FOR UPDATE holds the row lock for this transaction's lifetime, so a
+      // concurrent adjustment call blocks here and reads the post-commit stock — closing
+      // the TOCTOU window a separate findUnique + update left open (two concurrent reads
+      // of the same stale stock, both clobbering each other's write).
+      const rows = await tx.$queryRaw<Array<{ stock: number; productId: string; label: string }>>`
+        SELECT stock, "productId", label FROM "product_variants" WHERE id = ${variantId} FOR UPDATE
+      `;
+      const current = rows[0];
+      if (!current) throw new NotFoundException('Variant not found');
 
-    const newStock = dto.set !== undefined
-      ? dto.set
-      : Math.max(0, variant.stock + (dto.adjustment ?? 0));
+      const newStock = dto.set !== undefined
+        ? dto.set
+        : Math.max(0, current.stock + (dto.adjustment ?? 0));
 
-    this.logger.log({ variantId, before: variant.stock, after: newStock, actor: actorId ?? 'unknown' }, 'stock_update');
+      const updated = await tx.productVariant.update({
+        where: { id: variantId },
+        data: { stock: newStock },
+      });
 
-    const updated = await this.prisma.productVariant.update({
-      where: { id: variantId },
-      data: { stock: newStock },
+      return { updated, previousStock: current.stock };
     });
+
+    this.logger.log({ variantId, before: previousStock, after: updated.stock, actor: actorId ?? 'unknown' }, 'stock_update');
 
     this.notifyStockChange({
       variantId,
-      productId: variant.productId,
-      variantLabel: variant.label,
-      previousStock: variant.stock,
-      newStock,
+      productId: updated.productId,
+      variantLabel: updated.label,
+      previousStock,
+      newStock: updated.stock,
     });
     this.invalidateProductCaches();
     return updated;

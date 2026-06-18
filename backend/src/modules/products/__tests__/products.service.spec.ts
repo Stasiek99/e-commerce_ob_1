@@ -390,17 +390,27 @@ describe('ProductsService — slug P2002 conflict handling', () => {
   });
 
   describe('updateVariantStock()', () => {
+    // updateVariantStock() reads the current stock via `tx.$queryRaw` (SELECT ... FOR
+    // UPDATE) inside `prisma.$transaction`, then writes via `tx.productVariant.update`
+    // — not the bare findUnique + update a separate-read TOCTOU race would use.
+    const mockTx = {
+      $queryRaw: jest.fn(),
+      productVariant: { update: jest.fn() },
+    };
+
+    beforeEach(() => {
+      mockPrisma.$transaction.mockImplementation((fn: any) => fn(mockTx));
+    });
+
     it('throws NotFoundException when the variant does not exist', async () => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue(null);
+      mockTx.$queryRaw.mockResolvedValue([]);
 
       await expect(service.updateVariantStock(VARIANT_ID, { set: 10 })).rejects.toThrow(NotFoundException);
     });
 
     it('publishes the new stock after a manual set', async () => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue({
-        id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 5,
-      });
-      mockPrisma.productVariant.update.mockResolvedValue({ id: VARIANT_ID, stock: 12 });
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 5, productId: PRODUCT_ID, label: '100ml' }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 12 });
 
       await service.updateVariantStock(VARIANT_ID, { set: 12 });
 
@@ -411,10 +421,8 @@ describe('ProductsService — slug P2002 conflict handling', () => {
     });
 
     it('fires the back-in-stock notifier when an adjustment brings stock from 0 to positive', async () => {
-      mockPrisma.productVariant.findUnique.mockResolvedValue({
-        id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 0,
-      });
-      mockPrisma.productVariant.update.mockResolvedValue({ id: VARIANT_ID, stock: 6 });
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 0, productId: PRODUCT_ID, label: '100ml' }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 6 });
       mockPrisma.wishlistItem.findMany.mockResolvedValue([
         { id: 'wi-1', user: { email: 'fan@example.com', firstName: 'Ola' }, product: { name: 'Rose Oud', slug: 'rose-oud' } },
       ]);
@@ -425,6 +433,36 @@ describe('ProductsService — slug P2002 conflict handling', () => {
 
       expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: expect.objectContaining({ productId: PRODUCT_ID }) }),
+      );
+    });
+
+    // Race-condition regression: a separate findUnique + update would compute newStock
+    // from a pre-read snapshot, silently losing a concurrent adjustment that committed
+    // in between. The locked read inside $transaction must be the value applied here.
+    it('computes the new stock from the value read inside the locked transaction, not a stale pre-read', async () => {
+      // Simulates the row a concurrent transaction already adjusted by the time this
+      // transaction's SELECT ... FOR UPDATE acquires the lock and reads it.
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 8, productId: PRODUCT_ID, label: '100ml' }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 12 });
+
+      await service.updateVariantStock(VARIANT_ID, { adjustment: 4 });
+
+      expect(mockTx.productVariant.update).toHaveBeenCalledWith({
+        where: { id: VARIANT_ID },
+        data: { stock: 12 },
+      });
+    });
+
+    it('reports the locked pre-update stock as previousStock, not a separately re-read value', async () => {
+      mockTx.$queryRaw.mockResolvedValue([{ stock: 0, productId: PRODUCT_ID, label: '100ml' }]);
+      mockTx.productVariant.update.mockResolvedValue({ id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml', stock: 6 });
+
+      const notifySpy = jest.spyOn(service, 'notifyStockChange');
+
+      await service.updateVariantStock(VARIANT_ID, { adjustment: 6 });
+
+      expect(notifySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ previousStock: 0, newStock: 6 }),
       );
     });
   });
