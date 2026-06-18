@@ -118,6 +118,25 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * Resolves a category slug plus every descendant slug at any depth, via a
+   * recursive walk of categories.parentId — not just one level of children,
+   * so browsing a top-level category also surfaces grandchild-category products.
+   */
+  private async resolveCategorySlugs(slug: string): Promise<string[] | undefined> {
+    const descendants = await this.prisma.$queryRaw<Array<{ slug: string }>>`
+      WITH RECURSIVE descendants AS (
+        SELECT id, slug FROM categories WHERE slug = ${slug}
+        UNION ALL
+        SELECT c.id, c.slug
+        FROM categories c
+        INNER JOIN descendants d ON c."parentId" = d.id
+      )
+      SELECT slug FROM descendants
+    `;
+    return descendants.length ? descendants.map((d) => d.slug) : undefined;
+  }
+
   private async _executeFindAll(query: FindAllQuery) {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, 100);
@@ -139,16 +158,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     const hasVariantFilter =
       query.volumes?.length || query.inStock || query.minPrice !== undefined || query.maxPrice !== undefined;
 
-    let categorySlugs: string[] | undefined;
-    if (query.category) {
-      const cat = await this.prisma.category.findUnique({
-        where: { slug: query.category },
-        include: { children: { select: { slug: true } } },
-      });
-      if (cat) {
-        categorySlugs = [cat.slug, ...cat.children.map((c) => c.slug)];
-      }
-    }
+    const categorySlugs = query.category ? await this.resolveCategorySlugs(query.category) : undefined;
 
     // Search handled via raw query below — excluded from Prisma where so filters
     // (category, gender, etc.) can be applied on top of the ranked ID set.
@@ -373,16 +383,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       if (cached) return JSON.parse(cached);
     } catch {}
 
-    let categorySlugs: string[] | undefined;
-    if (query.category) {
-      const cat = await this.prisma.category.findUnique({
-        where: { slug: query.category },
-        include: { children: { select: { slug: true } } },
-      });
-      if (cat) {
-        categorySlugs = [cat.slug, ...cat.children.map((c) => c.slug)];
-      }
-    }
+    const categorySlugs = query.category ? await this.resolveCategorySlugs(query.category) : undefined;
 
     const products = await this.prisma.product.findMany({
       where: {

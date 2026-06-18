@@ -69,11 +69,15 @@ describe('ProductsService — slug P2002 conflict handling', () => {
   const mockPrisma = {
     product: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
     },
     productVariant: { updateMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+    productVariantPriceHistory: { findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]) },
     wishlistItem: { findMany: jest.fn().mockResolvedValue([]) },
+    $queryRaw: jest.fn(),
     $transaction: jest.fn(),
   };
 
@@ -371,6 +375,61 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       expect(mockPrisma.wishlistItem.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: expect.objectContaining({ productId: PRODUCT_ID }) }),
       );
+    });
+  });
+
+  // --- category filter — recursive descendant resolution ---
+  // FIX: the category filter previously only descended one level of
+  // `children`, silently dropping products assigned to grandchild (or
+  // deeper) categories. resolveCategorySlugs() now walks the full
+  // categories.parentId tree via a recursive CTE, at any depth.
+
+  describe('category filter — recursive descendant resolution', () => {
+    const productForFacets = { scentFamily: 'woody', gender: 'MALE' };
+
+    it('findAll() filters by every descendant slug returned by the recursive lookup, not just direct children', async () => {
+      mockPrisma.$queryRaw.mockResolvedValueOnce([
+        { slug: 'perfumy' },
+        { slug: 'perfumy-meskie' },
+        { slug: 'perfumy-meskie-nisza' },
+      ]);
+      mockPrisma.product.findMany.mockResolvedValue([mockProduct]);
+      mockPrisma.product.count.mockResolvedValue(1);
+
+      await service.findAll({ category: 'perfumy' });
+
+      const callArg = mockPrisma.product.findMany.mock.calls[0][0];
+      expect(callArg.where.category).toEqual({
+        slug: { in: ['perfumy', 'perfumy-meskie', 'perfumy-meskie-nisza'] },
+      });
+      expect(mockPrisma.$queryRaw.mock.calls[0][1]).toBe('perfumy');
+    });
+
+    it('findAll() omits the category filter entirely when the slug cannot be resolved', async () => {
+      mockPrisma.$queryRaw.mockResolvedValueOnce([]);
+      mockPrisma.product.findMany.mockResolvedValue([]);
+      mockPrisma.product.count.mockResolvedValue(0);
+
+      await service.findAll({ category: 'unknown-slug' });
+
+      const callArg = mockPrisma.product.findMany.mock.calls[0][0];
+      expect(callArg.where.category).toBeUndefined();
+    });
+
+    it('getFacets() includes grandchild-category products when computing available facets', async () => {
+      mockPrisma.$queryRaw.mockResolvedValueOnce([
+        { slug: 'perfumy' },
+        { slug: 'perfumy-meskie' },
+        { slug: 'perfumy-meskie-nisza' },
+      ]);
+      mockPrisma.product.findMany.mockResolvedValue([productForFacets]);
+
+      await service.getFacets({ category: 'perfumy' });
+
+      const callArg = mockPrisma.product.findMany.mock.calls[0][0];
+      expect(callArg.where.category).toEqual({
+        slug: { in: ['perfumy', 'perfumy-meskie', 'perfumy-meskie-nisza'] },
+      });
     });
   });
 });
