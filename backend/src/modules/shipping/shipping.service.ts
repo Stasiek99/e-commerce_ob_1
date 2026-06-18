@@ -1,6 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
@@ -40,6 +41,7 @@ export class ShippingService {
     private readonly gls: GlsClient,
     private readonly dpd: DpdClient,
     private readonly shippingRates: ShippingRatesService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
   async getShippingRates() {
@@ -268,6 +270,9 @@ export class ShippingService {
   // PII on shipping labels (name, phone, locker code) is not retained indefinitely.
   @Cron('0 3 * * 1', { timeZone: 'Europe/Warsaw' })
   async cleanupStaleShippingLabels(): Promise<void> {
+    const acquired = await this.redis.set('cron:cleanup-stale-shipping-labels:lock', '1', 'EX', 82000, 'NX');
+    if (!acquired) return;
+
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const staleShipments = await this.prisma.shipment.findMany({

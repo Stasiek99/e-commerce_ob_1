@@ -465,6 +465,11 @@ model OrderItem {
   snapshotVatRate   Int @default(2300)
   quantity          Int
   cancelledQuantity Int @default(0)
+  // Running total of the actual (floor-applied) discount already deducted from
+  // cancelled units of this item, so a later partial cancel can subtract the true
+  // remaining budget instead of recomputing an idealized value that drifts from
+  // what was really applied across prior calls.
+  cancelledDiscountInCents Int @default(0)
 
   @@index([orderId])
   @@map("order_items")

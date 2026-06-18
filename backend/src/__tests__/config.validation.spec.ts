@@ -274,6 +274,60 @@ describe('envValidationSchema — SELLER_NIP production guard', () => {
   });
 });
 
+// ── STRIPE_CURRENCY zero-decimal guard ────────────────────────────────────────
+// FIX: every money computation in payments/invoice (snapshotPrice, unitAmount,
+// amount_off, totalInCents, invoice VAT math) assumes a 2-decimal minor unit
+// (gr/100 = zł) and passes those integers straight to Stripe's unit_amount/
+// amount_off/amount fields. Stripe's zero-decimal currencies (JPY, KRW, VND,
+// etc.) treat that integer as a whole unit instead, which would silently
+// overcharge customers 100x. STRIPE_CURRENCY now rejects zero-decimal
+// currencies at boot in both environments — this guard applies regardless of
+// NODE_ENV since the bug is in money math, not a prod-only credential.
+
+const hasStripeCurrencyError = (error: ReturnType<typeof validate>['error']): boolean =>
+  error?.details.some(
+    (d) => d.context?.key === 'STRIPE_CURRENCY' || d.message.includes('STRIPE_CURRENCY'),
+  ) ?? false;
+
+describe('envValidationSchema — STRIPE_CURRENCY zero-decimal guard', () => {
+  it('rejects JPY (zero-decimal currency)', () => {
+    const { error } = validate({ NODE_ENV: 'production', STRIPE_CURRENCY: 'jpy' });
+    expect(hasStripeCurrencyError(error)).toBe(true);
+  });
+
+  it('rejects KRW regardless of casing', () => {
+    const { error } = validate({ NODE_ENV: 'production', STRIPE_CURRENCY: 'KRW' });
+    expect(hasStripeCurrencyError(error)).toBe(true);
+  });
+
+  it('rejects VND in development too — the bug is in money math, not a prod-only guard', () => {
+    const { error } = validate({ NODE_ENV: 'development', STRIPE_CURRENCY: 'vnd' });
+    expect(hasStripeCurrencyError(error)).toBe(true);
+  });
+
+  it('accepts PLN (the default 2-decimal currency)', () => {
+    const { error } = validate({ NODE_ENV: 'production', STRIPE_CURRENCY: 'pln' });
+    expect(hasStripeCurrencyError(error)).toBe(false);
+  });
+
+  it('accepts USD (a supported 2-decimal currency)', () => {
+    const { error } = validate({ NODE_ENV: 'production', STRIPE_CURRENCY: 'usd' });
+    expect(hasStripeCurrencyError(error)).toBe(false);
+  });
+
+  it('defaults to pln when STRIPE_CURRENCY is absent', () => {
+    const { value, error } = validate({ NODE_ENV: 'development' });
+    expect(hasStripeCurrencyError(error)).toBe(false);
+    expect(value.STRIPE_CURRENCY).toBe('pln');
+  });
+
+  it('error message explains the zero-decimal mismatch', () => {
+    const { error } = validate({ NODE_ENV: 'production', STRIPE_CURRENCY: 'jpy' });
+    const currencyError = error?.details.find((d) => d.context?.key === 'STRIPE_CURRENCY');
+    expect(currencyError?.message).toContain('zero-decimal');
+  });
+});
+
 // ── ORDER_CANCEL_SECRET production guard ──────────────────────────────────────
 // FIX: guest order cancel tokens previously reused JWT_ACCESS_SECRET as their
 // HMAC key, coupling cancel-link validity to JWT secret rotation and letting a

@@ -58,15 +58,17 @@ const TRACKING_URL: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT:    'Oczekuje na płatność',
-  FRAUD_REVIEW:       'Weryfikacja',
-  PAID:               'Opłacone',
-  PROCESSING:         'W realizacji',
-  SHIPPED:            'Wysłane',
-  DELIVERED:          'Dostarczone',
-  CANCELLED:          'Anulowane',
-  REFUNDED:           'Zwrócone',
-  PARTIALLY_REFUNDED: 'Częściowo zwrócone',
+  PENDING_PAYMENT:     'Oczekuje na płatność',
+  FRAUD_REVIEW:        'Weryfikacja',
+  PAID:                'Opłacone',
+  PROCESSING:          'W realizacji',
+  SHIPPED:             'Wysłane',
+  DELIVERED:           'Dostarczone',
+  CANCELLED:           'Anulowane',
+  REFUNDED:            'Zwrócone',
+  PARTIALLY_REFUNDED:  'Częściowo zwrócone',
+  DISPUTE_HOLD:        'Spór płatniczy',
+  DISPUTE_LOST_REVIEW: 'Weryfikacja zwrotu',
 };
 
 @Component({
@@ -414,7 +416,7 @@ export class OrderDetailComponent implements OnInit {
   }
 
   canCancel(status: string): boolean {
-    return ['PENDING_PAYMENT', 'PAID', 'PROCESSING', 'PARTIALLY_REFUNDED'].includes(status);
+    return ['PENDING_PAYMENT', 'PAID', 'PROCESSING'].includes(status);
   }
 
   canPartialCancel(status: string): boolean {
@@ -422,7 +424,7 @@ export class OrderDetailComponent implements OnInit {
   }
 
   canDownloadInvoice(status: string): boolean {
-    return !['PENDING_PAYMENT', 'CANCELLED'].includes(status);
+    return !['PENDING_PAYMENT', 'CANCELLED', 'FRAUD_REVIEW', 'DISPUTE_HOLD'].includes(status);
   }
 
   downloadInvoice(): void {

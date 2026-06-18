@@ -222,7 +222,7 @@ Config lives in [`vercel.json`](vercel.json) at the repo root. The project is de
 - **Install / Build / Output Directory:** leave blank — `vercel.json` owns them.
 
 **Required Vercel env vars** (Settings → Environment Variables, Production scope):
-- `SITEMAP_BACKEND_URL=https://backend-production-c004.up.railway.app/api` — the `prebuild` sitemap generator hits this at build time to pull product/category slugs. Falls back to static routes only if unreachable, so the build never hard-fails.
+- `SITEMAP_BACKEND_URL=https://backend-production-c004.up.railway.app` — the `prebuild` sitemap generator hits this at build time to pull product/category slugs. **No `/api` suffix** — the backend has no global route prefix (see `main.ts`, `railway.json`'s `healthcheckPath: /health`, and `environment.prod.ts`'s `apiUrl`, none of which use `/api`). When this var is set, the build now **hard-fails** if the resolved route count never rises above the static-only baseline (retries 3x with backoff first) — it no longer silently degrades, so a wrong URL here breaks the build loudly instead of shipping a near-empty sitemap.
 - `SITEMAP_SITE_URL=https://<your-vercel-domain>` — the canonical URL written into `sitemap.xml`.
 
 **Post-deploy backend sync:** after the first Vercel deploy, copy the production URL and set it as `FRONTEND_URL` in Railway's backend env vars (needed for CORS and the OAuth redirect whitelist). Also update `GOOGLE_CALLBACK_URL` in Google Cloud Console if you want OAuth to work from the Vercel origin.

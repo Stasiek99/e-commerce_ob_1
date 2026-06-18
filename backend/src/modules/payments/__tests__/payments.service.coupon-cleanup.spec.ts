@@ -20,6 +20,7 @@ import { EmailQueueService } from '../../email/email-queue.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ConfigService } from '@nestjs/config';
 import { CouponService } from '../../coupons/coupon.service';
+import { ProductsService } from '../../products/products.service';
 
 jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
@@ -146,6 +147,10 @@ describe('PaymentsService — orphaned coupon cleanup on payment retry', () => {
         {
           provide: CouponService,
           useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
+        },
+        {
+          provide: ProductsService,
+          useValue: { notifyStockChangesByDelta: jest.fn().mockResolvedValue(undefined) },
         },
       ],
     }).compile();

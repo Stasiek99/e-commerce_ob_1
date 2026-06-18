@@ -1,5 +1,6 @@
 import * as Joi from 'joi';
 import { isValidNipChecksum } from './common/utils/nip-checksum.util';
+import { isZeroDecimalCurrency } from './modules/payments/stripe-zero-decimal-currency.util';
 
 // Joi helper: field is required in production, optional (or has a dev default)
 // otherwise. Keeps dev/test ergonomic without letting prod boot in an unsafe
@@ -72,7 +73,23 @@ export const envValidationSchema = Joi.object({
   // Webhook secret: required in prod (no signature verification means no
   // webhook trust), optional in dev where Stripe CLI prints a `whsec_` on demand.
   STRIPE_WEBHOOK_SECRET: requiredInProd(Joi.string(), ''),
-  STRIPE_CURRENCY: Joi.string().lowercase().default('pln'),
+  // Every money computation in payments/invoice (snapshotPrice, unitAmount,
+  // amount_off, totalInCents, invoice VAT math) assumes a 2-decimal minor unit
+  // (gr/100 = zł) and passes those integers straight to Stripe's unit_amount/
+  // amount_off/amount fields. Stripe's zero-decimal currencies (JPY, KRW, VND,
+  // etc.) treat that same integer as a whole unit, which would silently
+  // overcharge customers 100x. Reject at boot rather than convert, since no
+  // call site is written to handle a non-2-decimal currency.
+  STRIPE_CURRENCY: Joi.string()
+    .lowercase()
+    .default('pln')
+    .custom((value: string, helpers: Joi.CustomHelpers) =>
+      isZeroDecimalCurrency(value) ? helpers.error('any.invalid') : value,
+    )
+    .messages({
+      'any.invalid':
+        'STRIPE_CURRENCY must be a 2-decimal-minor-unit currency — payments/invoice money math assumes amount/100 == major units and does not support zero-decimal currencies (e.g. JPY, KRW, VND)',
+    }),
   STRIPE_SUCCESS_URL: Joi.string().uri().required(),
   STRIPE_CANCEL_URL: Joi.string().uri().required(),
   // Secret for POST /payments/reconcile. Required in production — without it,

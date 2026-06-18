@@ -48,8 +48,9 @@ describe('ReviewsService', () => {
             },
             reviewHelpfulVote: {
               create: jest.fn(),
+              deleteMany: jest.fn(),
             },
-            $transaction: jest.fn().mockResolvedValue([{}, {}]),
+            $transaction: jest.fn((ops: Promise<any>[]) => Promise.all(ops)),
             $executeRaw: jest.fn(),
           },
         },
@@ -1003,6 +1004,56 @@ describe('ReviewsService', () => {
       await service.resubmit('review-1', 'user-1', dto).catch(() => {});
 
       expect(prisma.review.update).not.toHaveBeenCalled();
+    });
+
+    // Fix: a reject → resubmit → re-approve cycle must not carry over the
+    // helpfulCount or ReviewHelpfulVote rows accumulated against the old content.
+
+    it('resets helpfulCount to 0 in the same update that applies the new content', async () => {
+      prisma.review.findUnique.mockResolvedValue(
+        makeReview({ userId: 'user-1', status: 'REJECTED', helpfulCount: 9 }),
+      );
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING', helpfulCount: 0 }));
+
+      await service.resubmit('review-1', 'user-1', dto);
+
+      expect(prisma.review.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ helpfulCount: 0 }),
+        }),
+      );
+    });
+
+    it('deletes all ReviewHelpfulVote rows for the review', async () => {
+      prisma.review.findUnique.mockResolvedValue(
+        makeReview({ userId: 'user-1', status: 'REJECTED', helpfulCount: 9 }),
+      );
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING', helpfulCount: 0 }));
+
+      await service.resubmit('review-1', 'user-1', dto);
+
+      expect(prisma.reviewHelpfulVote.deleteMany).toHaveBeenCalledWith({
+        where: { reviewId: 'review-1' },
+      });
+    });
+
+    it('resets helpfulCount and deletes vote rows atomically via $transaction', async () => {
+      prisma.review.findUnique.mockResolvedValue(
+        makeReview({ userId: 'user-1', status: 'REJECTED', helpfulCount: 9 }),
+      );
+      prisma.review.update.mockResolvedValue(makeReview({ status: 'PENDING', helpfulCount: 0 }));
+
+      await service.resubmit('review-1', 'user-1', dto);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not delete vote rows when the resubmit is rejected by the status guard', async () => {
+      prisma.review.findUnique.mockResolvedValue(makeReview({ userId: 'user-1', status: 'PENDING' }));
+
+      await service.resubmit('review-1', 'user-1', dto).catch(() => {});
+
+      expect(prisma.reviewHelpfulVote.deleteMany).not.toHaveBeenCalled();
     });
   });
 

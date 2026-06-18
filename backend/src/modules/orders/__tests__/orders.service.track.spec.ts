@@ -9,6 +9,7 @@ import { CouponService } from '../../coupons/coupon.service';
 import { ConfigService } from '@nestjs/config';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ShippingRatesService } from '../../shipping/shipping-rates.service';
+import { ProductsService } from '../../products/products.service';
 
 const mockPrisma = {
   $executeRawUnsafe: jest.fn().mockResolvedValue(undefined),
@@ -43,6 +44,7 @@ describe('OrdersService.trackByEmailAndNumber', () => {
         { provide: ConfigService,         useValue: { get: jest.fn() } },
         { provide: InvoiceService,        useValue: {} },
         { provide: ShippingRatesService,  useValue: {} },
+        { provide: ProductsService,       useValue: { notifyStockChangesByDelta: jest.fn() } },
         { provide: 'REDIS_CLIENT',        useValue: mockRedis },
       ],
     }).compile();

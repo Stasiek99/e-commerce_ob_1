@@ -44,6 +44,18 @@ const PRODUCT_SELECT = {
   category: { select: { id: true, name: true, slug: true } },
 };
 
+// Shape required by ProductsService.notifyStockChange — every site outside this
+// service that mutates ProductVariant.stock (orders/payments checkout decrements,
+// cancellation/refund/dispute restores) collects these and calls notifyStockChange
+// once its transaction has committed.
+export interface StockChange {
+  variantId: string;
+  productId: string;
+  variantLabel: string;
+  previousStock: number;
+  newStock: number;
+}
+
 type FindAllQuery = {
   page?: number;
   limit?: number;
@@ -106,6 +118,25 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * Resolves a category slug plus every descendant slug at any depth, via a
+   * recursive walk of categories.parentId — not just one level of children,
+   * so browsing a top-level category also surfaces grandchild-category products.
+   */
+  private async resolveCategorySlugs(slug: string): Promise<string[] | undefined> {
+    const descendants = await this.prisma.$queryRaw<Array<{ slug: string }>>`
+      WITH RECURSIVE descendants AS (
+        SELECT id, slug FROM categories WHERE slug = ${slug}
+        UNION ALL
+        SELECT c.id, c.slug
+        FROM categories c
+        INNER JOIN descendants d ON c."parentId" = d.id
+      )
+      SELECT slug FROM descendants
+    `;
+    return descendants.length ? descendants.map((d) => d.slug) : undefined;
+  }
+
   private async _executeFindAll(query: FindAllQuery) {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, 100);
@@ -127,16 +158,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     const hasVariantFilter =
       query.volumes?.length || query.inStock || query.minPrice !== undefined || query.maxPrice !== undefined;
 
-    let categorySlugs: string[] | undefined;
-    if (query.category) {
-      const cat = await this.prisma.category.findUnique({
-        where: { slug: query.category },
-        include: { children: { select: { slug: true } } },
-      });
-      if (cat) {
-        categorySlugs = [cat.slug, ...cat.children.map((c) => c.slug)];
-      }
-    }
+    const categorySlugs = query.category ? await this.resolveCategorySlugs(query.category) : undefined;
 
     // Search handled via raw query below — excluded from Prisma where so filters
     // (category, gender, etc.) can be applied on top of the ranked ID set.
@@ -361,16 +383,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       if (cached) return JSON.parse(cached);
     } catch {}
 
-    let categorySlugs: string[] | undefined;
-    if (query.category) {
-      const cat = await this.prisma.category.findUnique({
-        where: { slug: query.category },
-        include: { children: { select: { slug: true } } },
-      });
-      if (cat) {
-        categorySlugs = [cat.slug, ...cat.children.map((c) => c.slug)];
-      }
-    }
+    const categorySlugs = query.category ? await this.resolveCategorySlugs(query.category) : undefined;
 
     const products = await this.prisma.product.findMany({
       where: {
@@ -559,7 +572,6 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('Variant not found');
 
-    const wasOutOfStock = variant.stock === 0;
     const newStock = dto.set !== undefined
       ? dto.set
       : Math.max(0, variant.stock + (dto.adjustment ?? 0));
@@ -571,13 +583,57 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       data: { stock: newStock },
     });
 
-    if (wasOutOfStock && newStock > 0) {
-      this.dispatchBackInStockNotifications(variant.productId, variant.label).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
-    }
-
-    this.redis.publish('stock:updates', JSON.stringify({ id: variantId, stock: newStock })).catch(() => {});
+    this.notifyStockChange({
+      variantId,
+      productId: variant.productId,
+      variantLabel: variant.label,
+      previousStock: variant.stock,
+      newStock,
+    });
     this.invalidateProductCaches();
     return updated;
+  }
+
+  /**
+   * Single choke point for every ProductVariant.stock mutation, in this service
+   * or any other (orders/payments checkout decrements, cancellation/refund/
+   * dispute restores). Publishes the live-stock SSE update and, when stock
+   * crosses 0 → >0, fires the back-in-stock notifier. Call this once a stock
+   * mutation has committed — never from inside an open transaction, since the
+   * write could still roll back.
+   */
+  notifyStockChange(change: StockChange): void {
+    const { variantId, productId, variantLabel, previousStock, newStock } = change;
+    if (previousStock === 0 && newStock > 0) {
+      this.dispatchBackInStockNotifications(productId, variantLabel).catch((err) => this.logger.warn('Back-in-stock notification failed', err));
+    }
+    this.redis.publish('stock:updates', JSON.stringify({ id: variantId, stock: newStock })).catch(() => {});
+  }
+
+  /**
+   * Same choke point as notifyStockChange, for callers that only know the net
+   * change applied inside a transaction (e.g. `{ stock: { increment: qty } }`)
+   * rather than the before/after values. Re-reads current stock once the
+   * transaction has committed and derives previousStock from the known delta
+   * (positive for a restore, negative for a decrement).
+   */
+  async notifyStockChangesByDelta(deltas: Array<{ variantId: string; delta: number }>): Promise<void> {
+    if (!deltas.length) return;
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: deltas.map((d) => d.variantId) } },
+      select: { id: true, productId: true, label: true, stock: true },
+    });
+    const deltaByVariantId = new Map(deltas.map((d) => [d.variantId, d.delta]));
+    for (const variant of variants) {
+      const delta = deltaByVariantId.get(variant.id) ?? 0;
+      this.notifyStockChange({
+        variantId: variant.id,
+        productId: variant.productId,
+        variantLabel: variant.label,
+        previousStock: variant.stock - delta,
+        newStock: variant.stock,
+      });
+    }
   }
 
   private async dispatchBackInStockNotifications(productId: string, variantLabel: string): Promise<void> {

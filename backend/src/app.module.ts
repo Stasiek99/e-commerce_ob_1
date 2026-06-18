@@ -11,6 +11,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { HealthController } from './health.controller';
 import { LocationController } from './modules/location/location.controller';
 import { envValidationSchema } from './config.validation';
+import { THROTTLER_CONFIGS } from './throttler.config';
 import { getCorrelationId } from './modules/correlation/correlation-id.storage';
 import { CorrelationModule } from './modules/correlation/correlation.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
@@ -65,12 +66,7 @@ export { PINO_REDACT_PATHS };
       useFactory: (config: ConfigService, redis: IORedis) => {
         const isProd = config.get<string>('NODE_ENV') === 'production';
         return {
-          throttlers: [
-            { name: 'burst',       ttl: 1_000,  limit: 5  },  // 5 req/s per IP
-            { name: 'sustained',   ttl: 60_000, limit: 60 },  // 60 req/min per IP
-            { name: 'coupon-anon', ttl: 60_000, limit: 3  },  // 3 req/min for unauthenticated coupon validation
-            { name: 'coupon-auth', ttl: 60_000, limit: 10 },  // 10 req/min for authenticated coupon validation
-          ],
+          throttlers: THROTTLER_CONFIGS,
           // Reuse the shared REDIS_CLIENT (retryStrategy + error handler already
           // wired). Avoids a second disconnected IORedis connection whose silent
           // failure would degrade per-replica in-memory throttling for all replicas.

@@ -233,15 +233,21 @@ export class ReviewsService {
       throw new BadRequestException('Only rejected reviews can be resubmitted');
     }
 
-    return this.prisma.review.update({
-      where: { id },
-      data: {
-        rating: dto.rating,
-        title: dto.title?.trim() ?? null,
-        body: dto.body?.trim() ?? null,
-        status: 'PENDING',
-      },
-    });
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.review.update({
+        where: { id },
+        data: {
+          rating: dto.rating,
+          title: dto.title?.trim() ?? null,
+          body: dto.body?.trim() ?? null,
+          status: 'PENDING',
+          helpfulCount: 0,
+        },
+      }),
+      this.prisma.reviewHelpfulVote.deleteMany({ where: { reviewId: id } }),
+    ]);
+
+    return updated;
   }
 
   async adminUpdateStatus(id: string, dto: UpdateReviewStatusDto) {
