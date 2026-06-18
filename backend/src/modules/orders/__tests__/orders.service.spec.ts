@@ -3344,6 +3344,7 @@ describe('OrdersService', () => {
             quantity: 2,
             priceInCents: 34900,
             vatRate: 2300,
+            discountAppliedInCents: 0,
           },
         ],
         OrderStatus.PAID,
@@ -3551,11 +3552,11 @@ describe('OrdersService', () => {
 
     it('uses only remaining discount budget on second partial cancel of the same item', async () => {
       // snapshotPrice=33, qty=2, itemsTotalInCents=66, discountInCents=5
-      // discountFraction = 5/66. First cancel consumed discount=round(33*5/66*1)=round(2.5)=3.
-      // Second cancel (cancelledQuantity=1): maxItemDiscount=round(33*5/66*2)=round(5)=5,
-      // alreadyCancelledDiscount=3, remaining=2 → appliedDiscount=min(3,2)=2 → priceInCents=33-2=31.
-      // Without the fix, the old formula would apply discount=3 again → priceInCents=30 (under-refund
-      // and total would be 30+30=60 while customer paid 66-5=61).
+      // discountFraction = 5/66. cancelledDiscountInCents=3 is the persisted actual amount
+      // the (mocked) first cancel call already applied to item-1's cancelled unit.
+      // maxItemDiscount=round(33*5/66*2)=round(5)=5, alreadyCancelledDiscount=3 (read directly
+      // from the persisted field, not recomputed), remaining=2 → appliedDiscount=min(3,2)=2
+      // → priceInCents=33-2=31.
       const partiallyRefundedOrder = {
         ...mockPaidOrder,
         status: OrderStatus.PARTIALLY_REFUNDED,
@@ -3567,6 +3568,7 @@ describe('OrdersService', () => {
             productVariantId: 'pv-1',
             quantity: 2,
             cancelledQuantity: 1,
+            cancelledDiscountInCents: 3,
             snapshotName: 'Test Item',
             snapshotSku: 'T-1',
             snapshotPrice: 33,
@@ -3578,6 +3580,7 @@ describe('OrdersService', () => {
             productVariantId: 'pv-2',
             quantity: 2,
             cancelledQuantity: 0,
+            cancelledDiscountInCents: 0,
             snapshotName: 'Other Item',
             snapshotSku: 'O-1',
             snapshotPrice: 33,
@@ -3592,7 +3595,62 @@ describe('OrdersService', () => {
 
       expect(paymentsService.partialRefund).toHaveBeenCalledWith(
         'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31 })],
+        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31, discountAppliedInCents: 2 })],
+        OrderStatus.PARTIALLY_REFUNDED,
+        'CUSTOMER',
+      );
+    });
+
+    it('reads alreadyCancelledDiscount from the persisted actual amount, not a Math.round recompute', async () => {
+      // snapshotPrice=50, qty=4, itemsTotalInCents=200, discountInCents=10 → discountFraction=0.05,
+      // maxItemDiscount=round(50*0.05*4)=10.
+      // A first call cancelling qty=3 would apply wanted=round(50*0.05*3)=8, floored per-unit to
+      // floor(8/3)=2 → actual persisted total = 2*3 = 6 (2gr lost to the floor, not the full 8).
+      // This second call cancels the last unit (qty=1): wanted=round(50*0.05*1)=3.
+      //   Old (buggy) recompute: alreadyCancelledDiscount=round(50*0.05*3)=8 → remaining=10-8=2
+      //     → appliedDiscount=min(3,2)=2 → priceInCents=50-2=48 (under-applies the discount,
+      //     over-refunding the customer by 1gr).
+      //   Fixed (persisted actual): alreadyCancelledDiscount=6 → remaining=10-6=4
+      //     → appliedDiscount=min(3,4)=3 → priceInCents=50-3=47 (correct).
+      const order = {
+        ...mockPaidOrder,
+        status: OrderStatus.PARTIALLY_REFUNDED,
+        itemsTotalInCents: 200,
+        discountInCents: 10,
+        items: [
+          {
+            id: 'item-1',
+            productVariantId: 'pv-1',
+            quantity: 4,
+            cancelledQuantity: 3,
+            cancelledDiscountInCents: 6,
+            snapshotName: 'Test Item',
+            snapshotSku: 'T-1',
+            snapshotPrice: 50,
+          },
+          {
+            // Keeps the order from being fully cancelled so partialRefund() (not
+            // refundPayment()) is the path under test.
+            id: 'item-2',
+            productVariantId: 'pv-2',
+            quantity: 1,
+            cancelledQuantity: 0,
+            cancelledDiscountInCents: 0,
+            snapshotName: 'Other Item',
+            snapshotSku: 'O-1',
+            snapshotPrice: 50,
+          },
+        ],
+      };
+      prisma.order.findFirst.mockResolvedValue(order);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-1',
+        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 47, discountAppliedInCents: 3 })],
         OrderStatus.PARTIALLY_REFUNDED,
         'CUSTOMER',
       );

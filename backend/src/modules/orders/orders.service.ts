@@ -978,6 +978,7 @@ export class OrdersService implements OnModuleInit {
       quantity: number;
       priceInCents: number;
       vatRate: number;
+      discountAppliedInCents: number;
     }> = [];
 
     for (const line of dto.items) {
@@ -997,6 +998,7 @@ export class OrdersService implements OnModuleInit {
         quantity: line.quantity,
         priceInCents: item.snapshotPrice,
         vatRate: item.snapshotVatRate,
+        discountAppliedInCents: 0,
       });
     }
 
@@ -1018,15 +1020,22 @@ export class OrdersService implements OnModuleInit {
         const orderItem = order.items.find(i => i.id === item.orderItemId)!;
         // Max discount this item can ever yield (based on all units)
         const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
-        // Discount already consumed by prior partial cancels, derived from cancelledQuantity
-        // so we don't re-apply the fraction on subsequent partial cancels of the same item.
-        const alreadyCancelledDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.cancelledQuantity);
+        // Discount actually applied by prior partial cancels. Read from the persisted
+        // running total rather than recomputing an idealized (Math.round) value from
+        // cancelledQuantity — each prior call floors its per-unit discount, so the ideal
+        // recompute overstates what was really deducted and drifts the refund a few
+        // grosz over entitlement across 3+ sequential partial cancellations.
+        const alreadyCancelledDiscount = orderItem.cancelledDiscountInCents ?? 0;
         const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyCancelledDiscount);
         // Proportional discount we'd ideally apply to the qty being cancelled now
         const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
         const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
         // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
-        item.priceInCents = item.priceInCents - Math.floor(appliedDiscount / item.quantity);
+        const perUnitDiscount = Math.floor(appliedDiscount / item.quantity);
+        item.priceInCents = item.priceInCents - perUnitDiscount;
+        // Persist the true total deducted this call so the next partial cancel's
+        // alreadyCancelledDiscount reflects reality, not an idealized recompute.
+        item.discountAppliedInCents = perUnitDiscount * item.quantity;
       }
     }
 

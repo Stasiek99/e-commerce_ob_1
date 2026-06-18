@@ -1912,11 +1912,55 @@ describe('PaymentsService', () => {
         expect.arrayContaining([
           expect.objectContaining({
             where: { id: 'item-1' },
-            data: { cancelledQuantity: { increment: 2 } },
+            data: { cancelledQuantity: { increment: 2 }, cancelledDiscountInCents: { increment: 0 } },
           }),
           expect.objectContaining({
             where: { id: 'item-2' },
-            data: { cancelledQuantity: { increment: 1 } },
+            data: { cancelledQuantity: { increment: 1 }, cancelledDiscountInCents: { increment: 0 } },
+          }),
+        ]),
+      );
+    });
+
+    it('increments cancelledDiscountInCents by discountAppliedInCents when provided', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+
+      const capturedUpdates: any[] = [];
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          orderItem: {
+            update: jest.fn().mockImplementation((args: any) => {
+              capturedUpdates.push(args);
+            }),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'item-1', quantity: 3, cancelledQuantity: 2 },
+              { id: 'item-2', quantity: 2, cancelledQuantity: 1 },
+            ]),
+          },
+          productVariant: { update: jest.fn() },
+          order: { update: jest.fn() },
+          payment: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      const itemsWithDiscount = [
+        { orderItemId: 'item-1', productVariantId: 'pv-1', quantity: 2, priceInCents: 34800, discountAppliedInCents: 200 },
+        { orderItemId: 'item-2', productVariantId: 'pv-2', quantity: 1, priceInCents: 44900 },
+      ];
+
+      await service.partialRefund('order-1', itemsWithDiscount, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(capturedUpdates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            where: { id: 'item-1' },
+            data: { cancelledQuantity: { increment: 2 }, cancelledDiscountInCents: { increment: 200 } },
+          }),
+          expect.objectContaining({
+            where: { id: 'item-2' },
+            data: { cancelledQuantity: { increment: 1 }, cancelledDiscountInCents: { increment: 0 } },
           }),
         ]),
       );

@@ -1176,7 +1176,13 @@ export class PaymentsService {
    */
   async partialRefund(
     orderId: string,
-    items: Array<{ orderItemId: string; productVariantId: string; quantity: number; priceInCents: number }>,
+    items: Array<{
+      orderItemId: string;
+      productVariantId: string;
+      quantity: number;
+      priceInCents: number;
+      discountAppliedInCents?: number;
+    }>,
     currentOrderStatus: OrderStatus,
     actor: string,
   ): Promise<void> {
@@ -1226,7 +1232,10 @@ export class PaymentsService {
       for (const item of items) {
         await tx.orderItem.update({
           where: { id: item.orderItemId },
-          data: { cancelledQuantity: { increment: item.quantity } },
+          data: {
+            cancelledQuantity: { increment: item.quantity },
+            cancelledDiscountInCents: { increment: item.discountAppliedInCents ?? 0 },
+          },
         });
         await tx.productVariant.update({
           where: { id: item.productVariantId },
