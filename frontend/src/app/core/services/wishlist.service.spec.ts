@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { PLATFORM_ID } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { WishlistService, WishlistItemData } from './wishlist.service';
 import { AuthService } from './auth.service';
 import { LOCAL_STORAGE } from '../tokens/storage.tokens';
@@ -174,6 +174,115 @@ describe('WishlistService', () => {
       const serviceB = TestBed.inject(WishlistService);
 
       expect(serviceB.items()).toEqual([]);
+    });
+  });
+
+  // ── Guest wishlist revalidation against backend isActive filter ──────────
+  // Guards the fix: a frozen localStorage snapshot must never be trusted as
+  // ground truth for purchasability — each guest item is re-fetched by slug
+  // from the public products endpoint, which 404s for inactive products.
+
+  describe('guest wishlist revalidation', () => {
+    let httpMock: HttpTestingController;
+
+    afterEach(() => httpMock.verify());
+
+    it('replaces the stale snapshot with fresh data from the products endpoint', () => {
+      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      const freshProduct = {
+        id: 'product-1',
+        name: 'Rose Oud 50ml (Updated)',
+        slug: 'rose-oud',
+        brand: 'Aromaterie',
+        gender: 'unisex',
+        catalogNumber: 'RO-50',
+        images: [{ url: 'https://cdn.example.com/rose-oud.jpg' }],
+        variants: [{ id: 'v-1', label: '50ml', priceInCents: 19900, stock: 3 }],
+        description: 'internal-only field that must not leak into the wishlist cache',
+      };
+      httpMock.expectOne('/api/products/rose-oud').flush(freshProduct);
+
+      expect(service.items()).toEqual([
+        {
+          id: 'product-1',
+          name: 'Rose Oud 50ml (Updated)',
+          slug: 'rose-oud',
+          brand: 'Aromaterie',
+          gender: 'unisex',
+          catalogNumber: 'RO-50',
+          images: [{ url: 'https://cdn.example.com/rose-oud.jpg' }],
+          variants: [{ id: 'v-1', label: '50ml', priceInCents: 19900, stock: 3 }],
+          notifyOnRestock: false,
+        },
+      ]);
+    });
+
+    it('drops an item whose product has been deactivated (404 from backend)', () => {
+      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectOne('/api/products/rose-oud').flush(null, {
+        status: 404,
+        statusText: 'Not Found',
+      });
+
+      expect(service.items()).toEqual([]);
+    });
+
+    it('persists the revalidated items back to the injected storage token', () => {
+      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectOne('/api/products/rose-oud').flush(null, {
+        status: 404,
+        statusText: 'Not Found',
+      });
+
+      expect(mockStorage.setItem).toHaveBeenCalledWith(STORAGE_KEY, '[]');
+    });
+
+    it('revalidates every guest item independently — one 404 does not drop the others', () => {
+      const second: WishlistItemData = {
+        id: 'product-2',
+        name: 'Amber Oud',
+        slug: 'amber-oud',
+        notifyOnRestock: false,
+      };
+      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM, second]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectOne('/api/products/rose-oud').flush(null, { status: 404, statusText: 'Not Found' });
+      httpMock.expectOne('/api/products/amber-oud').flush({
+        id: 'product-2',
+        name: 'Amber Oud',
+        slug: 'amber-oud',
+      });
+
+      expect(service.items()).toEqual([
+        { id: 'product-2', name: 'Amber Oud', slug: 'amber-oud', notifyOnRestock: false },
+      ]);
+    });
+
+    it('makes no HTTP request when the guest wishlist is empty', () => {
+      setup('browser', {});
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectNone('/api/products/rose-oud');
+    });
+
+    it('makes no HTTP request on the server platform (SSR)', () => {
+      setup('server', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectNone('/api/products/rose-oud');
     });
   });
 });
