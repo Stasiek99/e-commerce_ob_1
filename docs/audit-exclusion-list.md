@@ -57,6 +57,10 @@ After each round wraps up, fold its resolved findings into the relevant category
 - `approveFraudReview` dispatched invoice/confirmation notifications purely in-process with no `OutboxMessage` row — a crash between commit and send permanently lost them, with no recovery path
 - `reconcilePendingPayments` only selects payments with a non-null `stripeCheckoutSessionId` — orders whose `initiatePayment` failed before any session was created are invisible to reconciliation, a slow invisible leak of stock/coupon capacity
 - `handlePaymentFailure` stock-restore credited the full original `quantity` instead of `quantity - cancelledQuantity`, unlike the other three restore sites in the module (dead code at the time, but a landmine for the next state-machine change)
+- `sweepOrphanedPendingOrders` stock-restore had the same raw-`quantity` bug as `handlePaymentFailure`, missed in the same file ~250 lines away — fixed to subtract `cancelledQuantity` too
+- Partial-refund Stripe idempotency key built only from the current call's `orderItemId:quantity` pairs, no sequence/running-total — collided across the 1st and 3rd cancellation call in a 3+-call sequence, returning Stripe's cached 1st-call result while the DB recorded a second real refund — fixed by disambiguating the key across sequential cancellations
+- No zero-decimal-currency guard — every money computation assumed `STRIPE_CURRENCY` is always a 2-decimal minor unit; fixed to reject non-2-decimal currencies (JPY, KRW, VND, CLP, etc.) at boot via `config.validation.ts`
+- `alreadyCancelledDiscount` recomputed the *ideal* `Math.round` discount for previously-cancelled units instead of the actual `Math.floor`-applied amount, drifting the refund a few grosz across 3+ sequential partial cancellations — fixed to persist and reuse the actual discount applied per cancelled unit
 
 ## Cart
 - Stock oversell race (`addItem` no transaction) — original finding, later found to be structurally broken under pgbouncer (see above)
@@ -67,6 +71,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - 4-hour cart cleanup TTL deletes items during active 24h Stripe session window
 - `CartItem→ProductVariant` FK `onDelete: Cascade` (asymmetric vs `OrderItem: Restrict`) — hard variant delete silently destroys carts
 - Product deactivation doesn't purge carts / doesn't cascade to variants — deactivated/soft-deleted items remain checkout-eligible
+- Wishlist `addItem` skipped the `isActive` product check that `mergeGuestItems` already enforced, letting a deactivated product get wishlisted and sit there permanently — fixed to check `isActive` on both `addItem` and `getItems`
 
 ## Orders
 - Guest `guestEmail` not validated (`@IsEmail` missing)
@@ -176,6 +181,9 @@ After each round wraps up, fold its resolved findings into the relevant category
 - EU Omnibus 30-day price history: gating logic exists but not populated via seed/bulk import (falls back to current price as "lowest")
 - Product slug P2002 unhandled 500
 - Review form never passes `orderId` (review submission always 404s) — separately, `markHelpful` unauthenticated/gameable; review bombing no email-verification gate; `Review.@@unique` blocks resubmission after rejection; `verifiedPurchase` nullified silently on order hard-delete; review author last-name initial exposed publicly
+- `resubmit()` reset review `status`/body/rating but never cleared `helpfulCount` or deleted stale `ReviewHelpfulVote` rows — a re-approved review kept a helpful-count inherited from different content, and prior voters could never vote again — fixed to reset both in the same transaction
+- Real stock mutations (checkout decrements, cancellation/payment-failure/dispute restores — 11 call sites across orders/payments) never published to the `stock:updates` Redis channel or fired the back-in-stock notifier, only the admin manual stock-edit endpoint did — fixed by centralizing the publish + notifier check into one helper called from every mutation site
+- Category product filter only descended one level of `children`, silently dropping products assigned to grandchild categories despite the schema/tree supporting arbitrary depth — fixed to recursively collect all descendant slugs
 
 ## Frontend / Angular / SSR
 - SSR `localStorage` singleton cross-request leakage (fixed) — WishlistService SSR hydration mismatch (separate, still flagged)
@@ -209,6 +217,9 @@ After each round wraps up, fold its resolved findings into the relevant category
 - Address deletion has no auto-promotion of new default
 - Wishlist auto-redirect away from its own empty state
 - GA4 purchase value computed from mutable `sessionStorage`
+- `STATUS_LABELS` map omitted `DISPUTE_HOLD`/`DISPUTE_LOST_REVIEW`, falling back to the raw enum string with no badge color — fixed by adding Polish labels and badge colors for both
+- `canCancel()` included `PARTIALLY_REFUNDED` in its allowed list, showing an active cancel button the backend always rejected with a 409 — fixed by removing it (already correctly handled by the separate `canPartialCancel()`)
+- `canDownloadInvoice()` only excluded `PENDING_PAYMENT`/`CANCELLED`, so the invoice button rendered for `FRAUD_REVIEW`/`DISPUTE_HOLD` orders the backend's `nonInvoiceable` list refuses to invoice — fixed to mirror the backend list exactly
 
 ## Accessibility (EAA/WCAG) — Round 9, large cluster, all excluded
 - No skip-navigation link; no per-route `<title>`/TitleStrategy; DPD modal & lightbox no focus trap/`aria-modal`/focus restore; form errors not `role="alert"`; hero scroll-jacking inaccessible to keyboard + no `prefers-reduced-motion`; low-contrast text (cookie consent button, footer, street-hint warning); cart/wishlist badge no accessible name; lightbox `tabindex` present but never focused; in-stock filter checkbox no label association; `<a role="button">` without `href` not focusable; mobile nav no focus trap; `<time>` missing `datetime`; Taiga UI label association unverified
@@ -221,6 +232,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - Checkout success/failure pages not `noindex`
 - No `robots.txt`; `/cart` prerendered and indexable
 - `sitemap.xml` committed to git as stale artifact
+- `generate-sitemap.mjs`'s `fetchJson` caught any fetch error/timeout and silently returned `null`, shipping a near-empty 4-static-route sitemap with no build failure if Railway was cold-starting during the Vercel build — fixed with retry+backoff and a hard build failure if the route count never rises above the static-only baseline
 - Prerendered `/products` embeds stale build-time catalog data
 - Product detail 404 not handled — SSR returns blank 200 (soft-404)
 - No `preconnect` hints for InPost/Turnstile/GTM origins
@@ -251,6 +263,10 @@ After each round wraps up, fold its resolved findings into the relevant category
 - No documented rollback runbook for "migration applied cleanly, new app code is broken" — Prisma migrations are forward-only and a naive "redeploy previous version" click can be unsafe; fixed with `deploy-rollback-runbook.md`
 - Node engine range was unbounded (`>=20`) with no `.nvmrc`/pinned Railway runtime — Railway (Railpack, reads `engines.node`) and CI (`actions/setup-node`, reads `.nvmrc`) could silently drift to different Node versions; fixed by pinning both to the same exact version
 - `backend/coverage/` had 101 files tracked in git despite being gitignored, with machine-specific absolute paths causing a 100%-changed diff and guaranteed merge conflicts on every test run; fixed via `git rm -r --cached`
+- Playwright e2e suite (`pnpm test:e2e`) existed and was fully wired but CI never ran it — a regression breaking checkout end-to-end could merge with a fully green run; fixed by adding a CI `e2e` job that boots Postgres+Redis+backend with mocked carrier/Stripe/Supabase credentials and runs the suite against it
+- `cleanupStaleShippingLabels` was the only cron job (of 10) with no distributed lock — every replica raced duplicate deletes/updates on the same stale rows every Monday 03:00; fixed by adding the same `SET NX` Redis lock guard the other 9 crons use
+- Dependabot had no `github-actions` ecosystem entry and skipped the root workspace + `packages/shared-types` — fixed by adding both npm directories plus a `github-actions, directory: /` entry
+- `package.json`'s ~30-entry `pnpm.overrides` CVE-remediation block (tar, hono, vite, esbuild, ws, qs, multer, etc.) was added without regenerating `pnpm-lock.yaml` to match, so `pnpm install --frozen-lockfile` (used by Railway/Vercel/CI) failed immediately on `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` — fixed by pairing each override addition with a lockfile regeneration going forward; the untracked `audit-prod.txt`/`audit-full.json` CVE dumps that motivated the overrides are public data with no exposure risk but still have **no `.gitignore` entry** — open
 
 ## GDPR / Privacy / Data Retention
 - `deleteAccount` doesn't scrub `ReturnRequest` PII; `snapshotStreet`/`City`/`PostalCode` never nulled in erasure (only name/email/phone/company/nip)
@@ -277,4 +293,4 @@ After each round wraps up, fold its resolved findings into the relevant category
 
 ---
 
-This list spans ~301 distinct findings (21 folded in from round 12). Each new audit round should avoid restating any of the above and focus on genuinely new angles.
+This list spans ~317 distinct findings (16 folded in from round 13). Each new audit round should avoid restating any of the above and focus on genuinely new angles.

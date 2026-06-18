@@ -5,11 +5,12 @@ import { Router } from '@angular/router';
 import { Observable, throwError, timer } from 'rxjs';
 import { catchError, finalize, retry, shareReplay, tap } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
+import { Role } from '@fragrance-store/shared-types';
 
 interface User {
   id: string;
   email: string;
-  role: string;
+  role: Role;
   firstName?: string;
   lastName?: string;
   phone?: string;
@@ -49,7 +50,7 @@ export class AuthService {
 
   readonly isAuthenticated = computed(() => this._accessToken() !== null);
   readonly currentUser = this._user.asReadonly();
-  readonly isAdmin = computed(() => this._user()?.role === 'ADMIN');
+  readonly isAdmin = computed(() => this._user()?.role === Role.ADMIN);
 
   getAccessToken(): string | null {
     return this._accessToken();
