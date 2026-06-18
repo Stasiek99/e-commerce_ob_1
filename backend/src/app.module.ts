@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard, ThrottlerOptions } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
@@ -36,6 +36,18 @@ import { PINO_REDACT_PATHS, PINO_SERIALIZERS } from './logger-redact-paths';
 
 export { PINO_REDACT_PATHS };
 
+// Must include a throttler literally named 'default' — every @Throttle({ default: { ttl, limit } })
+// decorator in the app (auth, orders, payments, returns, reviews, users) overrides THIS throttler
+// by name. ThrottlerGuard only resolves route-level overrides for names present in this array, so
+// without an entry named 'default' those decorators silently no-op and only burst/sustained apply.
+export const THROTTLER_CONFIGS: ThrottlerOptions[] = [
+  { name: 'default',     ttl: 60_000, limit: 100 },  // generic baseline per IP; routes tighten via @Throttle({ default: {...} })
+  { name: 'burst',       ttl: 1_000,  limit: 5  },  // 5 req/s per IP
+  { name: 'sustained',   ttl: 60_000, limit: 60 },  // 60 req/min per IP
+  { name: 'coupon-anon', ttl: 60_000, limit: 3  },  // 3 req/min for unauthenticated coupon validation
+  { name: 'coupon-auth', ttl: 60_000, limit: 10 },  // 10 req/min for authenticated coupon validation
+];
+
 @Module({
   imports: [
     SentryModule.forRoot(),
@@ -65,12 +77,7 @@ export { PINO_REDACT_PATHS };
       useFactory: (config: ConfigService, redis: IORedis) => {
         const isProd = config.get<string>('NODE_ENV') === 'production';
         return {
-          throttlers: [
-            { name: 'burst',       ttl: 1_000,  limit: 5  },  // 5 req/s per IP
-            { name: 'sustained',   ttl: 60_000, limit: 60 },  // 60 req/min per IP
-            { name: 'coupon-anon', ttl: 60_000, limit: 3  },  // 3 req/min for unauthenticated coupon validation
-            { name: 'coupon-auth', ttl: 60_000, limit: 10 },  // 10 req/min for authenticated coupon validation
-          ],
+          throttlers: THROTTLER_CONFIGS,
           // Reuse the shared REDIS_CLIENT (retryStrategy + error handler already
           // wired). Avoids a second disconnected IORedis connection whose silent
           // failure would degrade per-replica in-memory throttling for all replicas.
