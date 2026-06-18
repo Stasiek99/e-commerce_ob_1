@@ -131,6 +131,16 @@ Copy `.env.example` to `backend/.env`. Required external services: PostgreSQL/Su
 
 ## Deployment
 
+### Branch model
+
+`develop` is the real integration branch — all PRs land there and CI (`.github/workflows/ci.yml`) gates merges into it. `main` is a **deploy-only mirror of develop**: Railway and Vercel are configured to track `main`, but no work happens directly on it.
+
+Keeping `main` in sync is automated by [`.github/workflows/promote-main.yml`](.github/workflows/promote-main.yml): a weekly scheduled job (Mondays 06:00 UTC) plus a manual `workflow_dispatch` trigger. It only fast-forwards `main` to `develop`'s tip if the latest CI run for `develop`'s current commit concluded `success`; otherwise it's a silent no-op (logged as a `::notice::`, not a failure). This exists because `main` was previously promoted manually and drifted ~2 months stale (rounds 10-13 hardening sat unmerged into prod) — see `docs/audit-round-14.md`.
+
+If you need to deploy sooner than the weekly schedule, trigger the workflow manually from the Actions tab instead of merging directly into `main`.
+
+**Known gap — no branch protection on `main` or `develop`:** this repo is private on GitHub's Free plan, which 403s both the classic branch-protection API and the newer rulesets API ("Upgrade to GitHub Pro or make this repository public to enable this feature"). Practically, nothing currently stops a force-push, direct push, or branch deletion on `main`/`develop` outside of this documented process. Closing this gap requires either upgrading to GitHub Pro/Team or making the repo public — a cost/visibility tradeoff for the repo owner to decide, not something to silently work around. Once available, `main` should require the `build-and-test` and `e2e` status checks, disallow force-pushes, and disallow deletion.
+
 ### Backend — Railway
 
 Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-detects the pnpm monorepo, runs `pnpm install` from the root (so `packages/shared-types` resolves via workspace), then:
