@@ -353,6 +353,24 @@ export class ReturnsService {
       );
     }
 
+    // A return request can sit APPROVED for days awaiting the customer's physical
+    // return shipment. If Stripe opens a dispute in that window, handleDisputeCreated
+    // flips the order to DISPUTE_HOLD (or FRAUD_REVIEW/DISPUTE_LOST_REVIEW) directly,
+    // bypassing the normal transition guard — re-check status here, right before the
+    // refund fires, so we never refund a payment_intent that is simultaneously the
+    // subject of an open chargeback (undermines dispute evidence, risks a double-debit).
+    const disputeBlockedStatuses: string[] = [
+      OrderStatus.DISPUTE_HOLD,
+      OrderStatus.FRAUD_REVIEW,
+      OrderStatus.DISPUTE_LOST_REVIEW,
+    ];
+    if (disputeBlockedStatuses.includes(order.status)) {
+      throw new ConflictException(
+        `Cannot refund order in status ${order.status} — resolve the active dispute or fraud ` +
+        `review before issuing a return refund for request ${id}.`,
+      );
+    }
+
     // Issues Stripe partial refund for the returned items, restores their stock,
     // and sets order.status → PARTIALLY_REFUNDED or REFUNDED.
     // Throws on Stripe error — intentionally propagated so the return stays APPROVED.
