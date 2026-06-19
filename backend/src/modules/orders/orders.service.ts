@@ -795,6 +795,12 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
+    if (order.status === OrderStatus.DISPUTE_LOST_REVIEW) {
+      throw new ConflictException(
+        'Twoje zamówienie czeka na potwierdzenie przez obsługę po przegranym sporze płatniczym — skontaktuj się z obsługą.',
+      );
+    }
+
     const isRefund = ([OrderStatus.PAID, OrderStatus.PROCESSING] as OrderStatus[]).includes(order.status);
 
     if (order.status === OrderStatus.PENDING_PAYMENT) {
@@ -1320,6 +1326,7 @@ export class OrdersService implements OnModuleInit {
       OrderStatus.PARTIALLY_REFUNDED,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
+      OrderStatus.DISPUTE_LOST_REVIEW,
     ];
 
     await Promise.all(

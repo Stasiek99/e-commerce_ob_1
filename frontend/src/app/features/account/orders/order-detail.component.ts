@@ -157,6 +157,7 @@ const STATUS_LABELS: Record<string, string> = {
           <div class="cancel-zone">
             @if (!confirming()) {
               <button tuiButton appearance="secondary" size="m" type="button"
+                      [disabled]="actionInFlight()"
                       (click)="confirming.set(true)">
                 Anuluj zamówienie
               </button>
@@ -177,11 +178,11 @@ const STATUS_LABELS: Record<string, string> = {
                 </tui-textfield>
                 <div class="confirm-actions">
                   <button tuiButton appearance="negative" size="m" type="button"
-                          [disabled]="cancelling()" (click)="doCancel()">
+                          [disabled]="actionInFlight()" (click)="doCancel()">
                     {{ cancelling() ? 'Anulowanie…' : 'Tak, anuluj' }}
                   </button>
                   <button tuiButton appearance="secondary" size="m" type="button"
-                          [disabled]="cancelling()" (click)="confirming.set(false)">
+                          [disabled]="actionInFlight()" (click)="confirming.set(false)">
                     Wróć
                   </button>
                 </div>
@@ -197,6 +198,7 @@ const STATUS_LABELS: Record<string, string> = {
         @if (canPartialCancel(order()!.status) && !partialCancelling()) {
           <div class="partial-cancel-trigger">
             <button tuiButton appearance="secondary" size="m" type="button"
+                    [disabled]="actionInFlight()"
                     (click)="startPartialCancel()">
               Anuluj wybrane produkty
             </button>
@@ -238,12 +240,12 @@ const STATUS_LABELS: Record<string, string> = {
 
             <div class="partial-actions">
               <button tuiButton appearance="negative" size="m" type="button"
-                      [disabled]="refundPreview() === 0 || submittingPartial()"
+                      [disabled]="refundPreview() === 0 || actionInFlight()"
                       (click)="doPartialCancel()">
                 {{ submittingPartial() ? 'Przetwarzanie…' : 'Zatwierdź zwrot' }}
               </button>
               <button tuiButton appearance="secondary" size="m" type="button"
-                      [disabled]="submittingPartial()"
+                      [disabled]="actionInFlight()"
                       (click)="partialCancelling.set(false)">
                 Anuluj
               </button>
@@ -397,6 +399,10 @@ export class OrderDetailComponent implements OnInit {
   readonly partialCancelling = signal(false);
   readonly submittingPartial = signal(false);
   readonly downloadingInvoice = signal(false);
+  // Shared across the full-cancel and partial-cancel zones — without it, a user
+  // could fire "cancel whole order" then submit a partial cancellation for the
+  // same order before the first request resolves, racing two backend code paths.
+  readonly actionInFlight = signal(false);
 
   cancelReason: string | null = null;
   readonly cancelReasonItems = CANCEL_REASON_ITEMS;
@@ -473,16 +479,19 @@ export class OrderDetailComponent implements OnInit {
     if (!items.length) return;
 
     this.submittingPartial.set(true);
+    this.actionInFlight.set(true);
     this.http.post(`${environment.apiUrl}/orders/${id}/cancel-items`, { items }).subscribe({
       next: () => {
         this.partialCancelling.set(false);
         this.submittingPartial.set(false);
+        this.actionInFlight.set(false);
         this.toast.success('Wybrane produkty zostały anulowane. Zwrot pojawi się w ciągu 5–10 dni roboczych.');
         this.load();
       },
       error: (err) => {
         this.toast.error(err.error?.message ?? 'Nie udało się anulować wybranych produktów.');
         this.submittingPartial.set(false);
+        this.actionInFlight.set(false);
       },
     });
   }
@@ -494,11 +503,13 @@ export class OrderDetailComponent implements OnInit {
   doCancel(): void {
     const id = this.route.snapshot.paramMap.get('id')!;
     this.cancelling.set(true);
+    this.actionInFlight.set(true);
     const body = this.cancelReason ? { reason: this.cancelReason } : {};
     this.http.post(`${environment.apiUrl}/orders/${id}/cancel`, body).subscribe({
       next: () => {
         this.confirming.set(false);
         this.cancelling.set(false);
+        this.actionInFlight.set(false);
         this.cancelReason = null;
         this.toast.success('Zamówienie zostało anulowane.');
         this.load();
@@ -506,6 +517,7 @@ export class OrderDetailComponent implements OnInit {
       error: (err) => {
         this.toast.error(err.error?.message ?? 'Nie udało się anulować zamówienia.');
         this.cancelling.set(false);
+        this.actionInFlight.set(false);
       },
     });
   }

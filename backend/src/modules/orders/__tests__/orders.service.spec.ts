@@ -2641,6 +2641,27 @@ describe('OrdersService', () => {
       expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
     });
 
+    it('throws ConflictException when order is in DISPUTE_LOST_REVIEW — admin must confirm non-delivery first', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('does not issue refund or expire session when order is in DISPUTE_LOST_REVIEW', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        ...mockOrderWithItems,
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
+      });
+
+      await expect(service.cancelByUser('order-1', 'user-1')).rejects.toThrow(ConflictException);
+
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(paymentsService.expirePendingCheckoutSession).not.toHaveBeenCalled();
+    });
+
     it('issues full refund when order is PROCESSING (PARTIALLY_REFUNDED guard does not affect PROCESSING)', async () => {
       prisma.order.findFirst.mockResolvedValue({
         ...mockOrderWithItems,
@@ -2993,6 +3014,19 @@ describe('OrdersService', () => {
       expect(result.succeeded).toBe(0);
       expect(result.failed).toHaveLength(1);
       expect(result.failed[0].orderNumber).toBe('ORD-001');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('blocks DISPUTE_LOST_REVIEW orders — admin must confirm non-delivery via the order status endpoint first', async () => {
+      const orders = [makeOrder('o-1', 'ORD-001', OrderStatus.DISPUTE_LOST_REVIEW)];
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.bulkCancel(['o-1']);
+
+      expect(result.succeeded).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0].orderNumber).toBe('ORD-001');
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 

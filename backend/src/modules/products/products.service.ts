@@ -539,12 +539,39 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     stock?: number;
     isActive?: boolean;
   }) {
-    const variant = await this.prisma.productVariant.update({ where: { id: variantId }, data });
+    const { variant, previousStock } = await this.prisma.$transaction(async (tx) => {
+      let previousStock: number | undefined;
+      if (data.stock !== undefined) {
+        // Same FOR UPDATE pattern as updateVariantStock — holds the row lock so the
+        // before-value reported to notifyStockChange can't be clobbered by a concurrent
+        // mutation landing between this read and the write below.
+        const rows = await tx.$queryRaw<Array<{ stock: number }>>`
+          SELECT stock FROM "product_variants" WHERE id = ${variantId} FOR UPDATE
+        `;
+        const current = rows[0];
+        if (!current) throw new NotFoundException('Variant not found');
+        previousStock = current.stock;
+      }
+      const variant = await tx.productVariant.update({ where: { id: variantId }, data });
+      return { variant, previousStock };
+    });
+
     if (data.priceInCents !== undefined) {
       await this.prisma.productVariantPriceHistory.create({
         data: { variantId: variant.id, priceInCents: variant.priceInCents },
       });
     }
+
+    if (previousStock !== undefined) {
+      this.notifyStockChange({
+        variantId: variant.id,
+        productId: variant.productId,
+        variantLabel: variant.label,
+        previousStock,
+        newStock: variant.stock,
+      });
+    }
+
     return variant;
   }
 
@@ -569,26 +596,37 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateVariantStock(variantId: string, dto: { set?: number; adjustment?: number }, actorId?: string) {
-    const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
-    if (!variant) throw new NotFoundException('Variant not found');
+    const { updated, previousStock } = await this.prisma.$transaction(async (tx) => {
+      // SELECT ... FOR UPDATE holds the row lock for this transaction's lifetime, so a
+      // concurrent adjustment call blocks here and reads the post-commit stock — closing
+      // the TOCTOU window a separate findUnique + update left open (two concurrent reads
+      // of the same stale stock, both clobbering each other's write).
+      const rows = await tx.$queryRaw<Array<{ stock: number; productId: string; label: string }>>`
+        SELECT stock, "productId", label FROM "product_variants" WHERE id = ${variantId} FOR UPDATE
+      `;
+      const current = rows[0];
+      if (!current) throw new NotFoundException('Variant not found');
 
-    const newStock = dto.set !== undefined
-      ? dto.set
-      : Math.max(0, variant.stock + (dto.adjustment ?? 0));
+      const newStock = dto.set !== undefined
+        ? dto.set
+        : Math.max(0, current.stock + (dto.adjustment ?? 0));
 
-    this.logger.log({ variantId, before: variant.stock, after: newStock, actor: actorId ?? 'unknown' }, 'stock_update');
+      const updated = await tx.productVariant.update({
+        where: { id: variantId },
+        data: { stock: newStock },
+      });
 
-    const updated = await this.prisma.productVariant.update({
-      where: { id: variantId },
-      data: { stock: newStock },
+      return { updated, previousStock: current.stock };
     });
+
+    this.logger.log({ variantId, before: previousStock, after: updated.stock, actor: actorId ?? 'unknown' }, 'stock_update');
 
     this.notifyStockChange({
       variantId,
-      productId: variant.productId,
-      variantLabel: variant.label,
-      previousStock: variant.stock,
-      newStock,
+      productId: updated.productId,
+      variantLabel: updated.label,
+      previousStock,
+      newStock: updated.stock,
     });
     this.invalidateProductCaches();
     return updated;
@@ -620,6 +658,10 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
    * delta batch for the same variant may have already committed its own
    * change in between, making a post-commit read indistinguishable from
    * this batch's own effect.
+   *
+   * When a batch carries more than one delta for the same variant, entries
+   * must be in transaction-commit order — aggregation below verifies this
+   * rather than assuming it silently.
    */
   async notifyStockChangesByDelta(deltas: Array<{ variantId: string; delta: number; newStock: number }>): Promise<void> {
     if (!deltas.length) return;
@@ -630,6 +672,21 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     const aggregated = new Map<string, { delta: number; newStock: number }>();
     for (const { variantId, delta, newStock } of deltas) {
       const existing = aggregated.get(variantId);
+      if (existing) {
+        // This entry's own previousStock (newStock - delta) must equal the prior
+        // entry's newStock — true only if entries for this variant are in
+        // transaction-commit order. Every current caller satisfies this by
+        // construction (sequential for loops), but nothing in the signature
+        // enforces it — a future caller built around Promise.all could violate
+        // it and silently mis-derive previousStock below. Fail loudly instead.
+        const impliedPreviousStock = newStock - delta;
+        if (impliedPreviousStock !== existing.newStock) {
+          throw new Error(
+            `notifyStockChangesByDelta: deltas for variant ${variantId} are out of transaction-commit order ` +
+              `(this entry implies previous stock ${impliedPreviousStock}, but the prior entry in this batch ended at ${existing.newStock})`,
+          );
+        }
+      }
       aggregated.set(variantId, {
         delta: (existing?.delta ?? 0) + delta,
         newStock, // later entries reflect the cumulative post-update value for this variant
@@ -870,7 +927,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
   // and showing the current promotional price as the verified minimum would be
   // misleading under UOKiK guidance. Such variants have their promo fields
   // suppressed until 30 days of history accumulate.
-  private async attachOmnibusData<T extends {
+  async attachOmnibusData<T extends {
     avgRating?: Prisma.Decimal | number | null;
     variants: Array<{ id: string; priceInCents: number; compareAtPriceInCents?: number | null }>;
   }>(products: T[]): Promise<T[]> {

@@ -133,14 +133,30 @@ export class WishlistService {
             variants: fresh.variants,
             notifyOnRestock: item.notifyOnRestock,
           })),
-          catchError(() => of(null)),
+          catchError(() => of({ id: item.id, invalid: true as const })),
         ),
       ),
     ).subscribe((results) => {
-      const valid = results.filter((r): r is WishlistItemData => r !== null);
-      this._items.set(valid);
-      this.saveToStorage();
       this.loading.set(false);
+
+      // Auth state flipped to true while these requests were in flight — syncFromBackend
+      // already replaced `_items` with the authenticated set, so applying this stale
+      // guest-snapshot result here would clobber it.
+      if (this.auth.isAuthenticated()) return;
+
+      const refreshed = new Map<string, WishlistItemData>();
+      const invalidIds = new Set<string>();
+      for (const r of results) {
+        if ('invalid' in r) invalidIds.add(r.id);
+        else refreshed.set(r.id, r);
+      }
+
+      // Merge into the *current* items rather than replacing outright, so a toggle()
+      // that landed after this revalidation started is never discarded.
+      this._items.update((current) =>
+        current.filter((p) => !invalidIds.has(p.id)).map((p) => refreshed.get(p.id) ?? p),
+      );
+      this.saveToStorage();
     });
   }
 

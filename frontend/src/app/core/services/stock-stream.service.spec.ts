@@ -80,5 +80,54 @@ describe('StockStreamService', () => {
       sub.unsubscribe();
       expect(mockSource.close).toHaveBeenCalledTimes(1);
     });
+
+    // ── Idle-reconnect signal ────────────────────────────────────────────────
+    // Backend sends { reconnect: true } then completes the response after
+    // SSE_IDLE_TIMEOUT_MS. EventSource's automatic reconnect only covers
+    // transient network drops, not a response the server closed on purpose,
+    // so the service must open a fresh connection itself.
+
+    it('does not forward the idle-reconnect signal to subscribers as a stock payload', () => {
+      const next = jest.fn();
+      TestBed.inject(StockStreamService).connect(['var-1']).subscribe(next);
+
+      mockSource.onmessage!({ data: JSON.stringify({ reconnect: true }) } as MessageEvent);
+
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('closes the stale EventSource and opens a fresh one on the idle-reconnect signal', () => {
+      TestBed.inject(StockStreamService).connect(['var-1']).subscribe();
+      expect(global.EventSource).toHaveBeenCalledTimes(1);
+
+      mockSource.onmessage!({ data: JSON.stringify({ reconnect: true }) } as MessageEvent);
+
+      expect(mockSource.close).toHaveBeenCalledTimes(1);
+      expect(global.EventSource).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps delivering stock updates after an idle-reconnect cycle', (done) => {
+      const updates = [{ id: 'var-1', stock: 7 }];
+
+      TestBed.inject(StockStreamService)
+        .connect(['var-1'])
+        .subscribe((data) => {
+          expect(data).toEqual(updates);
+          done();
+        });
+
+      mockSource.onmessage!({ data: JSON.stringify({ reconnect: true }) } as MessageEvent);
+      mockSource.onmessage!({ data: JSON.stringify(updates) } as MessageEvent);
+    });
+
+    it('does not treat a real stock-update array as the reconnect signal', () => {
+      const next = jest.fn();
+      TestBed.inject(StockStreamService).connect(['var-1']).subscribe(next);
+
+      mockSource.onmessage!({ data: JSON.stringify([{ id: 'var-1', stock: 5 }]) } as MessageEvent);
+
+      expect(next).toHaveBeenCalledWith([{ id: 'var-1', stock: 5 }]);
+      expect(mockSource.close).not.toHaveBeenCalled();
+    });
   });
 });

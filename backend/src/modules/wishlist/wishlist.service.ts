@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ProductsService } from '../products/products.service';
 
 @Injectable()
 export class WishlistService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly productsService: ProductsService,
+  ) {}
 
   async getItems(userId: string) {
     const items = await this.prisma.wishlistItem.findMany({
@@ -18,7 +22,7 @@ export class WishlistService {
             },
             variants: {
               where: { isActive: true },
-              select: { id: true, label: true, priceInCents: true, stock: true },
+              select: { id: true, label: true, priceInCents: true, compareAtPriceInCents: true, stock: true },
               orderBy: { priceInCents: 'asc' },
             },
           },
@@ -27,15 +31,22 @@ export class WishlistService {
       orderBy: { addedAt: 'desc' },
     });
 
-    return items.map(({ product, notifyOnRestock }) => ({
-      id: product.id,
-      name: product.name,
-      slug: product.slug,
-      brand: product.brand,
-      images: product.images.map((img) => ({ url: img.url })),
-      variants: product.variants,
-      notifyOnRestock,
-    }));
+    const enrichedProducts = await this.productsService.attachOmnibusData(items.map((i) => i.product));
+
+    return items.map(({ notifyOnRestock }, idx) => {
+      const product = enrichedProducts[idx];
+      return {
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        brand: product.brand,
+        gender: product.gender,
+        catalogNumber: product.catalogNumber,
+        images: product.images.map((img) => ({ url: img.url })),
+        variants: product.variants,
+        notifyOnRestock,
+      };
+    });
   }
 
   async addItem(userId: string, productId: string) {
