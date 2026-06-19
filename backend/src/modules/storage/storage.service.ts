@@ -17,6 +17,22 @@ export class StorageService {
     );
   }
 
+  private async uploadWithRetry(
+    bucket: string,
+    path: string,
+    body: Buffer,
+    options: { contentType: string; upsert: boolean },
+    errorContext: string,
+    maxAttempts = 3,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const { error } = await this.supabase.storage.from(bucket).upload(path, body, options);
+      if (!error) return;
+      if (attempt === maxAttempts - 1) throw new Error(`${errorContext} failed: ${error.message}`);
+      await new Promise<void>((r) => setTimeout(r, 500 * 2 ** attempt));
+    }
+  }
+
   async uploadProductImage(
     productId: string,
     file: Express.Multer.File,
@@ -30,14 +46,13 @@ export class StorageService {
     const ext = extMap[verifiedMime];
     const path = `${productId}/${Date.now()}.${ext}`;
 
-    const { error } = await this.supabase.storage
-      .from(PRODUCT_IMAGES_BUCKET)
-      .upload(path, file.buffer, {
-        contentType: verifiedMime,
-        upsert: false,
-      });
-
-    if (error) throw new Error(`Storage upload failed: ${error.message}`);
+    await this.uploadWithRetry(
+      PRODUCT_IMAGES_BUCKET,
+      path,
+      file.buffer,
+      { contentType: verifiedMime, upsert: false },
+      'Storage upload',
+    );
 
     const { data } = this.supabase.storage
       .from(PRODUCT_IMAGES_BUCKET)
@@ -52,14 +67,13 @@ export class StorageService {
   async uploadShippingLabel(pdfBuffer: Buffer, filename: string): Promise<string> {
     const path = `labels/${filename}`;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const { error } = await this.supabase.storage
-        .from(SHIPPING_LABELS_BUCKET)
-        .upload(path, pdfBuffer, { contentType: 'application/pdf', upsert: true });
-      if (!error) break;
-      if (attempt === 2) throw new Error(`Label upload failed: ${error.message}`);
-      await new Promise<void>((r) => setTimeout(r, 500 * 2 ** attempt));
-    }
+    await this.uploadWithRetry(
+      SHIPPING_LABELS_BUCKET,
+      path,
+      pdfBuffer,
+      { contentType: 'application/pdf', upsert: true },
+      'Label upload',
+    );
 
     return path;
   }
@@ -83,11 +97,13 @@ export class StorageService {
   async uploadInvoice(pdfBuffer: Buffer, filename: string): Promise<string> {
     const storagePath = `invoices/${filename}`;
 
-    const { error: uploadError } = await this.supabase.storage
-      .from(INVOICES_BUCKET)
-      .upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
-
-    if (uploadError) throw new Error(`Invoice upload failed: ${uploadError.message}`);
+    await this.uploadWithRetry(
+      INVOICES_BUCKET,
+      storagePath,
+      pdfBuffer,
+      { contentType: 'application/pdf', upsert: true },
+      'Invoice upload',
+    );
 
     return storagePath;
   }
