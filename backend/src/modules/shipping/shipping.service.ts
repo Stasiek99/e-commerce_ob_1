@@ -97,6 +97,20 @@ export class ShippingService {
       throw new ConflictException('Label already exists for this order');
     }
 
+    // A populated shipmentId on a LABEL_ERROR row means the carrier already created
+    // a real, billable shipment on a previous attempt — the failure happened
+    // afterward (e.g. the Supabase label upload, or persisting the result). Reuse
+    // those identifiers below instead of calling createShipment() again, which
+    // would create a second carrier-side shipment under the same order. Only call
+    // createShipment() again when no shipmentId was ever recorded (the carrier was
+    // never reached, or its response never arrived).
+    const resume = existing?.status === ShipmentStatus.LABEL_ERROR && existing.shipmentId ? existing : null;
+    if (resume) {
+      this.logger.warn(
+        `Resuming label generation for order ${orderId} from preserved shipment ${resume.shipmentId} — skipping createShipment`,
+      );
+    }
+
     const totalWeightKg = order.items.reduce((sum, item) => {
       const weight = item.productVariant.weight ?? 200;
       return sum + (weight * item.quantity) / 1000;
@@ -108,9 +122,9 @@ export class ShippingService {
       throw new BadRequestException(`Unsupported carrier: ${order.carrierCode}`);
     }
 
-    let trackingNumber: string | undefined;
-    let labelUrl: string | undefined;
-    let shipmentId: string | undefined;
+    let trackingNumber: string | undefined = resume?.trackingNumber ?? undefined;
+    let labelUrl: string | undefined = resume?.labelUrl ?? undefined;
+    let shipmentId: string | undefined = resume?.shipmentId ?? undefined;
     let targetLockerCode: string | undefined;
     let rawResponse: unknown;
 
@@ -118,95 +132,116 @@ export class ShippingService {
 
       switch (order.carrierCode) {
         case CarrierCode.INPOST: {
-          const result = await this.inpost.createShipment({
-            receiver: { name: receiverName, phone: order.snapshotPhone, email: order.snapshotEmail },
-            targetLockerCode: order.inpostLockerCode!,
-            weightKg: totalWeightKg,
-          });
-          shipmentId = result.id;
-          trackingNumber = result.trackingNumber;
+          if (!shipmentId) {
+            const result = await this.inpost.createShipment({
+              receiver: { name: receiverName, phone: order.snapshotPhone, email: order.snapshotEmail },
+              targetLockerCode: order.inpostLockerCode!,
+              weightKg: totalWeightKg,
+            });
+            shipmentId = result.id;
+            trackingNumber = result.trackingNumber;
+            rawResponse = result;
+          }
           targetLockerCode = order.inpostLockerCode ?? undefined;
-          rawResponse = result;
 
-          const pdfBuffer = await this.inpost.fetchLabelPdf(result.id);
-          if (pdfBuffer) {
-            labelUrl = await this.storage.uploadShippingLabel(
-              pdfBuffer,
-              `inpost-${result.id}.pdf`,
-            );
-            this.logger.log(`Label uploaded to Supabase for shipment ${result.id}`);
-          } else {
-            // Mock mode — no real PDF
-            labelUrl = `mock-label-${result.id}.pdf`;
+          if (!labelUrl) {
+            const pdfBuffer = await this.inpost.fetchLabelPdf(shipmentId!);
+            if (pdfBuffer) {
+              labelUrl = await this.storage.uploadShippingLabel(
+                pdfBuffer,
+                `inpost-${shipmentId}.pdf`,
+              );
+              this.logger.log(`Label uploaded to Supabase for shipment ${shipmentId}`);
+            } else {
+              // Mock mode — no real PDF
+              labelUrl = `mock-label-${shipmentId}.pdf`;
+            }
           }
           break;
         }
         case CarrierCode.DHL: {
-          const result = await this.dhl.createShipment({
-            receiver: {
-              name: receiverName,
-              street: order.snapshotStreet,
-              city: order.snapshotCity,
-              postalCode: order.snapshotPostalCode,
-              country: order.snapshotCountry,
-              phone: order.snapshotPhone,
-              email: order.snapshotEmail,
-            },
-            weightKg: totalWeightKg,
-            description: `Zamówienie #${order.orderNumber}`,
-          });
-          trackingNumber = result.trackingNumber;
-          labelUrl = result.labelUrl;
-          rawResponse = result;
+          if (!shipmentId) {
+            const result = await this.dhl.createShipment({
+              receiver: {
+                name: receiverName,
+                street: order.snapshotStreet,
+                city: order.snapshotCity,
+                postalCode: order.snapshotPostalCode,
+                country: order.snapshotCountry,
+                phone: order.snapshotPhone,
+                email: order.snapshotEmail,
+              },
+              weightKg: totalWeightKg,
+              description: `Zamówienie #${order.orderNumber}`,
+            });
+            trackingNumber = result.trackingNumber;
+            labelUrl = result.labelUrl;
+            // DHL has no separate fetch-label step — the label comes back inline
+            // with createShipment, so the tracking number doubles as the
+            // identifier that guards against re-creating the shipment on retry.
+            shipmentId = result.trackingNumber;
+            rawResponse = result;
+          }
           break;
         }
         case CarrierCode.GLS: {
-          const result = await this.gls.createShipment({
-            receiver: {
-              name: receiverName,
-              street: order.snapshotStreet,
-              city: order.snapshotCity,
-              postalCode: order.snapshotPostalCode,
-              country: order.snapshotCountry,
-              phone: order.snapshotPhone,
-              email: order.snapshotEmail,
-            },
-            weightKg: totalWeightKg,
-            reference: order.orderNumber,
-          });
-          trackingNumber = result.trackingNumber;
-          rawResponse = result;
+          let parcelId = shipmentId;
+          if (!parcelId) {
+            const result = await this.gls.createShipment({
+              receiver: {
+                name: receiverName,
+                street: order.snapshotStreet,
+                city: order.snapshotCity,
+                postalCode: order.snapshotPostalCode,
+                country: order.snapshotCountry,
+                phone: order.snapshotPhone,
+                email: order.snapshotEmail,
+              },
+              weightKg: totalWeightKg,
+              reference: order.orderNumber,
+            });
+            trackingNumber = result.trackingNumber;
+            parcelId = result.parcelId;
+            shipmentId = result.parcelId;
+            rawResponse = result;
+          }
 
-          const pdfBuffer = await this.gls.fetchLabelPdf(result.parcelId);
-          if (pdfBuffer) {
-            labelUrl = await this.storage.uploadShippingLabel(
-              pdfBuffer,
-              `gls-${result.parcelId}.pdf`,
-            );
-            this.logger.log(`Label uploaded to Supabase for GLS parcel ${result.parcelId}`);
-          } else {
-            labelUrl = `mock-label-gls-${result.parcelId}.pdf`;
+          if (!labelUrl) {
+            const pdfBuffer = await this.gls.fetchLabelPdf(parcelId);
+            if (pdfBuffer) {
+              labelUrl = await this.storage.uploadShippingLabel(
+                pdfBuffer,
+                `gls-${parcelId}.pdf`,
+              );
+              this.logger.log(`Label uploaded to Supabase for GLS parcel ${parcelId}`);
+            } else {
+              labelUrl = `mock-label-gls-${parcelId}.pdf`;
+            }
           }
           break;
         }
         case CarrierCode.DPD:
         case CarrierCode.DPD_COURIER: {
-          const result = await this.dpd.createShipment({
-            receiver: {
-              name: receiverName,
-              street: order.snapshotStreet,
-              city: order.snapshotCity,
-              postalCode: order.snapshotPostalCode,
-              country: order.snapshotCountry,
-              phone: order.snapshotPhone,
-              email: order.snapshotEmail,
-            },
-            weightKg: totalWeightKg,
-            reference: order.orderNumber,
-          });
-          trackingNumber = result.trackingNumber;
-          labelUrl = result.labelUrl;
-          rawResponse = result;
+          if (!shipmentId) {
+            const result = await this.dpd.createShipment({
+              receiver: {
+                name: receiverName,
+                street: order.snapshotStreet,
+                city: order.snapshotCity,
+                postalCode: order.snapshotPostalCode,
+                country: order.snapshotCountry,
+                phone: order.snapshotPhone,
+                email: order.snapshotEmail,
+              },
+              weightKg: totalWeightKg,
+              reference: order.orderNumber,
+            });
+            trackingNumber = result.trackingNumber;
+            labelUrl = result.labelUrl;
+            // DPD has no separate fetch-label step either — see DHL comment above.
+            shipmentId = result.trackingNumber;
+            rawResponse = result;
+          }
           break;
         }
       }
@@ -234,7 +269,9 @@ export class ShippingService {
         },
       });
 
-      const trackingUrl = this.getTrackingUrl(order.carrierCode, trackingNumber);
+      // trackingNumber is always populated by this point: either resumed from a
+      // preserved LABEL_ERROR row, or freshly assigned by the exhaustive switch above.
+      const trackingUrl = this.getTrackingUrl(order.carrierCode, trackingNumber!);
 
       this.emailService
         .sendShippingNotification({
@@ -242,7 +279,7 @@ export class ShippingService {
           orderNumber: order.orderNumber,
           firstName: order.snapshotFirstName,
           carrier: CARRIER_NAMES[order.carrierCode],
-          trackingNumber,
+          trackingNumber: trackingNumber!,
           trackingUrl,
         })
         .catch((err) => this.logger.warn('Shipping notification email failed', err));
@@ -252,10 +289,11 @@ export class ShippingService {
       const message = (err as Error).message;
       this.logger.error(`Label generation failed for order ${orderId}: ${message}`);
 
-      // Preserve any carrier identifiers that were already committed before the
-      // failure (e.g. InPost returned shipmentId but Supabase label upload failed).
-      // Without these fields a support engineer has no way to locate the shipment
-      // on the carrier's dashboard — they would be permanently lost in memory.
+      // Preserve any carrier identifiers (and the label, if it was already
+      // fetched/uploaded) that were committed before the failure. Without these
+      // fields a support engineer has no way to locate the shipment on the
+      // carrier's dashboard, and a retry would have no choice but to call
+      // createShipment() again — creating a second real, billable shipment.
       await this.prisma.shipment.upsert({
         where: { orderId },
         create: {
@@ -264,12 +302,14 @@ export class ShippingService {
           status: ShipmentStatus.LABEL_ERROR,
           shipmentId: shipmentId ?? null,
           trackingNumber: trackingNumber ?? null,
+          labelUrl: labelUrl ?? null,
           rawCarrierResponse: { error: message, carrierResponse: rawResponse ?? null } as any,
         },
         update: {
           status: ShipmentStatus.LABEL_ERROR,
           shipmentId: shipmentId ?? null,
           trackingNumber: trackingNumber ?? null,
+          labelUrl: labelUrl ?? null,
           rawCarrierResponse: { error: message, carrierResponse: rawResponse ?? null } as any,
         },
       });
