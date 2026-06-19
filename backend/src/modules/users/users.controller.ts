@@ -69,7 +69,7 @@ export class UsersController {
   @Patch('me/email')
   @HttpCode(HttpStatus.NO_CONTENT)
   async changeEmail(@CurrentUser() user: User, @Body() dto: ChangeEmailDto) {
-    await this.authService.requestEmailChange(user.id, dto.email);
+    await this.authService.requestEmailChange(user.id, dto.email, dto.currentPassword);
   }
 
   @Throttle({ default: { ttl: 3600000, limit: 5 } })

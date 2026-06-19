@@ -297,14 +297,18 @@ export class AuthService {
     await this.issueAndSendVerification(user);
   }
 
-  async requestEmailChange(userId: string, newEmail: string): Promise<void> {
+  async requestEmailChange(userId: string, newEmail: string, currentPassword: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (!user) throw new BadRequestException('User not found');
+
+    if (!user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    const validPassword = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!validPassword) throw new UnauthorizedException('Invalid credentials');
+
     const existing = await this.usersService.findByEmail(newEmail);
     if (existing && existing.id !== userId) {
       throw new ConflictException('Email already in use');
     }
-
-    const user = await this.usersService.findById(userId);
-    if (!user) throw new BadRequestException('User not found');
 
     await this.prisma.emailVerificationToken.updateMany({
       where: { userId, usedAt: null },
