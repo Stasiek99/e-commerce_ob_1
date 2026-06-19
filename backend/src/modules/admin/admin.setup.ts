@@ -31,16 +31,24 @@ export async function logAdminAction(
   }
 }
 
+/** @adminjs/express's own login handler and protected-routes middleware store/check
+ *  `req.session.adminUser` (not `req.session.passport.user` — there is no Passport
+ *  strategy registered for the admin panel). Exported so custom routes guarding
+ *  themselves outside the AdminJS router check the same key AdminJS actually sets. */
+export function isAdminAuthenticated(req: any): boolean {
+  return Boolean(req.session?.adminUser);
+}
+
 /** Session-fixation guard: regenerates the session ID on the first request after
  *  login. Without this, an attacker who plants a known session ID before login
  *  inherits the authenticated session after the admin logs in. Exported so it can
  *  be applied directly in custom route chains, not just the AdminJS router mount. */
 export function regenerateSessionOnLogin(req: any, res: any, next: any): void {
-  if (req.session?.passport?.user && !req.session._regenerated) {
-    const passportUser = req.session.passport.user;
+  if (req.session?.adminUser && !req.session._regenerated) {
+    const adminUser = req.session.adminUser;
     req.session.regenerate((err: Error | null) => {
       if (err) return next(err);
-      req.session.passport = { user: passportUser };
+      req.session.adminUser = adminUser;
       req.session._regenerated = true;
       next();
     });
@@ -1117,7 +1125,7 @@ export async function setupAdmin(
     sessionMw,
     regenerateSessionOnLogin,
     async (req: any, res: any) => {
-      if (!req.session?.passport?.user) {
+      if (!isAdminAuthenticated(req)) {
         return res.redirect('/admin/login');
       }
       try {
@@ -1135,7 +1143,7 @@ export async function setupAdmin(
     sessionMw,
     regenerateSessionOnLogin,
     async (req: any, res: any) => {
-      if (!req.session?.passport?.user) {
+      if (!isAdminAuthenticated(req)) {
         return res.redirect('/admin/login');
       }
       try {

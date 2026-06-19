@@ -1,5 +1,5 @@
 import * as bcrypt from 'bcrypt';
-import { buildAdminAuthenticator, regenerateSessionOnLogin } from '../admin.setup';
+import { buildAdminAuthenticator, isAdminAuthenticated, regenerateSessionOnLogin } from '../admin.setup';
 
 jest.mock('bcrypt');
 
@@ -95,8 +95,37 @@ describe('buildAdminAuthenticator', () => {
   });
 });
 
+describe('isAdminAuthenticated', () => {
+  it('returns true when req.session.adminUser is set (the key @adminjs/express actually sets on login)', () => {
+    const req: any = { session: { adminUser: { email: 'admin@example.com' } } };
+
+    expect(isAdminAuthenticated(req)).toBe(true);
+  });
+
+  it('returns false when the session has no adminUser', () => {
+    const req: any = { session: {} };
+
+    expect(isAdminAuthenticated(req)).toBe(false);
+  });
+
+  it('returns false when there is no session at all', () => {
+    const req: any = {};
+
+    expect(isAdminAuthenticated(req)).toBe(false);
+  });
+
+  it('returns false for a session carrying only the unused req.session.passport.user shape', () => {
+    // Regression guard: a logged-in admin's session never has this shape (no Passport
+    // strategy is registered for the admin panel) — this is the wrong key /admin/picklist
+    // and /admin/fulfillment-gap used to check, which made them permanently unreachable.
+    const req: any = { session: { passport: { user: 'admin@example.com' } } };
+
+    expect(isAdminAuthenticated(req)).toBe(false);
+  });
+});
+
 describe('regenerateSessionOnLogin', () => {
-  it('calls next without regenerating when there is no authenticated passport user', () => {
+  it('calls next without regenerating when there is no authenticated admin user', () => {
     const next = jest.fn();
     const req: any = { session: {} };
 
@@ -106,16 +135,16 @@ describe('regenerateSessionOnLogin', () => {
     expect(next).toHaveBeenCalledWith();
   });
 
-  it('regenerates the session and re-attaches the passport user on first authenticated request', () => {
+  it('regenerates the session and re-attaches the admin user on first authenticated request', () => {
     const next = jest.fn();
     const regenerate = jest.fn((cb: (err: Error | null) => void) => cb(null));
-    const session: any = { passport: { user: 'admin@example.com' }, regenerate };
+    const session: any = { adminUser: { email: 'admin@example.com' }, regenerate };
     const req: any = { session };
 
     regenerateSessionOnLogin(req, {} as any, next);
 
     expect(regenerate).toHaveBeenCalledTimes(1);
-    expect(session.passport).toEqual({ user: 'admin@example.com' });
+    expect(session.adminUser).toEqual({ email: 'admin@example.com' });
     expect(session._regenerated).toBe(true);
     expect(next).toHaveBeenCalledWith();
   });
@@ -123,7 +152,7 @@ describe('regenerateSessionOnLogin', () => {
   it('does not regenerate again once the session has already been regenerated', () => {
     const next = jest.fn();
     const regenerate = jest.fn();
-    const session: any = { passport: { user: 'admin@example.com' }, _regenerated: true, regenerate };
+    const session: any = { adminUser: { email: 'admin@example.com' }, _regenerated: true, regenerate };
     const req: any = { session };
 
     regenerateSessionOnLogin(req, {} as any, next);
@@ -136,7 +165,7 @@ describe('regenerateSessionOnLogin', () => {
     const next = jest.fn();
     const error = new Error('store unavailable');
     const regenerate = jest.fn((cb: (err: Error | null) => void) => cb(error));
-    const session: any = { passport: { user: 'admin@example.com' }, regenerate };
+    const session: any = { adminUser: { email: 'admin@example.com' }, regenerate };
     const req: any = { session };
 
     regenerateSessionOnLogin(req, {} as any, next);
