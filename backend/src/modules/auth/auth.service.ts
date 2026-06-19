@@ -12,7 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
-import { EmailTokenType, RefreshToken, User } from '@prisma/client';
+import { EmailTokenType, Prisma, RefreshToken, User } from '@prisma/client';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -62,12 +62,24 @@ export class AuthService {
     if (existing) throw new ConflictException('Email already in use');
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    const user = await this.usersService.create({
-      email: dto.email,
-      passwordHash,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-    });
+    let user: User;
+    try {
+      user = await this.usersService.create({
+        email: dto.email,
+        passwordHash,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+      });
+    } catch (err) {
+      // Two requests can both pass the findByEmail check above before either
+      // create() commits (double-submit, retried request). The DB-level
+      // @unique on User.email is the real guard — map its violation to the
+      // same 409 the pre-check above throws, instead of an unhandled 500.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Email already in use');
+      }
+      throw err;
+    }
 
     // Fire-and-forget — don't block registration if email fails
     this.issueAndSendVerification(user).catch(() => {});
@@ -150,13 +162,25 @@ export class AuthService {
       });
     }
 
-    return this.usersService.create({
-      email: profile.email,
-      googleId: profile.googleId,
-      firstName: profile.firstName,
-      lastName: profile.lastName,
-      isEmailVerified: true,
-    });
+    try {
+      return await this.usersService.create({
+        email: profile.email,
+        googleId: profile.googleId,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        isEmailVerified: true,
+      });
+    } catch (err) {
+      // Two concurrent first-time Google callbacks for the same never-seen
+      // email can both pass the findByGoogleId/findByEmail checks above
+      // before either create() commits. The DB-level @unique on User.email/
+      // User.googleId is the real guard — map its violation to a 409 instead
+      // of an unhandled 500.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Email already in use');
+      }
+      throw err;
+    }
   }
 
   async validateRefreshTokenByRaw(rawToken: string): Promise<User | null> {

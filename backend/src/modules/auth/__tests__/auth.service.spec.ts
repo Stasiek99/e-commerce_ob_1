@@ -3,11 +3,18 @@ import { BadRequestException, ConflictException, UnauthorizedException } from '@
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
-import { EmailTokenType, Role } from '@prisma/client';
+import { EmailTokenType, Prisma, Role } from '@prisma/client';
 import { AuthService } from '../auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../../users/users.service';
 import { EmailQueueService } from '../../email/email-queue.service';
+
+const makeP2002 = (target: string) =>
+  new Prisma.PrismaClientKnownRequestError(`Unique constraint failed on the fields: (\`${target}\`)`, {
+    code: 'P2002',
+    clientVersion: '6.0.0',
+    meta: { target: [target] },
+  });
 
 const mockUser = {
   id: 'user-1',
@@ -170,6 +177,40 @@ describe('AuthService', () => {
       expect(await bcrypt.compare('plaintext', createdWithHash.passwordHash as string)).toBe(true);
       expect(result).toHaveProperty('accessToken', 'mock-access-token');
       expect(result).toHaveProperty('refreshToken');
+    });
+
+    // ─── concurrent registration race (fix: unhandled P2002 → raw 500) ────────
+    // Invariant: a second concurrent request can pass the findByEmail
+    // pre-check before either create() commits. The DB-level @unique on
+    // User.email is the real guard — its P2002 must map to the same 409
+    // the pre-check throws, not an unhandled 500.
+
+    it('throws ConflictException when create() races to a P2002 on email', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.create.mockRejectedValue(makeP2002('email'));
+
+      await expect(
+        service.register({ email: 'race@example.com', password: 'pass', firstName: 'Jan', lastName: 'K' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException with message "Email already in use" on P2002 race', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.create.mockRejectedValue(makeP2002('email'));
+
+      await expect(
+        service.register({ email: 'race@example.com', password: 'pass', firstName: 'Jan', lastName: 'K' }),
+      ).rejects.toThrow('Email already in use');
+    });
+
+    it('re-throws non-P2002 errors from create() without wrapping', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      const dbError = new Error('Database connection lost');
+      usersService.create.mockRejectedValue(dbError);
+
+      await expect(
+        service.register({ email: 'new@example.com', password: 'pass', firstName: 'Jan', lastName: 'K' }),
+      ).rejects.toThrow(dbError);
     });
   });
 
@@ -577,6 +618,33 @@ describe('AuthService', () => {
         mockUser.id,
         expect.objectContaining({ googleId: 'gid-safe', isEmailVerified: true }),
       );
+    });
+
+    // ─── concurrent first-time Google sign-in race (fix: unhandled P2002 → raw 500) ─
+    // Invariant: two concurrent callbacks for the same never-seen email can both
+    // pass the findByGoogleId/findByEmail checks above before either create()
+    // commits. The DB-level @unique on User.email/User.googleId is the real
+    // guard — its P2002 must map to a 409, not an unhandled 500.
+
+    it('throws ConflictException when create() races to a P2002 for a never-seen email', async () => {
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(null);
+      usersService.create.mockRejectedValue(makeP2002('email'));
+
+      await expect(
+        service.findOrCreateGoogleUser({ googleId: 'gid-race', email: 'race@example.com' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('re-throws non-P2002 errors from create() without wrapping', async () => {
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(null);
+      const dbError = new Error('Database connection lost');
+      usersService.create.mockRejectedValue(dbError);
+
+      await expect(
+        service.findOrCreateGoogleUser({ googleId: 'gid-new', email: 'new@example.com' }),
+      ).rejects.toThrow(dbError);
     });
   });
 
