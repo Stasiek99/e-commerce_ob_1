@@ -908,7 +908,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
   // and showing the current promotional price as the verified minimum would be
   // misleading under UOKiK guidance. Such variants have their promo fields
   // suppressed until 30 days of history accumulate.
-  private async attachOmnibusData<T extends {
+  async attachOmnibusData<T extends {
     avgRating?: Prisma.Decimal | number | null;
     variants: Array<{ id: string; priceInCents: number; compareAtPriceInCents?: number | null }>;
   }>(products: T[]): Promise<T[]> {

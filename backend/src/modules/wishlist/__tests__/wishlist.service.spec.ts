@@ -2,15 +2,18 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { WishlistService } from '../wishlist.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ProductsService } from '../../products/products.service';
 
 const makeProduct = (overrides: Partial<Record<string, any>> = {}) => ({
   id: 'product-1',
   name: 'Test Perfume',
   slug: 'test-perfume',
   brand: 'Maison',
+  gender: 'damski',
+  catalogNumber: 'CAT-001',
   images: [{ url: 'https://cdn.example.com/img.jpg' }],
   variants: [
-    { id: 'var-1', label: '50ml', priceInCents: 9900, stock: 10 },
+    { id: 'var-1', label: '50ml', priceInCents: 9900, compareAtPriceInCents: null, stock: 10 },
   ],
   ...overrides,
 });
@@ -23,6 +26,7 @@ const makeWishlistRow = (productOverrides = {}, notifyOnRestock = false) => ({
 describe('WishlistService', () => {
   let service: WishlistService;
   let prisma: any;
+  let productsService: { attachOmnibusData: jest.Mock };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -44,11 +48,20 @@ describe('WishlistService', () => {
             },
           },
         },
+        {
+          provide: ProductsService,
+          useValue: {
+            // Identity passthrough by default — individual tests override this
+            // to assert on the enrichment ProductsService actually performs.
+            attachOmnibusData: jest.fn(async (products: any[]) => products),
+          },
+        },
       ],
     }).compile();
 
     service = module.get(WishlistService);
     prisma = module.get(PrismaService);
+    productsService = module.get(ProductsService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -133,6 +146,66 @@ describe('WishlistService', () => {
 
       expect(item.images).toEqual([{ url: 'https://cdn.example.com/img.jpg' }]);
       expect(Object.keys(item.images[0])).toEqual(['url']);
+    });
+
+    it('selects compareAtPriceInCents on the variant projection so Omnibus enrichment has data to work with', async () => {
+      prisma.wishlistItem.findMany.mockResolvedValue([]);
+
+      await service.getItems('user-1');
+
+      const call = prisma.wishlistItem.findMany.mock.calls[0][0];
+      expect(call.include.product.include.variants.select).toEqual(
+        expect.objectContaining({ compareAtPriceInCents: true }),
+      );
+    });
+
+    it('routes the projected products through ProductsService.attachOmnibusData', async () => {
+      const row = makeWishlistRow();
+      prisma.wishlistItem.findMany.mockResolvedValue([row]);
+
+      await service.getItems('user-1');
+
+      expect(productsService.attachOmnibusData).toHaveBeenCalledWith([row.product]);
+    });
+
+    it('surfaces gender and catalogNumber on each returned item', async () => {
+      prisma.wishlistItem.findMany.mockResolvedValue([makeWishlistRow({ gender: 'męski', catalogNumber: 'CAT-042' })]);
+
+      const [item] = await service.getItems('user-1');
+
+      expect(item).toMatchObject({ gender: 'męski', catalogNumber: 'CAT-042' });
+    });
+
+    it('uses the Omnibus-enriched variants (sale price + 30-day low) returned by attachOmnibusData', async () => {
+      prisma.wishlistItem.findMany.mockResolvedValue([makeWishlistRow()]);
+      productsService.attachOmnibusData.mockResolvedValue([
+        {
+          ...makeProduct(),
+          variants: [
+            { id: 'var-1', label: '50ml', priceInCents: 9900, compareAtPriceInCents: 12900, lowestPrice30dInCents: 9500, stock: 10 },
+          ],
+        },
+      ]);
+
+      const [item] = await service.getItems('user-1');
+
+      expect(item.variants[0]).toMatchObject({
+        compareAtPriceInCents: 12900,
+        lowestPrice30dInCents: 9500,
+      });
+    });
+
+    it('preserves wishlist row order when zipping enriched products back with notifyOnRestock', async () => {
+      const rows = [
+        makeWishlistRow({ id: 'product-1', name: 'First' }, true),
+        makeWishlistRow({ id: 'product-2', name: 'Second' }, false),
+      ];
+      prisma.wishlistItem.findMany.mockResolvedValue(rows);
+
+      const result = await service.getItems('user-1');
+
+      expect(result[0]).toMatchObject({ id: 'product-1', notifyOnRestock: true });
+      expect(result[1]).toMatchObject({ id: 'product-2', notifyOnRestock: false });
     });
   });
 
