@@ -28,6 +28,7 @@ describe('ShippingService', () => {
   let dpd: jest.Mocked<DpdClient>;
   let storage: jest.Mocked<StorageService>;
   let emailService: jest.Mocked<EmailQueueService>;
+  let shippingRates: jest.Mocked<ShippingRatesService>;
   let redis: { set: jest.Mock; eval: jest.Mock };
 
   const mockOrderBase = {
@@ -136,6 +137,7 @@ describe('ShippingService', () => {
     dpd = module.get(DpdClient);
     storage = module.get(StorageService);
     emailService = module.get(EmailQueueService);
+    shippingRates = module.get(ShippingRatesService);
     redis = module.get('REDIS_CLIENT');
 
     // Default: no existing shipment — tests that need a different value override this
@@ -160,6 +162,18 @@ describe('ShippingService', () => {
         expect(r.priceInCents).toBeGreaterThan(0);
         expect(r.name).toBeTruthy();
       });
+    });
+
+    // Regression harness: a deactivated carrier must disappear from the
+    // customer-facing rate list, not keep showing up with a stale/fallback price.
+    it('excludes a carrier the rate map omits (deactivated carrier)', async () => {
+      const { [CarrierCode.DHL]: _omitted, ...withoutDhl } = MOCK_RATE_MAP;
+      shippingRates.getRateMap.mockResolvedValue(withoutDhl);
+
+      const rates = await service.getShippingRates();
+
+      expect(rates).toHaveLength(4);
+      expect(rates.map((r) => r.carrier)).not.toContain(CarrierCode.DHL);
     });
   });
 

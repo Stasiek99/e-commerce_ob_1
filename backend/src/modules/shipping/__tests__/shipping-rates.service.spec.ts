@@ -96,6 +96,7 @@ describe('ShippingRatesService', () => {
 
     it('DB price overrides the compile-time fallback for that carrier', async () => {
       prisma.shippingRate.findMany.mockResolvedValue([
+        ...allDbRows.filter((r) => r.carrierCode !== CarrierCode.DHL),
         makeDbRow(CarrierCode.DHL, 2499),
       ]);
 
@@ -103,6 +104,30 @@ describe('ShippingRatesService', () => {
 
       expect(map[CarrierCode.DHL]).toBe(2499);
       expect(map[CarrierCode.INPOST]).toBe(1499);
+    });
+
+    // Regression harness: deactivating a carrier must remove it from the map
+    // entirely, not leave it pointing at FALLBACK_RATES or its last DB price.
+    // Without this, GET /shipping/rates keeps listing a disabled carrier and
+    // order creation keeps accepting (and charging for) it.
+    it('omits a carrier from the map entirely when it has no active row in the DB', async () => {
+      prisma.shippingRate.findMany.mockResolvedValue(
+        allDbRows.filter((r) => r.carrierCode !== CarrierCode.DHL),
+      );
+
+      const map = await service.getRateMap();
+
+      expect(map[CarrierCode.DHL]).toBeUndefined();
+      expect(Object.keys(map)).not.toContain(CarrierCode.DHL);
+      expect(map[CarrierCode.INPOST]).toBe(1499);
+    });
+
+    it('returns an empty map when every carrier has been deactivated', async () => {
+      prisma.shippingRate.findMany.mockResolvedValue([]);
+
+      const map = await service.getRateMap();
+
+      expect(map).toEqual({});
     });
 
     // ── Redis cache behaviour ────────────────────────────────────────────────
@@ -216,6 +241,29 @@ describe('ShippingRatesService', () => {
       await service.getRateForCarrier(CarrierCode.INPOST);
 
       expect(prisma.shippingRate.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression harness: order creation calls getRateForCarrier() authoritatively
+    // to price and validate the order server-side. A deactivated carrier (e.g.
+    // credentials revoked) must hard-fail here instead of silently returning a
+    // stale price — otherwise payment gets captured for a carrier that can never
+    // generate a label.
+    it('throws NotFoundException for a carrier with no active row in the DB', async () => {
+      prisma.shippingRate.findMany.mockResolvedValue(
+        allDbRows.filter((r) => r.carrierCode !== CarrierCode.DHL),
+      );
+
+      await expect(service.getRateForCarrier(CarrierCode.DHL)).rejects.toThrow(NotFoundException);
+    });
+
+    it('still resolves active carriers when a different carrier has been deactivated', async () => {
+      prisma.shippingRate.findMany.mockResolvedValue(
+        allDbRows.filter((r) => r.carrierCode !== CarrierCode.DHL),
+      );
+
+      const price = await service.getRateForCarrier(CarrierCode.INPOST);
+
+      expect(price).toBe(1499);
     });
   });
 

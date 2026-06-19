@@ -25,11 +25,11 @@ export class ShippingRatesService {
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
-  async getRateMap(): Promise<Record<CarrierCode, number>> {
+  async getRateMap(): Promise<Partial<Record<CarrierCode, number>>> {
     try {
       const cached = await this.redis.get(CACHE_KEY);
       if (cached) {
-        return JSON.parse(cached) as Record<CarrierCode, number>;
+        return JSON.parse(cached) as Partial<Record<CarrierCode, number>>;
       }
     } catch (err) {
       this.logger.warn(`Redis read failed for ${CACHE_KEY}: ${(err as Error).message}`);
@@ -40,7 +40,10 @@ export class ShippingRatesService {
         where: { isActive: true },
       });
 
-      const map = { ...FALLBACK_RATES };
+      // Build the map from active rows only — a carrier absent here (deactivated,
+      // or never seeded) must not silently fall back to FALLBACK_RATES, otherwise
+      // a disabled carrier stays selectable and chargeable at its last/fallback price.
+      const map: Partial<Record<CarrierCode, number>> = {};
       for (const row of rows) {
         map[row.carrierCode] = row.priceInCents;
       }
@@ -62,7 +65,11 @@ export class ShippingRatesService {
 
   async getRateForCarrier(code: CarrierCode): Promise<number> {
     const map = await this.getRateMap();
-    return map[code];
+    const price = map[code];
+    if (price === undefined) {
+      throw new NotFoundException(`No active shipping rate found for carrier ${code}`);
+    }
+    return price;
   }
 
   async findAll() {
