@@ -658,6 +658,10 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
    * delta batch for the same variant may have already committed its own
    * change in between, making a post-commit read indistinguishable from
    * this batch's own effect.
+   *
+   * When a batch carries more than one delta for the same variant, entries
+   * must be in transaction-commit order — aggregation below verifies this
+   * rather than assuming it silently.
    */
   async notifyStockChangesByDelta(deltas: Array<{ variantId: string; delta: number; newStock: number }>): Promise<void> {
     if (!deltas.length) return;
@@ -668,6 +672,21 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     const aggregated = new Map<string, { delta: number; newStock: number }>();
     for (const { variantId, delta, newStock } of deltas) {
       const existing = aggregated.get(variantId);
+      if (existing) {
+        // This entry's own previousStock (newStock - delta) must equal the prior
+        // entry's newStock — true only if entries for this variant are in
+        // transaction-commit order. Every current caller satisfies this by
+        // construction (sequential for loops), but nothing in the signature
+        // enforces it — a future caller built around Promise.all could violate
+        // it and silently mis-derive previousStock below. Fail loudly instead.
+        const impliedPreviousStock = newStock - delta;
+        if (impliedPreviousStock !== existing.newStock) {
+          throw new Error(
+            `notifyStockChangesByDelta: deltas for variant ${variantId} are out of transaction-commit order ` +
+              `(this entry implies previous stock ${impliedPreviousStock}, but the prior entry in this batch ended at ${existing.newStock})`,
+          );
+        }
+      }
       aggregated.set(variantId, {
         delta: (existing?.delta ?? 0) + delta,
         newStock, // later entries reflect the cumulative post-update value for this variant

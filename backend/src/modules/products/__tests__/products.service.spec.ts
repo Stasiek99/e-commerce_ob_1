@@ -387,6 +387,41 @@ describe('ProductsService — slug P2002 conflict handling', () => {
         JSON.stringify({ id: VARIANT_ID, stock: 10 }),
       );
     });
+
+    // Regression test: a future caller that builds its deltas array out of
+    // transaction-commit order (e.g. via Promise.all instead of a sequential
+    // for loop) must not silently mis-derive previousStock — it should fail loudly.
+    it('throws when multiple deltas for the same variant are out of transaction-commit order', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
+      ]);
+
+      // Second entry implies a previousStock of 9-3=6, but the first entry ended
+      // at newStock=7 — inconsistent, since both deltas apply to the same variant.
+      await expect(
+        service.notifyStockChangesByDelta([
+          { variantId: VARIANT_ID, delta: 2, newStock: 7 },
+          { variantId: VARIANT_ID, delta: 3, newStock: 9 },
+        ]),
+      ).rejects.toThrow(/out of transaction-commit order/);
+
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when multiple deltas for the same variant are in transaction-commit order', async () => {
+      mockPrisma.productVariant.findMany.mockResolvedValue([
+        { id: VARIANT_ID, productId: PRODUCT_ID, label: '100ml' },
+      ]);
+
+      await expect(
+        service.notifyStockChangesByDelta([
+          { variantId: VARIANT_ID, delta: 2, newStock: 7 },
+          { variantId: VARIANT_ID, delta: 3, newStock: 10 },
+        ]),
+      ).resolves.toBeUndefined();
+
+      expect(mockRedis.publish).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('updateVariant()', () => {
