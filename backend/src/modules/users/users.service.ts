@@ -44,14 +44,26 @@ export class UsersService {
   }
 
   async createAddress(userId: string, data: Omit<Prisma.AddressCreateInput, 'user'>) {
-    if (data.isDefault) {
-      await this.prisma.address.updateMany({
-        where: { userId },
-        data: { isDefault: false },
+    if (!data.isDefault) {
+      return this.prisma.address.create({
+        data: { ...data, user: { connect: { id: userId } } },
       });
     }
-    return this.prisma.address.create({
-      data: { ...data, user: { connect: { id: userId } } },
+
+    // Demote-then-promote as two separate statements is not atomic — concurrent
+    // requests promoting different addresses can interleave and leave two rows
+    // isDefault=true. Insert the new row as non-default first (an INSERT is a
+    // single-row statement, so inserting it as true directly would collide
+    // immediately with the addresses_one_default_per_user partial unique index
+    // if another default already exists), then flip old + new in one UPDATE —
+    // Postgres defers unique-index checks on multi-row UPDATEs to end-of-
+    // statement, so the momentary "two defaults" state never trips the index.
+    return this.prisma.$transaction(async (tx) => {
+      const address = await tx.address.create({
+        data: { ...data, isDefault: false, user: { connect: { id: userId } } },
+      });
+      await tx.$executeRaw`UPDATE "addresses" SET "isDefault" = ("id" = ${address.id}) WHERE "userId" = ${userId}`;
+      return tx.address.findUniqueOrThrow({ where: { id: address.id } });
     });
   }
 
@@ -61,13 +73,19 @@ export class UsersService {
     });
     if (!address) throw new NotFoundException('Address not found');
 
-    if (data.isDefault) {
-      await this.prisma.address.updateMany({
-        where: { userId, id: { not: addressId } },
-        data: { isDefault: false },
-      });
+    if (!data.isDefault) {
+      return this.prisma.address.update({ where: { id: addressId }, data });
     }
-    return this.prisma.address.update({ where: { id: addressId }, data });
+
+    // Single atomic UPDATE instead of demote-then-promote — see createAddress.
+    const { isDefault: _isDefault, ...rest } = data;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`UPDATE "addresses" SET "isDefault" = ("id" = ${addressId}) WHERE "userId" = ${userId}`;
+      if (Object.keys(rest).length > 0) {
+        await tx.address.update({ where: { id: addressId }, data: rest });
+      }
+      return tx.address.findUniqueOrThrow({ where: { id: addressId } });
+    });
   }
 
   async deleteAddress(userId: string, addressId: string) {

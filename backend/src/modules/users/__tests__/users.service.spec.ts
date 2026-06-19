@@ -442,6 +442,191 @@ describe('UsersService', () => {
     });
   });
 
+  // ─── createAddress / updateAddress — atomic default-flag promotion ─────
+  // Demote-then-promote as two separate Prisma calls is not atomic: concurrent
+  // requests promoting different addresses could interleave and leave two (or
+  // zero) addresses isDefault=true. Fixed via a single $executeRaw UPDATE
+  // inside a $transaction, backed by the addresses_one_default_per_user
+  // partial unique index (migration 20260619120000).
+
+  describe('createAddress', () => {
+    const validDto = {
+      firstName: 'Jan',
+      lastName: 'Kowalski',
+      street: 'Długa 1',
+      city: 'Poznań',
+      postalCode: '60-001',
+      country: 'PL',
+      phone: '+48111222333',
+    };
+
+    const buildAddressTx = () => ({
+      address: {
+        create: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+      },
+      $executeRaw: jest.fn().mockResolvedValue(undefined),
+    });
+
+    it('creates a non-default address directly, without a transaction', async () => {
+      const data = { ...validDto, isDefault: false };
+      prisma.address.create.mockResolvedValue({ id: 'addr-1', userId: 'user-1', ...data });
+
+      const result = await service.createAddress('user-1', data);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.address.create).toHaveBeenCalledWith({
+        data: { ...data, user: { connect: { id: 'user-1' } } },
+      });
+      expect(result).toMatchObject({ id: 'addr-1' });
+    });
+
+    it('never inserts the new row as isDefault=true directly — INSERT is forced to false', async () => {
+      // Regression guard: a single-row INSERT with isDefault=true would collide
+      // immediately with the partial unique index whenever another default
+      // address already exists for this user (multi-row UPDATEs get Postgres's
+      // end-of-statement deferred uniqueness check; a lone INSERT does not).
+      const data = { ...validDto, isDefault: true };
+      const tx = buildAddressTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      tx.address.create.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      tx.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: true });
+
+      await service.createAddress('user-1', data);
+
+      expect(tx.address.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ isDefault: false }),
+      });
+    });
+
+    it('promotes the new address and demotes all others in a single atomic statement', async () => {
+      const data = { ...validDto, isDefault: true };
+      const tx = buildAddressTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      tx.address.create.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      tx.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: true });
+
+      const result = await service.createAddress('user-1', data);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+      // Tagged template literals are called as (templateStrings, ...values).
+      const interpolated = tx.$executeRaw.mock.calls[0].slice(1);
+      expect(interpolated).toEqual(['addr-2', 'user-1']);
+      expect(tx.address.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: 'addr-2' } });
+      expect(result).toMatchObject({ id: 'addr-2', isDefault: true });
+    });
+
+    it('never calls the old demote-then-promote updateMany — only the atomic UPDATE is used', async () => {
+      const data = { ...validDto, isDefault: true };
+      const tx = buildAddressTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      tx.address.create.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      tx.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: true });
+
+      await service.createAddress('user-1', data);
+
+      expect(prisma.address.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateAddress', () => {
+    const buildAddressTx = () => ({
+      address: {
+        update: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+      },
+      $executeRaw: jest.fn().mockResolvedValue(undefined),
+    });
+
+    it('throws NotFoundException when the address does not belong to the user', async () => {
+      prisma.address.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.updateAddress('user-1', 'addr-1', { city: 'Kraków' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('updates fields directly without a transaction when isDefault is not set', async () => {
+      prisma.address.findFirst.mockResolvedValue({ id: 'addr-1', userId: 'user-1', isDefault: false });
+      prisma.address.update.mockResolvedValue({ id: 'addr-1', city: 'Kraków' });
+
+      const result = await service.updateAddress('user-1', 'addr-1', { city: 'Kraków' });
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'addr-1' },
+        data: { city: 'Kraków' },
+      });
+      expect(result).toEqual({ id: 'addr-1', city: 'Kraków' });
+    });
+
+    it('atomically promotes the target address and demotes all others when isDefault: true', async () => {
+      prisma.address.findFirst.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      const tx = buildAddressTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      tx.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: true });
+
+      const result = await service.updateAddress('user-1', 'addr-2', { isDefault: true });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+      const interpolated = tx.$executeRaw.mock.calls[0].slice(1);
+      expect(interpolated).toEqual(['addr-2', 'user-1']);
+      expect(tx.address.update).not.toHaveBeenCalled();
+      expect(result).toEqual({ id: 'addr-2', userId: 'user-1', isDefault: true });
+    });
+
+    it('updates other fields after the atomic flip, stripping isDefault from the second update', async () => {
+      prisma.address.findFirst.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      const tx = buildAddressTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      tx.address.update.mockResolvedValue({ id: 'addr-2', isDefault: true, city: 'Gdańsk' });
+      tx.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', isDefault: true, city: 'Gdańsk' });
+
+      await service.updateAddress('user-1', 'addr-2', { isDefault: true, city: 'Gdańsk' });
+
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(tx.address.update).toHaveBeenCalledWith({
+        where: { id: 'addr-2' },
+        data: { city: 'Gdańsk' },
+      });
+      const updateCallData = tx.address.update.mock.calls[0][0].data;
+      expect(updateCallData).not.toHaveProperty('isDefault');
+    });
+
+    it('never calls the old demote-then-promote updateMany — only the atomic UPDATE is used', async () => {
+      prisma.address.findFirst.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      const tx = buildAddressTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+      tx.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: true });
+
+      await service.updateAddress('user-1', 'addr-2', { isDefault: true });
+
+      expect(prisma.address.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('targets only the requested address id per call, so sequential promotions never leave two defaults', async () => {
+      // Each call's atomic UPDATE sets isDefault = (id = thisAddressId) for the
+      // whole user in one statement — there is no separate demote step that a
+      // second concurrent request could interleave with.
+      prisma.address.findFirst.mockResolvedValueOnce({ id: 'addr-2', userId: 'user-1', isDefault: false });
+      const tx1 = buildAddressTx();
+      tx1.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-2', userId: 'user-1', isDefault: true });
+      prisma.$transaction.mockImplementationOnce((fn: any) => fn(tx1));
+      await service.updateAddress('user-1', 'addr-2', { isDefault: true });
+
+      prisma.address.findFirst.mockResolvedValueOnce({ id: 'addr-3', userId: 'user-1', isDefault: false });
+      const tx2 = buildAddressTx();
+      tx2.address.findUniqueOrThrow.mockResolvedValue({ id: 'addr-3', userId: 'user-1', isDefault: true });
+      prisma.$transaction.mockImplementationOnce((fn: any) => fn(tx2));
+      await service.updateAddress('user-1', 'addr-3', { isDefault: true });
+
+      expect(tx1.$executeRaw.mock.calls[0].slice(1)).toEqual(['addr-2', 'user-1']);
+      expect(tx2.$executeRaw.mock.calls[0].slice(1)).toEqual(['addr-3', 'user-1']);
+    });
+  });
+
   // ─── update — marketingConsentAt timestamp (GDPR Art. 7(1) proof of consent) ──
 
   describe('update', () => {
