@@ -41,11 +41,12 @@ describe('AuthService', () => {
 
   beforeEach(async () => {
     // $transaction supports both call styles used in auth.service.ts: array-style
-    // (resetPassword, changePassword, verifyEmail) eagerly evaluates its queries when
-    // the array literal is constructed, so the literal [{}, {}] resolution is enough
-    // for those callers. Callback-style (rotateToken, consumeMagicLink) must actually
-    // invoke the callback — routed to this same prismaMock so existing assertions on
-    // e.g. prisma.refreshToken.create continue to work unchanged.
+    // (resetPassword, changePassword, verifyEmail's plain-verification branch)
+    // eagerly evaluates its queries when the array literal is constructed, so the
+    // literal [{}, {}] resolution is enough for those callers. Callback-style
+    // (rotateToken, consumeMagicLink, verifyEmail's email-change branch) must
+    // actually invoke the callback — routed to this same prismaMock so existing
+    // assertions on e.g. prisma.refreshToken.create continue to work unchanged.
     const prismaMock: any = {
       refreshToken: {
         create: jest.fn().mockResolvedValue({}),
@@ -70,6 +71,7 @@ describe('AuthService', () => {
       },
       user: {
         update: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn().mockResolvedValue(null),
       },
     };
     prismaMock.$transaction = jest.fn().mockImplementation((arg: unknown) =>
@@ -1073,6 +1075,78 @@ describe('AuthService', () => {
 
       await expect(service.verifyEmail('magic-link-token')).rejects.toThrow(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    describe('email-change flow (pendingEmail)', () => {
+      const storedToken = {
+        id: 'vt-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        type: EmailTokenType.EMAIL_VERIFICATION,
+        user: { ...mockUser, isEmailVerified: false, pendingEmail: 'new@example.com' },
+      };
+
+      it('promotes pendingEmail to email and revokes all refresh tokens on a valid token', async () => {
+        prisma.emailVerificationToken.findUnique.mockResolvedValue(storedToken);
+        prisma.emailVerificationToken.updateMany.mockResolvedValue({ count: 1 });
+
+        await service.verifyEmail('valid-change-token');
+
+        expect(prisma.user.update).toHaveBeenCalledWith({
+          where: { id: 'user-1' },
+          data: { email: 'new@example.com', pendingEmail: null, isEmailVerified: true },
+        });
+        expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+          where: { userId: 'user-1', revokedAt: null },
+          data: { revokedAt: expect.any(Date) },
+        });
+      });
+
+      it('throws ConflictException when the pending email was claimed by another user', async () => {
+        prisma.emailVerificationToken.findUnique.mockResolvedValue(storedToken);
+        prisma.user.findUnique.mockResolvedValue({ id: 'other-user', email: 'new@example.com' });
+
+        await expect(service.verifyEmail('valid-change-token')).rejects.toThrow(ConflictException);
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it('does not throw the conflict when the pending email is already owned by the same user', async () => {
+        prisma.emailVerificationToken.findUnique.mockResolvedValue(storedToken);
+        prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'new@example.com' });
+        prisma.emailVerificationToken.updateMany.mockResolvedValue({ count: 1 });
+
+        await expect(service.verifyEmail('valid-change-token')).resolves.toBeUndefined();
+      });
+
+      // ── race condition: a newer requestEmailChange() invalidated this token ──
+
+      it('throws BadRequestException and does not promote the stale pendingEmail when the token was invalidated mid-flight', async () => {
+        prisma.emailVerificationToken.findUnique.mockResolvedValue(storedToken);
+        // Simulates a concurrent requestEmailChange() committing its invalidating
+        // updateMany (usedAt: null guard) between this verifyEmail's initial read
+        // and its own transaction — the atomic guard must see count: 0 and reject
+        // instead of confirming the captured (now superseded) pendingEmail.
+        prisma.emailVerificationToken.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(service.verifyEmail('raced-change-token')).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(prisma.user.update).not.toHaveBeenCalled();
+        expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('guards the email-change promotion with usedAt: null in the same updateMany call that marks it used', async () => {
+        prisma.emailVerificationToken.findUnique.mockResolvedValue(storedToken);
+        prisma.emailVerificationToken.updateMany.mockResolvedValue({ count: 1 });
+
+        await service.verifyEmail('valid-change-token');
+
+        expect(prisma.emailVerificationToken.updateMany).toHaveBeenCalledWith({
+          where: { id: 'vt-1', usedAt: null },
+          data: { usedAt: expect.any(Date) },
+        });
+      });
     });
   });
 

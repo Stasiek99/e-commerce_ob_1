@@ -381,21 +381,29 @@ export class AuthService {
         throw new ConflictException('The requested email address is no longer available');
       }
 
-      await this.prisma.$transaction([
-        this.prisma.emailVerificationToken.update({
-          where: { id: stored.id },
+      await this.prisma.$transaction(async (tx) => {
+        // Atomic guard mirrors consumeMagicLink/rotateToken: usedAt: null in the
+        // WHERE clause ensures a token already invalidated by a newer
+        // requestEmailChange() call (e.g. the user requested a second email
+        // change before clicking this link) cannot still promote its stale
+        // pendingEmail captured above.
+        const result = await tx.emailVerificationToken.updateMany({
+          where: { id: stored.id, usedAt: null },
           data: { usedAt: new Date() },
-        }),
-        this.prisma.user.update({
+        });
+        if (result.count === 0) {
+          throw new BadRequestException('Invalid or expired verification link');
+        }
+        await tx.user.update({
           where: { id: stored.userId },
           data: { email: newEmail, pendingEmail: null, isEmailVerified: true },
-        }),
+        });
         // JWT encodes email — all devices must re-login after an email change
-        this.prisma.refreshToken.updateMany({
+        await tx.refreshToken.updateMany({
           where: { userId: stored.userId, revokedAt: null },
           data: { revokedAt: new Date() },
-        }),
-      ]);
+        });
+      });
     } else {
       await this.prisma.$transaction([
         this.prisma.emailVerificationToken.update({
