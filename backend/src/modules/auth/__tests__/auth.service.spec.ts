@@ -113,7 +113,12 @@ describe('AuthService', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn().mockReturnValue('7d'),
+            // JWT_ACCESS_EXPIRES_IN drives revokeBeforeTtlSecs (15m → 900s, matching
+            // the literal the rest of this suite asserts on). Other keys (e.g.
+            // FRONTEND_URL) fall through to whatever default the call site passes.
+            get: jest.fn((key: string, defaultValue?: unknown) =>
+              key === 'JWT_ACCESS_EXPIRES_IN' ? '15m' : defaultValue,
+            ),
           },
         },
         {
@@ -1672,6 +1677,81 @@ describe('AuthService', () => {
       );
 
       expect(redis.set).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Revocation fence TTL derivation (fix: literal drifted from JWT_ACCESS_EXPIRES_IN) ─
+  // Invariant: the fence TTL must track whatever JWT_ACCESS_EXPIRES_IN actually is,
+  // not a hardcoded 900. Before the fix, bumping the env var to e.g. "1h" left the
+  // fence still expiring after 900s while tokens stayed valid for an hour.
+
+  describe('revocation fence TTL — derived from JWT_ACCESS_EXPIRES_IN', () => {
+    async function buildServiceWithExpiry(expiresIn: string) {
+      const prismaMock: any = {
+        refreshToken: {
+          findUnique: jest.fn().mockResolvedValue({ userId: 'user-1' }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+      };
+      const redisMock = { set: jest.fn().mockResolvedValue('OK') };
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          AuthService,
+          { provide: PrismaService, useValue: prismaMock },
+          { provide: UsersService, useValue: {} },
+          { provide: JwtService, useValue: { sign: jest.fn() } },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn((key: string) => (key === 'JWT_ACCESS_EXPIRES_IN' ? expiresIn : undefined)),
+            },
+          },
+          { provide: EmailQueueService, useValue: {} },
+          { provide: 'REDIS_CLIENT', useValue: redisMock },
+        ],
+      }).compile();
+
+      return { service: module.get(AuthService), redisMock };
+    }
+
+    it('writes a 3600s fence TTL when JWT_ACCESS_EXPIRES_IN is "1h"', async () => {
+      const { service: svc, redisMock } = await buildServiceWithExpiry('1h');
+
+      await svc.logout('some-raw-token');
+
+      expect(redisMock.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        3600,
+      );
+    });
+
+    it('writes a 900s fence TTL when JWT_ACCESS_EXPIRES_IN is "15m"', async () => {
+      const { service: svc, redisMock } = await buildServiceWithExpiry('15m');
+
+      await svc.logout('some-raw-token');
+
+      expect(redisMock.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        900,
+      );
+    });
+
+    it('writes a 30s fence TTL when JWT_ACCESS_EXPIRES_IN is "30s"', async () => {
+      const { service: svc, redisMock } = await buildServiceWithExpiry('30s');
+
+      await svc.logout('some-raw-token');
+
+      expect(redisMock.set).toHaveBeenCalledWith(
+        'auth:revoke-before:user-1',
+        expect.any(String),
+        'EX',
+        30,
+      );
     });
   });
 

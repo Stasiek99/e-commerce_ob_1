@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { RegisterDto } from './dto/register.dto';
+import { parseDurationToSeconds } from '../../common/utils/duration.util';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -29,8 +30,11 @@ const REFRESH_GRACE_MS = 30_000;
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  // TTL matches the access token lifetime so the entry self-expires when no old tokens remain valid
-  private static readonly REVOKE_BEFORE_TTL_SECS = 900; // 15 minutes
+  // TTL matches the access token lifetime so the entry self-expires when no old
+  // tokens remain valid. Derived from JWT_ACCESS_EXPIRES_IN (rather than a literal)
+  // so an operator bumping that env var can't silently shrink the revocation window
+  // below the actual token lifetime.
+  private readonly revokeBeforeTtlSecs: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -39,7 +43,11 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly emailService: EmailQueueService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
-  ) {}
+  ) {
+    this.revokeBeforeTtlSecs = parseDurationToSeconds(
+      this.configService.get<string>('JWT_ACCESS_EXPIRES_IN', '15m'),
+    );
+  }
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM, { timeZone: 'Europe/Warsaw' })
   async purgeExpiredTokens(): Promise<void> {
@@ -630,7 +638,7 @@ export class AuthService {
       `auth:revoke-before:${userId}`,
       Date.now().toString(),
       'EX',
-      AuthService.REVOKE_BEFORE_TTL_SECS,
+      this.revokeBeforeTtlSecs,
     );
   }
 
