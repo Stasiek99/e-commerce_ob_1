@@ -28,7 +28,7 @@ describe('ShippingService', () => {
   let dpd: jest.Mocked<DpdClient>;
   let storage: jest.Mocked<StorageService>;
   let emailService: jest.Mocked<EmailQueueService>;
-  let redis: { set: jest.Mock };
+  let redis: { set: jest.Mock; eval: jest.Mock };
 
   const mockOrderBase = {
     id: 'order-1',
@@ -122,6 +122,7 @@ describe('ShippingService', () => {
           provide: 'REDIS_CLIENT',
           useValue: {
             set: jest.fn().mockResolvedValue('OK'),
+            eval: jest.fn().mockResolvedValue(1),
           },
         },
       ],
@@ -167,6 +168,92 @@ describe('ShippingService', () => {
       prisma.order.findUnique.mockResolvedValue(null);
 
       await expect(service.generateLabel('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    // ─── distributed lock — prevents duplicate billable carrier shipments ────
+    // Without a lock, two concurrent requests for the same order (admin
+    // double-click, or a retry on what looks like a hung request) could both
+    // pass the existing-shipment guard and both call the carrier's real,
+    // billable createShipment(). The second prisma.shipment.upsert would then
+    // silently overwrite the first's shipmentId/trackingNumber, leaving one
+    // real carrier-side shipment with no local DB record at all.
+
+    describe('distributed lock', () => {
+      it('acquires the lock with NX and a 60-second TTL before doing any work', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'T', labelUrl: 'U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'U', trackingNumber: 'T' });
+
+        await service.generateLabel('order-1');
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'label-gen-lock:order-1',
+          expect.any(String),
+          'EX',
+          60,
+          'NX',
+        );
+      });
+
+      it('throws 429 when the lock is already held by a concurrent request', async () => {
+        redis.set.mockResolvedValue(null); // SET NX returns null = not acquired
+
+        await expect(service.generateLabel('order-1')).rejects.toMatchObject({ status: 429 });
+      });
+
+      it('does not look up the order when the lock cannot be acquired', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await expect(service.generateLabel('order-1')).rejects.toMatchObject({ status: 429 });
+
+        expect(prisma.order.findUnique).not.toHaveBeenCalled();
+      });
+
+      it('never calls the carrier when the lock cannot be acquired — regression guard for duplicate billable shipments', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await expect(service.generateLabel('order-1')).rejects.toMatchObject({ status: 429 });
+
+        expect(dhl.createShipment).not.toHaveBeenCalled();
+        expect(inpost.createShipment).not.toHaveBeenCalled();
+      });
+
+      it('releases the lock via the Lua script on success', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'T', labelUrl: 'U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'U', trackingNumber: 'T' });
+
+        await service.generateLabel('order-1');
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock via the Lua script even when the carrier call throws', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        dhl.createShipment.mockRejectedValue(new Error('Carrier API down'));
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('Carrier API down');
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock even when the order is not found', async () => {
+        prisma.order.findUnique.mockResolvedValue(null);
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(NotFoundException);
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock even when the duplicate-shipment guard rejects', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue({ status: ShipmentStatus.LABEL_GENERATED });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(ConflictException);
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
     });
 
     describe('order status guard', () => {

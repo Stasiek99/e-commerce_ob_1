@@ -1,5 +1,6 @@
-import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
@@ -59,6 +60,25 @@ export class ShippingService {
   }
 
   async generateLabel(orderId: string) {
+    // Distributed lock: prevents two concurrent requests for the same order
+    // (admin double-click, or a retry on what looks like a hung request — carrier
+    // latency near the 15s axios timeout is a realistic trigger) from both passing
+    // the existing-shipment guard and both calling the carrier's real, billable
+    // createShipment(). TTL covers the worst case of two sequential 15s carrier
+    // calls (createShipment + fetchLabelPdf) plus the Supabase label upload.
+    // Mirrors the checkout-lock/cancel-lock pattern in orders.service.ts.
+    const lockKey = `label-gen-lock:${orderId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 60, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        'Label generation for this order is already in progress — please wait a moment before trying again',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    try {
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { items: { include: { productVariant: true } } },
@@ -255,6 +275,16 @@ export class ShippingService {
       });
 
       throw err;
+    }
+
+    } finally {
+      // Release the lock only if we still own it (Lua script is atomic).
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
     }
   }
 
