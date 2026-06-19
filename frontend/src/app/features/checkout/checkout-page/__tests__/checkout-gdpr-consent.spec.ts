@@ -16,6 +16,7 @@ import { environment } from '../../../../../environments/environment';
 
 const ORDERS_URL = `${environment.apiUrl}/orders`;
 const ADDRESSES_URL = `${environment.apiUrl}/users/me/addresses`;
+const RATES_URL = `${environment.apiUrl}/shipping/rates`;
 
 function buildSetup(authenticated = true) {
   const mockCart = {
@@ -59,6 +60,8 @@ function buildSetup(authenticated = true) {
   const http = TestBed.inject(HttpTestingController);
 
   fixture.detectChanges();
+
+  http.expectOne(RATES_URL).flush([]);
 
   if (authenticated) {
     http.expectOne(ADDRESSES_URL).flush([]);
