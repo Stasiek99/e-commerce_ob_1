@@ -11,6 +11,13 @@ import { GlsClient } from './carriers/gls.client';
 import { DpdClient } from './carriers/dpd.client';
 import { ShippingRatesService } from './shipping-rates.service';
 
+/** DHL/DPD store the carrier's own externally hosted label URL in `labelUrl`;
+ *  InPost/GLS store a bare Supabase storage path. Must be checked before the
+ *  `mock-label-` check since carrier URLs never have that prefix either. */
+export function isCarrierHostedUrl(labelUrl: string): boolean {
+  return labelUrl.startsWith('http');
+}
+
 const CARRIER_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.INPOST]:      'InPost',
   [CarrierCode.DHL]:         'DHL Express',
@@ -255,11 +262,13 @@ export class ShippingService {
     const shipment = await this.prisma.shipment.findUnique({ where: { orderId } });
     if (!shipment) throw new NotFoundException('No shipment for this order');
 
-    let signedLabelUrl: string | null = null;
-    if (shipment.labelUrl && !shipment.labelUrl.startsWith('mock-label-')) {
+    let signedLabelUrl: string | null = shipment.labelUrl;
+    if (
+      shipment.labelUrl &&
+      !isCarrierHostedUrl(shipment.labelUrl) &&
+      !shipment.labelUrl.startsWith('mock-label-')
+    ) {
       signedLabelUrl = await this.storage.getShippingLabelSignedUrl(shipment.labelUrl);
-    } else {
-      signedLabelUrl = shipment.labelUrl;
     }
 
     return { labelUrl: signedLabelUrl, trackingNumber: shipment.trackingNumber };

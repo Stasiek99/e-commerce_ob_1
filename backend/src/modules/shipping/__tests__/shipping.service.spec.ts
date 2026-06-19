@@ -608,6 +608,21 @@ describe('ShippingService', () => {
       });
     });
 
+    it('returns a carrier-hosted DHL/DPD URL as-is without calling getShippingLabelSignedUrl', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        labelUrl: 'https://dhl.example.com/labels/external-123.pdf',
+        trackingNumber: 'TRK-DHL-123',
+      });
+
+      const result = await service.getLabel('order-1');
+
+      expect(storage.getShippingLabelSignedUrl).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        labelUrl: 'https://dhl.example.com/labels/external-123.pdf',
+        trackingNumber: 'TRK-DHL-123',
+      });
+    });
+
     it('returns the mock label path as-is without calling getShippingLabelSignedUrl', async () => {
       prisma.shipment.findUnique.mockResolvedValue({
         labelUrl: 'mock-label-MOCK_INPOST_ABC.pdf',

@@ -500,11 +500,13 @@ export async function setupAdmin(
 
                 try {
                   // If a label was already generated, redirect to the existing URL rather
-                  // than hitting the carrier API again.
+                  // than hitting the carrier API again. Delegate to shippingService.getLabel()
+                  // so the carrier-hosted-vs-Supabase-path distinction lives in one place.
                   const existing = await prisma.shipment.findUnique({ where: { orderId } });
                   if (existing?.status === 'LABEL_GENERATED' && existing.labelUrl) {
-                    if (existing.labelUrl.startsWith('http')) {
-                      return { redirectUrl: existing.labelUrl, record: record.toJSON() };
+                    const { labelUrl } = await shippingService.getLabel(orderId);
+                    if (labelUrl && !labelUrl.startsWith('mock-label-')) {
+                      return { redirectUrl: labelUrl, record: record.toJSON() };
                     }
                     return {
                       record: record.toJSON(),
@@ -518,8 +520,11 @@ export async function setupAdmin(
                   const shipment = await shippingService.generateLabel(orderId);
                   await logAdminAction(prisma, 'generateLabel', 'Order', orderId, context.currentAdmin?.email ?? adminEmail, { trackingNumber: shipment.trackingNumber });
 
-                  if (shipment.labelUrl?.startsWith('http')) {
-                    return { redirectUrl: shipment.labelUrl, record: record.toJSON() };
+                  if (shipment.labelUrl && !shipment.labelUrl.startsWith('mock-label-')) {
+                    const { labelUrl } = await shippingService.getLabel(orderId);
+                    if (labelUrl) {
+                      return { redirectUrl: labelUrl, record: record.toJSON() };
+                    }
                   }
 
                   // Mock mode — no real PDF URL, just surface the tracking number
