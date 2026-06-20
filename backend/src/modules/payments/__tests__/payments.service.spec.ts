@@ -80,6 +80,12 @@ describe('PaymentsService', () => {
       data: { object },
     }) as unknown as Stripe.Event;
 
+  // Drains the microtask queue past a multi-step promise chain (invoice →
+  // email → outbox update). A fixed number of `await Promise.resolve()` calls
+  // is fragile to chain-length changes; setImmediate runs after the entire
+  // microtask queue has emptied.
+  const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolve));
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -3331,8 +3337,87 @@ describe('PaymentsService', () => {
       prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
 
       await service.approveFraudReview('order-1', 'ADMIN');
-      await Promise.resolve();
+      await flushMicrotasks();
 
+      expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
+        where: { id: 'outbox-fraud-1' },
+        data: { status: 'PROCESSED', processedAt: expect.any(Date) },
+      });
+    });
+
+    // Regression coverage for the bug where the outbox row was marked PROCESSED
+    // in the same tick as kicking off dispatch, instead of after the guarded
+    // notification work (invoice PDF + customer email) actually settled — which
+    // defeats crash recovery: a process crash between the two writes left a
+    // PROCESSED row backing notifications that never went out.
+
+    it('does NOT mark the outbox row PROCESSED until the invoice+email chain resolves', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+
+      let resolveInvoice: (value: { url: string; storagePath: string; pdf: Buffer; invoiceNumber: string }) => void;
+      invoiceService.processInvoice.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveInvoice = resolve;
+          }),
+      );
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await flushMicrotasks();
+
+      expect(prisma.outboxMessage.update).not.toHaveBeenCalled();
+
+      resolveInvoice!({
+        url: 'https://mock-invoice.pdf',
+        storagePath: 'invoices/FV-2026-000001.pdf',
+        pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
+      });
+      await flushMicrotasks();
+
+      expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
+        where: { id: 'outbox-fraud-1' },
+        data: { status: 'PROCESSED', processedAt: expect.any(Date) },
+      });
+    });
+
+    it('leaves the outbox row PENDING when invoice generation and the plain-email fallback both fail', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+      invoiceService.processInvoice.mockRejectedValue(new Error('PDF service timeout'));
+      emailService.sendPaymentConfirmed.mockRejectedValue(new Error('Resend API down'));
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await flushMicrotasks();
+
+      expect(prisma.outboxMessage.update).not.toHaveBeenCalled();
+    });
+
+    it('still marks the outbox row PROCESSED via the plain-email fallback when invoice generation fails', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+      invoiceService.processInvoice.mockRejectedValue(new Error('PDF service timeout'));
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await flushMicrotasks();
+
+      expect(emailService.sendPaymentConfirmed).toHaveBeenCalled();
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'outbox-fraud-1' },
         data: { status: 'PROCESSED', processedAt: expect.any(Date) },

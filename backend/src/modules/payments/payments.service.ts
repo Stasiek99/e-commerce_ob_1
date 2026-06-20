@@ -459,15 +459,26 @@ export class PaymentsService {
       `Payment completed for order ${payment.order.orderNumber} (session ${session.id})`,
     );
 
-    // Fast path: dispatch notifications immediately for low latency.
-    // If the process crashes here before the outbox can be marked PROCESSED,
-    // OutboxProcessorService will recover after its 30s delay.
-    this.dispatchPostPaymentNotifications(payment.order, paymentIntentId);
+    // Fast path: dispatch notifications immediately for low latency — this call
+    // does not block the webhook response. The outbox row is only marked
+    // PROCESSED once the notification chain it guards actually settles
+    // successfully; if it crashes or fails first, OutboxProcessorService will
+    // recover the still-PENDING row after its 30s delay.
+    const notified = this.dispatchPostPaymentNotifications(payment.order, paymentIntentId);
 
     if (outboxId) {
-      this.prisma.outboxMessage
-        .update({ where: { id: outboxId }, data: { status: 'PROCESSED', processedAt: new Date() } })
-        .catch((err) => this.logger.warn(`Outbox mark-processed failed: ${(err as Error).message}`));
+      notified
+        .then(() =>
+          this.prisma.outboxMessage.update({
+            where: { id: outboxId },
+            data: { status: 'PROCESSED', processedAt: new Date() },
+          }),
+        )
+        .catch((err) =>
+          this.logger.warn(
+            `Outbox ${outboxId} left PENDING for recovery — notification dispatch or mark-processed failed: ${(err as Error).message}`,
+          ),
+        );
     }
   }
 
@@ -519,20 +530,28 @@ export class PaymentsService {
 
     this.logger.log(`Fraud review approved for order ${order.orderNumber} by ${actor}`);
 
-    // Fast path: dispatch notifications immediately for low latency. If the
-    // process crashes here before the outbox can be marked PROCESSED,
-    // OutboxProcessorService will recover after its 30s delay.
-    this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
+    // Fast path — see markSessionPaid for why the outbox PROCESSED write is
+    // chained onto notification completion rather than fired alongside it.
+    const notified = this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
 
-    this.prisma.outboxMessage
-      .update({ where: { id: outboxId }, data: { status: 'PROCESSED', processedAt: new Date() } })
-      .catch((err) => this.logger.warn(`Outbox mark-processed failed: ${(err as Error).message}`));
+    notified
+      .then(() =>
+        this.prisma.outboxMessage.update({
+          where: { id: outboxId },
+          data: { status: 'PROCESSED', processedAt: new Date() },
+        }),
+      )
+      .catch((err) =>
+        this.logger.warn(
+          `Outbox ${outboxId} left PENDING for recovery — notification dispatch or mark-processed failed: ${(err as Error).message}`,
+        ),
+      );
   }
 
   private dispatchPostPaymentNotifications(
     order: InvoiceOrder & { snapshotEmail: string; carrierCode: string },
     _paymentIntentId: string | null,
-  ) {
+  ): Promise<void> {
     const adminEmail =
       this.configService.get<string>('ADMIN_ALERT_EMAIL') ||
       this.configService.get<string>('EMAIL_FROM');
@@ -577,9 +596,14 @@ export class PaymentsService {
       });
     }
 
-    // Fire-and-forget: generate invoice PDF, upload, then email with attachment.
-    // Falls back to a plain payment confirmation if invoice generation fails.
-    this.invoiceService
+    // Customer-facing chain: generate invoice PDF, upload, then email with
+    // attachment — falling back to a plain payment confirmation if invoice
+    // generation fails. Callers await this (without blocking their own return,
+    // for low latency) before marking the outbox row PROCESSED: if both the
+    // invoice path and the plain-email fallback fail, this rejects, so the
+    // row is left PENDING for OutboxProcessorService to recover instead of
+    // being marked done before the customer ever got a confirmation.
+    return this.invoiceService
       .processInvoice(order)
       .then(({ storagePath }) =>
         this.emailService.sendPaymentConfirmedWithInvoice({
@@ -603,14 +627,12 @@ export class PaymentsService {
           scope.setContext('order', { orderNumber: order.orderNumber });
           Sentry.captureException(err);
         });
-        this.emailService
-          .sendPaymentConfirmed({
-            to: order.snapshotEmail,
-            orderNumber: order.orderNumber,
-            firstName: order.snapshotFirstName,
-            totalInCents: order.totalInCents,
-          })
-          .catch((e) => this.logger.warn('Payment confirmed email failed', e));
+        return this.emailService.sendPaymentConfirmed({
+          to: order.snapshotEmail,
+          orderNumber: order.orderNumber,
+          firstName: order.snapshotFirstName,
+          totalInCents: order.totalInCents,
+        });
       });
   }
 
