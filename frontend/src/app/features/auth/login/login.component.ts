@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, OnInit } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
@@ -85,7 +85,7 @@ import { ToastService } from '../../../core/services/toast.service';
     .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
   `],
 })
-export class LoginComponent {
+export class LoginComponent implements OnInit {
   private readonly auth  = inject(AuthService);
   private readonly cart  = inject(CartService);
   private readonly toast = inject(ToastService);
@@ -105,6 +105,15 @@ export class LoginComponent {
     email:    ['', [Validators.required, Validators.email]],
     password: ['', Validators.required],
   });
+
+  ngOnInit(): void {
+    const error = this.route.snapshot.queryParams['error'];
+    if (error === 'account_conflict') {
+      this.toast.error('To konto zostało już zarejestrowane z hasłem. Zaloguj się hasłem, aby połączyć je z Google.');
+    } else if (error === 'oauth_failed') {
+      this.toast.error('Logowanie przez Google nie powiodło się. Spróbuj ponownie.');
+    }
+  }
 
   errorMsg(field: string): string | null {
     const ctrl = this.form.get(field);

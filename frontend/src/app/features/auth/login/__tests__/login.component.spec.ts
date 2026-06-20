@@ -16,11 +16,15 @@ import { AuthService } from '../../../../core/services/auth.service';
 import { CartService } from '../../../../core/services/cart.service';
 import { ToastService } from '../../../../core/services/toast.service';
 
-function setup(returnToParam: string | undefined = undefined) {
+function setup(returnToParam: string | undefined = undefined, errorParam: string | undefined = undefined) {
   const mockAuth  = { login: jest.fn(), loginWithGoogle: jest.fn() };
   const mockCart  = { mergeWithServer: jest.fn().mockReturnValue(of({})) };
   const mockToast = { success: jest.fn(), error: jest.fn() };
   const mockRouter = { navigateByUrl: jest.fn(), navigate: jest.fn() };
+
+  const queryParams: Record<string, string> = {};
+  if (returnToParam !== undefined) queryParams['returnTo'] = returnToParam;
+  if (errorParam !== undefined) queryParams['error'] = errorParam;
 
   TestBed.configureTestingModule({
     imports: [LoginComponent],
@@ -28,7 +32,7 @@ function setup(returnToParam: string | undefined = undefined) {
       { provide: AuthService,    useValue: mockAuth },
       { provide: CartService,    useValue: mockCart },
       { provide: ToastService,   useValue: mockToast },
-      { provide: ActivatedRoute, useValue: { snapshot: { queryParams: returnToParam !== undefined ? { returnTo: returnToParam } : {} } } },
+      { provide: ActivatedRoute, useValue: { snapshot: { queryParams } } },
       { provide: 'Router',       useValue: mockRouter },
     ],
     schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
@@ -82,6 +86,36 @@ describe('LoginComponent — returnTo sanitization (open-redirect guard)', () =>
     const { component } = setup('/');
 
     expect(component.returnTo).toBe('/');
+  });
+});
+
+describe('LoginComponent — Google OAuth rejection toast', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows the account-conflict message when error=account_conflict', () => {
+    const { mockToast } = setup(undefined, 'account_conflict');
+
+    expect(mockToast.error).toHaveBeenCalledTimes(1);
+    expect(mockToast.error).toHaveBeenCalledWith(expect.stringContaining('zarejestrowane'));
+  });
+
+  it('shows the generic OAuth-failure message when error=oauth_failed', () => {
+    const { mockToast } = setup(undefined, 'oauth_failed');
+
+    expect(mockToast.error).toHaveBeenCalledTimes(1);
+    expect(mockToast.error).toHaveBeenCalledWith(expect.stringContaining('Google'));
+  });
+
+  it('does not show a toast when no error query param is present', () => {
+    const { mockToast } = setup();
+
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('ignores an unrecognized error value', () => {
+    const { mockToast } = setup(undefined, 'something_unexpected');
+
+    expect(mockToast.error).not.toHaveBeenCalled();
   });
 });
 

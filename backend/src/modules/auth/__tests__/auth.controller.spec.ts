@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Role } from '@prisma/client';
 import { AuthController } from '../auth.controller';
@@ -198,7 +198,7 @@ describe('AuthController', () => {
     it('stores a 64-char hex nonce in Redis with a 60-second TTL', async () => {
       const res = { cookie: jest.fn(), redirect: jest.fn() };
 
-      await controller.googleCallback(mockUser as any, res as any);
+      await controller.googleCallback(mockUser as any, {} as any, res as any);
 
       expect(redis.set).toHaveBeenCalledWith(
         expect.stringMatching(/^oauth_nonce:[a-f0-9]{64}$/),
@@ -211,7 +211,7 @@ describe('AuthController', () => {
     it('appends #state=<nonce> fragment to the redirect URL', async () => {
       const res = { cookie: jest.fn(), redirect: jest.fn() };
 
-      await controller.googleCallback(mockUser as any, res as any);
+      await controller.googleCallback(mockUser as any, {} as any, res as any);
 
       const redirectUrl: string = (res.redirect as jest.Mock).mock.calls[0][0];
       expect(redirectUrl).toMatch(/\/auth\/callback#state=[a-f0-9]{64}$/);
@@ -220,7 +220,7 @@ describe('AuthController', () => {
     it('sets both the refresh cookie and the short-lived oauth_access_token cookie', async () => {
       const res = { cookie: jest.fn(), redirect: jest.fn() };
 
-      await controller.googleCallback(mockUser as any, res as any);
+      await controller.googleCallback(mockUser as any, {} as any, res as any);
 
       const setCookieNames = (res.cookie as jest.Mock).mock.calls.map(
         (args: unknown[]) => args[0] as string,
@@ -232,7 +232,7 @@ describe('AuthController', () => {
     it('nonce in the redirect URL matches the Redis key written (end-to-end consistency)', async () => {
       const res = { cookie: jest.fn(), redirect: jest.fn() };
 
-      await controller.googleCallback(mockUser as any, res as any);
+      await controller.googleCallback(mockUser as any, {} as any, res as any);
 
       const redisKey: string = (redis.set as jest.Mock).mock.calls[0][0];
       const nonce = redisKey.replace('oauth_nonce:', '');
@@ -245,13 +245,56 @@ describe('AuthController', () => {
       const res1 = { cookie: jest.fn(), redirect: jest.fn() };
       const res2 = { cookie: jest.fn(), redirect: jest.fn() };
 
-      await controller.googleCallback(mockUser as any, res1 as any);
-      await controller.googleCallback(mockUser as any, res2 as any);
+      await controller.googleCallback(mockUser as any, {} as any, res1 as any);
+      await controller.googleCallback(mockUser as any, {} as any, res2 as any);
 
       const url1: string = (res1.redirect as jest.Mock).mock.calls[0][0];
       const url2: string = (res2.redirect as jest.Mock).mock.calls[0][0];
 
       expect(url1).not.toBe(url2);
+    });
+  });
+
+  // ─── googleCallback — strategy-side rejection redirect ───────────────────────
+
+  describe('googleCallback — strategy-side rejection redirect', () => {
+    it('redirects to /auth/login?error=account_conflict when GoogleAuthGuard stashed a ConflictException', async () => {
+      const res = { cookie: jest.fn(), redirect: jest.fn() };
+      const req = { oauthError: new ConflictException('already exists') };
+
+      await controller.googleCallback(undefined as any, req as any, res as any);
+
+      expect(res.redirect).toHaveBeenCalledWith('http://localhost:4200/auth/login?error=account_conflict');
+      expect(authService.generateTokenPair).not.toHaveBeenCalled();
+    });
+
+    it('redirects to /auth/login?error=oauth_failed when a non-conflict error was stashed', async () => {
+      const res = { cookie: jest.fn(), redirect: jest.fn() };
+      const req = { oauthError: new Error('No email from Google') };
+
+      await controller.googleCallback(undefined as any, req as any, res as any);
+
+      expect(res.redirect).toHaveBeenCalledWith('http://localhost:4200/auth/login?error=oauth_failed');
+      expect(authService.generateTokenPair).not.toHaveBeenCalled();
+    });
+
+    it('redirects to /auth/login?error=oauth_failed when no user and no stashed error are present', async () => {
+      const res = { cookie: jest.fn(), redirect: jest.fn() };
+
+      await controller.googleCallback(undefined as any, {} as any, res as any);
+
+      expect(res.redirect).toHaveBeenCalledWith('http://localhost:4200/auth/login?error=oauth_failed');
+      expect(authService.generateTokenPair).not.toHaveBeenCalled();
+    });
+
+    it('does not redirect to the error route on the happy path', async () => {
+      authService.generateTokenPair.mockResolvedValue({ accessToken: 'at-val', refreshToken: 'rt-val' });
+      const res = { cookie: jest.fn(), redirect: jest.fn() };
+
+      await controller.googleCallback(mockUser as any, {} as any, res as any);
+
+      const redirectUrl: string = (res.redirect as jest.Mock).mock.calls[0][0];
+      expect(redirectUrl).not.toContain('error=');
     });
   });
 
