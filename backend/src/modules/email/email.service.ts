@@ -20,6 +20,7 @@ import { returnStatusUpdateTemplate } from './templates/return-status-update.tem
 import { emailChangeTemplate } from './templates/email-change.template';
 import { magicLinkTemplate } from './templates/magic-link.template';
 import { orderAcknowledgedTemplate } from './templates/order-acknowledged.template';
+import { escapeHtml } from './templates/html-escape.util';
 
 type EmailKind =
   | 'order_confirmation'
@@ -161,7 +162,7 @@ export class EmailService {
       <p>Stripe Radar oznaczył płatność jako ryzykowną i zamówienie zostało wstrzymane przed realizacją.</p>
       <table>
         <tr><td><strong>Zamówienie:</strong></td><td>${data.orderNumber}</td></tr>
-        <tr><td><strong>Klient:</strong></td><td>${data.customerEmail}</td></tr>
+        <tr><td><strong>Klient:</strong></td><td>${escapeHtml(data.customerEmail)}</td></tr>
         <tr><td><strong>Kwota:</strong></td><td>${amount} PLN</td></tr>
         <tr><td><strong>Poziom ryzyka Radar:</strong></td><td>${data.radarRiskLevel}</td></tr>
       </table>
@@ -275,9 +276,9 @@ export class EmailService {
       <p>Klient złożył reklamację za pośrednictwem banku. Stripe wymaga przesłania dowodów w ciągu <strong>7 dni kalendarzowych</strong>.</p>
       <table>
         <tr><td><strong>Zamówienie:</strong></td><td>${data.orderNumber}</td></tr>
-        <tr><td><strong>Klient:</strong></td><td>${data.customerEmail}</td></tr>
+        <tr><td><strong>Klient:</strong></td><td>${escapeHtml(data.customerEmail)}</td></tr>
         <tr><td><strong>Kwota sporu:</strong></td><td>${amount} PLN</td></tr>
-        <tr><td><strong>Powód:</strong></td><td>${data.reason}</td></tr>
+        <tr><td><strong>Powód:</strong></td><td>${escapeHtml(data.reason)}</td></tr>
         <tr><td><strong>Termin dowodów:</strong></td><td>${data.evidenceDeadline}</td></tr>
         <tr><td><strong>ID sporu:</strong></td><td>${data.disputeId}</td></tr>
       </table>
