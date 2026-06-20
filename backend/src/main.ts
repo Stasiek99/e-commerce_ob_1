@@ -99,8 +99,6 @@ async function bootstrap() {
 
   app.useLogger(app.get(Logger));
 
-  app.enableShutdownHooks();
-
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
 
@@ -108,10 +106,36 @@ async function bootstrap() {
   // Idle keep-alive connections hold the process open past Railway's SIGKILL.
   // 5 s < SIGKILL window (≈10 s), so they drain before the OS force-kills.
   server.keepAliveTimeout = 5_000;
-  // On SIGTERM, immediately drop idle connections so the process can exit cleanly
-  // within the SIGKILL window. Active in-flight requests finish normally (bounded
-  // by the 8 s TimeoutInterceptor above).
-  process.once('SIGTERM', () => server.closeIdleConnections());
+
+  // Graceful shutdown, driven manually instead of Nest's built-in shutdown-hook
+  // signal listener. That built-in path runs callDestroyHook() — which disconnects
+  // Prisma process-wide via PrismaService.onModuleDestroy() — BEFORE dispose()
+  // closes the HTTP server. That order means any request still in flight when
+  // the signal arrives would have its next Prisma call fail, instead of finishing
+  // normally. Closing the HTTP server first (and only tearing providers down once
+  // it has drained) fixes the ordering.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    app.get(Logger).log(`${signal} received, draining HTTP server…`, 'Bootstrap');
+
+    server.closeIdleConnections();
+    const drained = new Promise<void>((resolve) => server.close(() => resolve()));
+    // Bounded by the same budget as TimeoutInterceptor above, so we never wait
+    // past Railway's SIGTERM→SIGKILL window (≈10 s) on a stuck connection.
+    const timedOut = new Promise<void>((resolve) => setTimeout(resolve, 8_000));
+
+    Promise.race([drained, timedOut])
+      .then(() => app.close())
+      .then(() => process.exit(0))
+      .catch((err) => {
+        app.get(Logger).error('Error during shutdown', (err as Error)?.stack, 'Bootstrap');
+        process.exit(1);
+      });
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 
   app.get(Logger).log(`Backend running on http://localhost:${port}`, 'Bootstrap');
 }
