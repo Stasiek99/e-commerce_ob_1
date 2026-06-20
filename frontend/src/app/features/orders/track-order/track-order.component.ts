@@ -1,10 +1,8 @@
 import { Component, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { DatePipe } from '@angular/common';
 import { TuiButton, TuiLabel, TuiTextfield } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
-import { PricePipe } from '../../../shared/pipes/price.pipe';
 
 const TRACKING_URLS: Record<string, string> = {
   INPOST:      'https://inpost.pl/sledzenie-przesylek?number=',
@@ -26,11 +24,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 interface TrackResult {
-  orderNumber: string;
   status: string;
-  createdAt: string;
-  totalInCents: number;
-  items: Array<{ snapshotName: string; quantity: number; snapshotPrice: number }>;
   trackingNumber: string | null;
   carrier: string | null;
 }
@@ -38,7 +32,7 @@ interface TrackResult {
 @Component({
   selector: 'app-track-order',
   standalone: true,
-  imports: [ReactiveFormsModule, DatePipe, TuiButton, TuiLabel, TuiTextfield, PricePipe],
+  imports: [ReactiveFormsModule, TuiButton, TuiLabel, TuiTextfield],
   template: `
     <div class="page">
       <div class="card">
@@ -66,10 +60,6 @@ interface TrackResult {
       @if (result()) {
         <div class="result">
           <div class="result-header">
-            <div>
-              <h2>#{{ result()!.orderNumber }}</h2>
-              <p class="result-date">{{ result()!.createdAt | date:'dd.MM.yyyy' }}</p>
-            </div>
             <span class="status"
               [class.status--paid]="result()!.status === 'PAID'"
               [class.status--pending_payment]="result()!.status === 'PENDING_PAYMENT'"
@@ -80,19 +70,6 @@ interface TrackResult {
               [class.status--refunded]="result()!.status === 'REFUNDED'">
               {{ statusLabel(result()!.status) }}
             </span>
-          </div>
-
-          <div class="items-card">
-            @for (item of result()!.items; track item.snapshotName) {
-              <div class="item">
-                <span>{{ item.snapshotName }} × {{ item.quantity }}</span>
-                <span>{{ item.snapshotPrice * item.quantity | price }}</span>
-              </div>
-            }
-            <div class="item item--total">
-              <strong>Łącznie</strong>
-              <strong>{{ result()!.totalInCents | price }}</strong>
-            </div>
           </div>
 
           @if (result()!.trackingNumber) {
@@ -130,9 +107,7 @@ interface TrackResult {
     .track-form { display: flex; flex-direction: column; gap: 16px; }
     .error { font-size: 13px; color: var(--color-error); margin: 0; }
 
-    .result-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
-    h2 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
-    .result-date { font-size: 13px; color: var(--color-secondary); margin: 0; }
+    .result-header { margin-bottom: 16px; }
 
     .status {
       padding: 3px 10px;
@@ -149,17 +124,6 @@ interface TrackResult {
     .status--refunded        { background: #f3f4f6; color: #6b7280; }
     .status--processing      { background: #eff6ff; color: #1d4ed8; }
     .status--delivered       { background: #f0fdf4; color: #166534; }
-
-    .items-card {
-      background: var(--color-surface);
-      border: 1px solid var(--color-border);
-      border-radius: var(--border-radius-md);
-      overflow: hidden;
-      margin-bottom: 16px;
-    }
-    .item { display: flex; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--color-border); font-size: 14px; }
-    .item:last-child { border-bottom: none; }
-    .item--total { font-weight: 600; background: var(--color-surface); }
 
     .tracking {
       padding: 16px;
