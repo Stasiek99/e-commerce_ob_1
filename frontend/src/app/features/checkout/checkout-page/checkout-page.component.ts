@@ -669,6 +669,9 @@ export class CheckoutPageComponent implements OnInit {
   );
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   private dpdOpenerEl: HTMLElement | null = null;
+  // Guards against the message listener outliving the component (e.g. back
+  // button or an auth-guard redirect while the DPD modal is open).
+  private readonly _dpdModalCleanup = this.destroyRef.onDestroy(() => this.closeDpdModal());
   private readonly checkoutIdempotencyKey = crypto.randomUUID();
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);

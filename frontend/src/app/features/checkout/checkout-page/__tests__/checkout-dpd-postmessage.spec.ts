@@ -135,3 +135,36 @@ describe('CheckoutPageComponent — DPD postMessage origin guard', () => {
     expect(component.selectedDpdPoint()).toBeNull();
   });
 });
+
+describe('CheckoutPageComponent — DPD modal listener cleanup on destroy', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('removes the window message listener when the component is destroyed while the modal is open', () => {
+    const { component, fixture } = setup();
+    const removeSpy = jest.spyOn(window, 'removeEventListener');
+    component.openDpdPicker();
+
+    fixture.destroy();
+
+    expect(removeSpy).toHaveBeenCalledWith('message', expect.any(Function));
+  });
+
+  it('a postMessage delivered after destroy no longer updates selectedDpdPoint (no stale listener)', () => {
+    const { component, fixture } = setup();
+    component.openDpdPicker();
+
+    fixture.destroy();
+
+    window.dispatchEvent(
+      dpdMessage('https://api.dpd.cz', { dpdWidget: { id: 'AFTER001', street: 'ul. Testowa', zip_code: '00-001', city: 'Warszawa' } }),
+    );
+
+    expect(component.selectedDpdPoint()).toBeNull();
+  });
+
+  it('destroying the component without ever opening the modal does not throw', () => {
+    const { fixture } = setup();
+
+    expect(() => fixture.destroy()).not.toThrow();
+  });
+});
