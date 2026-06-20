@@ -5,6 +5,11 @@
  *  - Content-Security-Policy is set on every response, restricting script/connect/frame sources
  *  - CSP script-src uses a per-request nonce instead of 'unsafe-inline'
  *  - The nonce is stored on res.locals.cspNonce for downstream SSR render use
+ *  - script-src always allows the two fixed inline scripts Angular's withEventReplay()
+ *    emits, via hash sources — Angular never attaches the CSP_NONCE token to those two
+ *    specific scripts regardless of provider wiring
+ *    (https://github.com/angular/angular/issues/59886, /issues/66540), so the nonce
+ *    alone is not enough to unblock them
  *  - frame-ancestors 'none' prevents clickjacking of SSR-rendered pages
  *  - X-Content-Type-Options: nosniff prevents MIME-type sniffing
  *  - Referrer-Policy limits referrer leakage to cross-origin navigations
@@ -111,6 +116,36 @@ describe('ssrSecurityHeaders middleware', () => {
     const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
     expect(csp).toContain('https://www.googletagmanager.com');
     expect(csp).toContain('https://geowidget.easypack24.net');
+  });
+
+  it('CSP script-src allows the withEventReplay() event-dispatch-contract script via a fixed hash source', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src')) ?? '';
+    expect(scriptSrc).toContain("'sha256-VM2mZqyEQZoLzoTrp5EigFvzQ0+f1wSeBuoOn95WHCg='");
+  });
+
+  it('CSP script-src allows the withEventReplay() __jsaction_bootstrap call via a fixed hash source', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src')) ?? '';
+    expect(scriptSrc).toContain("'sha256-sJtQRwXhGs3qiB9BaI1yomAMvp6wpH7vkm5wTnIjvWg='");
+  });
+
+  it('keeps both event-replay hash sources stable across different nonces (not nonce-dependent)', () => {
+    const cspA = buildCsp('nonce-a');
+    const cspB = buildCsp('nonce-b');
+
+    expect(cspA).toContain("'sha256-VM2mZqyEQZoLzoTrp5EigFvzQ0+f1wSeBuoOn95WHCg='");
+    expect(cspB).toContain("'sha256-VM2mZqyEQZoLzoTrp5EigFvzQ0+f1wSeBuoOn95WHCg='");
+    expect(cspA).toContain("'sha256-sJtQRwXhGs3qiB9BaI1yomAMvp6wpH7vkm5wTnIjvWg='");
+    expect(cspB).toContain("'sha256-sJtQRwXhGs3qiB9BaI1yomAMvp6wpH7vkm5wTnIjvWg='");
   });
 
   it('CSP script-src includes Cloudflare Turnstile', () => {
