@@ -54,11 +54,23 @@ export class OutboxProcessorService {
     this.logger.warn(`Outbox recovery: found ${messages.length} pending message(s)`);
 
     for (const msg of messages) {
-      if (msg.type === 'POST_PAYMENT_NOTIFICATIONS') {
-        await this.processPostPaymentNotifications(
-          msg as { id: string; orderId: string | null; retries: number },
-        );
-      }
+      if (msg.type !== 'POST_PAYMENT_NOTIFICATIONS') continue;
+
+      // Claim the row before doing any work so a second runner's PENDING-filtered
+      // query excludes it — closes the race where the lock TTL expires mid-batch
+      // and a concurrent run re-processes rows this run hasn't reached yet.
+      const claim = await this.prisma.outboxMessage.updateMany({
+        where: { id: msg.id, status: 'PENDING' },
+        data: { status: 'PROCESSING' },
+      });
+      if (claim.count === 0) continue;
+
+      await this.processPostPaymentNotifications(
+        msg as { id: string; orderId: string | null; retries: number },
+      );
+
+      // Refresh the lock TTL so a slow batch doesn't outlive it.
+      await this.redis.expire('cron:outbox-recovery:lock', LOCK_TTL_SECONDS);
     }
   }
 
@@ -149,7 +161,9 @@ export class OutboxProcessorService {
         data: {
           retries: { increment: 1 },
           lastError: (err as Error).message,
-          ...(newRetries >= MAX_RETRIES ? { status: 'FAILED' } : {}),
+          // Row was claimed into PROCESSING before this attempt — return it to
+          // PENDING so the next recovery pass can retry it, unless retries are exhausted.
+          status: newRetries >= MAX_RETRIES ? 'FAILED' : 'PENDING',
         },
       });
     }
