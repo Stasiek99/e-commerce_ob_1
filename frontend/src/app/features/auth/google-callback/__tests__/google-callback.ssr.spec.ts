@@ -32,7 +32,6 @@ function createComponent(platformId: string, exchangeMock: jest.Mock) {
 function createComponentWithReturnTo(returnTo: string | null, router: { navigate: jest.Mock; navigateByUrl: jest.Mock }) {
   const exchangeMock = jest.fn().mockReturnValue(of({}));
   jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) => {
-    if (key === 'oauth_state') return 'mock-csrf-state';
     if (key === 'auth_return_to') return returnTo;
     return null;
   });
@@ -125,7 +124,6 @@ describe('GoogleCallbackComponent — SSR platform guard', () => {
   it('calls exchangeOAuthToken() exactly once in the browser', () => {
     const exchangeMock = jest.fn().mockReturnValue(of({}));
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) => {
-      if (key === 'oauth_state') return 'mock-state';
       if (key === 'auth_return_to') return '/';
       return null;
     });
@@ -141,7 +139,6 @@ describe('GoogleCallbackComponent — SSR platform guard', () => {
     const exchangeMock = jest.fn().mockReturnValue(throwError(() => new Error('OAuth failed')));
     const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) => {
-      if (key === 'oauth_state') return 'mock-state';
       if (key === 'auth_return_to') return '/';
       return null;
     });
@@ -163,47 +160,20 @@ describe('GoogleCallbackComponent — SSR platform guard', () => {
   });
 });
 
-describe('GoogleCallbackComponent — CSRF state guard', () => {
+describe('GoogleCallbackComponent — no dead CSRF state mechanism', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
     jest.restoreAllMocks();
   });
 
-  function buildModule(getItemImpl: (key: string) => string | null, exchangeMock: jest.Mock, router: { navigate: jest.Mock; navigateByUrl: jest.Mock }) {
-    jest.spyOn(Storage.prototype, 'getItem').mockImplementation(getItemImpl);
-    jest.spyOn(Storage.prototype, 'removeItem').mockReturnValue(undefined);
-
-    TestBed.configureTestingModule({
-      imports: [GoogleCallbackComponent],
-      providers: [
-        { provide: PLATFORM_ID, useValue: 'browser' },
-        { provide: AuthService, useValue: { exchangeOAuthToken: exchangeMock } },
-        { provide: Router, useValue: router },
-      ],
-    });
-
-    TestBed.createComponent(GoogleCallbackComponent).detectChanges();
-  }
-
-  it('redirects to /auth/login and skips token exchange when oauth_state is absent', () => {
-    const exchangeMock = jest.fn().mockReturnValue(of({}));
-    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
-
-    buildModule((key) => (key === 'oauth_state' ? null : '/'), exchangeMock, router);
-
-    expect(router.navigate).toHaveBeenCalledWith(['/auth/login']);
-    expect(exchangeMock).not.toHaveBeenCalled();
-  });
-
-  it('always removes oauth_state from sessionStorage (even when rejecting)', () => {
+  it('does not read or write the legacy oauth_state sessionStorage key', () => {
+    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) =>
+      key === 'auth_return_to' ? '/account' : null,
+    );
     const removeItemSpy = jest.spyOn(Storage.prototype, 'removeItem').mockReturnValue(undefined);
     const exchangeMock = jest.fn().mockReturnValue(of({}));
     const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
 
-    jest.spyOn(Storage.prototype, 'getItem').mockImplementation((key: string) =>
-      key === 'oauth_state' ? null : '/',
-    );
-
     TestBed.configureTestingModule({
       imports: [GoogleCallbackComponent],
       providers: [
@@ -214,19 +184,8 @@ describe('GoogleCallbackComponent — CSRF state guard', () => {
     });
     TestBed.createComponent(GoogleCallbackComponent).detectChanges();
 
-    expect(removeItemSpy).toHaveBeenCalledWith('oauth_state');
-  });
-
-  it('proceeds with token exchange when oauth_state is present', () => {
-    const exchangeMock = jest.fn().mockReturnValue(of({}));
-    const router = { navigate: jest.fn(), navigateByUrl: jest.fn() };
-
-    buildModule((key) => {
-      if (key === 'oauth_state') return 'abc123def456';
-      if (key === 'auth_return_to') return '/account';
-      return null;
-    }, exchangeMock, router);
-
+    expect(getItemSpy).not.toHaveBeenCalledWith('oauth_state');
+    expect(removeItemSpy).not.toHaveBeenCalledWith('oauth_state');
     expect(exchangeMock).toHaveBeenCalledTimes(1);
     expect(router.navigateByUrl).toHaveBeenCalledWith('/account');
   });

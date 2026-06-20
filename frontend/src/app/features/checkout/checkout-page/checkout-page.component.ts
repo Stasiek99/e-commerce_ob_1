@@ -39,7 +39,17 @@ declare const easyPack: {
 
 const enum CarrierCode { INPOST = 'INPOST', DPD = 'DPD', DPD_COURIER = 'DPD_COURIER', DHL = 'DHL', GLS = 'GLS' }
 
-const CARRIERS = [
+interface Carrier {
+  code: CarrierCode;
+  name: string;
+  price: number;
+  desc: string;
+}
+
+// Offline last-resort fallback — used only until GET /shipping/rates resolves
+// (or if it fails). The live, admin-editable price always takes precedence;
+// see ngOnInit's rates fetch below.
+const CARRIERS: Carrier[] = [
   { code: CarrierCode.INPOST,      name: 'InPost Paczkomat', price: 1499, desc: 'Dostawa do paczkomatu 1-2 dni' },
   { code: CarrierCode.DPD,         name: 'DPD Pickup',       price: 1599, desc: 'Odbiór w punkcie DPD 1-2 dni' },
   { code: CarrierCode.DPD_COURIER, name: 'DPD Kurier',       price: 1699, desc: 'Dostawa pod drzwi 1-2 dni' },
@@ -255,7 +265,7 @@ interface AppliedCoupon {
               </header>
               <fieldset class="carrier-list">
                 <legend class="sr-only">Wybierz sposób dostawy</legend>
-                @for (c of carriers; track c.code) {
+                @for (c of carriers(); track c.code) {
                   <label
                     class="carrier-option"
                     [class.carrier-option--selected]="selectedCarrier()?.code === c.code">
@@ -645,7 +655,7 @@ export class CheckoutPageComponent implements OnInit {
 
   private readonly sanitizer = inject(DomSanitizer);
 
-  readonly selectedCarrier = signal<(typeof CARRIERS)[0] | null>(null);
+  readonly selectedCarrier = signal<Carrier | null>(null);
   readonly lockerCode = signal<string | null>(null);
   readonly selectedLocker = signal<{ code: string; address: string } | null>(null);
   readonly lockerPickerTouched = signal(false);
@@ -659,6 +669,9 @@ export class CheckoutPageComponent implements OnInit {
   );
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   private dpdOpenerEl: HTMLElement | null = null;
+  // Guards against the message listener outliving the component (e.g. back
+  // button or an auth-guard redirect while the DPD modal is open).
+  private readonly _dpdModalCleanup = this.destroyRef.onDestroy(() => this.closeDpdModal());
   private readonly checkoutIdempotencyKey = crypto.randomUUID();
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
@@ -708,7 +721,7 @@ export class CheckoutPageComponent implements OnInit {
     return map[carrier.code] ?? null;
   });
 
-  readonly carriers = CARRIERS;
+  readonly carriers = signal<Carrier[]>(CARRIERS.map((c) => ({ ...c })));
 
   readonly countries: readonly TuiCountryIsoCode[] = [
     'PL',
@@ -728,6 +741,24 @@ export class CheckoutPageComponent implements OnInit {
   });
 
   ngOnInit(): void {
+    // Live, admin-editable rates (GET /shipping/rates is @Public()) — replaces
+    // the hardcoded CARRIERS prices so the pre-payment total shown here can't
+    // silently diverge from what orders.service.ts charges server-side.
+    this.http.get<{ carrier: string; priceInCents: number }[]>(`${environment.apiUrl}/shipping/rates`).pipe(
+      catchError(() => of(null)),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe((rates) => {
+      if (!rates?.length) return;
+      const priceByCode = new Map(rates.map((r) => [r.carrier, r.priceInCents]));
+      const updated = this.carriers().map((c) => ({ ...c, price: priceByCode.get(c.code) ?? c.price }));
+      this.carriers.set(updated);
+      const sel = this.selectedCarrier();
+      if (sel) {
+        const match = updated.find((c) => c.code === sel.code);
+        if (match) this.selectedCarrier.set(match);
+      }
+    });
+
     this.addressForm.controls.postalCode.valueChanges.pipe(
       tap((val) => { if (!/^\d{2}-\d{3}$/.test(val ?? '')) this.citySuggestions.set([]); }),
       debounceTime(500),
@@ -943,7 +974,7 @@ export class CheckoutPageComponent implements OnInit {
     this.addressForm.reset({ email: this.auth.currentUser()?.email ?? '' });
   }
 
-  selectCarrier(c: (typeof CARRIERS)[0]): void {
+  selectCarrier(c: Carrier): void {
     this.selectedCarrier.set(c);
     if (c.code !== CarrierCode.INPOST) {
       this.selectedLocker.set(null);

@@ -205,6 +205,58 @@ describe('envValidationSchema — InPost production credential guard', () => {
   });
 });
 
+// ── DHL/GLS/DPD production credential guard ───────────────────────────────────
+// FIX: DhlClient/GlsClient/DpdClient call configService.getOrThrow() for these
+// credentials whenever their own mock flag is not 'true', and all three are
+// eager providers in ShippingModule — a missing credential previously passed
+// Joi validation cleanly (unconditionally .optional(), and DPD had no schema
+// entries at all) only to crash the whole process moments later inside the
+// carrier client's constructor. Mirrors the INPOST_ORGANIZATION_ID/
+// INPOST_API_TOKEN gate above for all three remaining carriers.
+
+const hasFieldError = (error: ReturnType<typeof validate>['error'], field: string): boolean =>
+  error?.details.some((d) => d.context?.key === field || d.message.includes(field)) ?? false;
+
+describe.each([
+  { carrier: 'DHL', mockFlag: 'DHL_MOCK_ENABLED', fields: ['DHL_ACCOUNT_NUMBER', 'DHL_API_KEY', 'DHL_API_SECRET'] },
+  { carrier: 'GLS', mockFlag: 'GLS_MOCK_ENABLED', fields: ['GLS_SENDER_ID', 'GLS_USERNAME', 'GLS_PASSWORD'] },
+  { carrier: 'DPD', mockFlag: 'DPD_MOCK_ENABLED', fields: ['DPD_SENDER_ID', 'DPD_API_KEY'] },
+])('envValidationSchema — $carrier production credential guard', ({ mockFlag, fields }) => {
+  describe('development environment', () => {
+    it.each(fields)('does not raise an error for missing %s in development, mock disabled', (field) => {
+      const { error } = validate({ NODE_ENV: 'development', [mockFlag]: 'false' });
+      expect(hasFieldError(error, field)).toBe(false);
+    });
+  });
+
+  describe('production environment — mock disabled (flag omitted or "false")', () => {
+    it.each(fields)('raises an error when %s is absent and mock is disabled', (field) => {
+      const { error } = validate({ NODE_ENV: 'production', [mockFlag]: 'false' });
+      expect(hasFieldError(error, field)).toBe(true);
+    });
+
+    it.each(fields)('raises an error when %s is absent (mock flag not set at all)', (field) => {
+      const { error } = validate({ NODE_ENV: 'production' });
+      expect(hasFieldError(error, field)).toBe(true);
+    });
+
+    it('does not raise an error when all credentials are provided and mock is disabled', () => {
+      const creds = Object.fromEntries(fields.map((f) => [f, 'real-value']));
+      const { error } = validate({ NODE_ENV: 'production', [mockFlag]: 'false', ...creds });
+      for (const field of fields) {
+        expect(hasFieldError(error, field)).toBe(false);
+      }
+    });
+  });
+
+  describe('production environment — mock enabled (flag "true")', () => {
+    it.each(fields)('does not raise an error when %s is absent and mock is enabled', (field) => {
+      const { error } = validate({ NODE_ENV: 'production', [mockFlag]: 'true' });
+      expect(hasFieldError(error, field)).toBe(false);
+    });
+  });
+});
+
 // ── SELLER_NIP production validation guard ───────────────────────────────────
 // FIX: SELLER_NIP previously used requiredInProd(Joi.string(), '') which let
 // '' pass .required() in production. An empty NIP silently omits the seller

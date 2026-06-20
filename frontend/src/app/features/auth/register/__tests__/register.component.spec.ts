@@ -1,12 +1,12 @@
 import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { RegisterComponent } from '../register.component';
 import { AuthService } from '../../../../core/services/auth.service';
 import { ToastService } from '../../../../core/services/toast.service';
 
-function setup() {
+function setup(returnToParam: string | undefined = undefined) {
   const mockAuth  = { register: jest.fn() };
   const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
 
@@ -16,6 +16,7 @@ function setup() {
       provideRouter([]),
       { provide: AuthService,  useValue: mockAuth },
       { provide: ToastService, useValue: mockToast },
+      { provide: ActivatedRoute, useValue: { snapshot: { queryParams: returnToParam !== undefined ? { returnTo: returnToParam } : {} } } },
     ],
     schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
   });
@@ -30,6 +31,34 @@ function setup() {
 
   return { fixture, component, mockAuth, mockToast };
 }
+
+describe('RegisterComponent — returnTo sanitization (open-redirect guard)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('sets returnTo to null when query param is an absolute URL', () => {
+    const { component } = setup('https://attacker.com/steal-token');
+
+    expect(component.returnTo).toBeNull();
+  });
+
+  it('sets returnTo to null when query param is a protocol-relative URL', () => {
+    const { component } = setup('//attacker.com');
+
+    expect(component.returnTo).toBeNull();
+  });
+
+  it('sets returnTo to null when query param is absent', () => {
+    const { component } = setup(undefined);
+
+    expect(component.returnTo).toBeNull();
+  });
+
+  it('sets returnTo to the path when query param is a safe relative URL', () => {
+    const { component } = setup('/account/orders');
+
+    expect(component.returnTo).toBe('/account/orders');
+  });
+});
 
 describe('RegisterComponent — errorMsg inline validation', () => {
   afterEach(() => TestBed.resetTestingModule());

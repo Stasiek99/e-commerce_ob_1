@@ -12,12 +12,13 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
-import { EmailTokenType, RefreshToken, User } from '@prisma/client';
+import { EmailTokenType, Prisma, RefreshToken, User } from '@prisma/client';
 import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { RegisterDto } from './dto/register.dto';
+import { parseDurationToSeconds } from '../../common/utils/duration.util';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -29,8 +30,11 @@ const REFRESH_GRACE_MS = 30_000;
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  // TTL matches the access token lifetime so the entry self-expires when no old tokens remain valid
-  private static readonly REVOKE_BEFORE_TTL_SECS = 900; // 15 minutes
+  // TTL matches the access token lifetime so the entry self-expires when no old
+  // tokens remain valid. Derived from JWT_ACCESS_EXPIRES_IN (rather than a literal)
+  // so an operator bumping that env var can't silently shrink the revocation window
+  // below the actual token lifetime.
+  private readonly revokeBeforeTtlSecs: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -39,7 +43,11 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly emailService: EmailQueueService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
-  ) {}
+  ) {
+    this.revokeBeforeTtlSecs = parseDurationToSeconds(
+      this.configService.get<string>('JWT_ACCESS_EXPIRES_IN', '15m'),
+    );
+  }
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM, { timeZone: 'Europe/Warsaw' })
   async purgeExpiredTokens(): Promise<void> {
@@ -62,12 +70,24 @@ export class AuthService {
     if (existing) throw new ConflictException('Email already in use');
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    const user = await this.usersService.create({
-      email: dto.email,
-      passwordHash,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-    });
+    let user: User;
+    try {
+      user = await this.usersService.create({
+        email: dto.email,
+        passwordHash,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+      });
+    } catch (err) {
+      // Two requests can both pass the findByEmail check above before either
+      // create() commits (double-submit, retried request). The DB-level
+      // @unique on User.email is the real guard — map its violation to the
+      // same 409 the pre-check above throws, instead of an unhandled 500.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Email already in use');
+      }
+      throw err;
+    }
 
     // Fire-and-forget — don't block registration if email fails
     this.issueAndSendVerification(user).catch(() => {});
@@ -150,13 +170,25 @@ export class AuthService {
       });
     }
 
-    return this.usersService.create({
-      email: profile.email,
-      googleId: profile.googleId,
-      firstName: profile.firstName,
-      lastName: profile.lastName,
-      isEmailVerified: true,
-    });
+    try {
+      return await this.usersService.create({
+        email: profile.email,
+        googleId: profile.googleId,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        isEmailVerified: true,
+      });
+    } catch (err) {
+      // Two concurrent first-time Google callbacks for the same never-seen
+      // email can both pass the findByGoogleId/findByEmail checks above
+      // before either create() commits. The DB-level @unique on User.email/
+      // User.googleId is the real guard — map its violation to a 409 instead
+      // of an unhandled 500.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Email already in use');
+      }
+      throw err;
+    }
   }
 
   async validateRefreshTokenByRaw(rawToken: string): Promise<User | null> {
@@ -297,14 +329,18 @@ export class AuthService {
     await this.issueAndSendVerification(user);
   }
 
-  async requestEmailChange(userId: string, newEmail: string): Promise<void> {
+  async requestEmailChange(userId: string, newEmail: string, currentPassword: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (!user) throw new BadRequestException('User not found');
+
+    if (!user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    const validPassword = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!validPassword) throw new UnauthorizedException('Invalid credentials');
+
     const existing = await this.usersService.findByEmail(newEmail);
     if (existing && existing.id !== userId) {
       throw new ConflictException('Email already in use');
     }
-
-    const user = await this.usersService.findById(userId);
-    if (!user) throw new BadRequestException('User not found');
 
     await this.prisma.emailVerificationToken.updateMany({
       where: { userId, usedAt: null },
@@ -377,21 +413,29 @@ export class AuthService {
         throw new ConflictException('The requested email address is no longer available');
       }
 
-      await this.prisma.$transaction([
-        this.prisma.emailVerificationToken.update({
-          where: { id: stored.id },
+      await this.prisma.$transaction(async (tx) => {
+        // Atomic guard mirrors consumeMagicLink/rotateToken: usedAt: null in the
+        // WHERE clause ensures a token already invalidated by a newer
+        // requestEmailChange() call (e.g. the user requested a second email
+        // change before clicking this link) cannot still promote its stale
+        // pendingEmail captured above.
+        const result = await tx.emailVerificationToken.updateMany({
+          where: { id: stored.id, usedAt: null },
           data: { usedAt: new Date() },
-        }),
-        this.prisma.user.update({
+        });
+        if (result.count === 0) {
+          throw new BadRequestException('Invalid or expired verification link');
+        }
+        await tx.user.update({
           where: { id: stored.userId },
           data: { email: newEmail, pendingEmail: null, isEmailVerified: true },
-        }),
+        });
         // JWT encodes email — all devices must re-login after an email change
-        this.prisma.refreshToken.updateMany({
+        await tx.refreshToken.updateMany({
           where: { userId: stored.userId, revokedAt: null },
           data: { revokedAt: new Date() },
-        }),
-      ]);
+        });
+      });
     } else {
       await this.prisma.$transaction([
         this.prisma.emailVerificationToken.update({
@@ -594,7 +638,7 @@ export class AuthService {
       `auth:revoke-before:${userId}`,
       Date.now().toString(),
       'EX',
-      AuthService.REVOKE_BEFORE_TTL_SECS,
+      this.revokeBeforeTtlSecs,
     );
   }
 

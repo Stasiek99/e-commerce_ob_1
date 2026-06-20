@@ -15,6 +15,24 @@ const requiredInProd = <T extends Joi.AnySchema>(schema: T, devDefault?: unknown
         : (schema as Joi.AnySchema).default(devDefault),
   });
 
+// Joi helper for carrier credentials: required in production unless that
+// carrier's own *_MOCK_ENABLED flag is 'true'. Mirrors INPOST_ORGANIZATION_ID/
+// INPOST_API_TOKEN below — without this gate, a missing credential isn't
+// caught here, it surfaces as configService.getOrThrow() crashing the whole
+// process deep inside the carrier client's constructor at boot.
+const requiredInProdUnlessMocked = (envVarName: string, mockFlagKey: string) =>
+  Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.when(mockFlagKey, {
+      is: 'true',
+      then: Joi.string().optional().allow(''),
+      otherwise: Joi.string().required().messages({
+        'any.required': `${envVarName} is required in production when ${mockFlagKey} is not "true"`,
+      }),
+    }),
+    otherwise: Joi.string().optional(),
+  });
+
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
@@ -150,19 +168,29 @@ export const envValidationSchema = Joi.object({
   // Get from: Cloudflare Dashboard → Turnstile → your site → Secret key.
   CLOUDFLARE_TURNSTILE_SECRET_KEY: requiredInProd(Joi.string(), ''),
 
-  // ── Optional: DHL/GLS (not required for Phase 0) ──
-  DHL_ACCOUNT_NUMBER: Joi.string().optional(),
-  DHL_API_KEY: Joi.string().optional(),
-  DHL_API_SECRET: Joi.string().optional(),
+  // ── DHL / GLS / DPD ──
+  // DhlClient/GlsClient/DpdClient call configService.getOrThrow() for these
+  // credentials whenever their own mock flag is not 'true', and all three are
+  // eager providers in ShippingModule — so a missing credential doesn't just
+  // disable shipping, it crashes the entire backend at boot. Mirror InPost's
+  // gate so a missing var fails loudly and specifically here instead.
+  DHL_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  DHL_ACCOUNT_NUMBER: requiredInProdUnlessMocked('DHL_ACCOUNT_NUMBER', 'DHL_MOCK_ENABLED'),
+  DHL_API_KEY: requiredInProdUnlessMocked('DHL_API_KEY', 'DHL_MOCK_ENABLED'),
+  DHL_API_SECRET: requiredInProdUnlessMocked('DHL_API_SECRET', 'DHL_MOCK_ENABLED'),
   DHL_SHIPPER_NAME: Joi.string().optional(),
   DHL_SHIPPER_STREET: Joi.string().optional(),
   DHL_SHIPPER_CITY: Joi.string().optional(),
   DHL_SHIPPER_POSTAL_CODE: Joi.string().optional(),
   DHL_SHIPPER_PHONE: Joi.string().optional(),
   DHL_SHIPPER_EMAIL: Joi.string().email().optional(),
-  GLS_SENDER_ID: Joi.string().optional(),
-  GLS_USERNAME: Joi.string().optional(),
-  GLS_PASSWORD: Joi.string().optional(),
+  GLS_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  GLS_SENDER_ID: requiredInProdUnlessMocked('GLS_SENDER_ID', 'GLS_MOCK_ENABLED'),
+  GLS_USERNAME: requiredInProdUnlessMocked('GLS_USERNAME', 'GLS_MOCK_ENABLED'),
+  GLS_PASSWORD: requiredInProdUnlessMocked('GLS_PASSWORD', 'GLS_MOCK_ENABLED'),
+  DPD_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  DPD_SENDER_ID: requiredInProdUnlessMocked('DPD_SENDER_ID', 'DPD_MOCK_ENABLED'),
+  DPD_API_KEY: requiredInProdUnlessMocked('DPD_API_KEY', 'DPD_MOCK_ENABLED'),
 
   // ── Invoice / Seller info ──
   // Required in production to generate legally-compliant Polish VAT invoices.

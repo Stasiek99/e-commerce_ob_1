@@ -15,6 +15,7 @@ import { environment } from '../../../../../environments/environment';
 
 const ORDERS_URL = `${environment.apiUrl}/orders`;
 const ADDRESSES_URL = `${environment.apiUrl}/users/me/addresses`;
+const RATES_URL = `${environment.apiUrl}/shipping/rates`;
 
 function buildSetup() {
   const mockCart = {
@@ -57,6 +58,8 @@ function buildSetup() {
   const http = TestBed.inject(HttpTestingController);
 
   fixture.detectChanges();
+  // Flush the GET /shipping/rates that ngOnInit always fires
+  http.expectOne(RATES_URL).flush([]);
   // Flush the GET /users/me/addresses that ngOnInit fires for authenticated users
   http.expectOne(ADDRESSES_URL).flush([]);
 

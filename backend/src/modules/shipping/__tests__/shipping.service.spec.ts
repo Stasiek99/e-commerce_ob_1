@@ -28,7 +28,8 @@ describe('ShippingService', () => {
   let dpd: jest.Mocked<DpdClient>;
   let storage: jest.Mocked<StorageService>;
   let emailService: jest.Mocked<EmailQueueService>;
-  let redis: { set: jest.Mock };
+  let shippingRates: jest.Mocked<ShippingRatesService>;
+  let redis: { set: jest.Mock; eval: jest.Mock };
 
   const mockOrderBase = {
     id: 'order-1',
@@ -122,6 +123,7 @@ describe('ShippingService', () => {
           provide: 'REDIS_CLIENT',
           useValue: {
             set: jest.fn().mockResolvedValue('OK'),
+            eval: jest.fn().mockResolvedValue(1),
           },
         },
       ],
@@ -135,6 +137,7 @@ describe('ShippingService', () => {
     dpd = module.get(DpdClient);
     storage = module.get(StorageService);
     emailService = module.get(EmailQueueService);
+    shippingRates = module.get(ShippingRatesService);
     redis = module.get('REDIS_CLIENT');
 
     // Default: no existing shipment — tests that need a different value override this
@@ -160,6 +163,18 @@ describe('ShippingService', () => {
         expect(r.name).toBeTruthy();
       });
     });
+
+    // Regression harness: a deactivated carrier must disappear from the
+    // customer-facing rate list, not keep showing up with a stale/fallback price.
+    it('excludes a carrier the rate map omits (deactivated carrier)', async () => {
+      const { [CarrierCode.DHL]: _omitted, ...withoutDhl } = MOCK_RATE_MAP;
+      shippingRates.getRateMap.mockResolvedValue(withoutDhl);
+
+      const rates = await service.getShippingRates();
+
+      expect(rates).toHaveLength(4);
+      expect(rates.map((r) => r.carrier)).not.toContain(CarrierCode.DHL);
+    });
   });
 
   describe('generateLabel', () => {
@@ -167,6 +182,92 @@ describe('ShippingService', () => {
       prisma.order.findUnique.mockResolvedValue(null);
 
       await expect(service.generateLabel('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    // ─── distributed lock — prevents duplicate billable carrier shipments ────
+    // Without a lock, two concurrent requests for the same order (admin
+    // double-click, or a retry on what looks like a hung request) could both
+    // pass the existing-shipment guard and both call the carrier's real,
+    // billable createShipment(). The second prisma.shipment.upsert would then
+    // silently overwrite the first's shipmentId/trackingNumber, leaving one
+    // real carrier-side shipment with no local DB record at all.
+
+    describe('distributed lock', () => {
+      it('acquires the lock with NX and a 60-second TTL before doing any work', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'T', labelUrl: 'U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'U', trackingNumber: 'T' });
+
+        await service.generateLabel('order-1');
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'label-gen-lock:order-1',
+          expect.any(String),
+          'EX',
+          60,
+          'NX',
+        );
+      });
+
+      it('throws 429 when the lock is already held by a concurrent request', async () => {
+        redis.set.mockResolvedValue(null); // SET NX returns null = not acquired
+
+        await expect(service.generateLabel('order-1')).rejects.toMatchObject({ status: 429 });
+      });
+
+      it('does not look up the order when the lock cannot be acquired', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await expect(service.generateLabel('order-1')).rejects.toMatchObject({ status: 429 });
+
+        expect(prisma.order.findUnique).not.toHaveBeenCalled();
+      });
+
+      it('never calls the carrier when the lock cannot be acquired — regression guard for duplicate billable shipments', async () => {
+        redis.set.mockResolvedValue(null);
+
+        await expect(service.generateLabel('order-1')).rejects.toMatchObject({ status: 429 });
+
+        expect(dhl.createShipment).not.toHaveBeenCalled();
+        expect(inpost.createShipment).not.toHaveBeenCalled();
+      });
+
+      it('releases the lock via the Lua script on success', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        dhl.createShipment.mockResolvedValue({ trackingNumber: 'T', labelUrl: 'U' });
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'U', trackingNumber: 'T' });
+
+        await service.generateLabel('order-1');
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock via the Lua script even when the carrier call throws', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        dhl.createShipment.mockRejectedValue(new Error('Carrier API down'));
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('Carrier API down');
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock even when the order is not found', async () => {
+        prisma.order.findUnique.mockResolvedValue(null);
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(NotFoundException);
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the lock even when the duplicate-shipment guard rejects', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue({ status: ShipmentStatus.LABEL_GENERATED });
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow(ConflictException);
+
+        expect(redis.eval).toHaveBeenCalledTimes(1);
+      });
     });
 
     describe('order status guard', () => {
@@ -242,6 +343,132 @@ describe('ShippingService', () => {
         prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'NEW_U', trackingNumber: 'NEW_T' });
 
         await expect(service.generateLabel('order-1')).resolves.toBeDefined();
+      });
+    });
+
+    // Regression harness: a LABEL_ERROR retry must not call the carrier's
+    // createShipment() again once a shipmentId was already committed on a prior
+    // attempt — doing so creates a second real, billable, dispatchable shipment.
+    describe('LABEL_ERROR retry — resumes from a preserved shipmentId instead of recreating the shipment', () => {
+      it('InPost: skips createShipment and resumes from fetchLabelPdf when shipmentId is preserved but the label is not', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.INPOST });
+        prisma.shipment.findUnique.mockResolvedValue({
+          status: ShipmentStatus.LABEL_ERROR,
+          shipmentId: 'INPOST_COMMITTED_999',
+          trackingNumber: 'TRK-INPOST-999',
+          labelUrl: null,
+        });
+        inpost.fetchLabelPdf.mockResolvedValue(Buffer.from('%PDF-mock'));
+        storage.uploadShippingLabel.mockResolvedValue('https://storage.example.com/labels/inpost-INPOST_COMMITTED_999.pdf');
+        prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'https://storage.example.com/labels/inpost-INPOST_COMMITTED_999.pdf',
+          trackingNumber: 'TRK-INPOST-999',
+        });
+
+        await service.generateLabel('order-1');
+
+        expect(inpost.createShipment).not.toHaveBeenCalled();
+        expect(inpost.fetchLabelPdf).toHaveBeenCalledWith('INPOST_COMMITTED_999');
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.update.shipmentId).toBe('INPOST_COMMITTED_999');
+        expect(upsertCall.update.status).toBe(ShipmentStatus.LABEL_GENERATED);
+      });
+
+      it('InPost: skips both createShipment and fetchLabelPdf when shipmentId and labelUrl are both already preserved', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.INPOST });
+        prisma.shipment.findUnique.mockResolvedValue({
+          status: ShipmentStatus.LABEL_ERROR,
+          shipmentId: 'INPOST_COMMITTED_999',
+          trackingNumber: 'TRK-INPOST-999',
+          labelUrl: 'https://storage.example.com/labels/inpost-INPOST_COMMITTED_999.pdf',
+        });
+        prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'https://storage.example.com/labels/inpost-INPOST_COMMITTED_999.pdf',
+          trackingNumber: 'TRK-INPOST-999',
+        });
+
+        await service.generateLabel('order-1');
+
+        expect(inpost.createShipment).not.toHaveBeenCalled();
+        expect(inpost.fetchLabelPdf).not.toHaveBeenCalled();
+        expect(storage.uploadShippingLabel).not.toHaveBeenCalled();
+      });
+
+      it('InPost: calls createShipment again when the LABEL_ERROR row has no shipmentId (carrier was never reached)', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.INPOST });
+        prisma.shipment.findUnique.mockResolvedValue({
+          status: ShipmentStatus.LABEL_ERROR,
+          shipmentId: null,
+          trackingNumber: null,
+          labelUrl: null,
+        });
+        inpost.createShipment.mockResolvedValue({ id: 'NEW_INPOST_1', trackingNumber: 'TRK-NEW-1' });
+        inpost.fetchLabelPdf.mockResolvedValue(null);
+        prisma.shipment.upsert.mockResolvedValue({ labelUrl: 'mock-label-NEW_INPOST_1.pdf', trackingNumber: 'TRK-NEW-1' });
+
+        await service.generateLabel('order-1');
+
+        expect(inpost.createShipment).toHaveBeenCalledTimes(1);
+      });
+
+      it('GLS: skips createShipment and resumes from fetchLabelPdf using the preserved parcelId', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.GLS });
+        prisma.shipment.findUnique.mockResolvedValue({
+          status: ShipmentStatus.LABEL_ERROR,
+          shipmentId: 'GLS_P999',
+          trackingNumber: 'TRK-GLS-999',
+          labelUrl: null,
+        });
+        gls.fetchLabelPdf.mockResolvedValue(Buffer.from('%PDF-mock'));
+        storage.uploadShippingLabel.mockResolvedValue('https://storage.example.com/labels/gls-GLS_P999.pdf');
+        prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'https://storage.example.com/labels/gls-GLS_P999.pdf',
+          trackingNumber: 'TRK-GLS-999',
+        });
+
+        await service.generateLabel('order-1');
+
+        expect(gls.createShipment).not.toHaveBeenCalled();
+        expect(gls.fetchLabelPdf).toHaveBeenCalledWith('GLS_P999');
+      });
+
+      it('DHL: skips createShipment entirely when shipmentId (tracking number) is already preserved', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DHL });
+        prisma.shipment.findUnique.mockResolvedValue({
+          status: ShipmentStatus.LABEL_ERROR,
+          shipmentId: 'DHL-COMMITTED-1',
+          trackingNumber: 'DHL-COMMITTED-1',
+          labelUrl: 'https://dhl.example.com/labels/DHL-COMMITTED-1.pdf',
+        });
+        prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'https://dhl.example.com/labels/DHL-COMMITTED-1.pdf',
+          trackingNumber: 'DHL-COMMITTED-1',
+        });
+
+        await service.generateLabel('order-1');
+
+        expect(dhl.createShipment).not.toHaveBeenCalled();
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.update.status).toBe(ShipmentStatus.LABEL_GENERATED);
+        expect(upsertCall.update.trackingNumber).toBe('DHL-COMMITTED-1');
+      });
+
+      it('DPD: skips createShipment entirely when shipmentId (tracking number) is already preserved', async () => {
+        prisma.order.findUnique.mockResolvedValue({ ...mockOrderBase, carrierCode: CarrierCode.DPD });
+        prisma.shipment.findUnique.mockResolvedValue({
+          status: ShipmentStatus.LABEL_ERROR,
+          shipmentId: 'DPD-COMMITTED-1',
+          trackingNumber: 'DPD-COMMITTED-1',
+          labelUrl: 'https://dpd.example.com/labels/DPD-COMMITTED-1.pdf',
+        });
+        prisma.shipment.upsert.mockResolvedValue({
+          labelUrl: 'https://dpd.example.com/labels/DPD-COMMITTED-1.pdf',
+          trackingNumber: 'DPD-COMMITTED-1',
+        });
+
+        await service.generateLabel('order-1');
+
+        expect(dpd.createShipment).not.toHaveBeenCalled();
       });
     });
 
@@ -400,6 +627,72 @@ describe('ShippingService', () => {
         expect(dpd.createShipment).toHaveBeenCalledWith(
           expect.objectContaining({ reference: 'ORD-2026-000001' }),
         );
+      });
+    });
+
+    describe('trackingNumber validation guard', () => {
+      it('throws and records LABEL_ERROR (not LABEL_GENERATED) when InPost returns no trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.INPOST };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        inpost.createShipment.mockResolvedValue({ id: 'MOCK_INPOST_999', trackingNumber: undefined as any });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('InPost returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+        expect(upsertCall.create.shipmentId).toBe('MOCK_INPOST_999');
+        expect(prisma.shipment.upsert).not.toHaveBeenCalledWith(
+          expect.objectContaining({ create: expect.objectContaining({ status: ShipmentStatus.LABEL_GENERATED }) }),
+        );
+      });
+
+      it('throws and records LABEL_ERROR when DHL returns an empty-string trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: '', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('DHL Express returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+      });
+
+      it('throws and records LABEL_ERROR when GLS returns an empty-string trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.GLS };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        gls.createShipment.mockResolvedValue({ trackingNumber: '', parcelId: 'P999', labelUrl: '' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('GLS returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+        expect(gls.fetchLabelPdf).not.toHaveBeenCalled();
+      });
+
+      it('throws and records LABEL_ERROR when DPD returns no trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DPD };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dpd.createShipment.mockResolvedValue({ trackingNumber: undefined as any, labelUrl: 'https://dpd.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('DPD Pickup returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+      });
+
+      it('does not send a shipping notification email when trackingNumber validation fails', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: '', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow();
+
+        expect(emailService.sendShippingNotification).not.toHaveBeenCalled();
       });
     });
 
@@ -565,6 +858,29 @@ describe('ShippingService', () => {
         expect(upsertCall.create.shipmentId).toBeNull();
         expect(upsertCall.create.trackingNumber).toBeNull();
       });
+
+      // Retry-duplication fix regression harness — without persisting labelUrl here,
+      // a retry that resumes from this LABEL_ERROR row would see no preserved label
+      // and (for InPost/GLS) re-fetch needlessly, or (for DHL/DPD, which have no
+      // separate fetch step) lose the label entirely even though it already exists.
+      it('preserves labelUrl in the LABEL_ERROR upsert when the success-path upsert itself fails after the label was already created', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({
+          trackingNumber: 'DHL-COMMITTED-2',
+          labelUrl: 'https://dhl.example.com/labels/DHL-COMMITTED-2.pdf',
+        });
+        prisma.shipment.upsert
+          .mockRejectedValueOnce(new Error('DB connection dropped'))
+          .mockResolvedValueOnce({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('DB connection dropped');
+
+        const errorUpsertCall = prisma.shipment.upsert.mock.calls[1][0];
+        expect(errorUpsertCall.create.labelUrl).toBe('https://dhl.example.com/labels/DHL-COMMITTED-2.pdf');
+        expect(errorUpsertCall.update.labelUrl).toBe('https://dhl.example.com/labels/DHL-COMMITTED-2.pdf');
+        expect(errorUpsertCall.create.shipmentId).toBe('DHL-COMMITTED-2');
+      });
     });
 
     it('sends shipping notification email as fire-and-forget', async () => {
@@ -605,6 +921,21 @@ describe('ShippingService', () => {
       expect(result).toEqual({
         labelUrl: 'https://supabase.io/signed/labels/inpost-123.pdf?token=xyz',
         trackingNumber: 'TRK123',
+      });
+    });
+
+    it('returns a carrier-hosted DHL/DPD URL as-is without calling getShippingLabelSignedUrl', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        labelUrl: 'https://dhl.example.com/labels/external-123.pdf',
+        trackingNumber: 'TRK-DHL-123',
+      });
+
+      const result = await service.getLabel('order-1');
+
+      expect(storage.getShippingLabelSignedUrl).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        labelUrl: 'https://dhl.example.com/labels/external-123.pdf',
+        trackingNumber: 'TRK-DHL-123',
       });
     });
 

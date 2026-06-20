@@ -25,25 +25,18 @@ export class ShippingRatesService {
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
-  async getRateMap(): Promise<Record<CarrierCode, number>> {
+  async getRateMap(): Promise<Partial<Record<CarrierCode, number>>> {
     try {
       const cached = await this.redis.get(CACHE_KEY);
       if (cached) {
-        return JSON.parse(cached) as Record<CarrierCode, number>;
+        return JSON.parse(cached) as Partial<Record<CarrierCode, number>>;
       }
     } catch (err) {
       this.logger.warn(`Redis read failed for ${CACHE_KEY}: ${(err as Error).message}`);
     }
 
     try {
-      const rows = await this.prisma.shippingRate.findMany({
-        where: { isActive: true },
-      });
-
-      const map = { ...FALLBACK_RATES };
-      for (const row of rows) {
-        map[row.carrierCode] = row.priceInCents;
-      }
+      const map = await this.loadRateMapFromDb();
 
       try {
         await this.redis.set(CACHE_KEY, JSON.stringify(map), 'EX', CACHE_TTL_SECONDS);
@@ -62,7 +55,11 @@ export class ShippingRatesService {
 
   async getRateForCarrier(code: CarrierCode): Promise<number> {
     const map = await this.getRateMap();
-    return map[code];
+    const price = map[code];
+    if (price === undefined) {
+      throw new NotFoundException(`No active shipping rate found for carrier ${code}`);
+    }
+    return price;
   }
 
   async findAll() {
@@ -91,7 +88,7 @@ export class ShippingRatesService {
       },
     });
 
-    await this.invalidateCache();
+    await this.repopulateCache();
     this.logger.log(
       `Shipping rate updated: ${carrierCode} → ${priceInCents} gr (isActive=${updated.isActive})`,
     );
@@ -99,11 +96,32 @@ export class ShippingRatesService {
     return updated;
   }
 
-  private async invalidateCache() {
+  private async loadRateMapFromDb(): Promise<Partial<Record<CarrierCode, number>>> {
+    const rows = await this.prisma.shippingRate.findMany({
+      where: { isActive: true },
+    });
+
+    // Build the map from active rows only — a carrier absent here (deactivated,
+    // or never seeded) must not silently fall back to FALLBACK_RATES, otherwise
+    // a disabled carrier stays selectable and chargeable at its last/fallback price.
+    const map: Partial<Record<CarrierCode, number>> = {};
+    for (const row of rows) {
+      map[row.carrierCode] = row.priceInCents;
+    }
+    return map;
+  }
+
+  // Writes the fresh map directly instead of DEL-ing the key, so this call is
+  // the sole source of truth for the cache until natural TTL expiry. A plain
+  // DEL left a window where a concurrent getRateMap() read — started before
+  // this update committed — could SET stale pre-update data back in after
+  // the DEL, serving it for the full TTL.
+  private async repopulateCache() {
     try {
-      await this.redis.del(CACHE_KEY);
+      const map = await this.loadRateMapFromDb();
+      await this.redis.set(CACHE_KEY, JSON.stringify(map), 'EX', CACHE_TTL_SECONDS);
     } catch (err) {
-      this.logger.warn(`Redis delete failed for ${CACHE_KEY}: ${(err as Error).message}`);
+      this.logger.warn(`Redis write failed for ${CACHE_KEY}: ${(err as Error).message}`);
     }
   }
 }

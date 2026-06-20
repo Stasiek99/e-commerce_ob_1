@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   HttpCode,
@@ -188,8 +189,21 @@ export class AuthController {
   @UseGuards(GoogleAuthGuard)
   async googleCallback(
     @CurrentUser() user: User,
+    @Req() req: Request & { oauthError?: unknown },
     @Res() res: Response,
   ) {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
+
+    // GoogleAuthGuard.handleRequest() stashes a strategy-side rejection (e.g. the
+    // account-hijack ConflictException) here instead of throwing, so it can be
+    // bounced back into the app as a redirect rather than a bare JSON error.
+    const oauthError = req?.oauthError;
+    if (oauthError || !user) {
+      const reason = oauthError instanceof ConflictException ? 'account_conflict' : 'oauth_failed';
+      res.redirect(`${frontendUrl}/auth/login?error=${reason}`);
+      return;
+    }
+
     const { accessToken, refreshToken } = await this.authService.generateTokenPair(user);
     res.cookie(REFRESH_COOKIE, refreshToken, { ...this.cookieOptions, path: '/' });
 
@@ -203,7 +217,6 @@ export class AuthController {
     const nonce = randomBytes(32).toString('hex');
     await this.redis.set(`oauth_nonce:${nonce}`, '1', 'EX', OAUTH_NONCE_TTL_S);
     res.cookie(OAUTH_EXCHANGE_COOKIE, accessToken, this.oauthCookieOptions);
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:4200');
     res.redirect(`${frontendUrl}/auth/callback#state=${nonce}`);
   }
 
