@@ -1,3 +1,5 @@
+import { escapeHtml, sanitizeUrl } from './html-escape.util';
+
 interface Data {
   firstName: string;
   newEmail: string;
@@ -13,11 +15,11 @@ export function emailChangeTemplate(data: Data): { subject: string; html: string
 <head><meta charset="UTF-8"><title>Zmiana adresu email</title></head>
 <body style="font-family:sans-serif;color:#333;max-width:600px;margin:0 auto;padding:24px">
   <h1 style="color:#1a1a1a;font-size:24px">Potwierdź nowy adres email</h1>
-  <p>Cześć ${data.firstName},</p>
-  <p>Otrzymaliśmy prośbę o zmianę adresu email na Twoim koncie na <strong>${data.newEmail}</strong>.</p>
+  <p>Cześć ${escapeHtml(data.firstName)},</p>
+  <p>Otrzymaliśmy prośbę o zmianę adresu email na Twoim koncie na <strong>${escapeHtml(data.newEmail)}</strong>.</p>
   <p>Kliknij poniższy przycisk, aby potwierdzić nowy adres:</p>
   <p style="text-align:center;margin:32px 0">
-    <a href="${data.verifyUrl}"
+    <a href="${sanitizeUrl(data.verifyUrl)}"
        style="background:#1a1a1a;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;display:inline-block">
       Potwierdź nowy email
     </a>

@@ -1,3 +1,5 @@
+import { escapeHtml, sanitizeUrl } from './html-escape.util';
+
 interface Data {
   firstName: string;
   resetUrl: string;
@@ -12,10 +14,10 @@ export function passwordResetTemplate(data: Data): { subject: string; html: stri
 <head><meta charset="UTF-8"><title>Resetowanie hasła</title></head>
 <body style="font-family:sans-serif;color:#333;max-width:600px;margin:0 auto;padding:24px">
   <h1 style="color:#1a1a1a;font-size:24px">Resetowanie hasła</h1>
-  <p>Cześć ${data.firstName},</p>
+  <p>Cześć ${escapeHtml(data.firstName)},</p>
   <p>Otrzymaliśmy prośbę o zresetowanie hasła do Twojego konta. Kliknij przycisk poniżej, aby ustawić nowe hasło:</p>
   <p style="text-align:center;margin:32px 0">
-    <a href="${data.resetUrl}"
+    <a href="${sanitizeUrl(data.resetUrl)}"
        style="background:#1a1a1a;color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;display:inline-block">
       Zresetuj hasło
     </a>
