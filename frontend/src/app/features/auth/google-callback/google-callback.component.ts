@@ -16,14 +16,6 @@ export class GoogleCallbackComponent implements OnInit {
   ngOnInit() {
     if (!isPlatformBrowser(this.platformId)) return;
 
-    const expectedState = sessionStorage.getItem('oauth_state');
-    sessionStorage.removeItem('oauth_state');
-
-    if (!expectedState) {
-      this.router.navigate(['/auth/login']);
-      return;
-    }
-
     this.auth.exchangeOAuthToken().subscribe({
       next: () => {
         const raw = sessionStorage.getItem('auth_return_to') ?? '/';
