@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, PLATFORM_ID, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { timer, switchMap, takeWhile, take } from 'rxjs';
@@ -229,6 +230,7 @@ export class CheckoutSuccessComponent implements OnInit {
   private readonly analytics = inject(AnalyticsService);
   private readonly cart = inject(CartService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly platformId = inject(PLATFORM_ID);
 
   readonly auth = inject(AuthService);
   private readonly seo = inject(SeoService);
@@ -242,6 +244,13 @@ export class CheckoutSuccessComponent implements OnInit {
 
   ngOnInit(): void {
     this.seo.setRobotsTag('noindex,nofollow');
+
+    // The payment-status poll, URL cleanup, cart clear, and analytics fire below are
+    // browser-only: Stripe redirects every real payment here, so running this server-side
+    // would mean every SSR render of this route wastes up to 10 backend round-trips, and
+    // the GA4 purchase event could fire from a discarded SSR render that's never seen by
+    // the client and then potentially fire again on hydration.
+    if (!isPlatformBrowser(this.platformId)) return;
 
     const id = this.route.snapshot.queryParamMap.get('orderId');
     const token = this.route.snapshot.queryParamMap.get('token');

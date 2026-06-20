@@ -12,7 +12,7 @@ import {
   HttpTestingController,
 } from '@angular/common/http/testing';
 import { ActivatedRoute, Router, provideRouter } from '@angular/router';
-import { NO_ERRORS_SCHEMA } from '@angular/core';
+import { NO_ERRORS_SCHEMA, PLATFORM_ID } from '@angular/core';
 import { CheckoutSuccessComponent } from '../checkout-success.component';
 import { CartService } from '../../../../core/services/cart.service';
 import { AuthService } from '../../../../core/services/auth.service';
@@ -99,6 +99,114 @@ describe('CheckoutSuccessComponent — robots meta tag', () => {
 
     expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,nofollow');
     expect(mockSeo.setRobotsTag).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── SSR platform guard ─────────────────────────────────────────────────────────
+// Stripe redirects every successful payment to this route, and the prior bug
+// ran the poll/navigate/cart-clear/analytics sequence unconditionally during SSR —
+// wasting up to 10 backend round-trips per render and risking the GA4 purchase
+// event firing from a discarded server render. These tests pin PLATFORM_ID to
+// 'server' to guard against that regression.
+
+describe('CheckoutSuccessComponent — SSR platform guard', () => {
+  function setupOnServer(orderId: string | null = 'order-1') {
+    const mockCart = { clear: jest.fn() };
+    const mockAnalytics = { trackPurchase: jest.fn(), push: jest.fn() };
+    const mockAuth = { currentUser: jest.fn().mockReturnValue(null) };
+    const mockSeo = { setRobotsTag: jest.fn(), updatePageMeta: jest.fn() };
+
+    TestBed.configureTestingModule({
+      imports: [CheckoutSuccessComponent],
+      schemas: [NO_ERRORS_SCHEMA],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: PLATFORM_ID, useValue: 'server' },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: {
+              queryParamMap: { get: (key: string) => (key === 'orderId' ? orderId : null) },
+            },
+          },
+        },
+        { provide: CartService, useValue: mockCart },
+        { provide: AuthService, useValue: mockAuth },
+        { provide: AnalyticsService, useValue: mockAnalytics },
+        { provide: SeoService, useValue: mockSeo },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(CheckoutSuccessComponent);
+    const component = fixture.componentInstance;
+    const httpMock = TestBed.inject(HttpTestingController);
+    const router = TestBed.inject(Router);
+    const navigateSpy = jest.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    return { fixture, component, httpMock, mockCart, mockAnalytics, mockSeo, navigateSpy };
+  }
+
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('does not strip session_id via router.navigate when rendered on the server', () => {
+    const { fixture, navigateSpy } = setupOnServer();
+
+    fixture.detectChanges();
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not issue the payment-status HTTP poll when rendered on the server, even after the timer would have fired', fakeAsync(() => {
+    const { fixture, httpMock } = setupOnServer();
+
+    fixture.detectChanges();
+    tick(3000); // past the timer(0, 3000) first tick — would have fired on the browser
+
+    httpMock.expectNone(statusUrl());
+  }));
+
+  it('does not clear the cart or fire any analytics event when rendered on the server, even after the timer would have fired', fakeAsync(() => {
+    const { fixture, mockCart, mockAnalytics } = setupOnServer();
+
+    fixture.detectChanges();
+    tick(3000);
+
+    expect(mockCart.clear).not.toHaveBeenCalled();
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
+    expect(mockAnalytics.push).not.toHaveBeenCalled();
+  }));
+
+  it('leaves loading=true on the server since the poll never ran (no false "payment failed" flash)', fakeAsync(() => {
+    const { fixture, component } = setupOnServer();
+
+    fixture.detectChanges();
+    tick(3000);
+
+    expect(component.loading()).toBe(true);
+    expect(component.paid()).toBe(false);
+  }));
+
+  it('still sets the noindex robots tag on the server so the SSR HTML carries it for crawlers', () => {
+    const { fixture, mockSeo } = setupOnServer();
+
+    fixture.detectChanges();
+
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,nofollow');
+  });
+
+  it('skips the guard entirely on the client even when orderId is absent', () => {
+    const { fixture, navigateSpy } = setupOnServer(null);
+
+    fixture.detectChanges();
+
+    // Absent orderId never reaches the early-return inside the browser branch
+    // because the server-platform guard returns first.
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 });
 
