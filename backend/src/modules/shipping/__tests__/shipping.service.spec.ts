@@ -630,6 +630,72 @@ describe('ShippingService', () => {
       });
     });
 
+    describe('trackingNumber validation guard', () => {
+      it('throws and records LABEL_ERROR (not LABEL_GENERATED) when InPost returns no trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.INPOST };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        inpost.createShipment.mockResolvedValue({ id: 'MOCK_INPOST_999', trackingNumber: undefined as any });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('InPost returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+        expect(upsertCall.create.shipmentId).toBe('MOCK_INPOST_999');
+        expect(prisma.shipment.upsert).not.toHaveBeenCalledWith(
+          expect.objectContaining({ create: expect.objectContaining({ status: ShipmentStatus.LABEL_GENERATED }) }),
+        );
+      });
+
+      it('throws and records LABEL_ERROR when DHL returns an empty-string trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: '', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('DHL Express returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+      });
+
+      it('throws and records LABEL_ERROR when GLS returns an empty-string trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.GLS };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        gls.createShipment.mockResolvedValue({ trackingNumber: '', parcelId: 'P999', labelUrl: '' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('GLS returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+        expect(gls.fetchLabelPdf).not.toHaveBeenCalled();
+      });
+
+      it('throws and records LABEL_ERROR when DPD returns no trackingNumber', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DPD };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dpd.createShipment.mockResolvedValue({ trackingNumber: undefined as any, labelUrl: 'https://dpd.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow('DPD Pickup returned no trackingNumber');
+
+        const upsertCall = prisma.shipment.upsert.mock.calls[0][0];
+        expect(upsertCall.create.status).toBe(ShipmentStatus.LABEL_ERROR);
+      });
+
+      it('does not send a shipping notification email when trackingNumber validation fails', async () => {
+        const mockOrder = { ...mockOrderBase, carrierCode: CarrierCode.DHL };
+        prisma.order.findUnique.mockResolvedValue(mockOrder);
+        dhl.createShipment.mockResolvedValue({ trackingNumber: '', labelUrl: 'https://dhl.pdf' });
+        prisma.shipment.upsert.mockResolvedValue({});
+
+        await expect(service.generateLabel('order-1')).rejects.toThrow();
+
+        expect(emailService.sendShippingNotification).not.toHaveBeenCalled();
+      });
+    });
+
     describe('weight calculation', () => {
       it('sums item weights and adds 0.5 kg base', async () => {
         const order = {

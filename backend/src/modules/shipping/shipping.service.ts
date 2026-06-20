@@ -140,6 +140,7 @@ export class ShippingService {
             });
             shipmentId = result.id;
             trackingNumber = result.trackingNumber;
+            this.assertTrackingNumber(trackingNumber, order.carrierCode);
             rawResponse = result;
           }
           targetLockerCode = order.inpostLockerCode ?? undefined;
@@ -175,6 +176,7 @@ export class ShippingService {
               description: `Zamówienie #${order.orderNumber}`,
             });
             trackingNumber = result.trackingNumber;
+            this.assertTrackingNumber(trackingNumber, order.carrierCode);
             labelUrl = result.labelUrl;
             // DHL has no separate fetch-label step — the label comes back inline
             // with createShipment, so the tracking number doubles as the
@@ -201,6 +203,7 @@ export class ShippingService {
               reference: order.orderNumber,
             });
             trackingNumber = result.trackingNumber;
+            this.assertTrackingNumber(trackingNumber, order.carrierCode);
             parcelId = result.parcelId;
             shipmentId = result.parcelId;
             rawResponse = result;
@@ -237,6 +240,7 @@ export class ShippingService {
               reference: order.orderNumber,
             });
             trackingNumber = result.trackingNumber;
+            this.assertTrackingNumber(trackingNumber, order.carrierCode);
             labelUrl = result.labelUrl;
             // DPD has no separate fetch-label step either — see DHL comment above.
             shipmentId = result.trackingNumber;
@@ -386,6 +390,15 @@ export class ShippingService {
     }
 
     this.logger.log(`Stale shipping label cleanup: ${deleted} deleted, ${failed} failed`);
+  }
+
+  // Catches a malformed/changed carrier response shape immediately, so it fails
+  // loudly into the existing LABEL_ERROR path instead of persisting LABEL_GENERATED
+  // with a dead tracking link mailed to the customer.
+  private assertTrackingNumber(trackingNumber: string | undefined, carrier: CarrierCode): void {
+    if (!trackingNumber) {
+      throw new Error(`${CARRIER_NAMES[carrier]} returned no trackingNumber for the shipment`);
+    }
   }
 
   private getTrackingUrl(carrier: CarrierCode, trackingNumber: string): string {
