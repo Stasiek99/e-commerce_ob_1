@@ -267,7 +267,7 @@ export class PaymentsService {
         break;
 
       case 'payout.failed':
-        await this.handlePayoutFailed(event.data.object as Stripe.Payout);
+        await this.handlePayoutFailed(event.data.object as Stripe.Payout, event.id);
         break;
 
       default:
@@ -1583,7 +1583,19 @@ export class PaymentsService {
     }
   }
 
-  private async handlePayoutFailed(payout: Stripe.Payout): Promise<void> {
+  private async handlePayoutFailed(payout: Stripe.Payout, eventId?: string): Promise<void> {
+    if (eventId) {
+      try {
+        await this.prisma.processedStripeEvent.create({ data: { eventId } });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          this.logger.log(`Payout failed event ${eventId} already processed — skipping duplicate`);
+          return;
+        }
+        throw err;
+      }
+    }
+
     const amountFormatted = (payout.amount / 100).toFixed(2);
     const currency = payout.currency.toUpperCase();
     const arrivalDate = new Date(payout.arrival_date * 1000).toISOString();

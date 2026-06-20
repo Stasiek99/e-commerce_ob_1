@@ -49,6 +49,9 @@ export class EmailQueueService {
     if (typeof p['orderNumber'] === 'string') {
       return `${name}-${p['orderNumber']}`;
     }
+    if (typeof p['payoutId'] === 'string') {
+      return `${name}-${p['payoutId']}`;
+    }
     if (typeof p['wishlistItemId'] === 'string') {
       return `${name}-${p['wishlistItemId']}`;
     }

@@ -4671,5 +4671,56 @@ describe('PaymentsService', () => {
         payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
       ).resolves.not.toThrow();
     });
+
+    // ── idempotency guard — payout.failed redelivery ────────────────────────
+    // Invariant: every other webhook case records event.id in processedStripeEvent
+    // before acting. payout.failed previously had no such guard, so a Stripe
+    // retry (timeout/non-2xx) re-ran the handler and produced a second Sentry
+    // alert + a second un-deduplicated email job for the same payout failure.
+
+    it('records the event.id in processedStripeEvent for deduplication', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+
+      expect(payoutPrisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: 'evt_payout.failed' },
+      });
+    });
+
+    it('swallows P2002 from a duplicate payout.failed delivery — no duplicate Sentry alert or email', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      payoutPrisma.processedStripeEvent.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`event_id`)', {
+          code: 'P2002',
+          clientVersion: '6.0.0',
+          meta: { target: ['event_id'] },
+        }),
+      );
+
+      await expect(
+        payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
+      ).resolves.not.toThrow();
+
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
+      expect(payoutEmail.sendPayoutFailedAlert).not.toHaveBeenCalled();
+    });
+
+    it('re-throws non-P2002 errors from processedStripeEvent.create', async () => {
+      payoutPrisma.processedStripeEvent.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Connection timed out', {
+          code: 'P1001',
+          clientVersion: '6.0.0',
+          meta: {},
+        }),
+      );
+
+      await expect(
+        payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
+      ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
+    });
   });
 });

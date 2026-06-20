@@ -457,6 +457,21 @@ describe('EmailQueueService', () => {
       expect(firstJobId).not.toBe(secondJobId);
     });
 
+    it('sets jobId = payout_failed_alert-{payoutId} to deduplicate redelivered payout.failed webhooks', async () => {
+      await service.sendPayoutFailedAlert({
+        to: 'admin@store.com',
+        payoutId: 'po_test_123',
+        amountInCents: 150000,
+        currency: 'pln',
+        failureCode: 'account_closed',
+        failureMessage: 'The bank account has been closed.',
+        arrivalDate: '2026-06-04T00:00:00.000Z',
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('payout_failed_alert-po_test_123');
+    });
+
     it('sets jobId = back_in_stock-{wishlistItemId} to deduplicate concurrent restock triggers', async () => {
       await service.sendBackInStock({
         to: 'alice@example.com',
