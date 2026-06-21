@@ -52,6 +52,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - `FOR UPDATE` inside interactive transactions is a no-op under pgbouncer transaction mode — oversell protection broken (cart/order/payment stock checks)
 - No HTTP timeout on Stripe-adjacent / carrier axios clients generally (see Shipping)
 - Stripe payout failure / account risk not monitored (`payout.failed` not subscribed)
+- `payout.failed` was the only Stripe webhook handler with no `ProcessedStripeEvent` idempotency guard and no deterministic BullMQ `jobId` — a Stripe-redelivered event re-ran unconditionally, double-alerting on-call — fixed by threading `event.id` through and keying `deriveJobId` on `payoutId`, matching the sibling `dispute_alert` pattern (round 17)
 - Guest cancel-token embedded in success URL leaks via Referer; later fixed to Redis opaque token but TTL too short for P24/BLIK (1h vs multi-day settlement)
 - Shipping rate fetched **outside** order transaction → stale price charged
 - City-level velocity guard ineffective/blocks legit Warsaw customers
@@ -90,13 +91,13 @@ After each round wraps up, fold its resolved findings into the relevant category
 
 ## Orders
 - Guest `guestEmail` not validated (`@IsEmail` missing)
-- `GET /orders/track` unauthenticated/enumerable; later found to leak full order contents to anyone with email+orderNumber; `deleted@deleted` GDPR sentinel enumerable; email logged in plaintext in Railway logs via query string
+- `GET /orders/track` unauthenticated/enumerable; later found to leak full order contents to anyone with email+orderNumber; `deleted@deleted` GDPR sentinel enumerable; email logged in plaintext in Railway logs via query string; that privacy fix narrowing the response to `{status, trackingNumber, carrier}` never touched the frontend, which kept typing/rendering the old richer shape and threw on every successful lookup — fixed by narrowing `TrackResult` and the template to match, plus a render-level spec (round 17)
 - Guest `addressId` IDOR (no ownership filter when `userId` absent)
 - No `OrderStatus` transition guard/allowlist
 - `bulkCancel` stock inflation (ignores `cancelledQuantity`) + skips Stripe refund
 - Coupon discount computed outside transaction on stale cart total
 - Order confirmation email sent while still PENDING_PAYMENT (timing) — later: missing **order-creation acknowledgement** email distinct from payment-confirmed email (UoK Art. 21)
-- `OrderItemDto.totalPrice` / `refundedAmountInCents` DTO gaps never populated by backend
+- `OrderItemDto.totalPrice` / `refundedAmountInCents` DTO gaps never populated by backend — fixed for `findAllAdmin`/`findOneForUser`/`findAllForUser` via `mapOrder()`; `findOneAdmin` was missed and still returned the bare Prisma object — fixed to route through `mapOrder()` too (round 17)
 - `getUnreadCount` monotonic forever-growing badge
 - `onModuleInit` sequence DDL non-idempotent/no retry under concurrent boot or DB unavailability
 - Cancel `reason` body has no DTO/length cap
@@ -170,6 +171,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - `StorageService`'s upload retry-with-backoff exists only for `uploadShippingLabel`, not `uploadProductImage`/`uploadInvoice` — the same transient Supabase failure self-heals for labels but fails permanently on the first attempt for images/invoices (round 16, open)
 - Carrier `trackingNumber` had no validation across all four clients (GLS/DPD fall back to `''`, DHL/InPost to `undefined`) — a malformed upstream response could ship `LABEL_GENERATED` with a dead tracking link — fixed with a shared guard that throws before persisting (round 16)
 - DPD pickup-point modal's `window` message listener had no cleanup if the component was destroyed mid-modal (no `ngOnDestroy`) — fixed via `destroyRef.onDestroy` (round 16)
+- InPost locker-picker had the same missing-cleanup gap as DPD's listener above — its `MutationObserver` watching for the widget backdrop was never registered with `destroyRef` — fixed the same way (round 17)
 
 ## Email / BullMQ / Notifications
 - Resend webhook signature verification silently skipped when secret unset
@@ -180,15 +182,16 @@ After each round wraps up, fold its resolved findings into the relevant category
 - Unknown BullMQ job type silently marked completed instead of failing
 - Email bounce handling passive (no suppression on resend) — fixed with `emailBounced` flag, but suppression then found to block ALL transactional mail indefinitely including for temporary bounces (no category split, no auto-reset)
 - `email.complained` webhook doesn't set any flag / no suppression list entry
-- Stored XSS in HTML email templates via unescaped interpolation (`return-admin-notification`, `shipping-notification`, `order-confirmation` templates)
+- Stored XSS in HTML email templates via unescaped interpolation (`return-admin-notification`, `shipping-notification`, `order-confirmation` templates) — later found to cover only 6 of 17 templates; fixed the remaining 8 (`password-reset`, `magic-link`, `email-verification`, `email-change`, `payment-confirmed`, `invoice`, `review-request`, `back-in-stock`) plus a regression spec asserting all escape an XSS payload (round 17); the three inline-HTML admin alert emails (`sendFraudReviewAlert`, `sendDisputeAlert`) built outside `templates/` were missed by the same sweep — fixed to escape `customerEmail`/`reason` too (round 17)
 - `dispute_alert` BullMQ job silently logged/skipped, no actual email sent
 - Redis `retryStrategy: null` in dev kills BullMQ silently on disconnect
 - `back_in_stock` job not idempotent (retry sends duplicate restock emails); flag reset happens before email send confirmed (data-loss order) — two distinct bugs across rounds
 - Back-in-stock notifications tied to Product not Variant (wrong-variant notify) + excludes users who bought a different variant
 - Railway rolling deploy: `worker.close(true)` exceeds SIGKILL window → duplicate emails on restart
-- Sentry captures plaintext passwords/PII in request body (top-level only, recursive scrub still missing for nested address fields); captures raw email address in tags; captures `Authorization` header/live JWT; Sentry source maps never uploaded to CI
+- Sentry captures plaintext passwords/PII in request body (top-level only, recursive scrub still missing for nested address fields); captures raw email address in tags; captures `Authorization` header/live JWT; Sentry source maps never uploaded to CI — later: CI started uploading SHA-tagged sourcemaps, but `SENTRY_RELEASE` was never set on Railway so production errors never matched them, leaving stack traces permanently minified — fixed by falling back to Railway's auto-injected `RAILWAY_GIT_COMMIT_SHA` (round 17)
 - Bounce-suppression bypass for transactional emails fired identically for permanent (hard) and transient (soft) bounces — sustained hard-bounce sends risk the sending identity getting rate-limited/suspended for every customer, not just the one with the dead address; fixed to bypass only for transient bounces
-- `OutboxProcessorService.recoverPendingMessages` had no distributed lock or atomic row-claiming (`SELECT ... FOR UPDATE SKIP LOCKED`), unlike the sibling `@Cron` jobs that take a Redis `SET NX` lock first — every Railway replica raced the same `PENDING` rows
+- `OutboxProcessorService.recoverPendingMessages` had no distributed lock or atomic row-claiming (`SELECT ... FOR UPDATE SKIP LOCKED`), unlike the sibling `@Cron` jobs that take a Redis `SET NX` lock first — every Railway replica raced the same `PENDING` rows; even after that fix, the 25s lock TTL didn't cover a slow 10-row batch's full duration, letting a second run re-process rows the first hadn't reached yet — fixed by atomically flipping each row `PENDING → PROCESSING` before working on it and refreshing the lock TTL per message (round 17)
+- `dispatchPostPaymentNotifications` returned immediately without awaiting its invoice+email chain, so `markSessionPaid`/`approveFraudReview` marked the outbox row `PROCESSED` in the same tick as kicking off dispatch rather than after it actually completed — a crash before the invoice upload/email send finished left the row falsely `PROCESSED` with no recovery path, since the poller only rescans `PENDING` rows — fixed by chaining the outbox update onto the notification promise and leaving it `PENDING` on failure (round 17)
 - `email_logs` 365-day blanket deletion could destroy the audit trail proving a bounce-suppression decision was correct while the `User.emailBounced` flag itself persists far longer — undermines the merchant's own defense if a customer disputes non-delivery
 
 ## Products / Catalog / Search
@@ -249,7 +252,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - Address deletion has no auto-promotion of new default
 - Wishlist auto-redirect away from its own empty state
 - GA4 purchase value computed from mutable `sessionStorage`
-- `STATUS_LABELS` map omitted `DISPUTE_HOLD`/`DISPUTE_LOST_REVIEW`, falling back to the raw enum string with no badge color — fixed by adding Polish labels and badge colors for both
+- `STATUS_LABELS` map omitted `DISPUTE_HOLD`/`DISPUTE_LOST_REVIEW`, falling back to the raw enum string with no badge color — fixed by adding Polish labels and badge colors for both; `FRAUD_REVIEW` had the same gap (correct Polish label, no badge color, fell back to generic gray) — fixed by adding a `.status--fraud_review` rule (round 17)
 - `canCancel()` included `PARTIALLY_REFUNDED` in its allowed list, showing an active cancel button the backend always rejected with a 409 — fixed by removing it (already correctly handled by the separate `canPartialCancel()`)
 - `canDownloadInvoice()` only excluded `PENDING_PAYMENT`/`CANCELLED`, so the invoice button rendered for `FRAUD_REVIEW`/`DISPUTE_HOLD` orders the backend's `nonInvoiceable` list refuses to invoice — fixed to mirror the backend list exactly
 - 429 responses fell through the error interceptor's catch-all with no UI signal, surfacing NestJS's raw English `ThrottlerException` string on a Polish storefront — fixed with a dedicated 429 branch that reads `Retry-After` and shows a localized toast via `ToastService`
@@ -259,6 +262,9 @@ After each round wraps up, fold its resolved findings into the relevant category
 - Order-detail page's full-cancel and partial-cancel zones tracked separate in-flight signals, letting a user fire both for the same order before either resolved — the realistic trigger for the cancel-lock-coverage gap in Payments/Stripe above — fixed with one shared `actionInFlight()` signal disabling both zones while either request is outstanding
 - Backend SSE idle-timeout signal (`{reconnect:true}` + `subscriber.complete()`) had no matching frontend handling — `StockStreamService` forwarded the plain object as a `StockUpdate[]`, the product-detail page's `.find()` call threw, RxJS routed it to `error`, and nothing reopened a new `EventSource` — silently freezing every live stock badge after 5 minutes idle with no recovery short of a reload — fixed by detecting the reconnect signal and reopening the connection internally
 - Checkout's `CARRIERS` array hardcodes shipping prices duplicating `ShippingRatesService.FALLBACK_RATES` instead of fetching live `GET /shipping/rates` — the price shown through carrier selection/summary can silently diverge from what Stripe actually charges the instant an admin edits a rate (round 16, open)
+- Email-verification (and email-change confirmation) link `ngOnInit()` called `verifyEmail()` unconditionally with no `isPlatformBrowser` guard — the Vercel SSR Lambda consumed the single-use token before the browser ran any JS, then hydration repeated the identical POST against an already-used token, overwriting a genuine success with an error on every normal click — fixed by guarding token consumption to the browser (round 17)
+- `/checkout/success`'s payment-status poll, cart clear, and GA4 purchase fire ran unguarded during SSR on the one route every successful Stripe payment hits, wasting backend round-trips and risking a GA4 fire from a discarded server render — fixed with `isPlatformBrowser`, matching the pattern already used in `product-detail`/`checkout-page` (round 17)
+- GA4 `purchase` event's `item_variant` sourced from `snapshotSku` instead of the human variant label every other GA4 event (`add_to_cart`/`view_item`) uses for the same line item, breaking variant-level revenue attribution — fixed by snapshotting the real variant label on `OrderItem` at order-creation time (round 17)
 
 ## Accessibility (EAA/WCAG) — Round 9, large cluster, all excluded
 - No skip-navigation link; no per-route `<title>`/TitleStrategy; DPD modal & lightbox no focus trap/`aria-modal`/focus restore; form errors not `role="alert"`; hero scroll-jacking inaccessible to keyboard + no `prefers-reduced-motion`; low-contrast text (cookie consent button, footer, street-hint warning); cart/wishlist badge no accessible name; lightbox `tabindex` present but never focused; in-stock filter checkbox no label association; `<a role="button">` without `href` not focusable; mobile nav no focus trap; `<time>` missing `datetime`; Taiga UI label association unverified
@@ -278,7 +284,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - Thumbnail images empty `alt=""`
 
 ## Security headers / CSP / Infra hardening
-- No CSP header at all (fixed) → later: CSP `'unsafe-inline'` neutralizes XSS protection (needs nonce); missing `form-action`, `X-Frame-Options`, HSTS; DPD domain missing from `frame-src`
+- No CSP header at all (fixed) → later: CSP `'unsafe-inline'` neutralizes XSS protection (needs nonce); missing `form-action`, `X-Frame-Options`, HSTS; DPD domain missing from `frame-src`; later still: `vercel.json`'s static CSP and the SSR Lambda's own nonce'd CSP both matched every route, so browsers enforced their intersection and blocked Angular's `withEventReplay()` inline hydration scripts on every prerendered/SSR page — fixed by scoping `vercel.json`'s CSP to just the 4 static routes and adding fixed sha256 hash sources for the two known inline scripts to both policies (round 17)
 - AdminJS full Helmet bypass (clickjacking) — fixed to targeted bypass
 - CORS falls back to `localhost:4200` if `FRONTEND_URL` unset in prod
 - File upload accepts any MIME type (no magic-byte check) — stored XSS via CDN
@@ -290,7 +296,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - `MERCHANT_SLACK_WEBHOOK_URL` not validated as Slack-only (SSRF)
 - `/location/postal-code`,`/location/street-check` unthrottled / no length cap / no cache / no timeout (Nominatim/zippopotam abuse + ban risk)
 - SSE stock stream: no per-IP cap (bypassable via shared NAT IP), Prisma poll saturates pool at scale, Redis counter not reset after crash (lockout)
-- HTTP graceful shutdown gap — in-flight requests cut by SIGKILL; BullMQ worker drain timing issues (`close(true)` vs SIGKILL window)
+- HTTP graceful shutdown gap — in-flight requests cut by SIGKILL; BullMQ worker drain timing issues (`close(true)` vs SIGKILL window); separately, `app.enableShutdownHooks()` ran Nest's `callDestroyHook()` (disconnecting Prisma process-wide via `PrismaService.onModuleDestroy()`) before `dispose()` closed the HTTP server, so any in-flight request needing a Prisma call after `SIGTERM` failed instead of completing — the opposite order graceful shutdown requires, despite `main.ts`'s own comments claiming otherwise — fixed by closing the HTTP server first (bounded by the same 8s budget as `TimeoutInterceptor`), then calling `app.close()` once draining settles (round 17)
 - `Payment` table missing indexes on `status`/`createdAt`
 - `pnpm audit`/CVE scanning absent
 - Cloudflare Turnstile disabled in production (empty site key) — this is **explicitly a ROADMAP Phase 7 hard-gate item**, exclude
@@ -309,6 +315,7 @@ After each round wraps up, fold its resolved findings into the relevant category
 - `main` (Railway/Vercel's actual deploy branch) had silently drifted ~2 months behind `develop`, leaving rounds 10-13's entire hardening backlog unmerged into prod with no mechanism to ever re-sync them — fixed by adding `.github/workflows/promote-main.yml`, a weekly (+ manual `workflow_dispatch`) job that fast-forwards `main` to `develop`'s tip only when `develop`'s latest CI run for that commit concluded `success`
 - Whether `main` enforces the same required status checks/no-force-push/no-deletion as `develop` is unverified — GitHub branch protection lives in repo settings, invisible to a filesystem audit, and this repo's private-on-Free-plan status already 403s both the classic and ruleset branch-protection APIs (documented as a known gap in CLAUDE.md's deployment section) — open, blocked on a GitHub plan upgrade or making the repo public
 - New e2e CI job's Playwright step had no `timeout-minutes`, relying on GitHub Actions' 6-hour job default to eventually catch a hung test (e.g. waiting on a webhook a mocked Stripe never fires) — fixed with `timeout-minutes: 10` on the step plus an 8-minute `globalTimeout` in `playwright.config.ts`
+- `CLAUDE.md`'s Railway checklist called `SENTRY_DSN` "(optional)" while `config.validation.ts` makes it required and boot-fatal in production — fixed by correcting the doc (round 17)
 
 ## GDPR / Privacy / Data Retention
 - `deleteAccount` doesn't scrub `ReturnRequest` PII; `snapshotStreet`/`City`/`PostalCode` never nulled in erasure (only name/email/phone/company/nip)
@@ -335,4 +342,4 @@ After each round wraps up, fold its resolved findings into the relevant category
 
 ---
 
-This list spans ~360 distinct findings (20 folded in from round 16 — the 5 round-16 LOW-severity items were fixed directly on that round's branch; the other 15 CRITICAL/HIGH/MEDIUM findings remain open). Each new audit round should avoid restating any of the above and focus on genuinely new angles.
+This list spans ~376 distinct findings (20 folded in from round 16 — the 5 round-16 LOW-severity items were fixed directly on that round's branch; the other 15 CRITICAL/HIGH/MEDIUM findings remain open — plus 16 folded in from round 17, all fixed directly on that round's branch). Each new audit round should avoid restating any of the above and focus on genuinely new angles.

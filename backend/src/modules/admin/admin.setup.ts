@@ -338,6 +338,10 @@ export async function setupAdmin(
               description: 'Numer powiadomienia CPNP (wymagany przez art. 13 rozp. 1223/2009 przed wprowadzeniem do obrotu UE)',
               isVisible: { list: false, show: true, edit: true, filter: false },
             },
+            ufiCode: {
+              description: 'Unikalny Identyfikator Formuły (UFI) — wymagany na etykiecie mieszanin niebezpiecznych zgodnie z rozp. CLP 1272/2008 zał. VIII (stosowany zamiast CPNP dla produktów niekosmetycznych, np. dyfuzorów)',
+              isVisible: { list: false, show: true, edit: true, filter: false },
+            },
             responsiblePersonName: {
               description: 'Nazwa/firma Osoby Odpowiedzialnej (RP) zgodnie z rozp. 1223/2009',
               isVisible: { list: false, show: true, edit: true, filter: false },
@@ -349,12 +353,12 @@ export async function setupAdmin(
                 const result = await prisma.$queryRaw<[{ count: number }]>`
                   SELECT COUNT(*)::int AS count FROM products
                   WHERE "isActive" = true
-                    AND ("cpnpNotificationNumber" IS NULL OR "responsiblePersonName" IS NULL)
+                    AND ("cpnpNotificationNumber" IS NULL AND "ufiCode" IS NULL OR "responsiblePersonName" IS NULL)
                 `;
                 const count = Number(result[0]?.count ?? 0);
                 if (count > 0) {
                   response.notice = {
-                    message: `CPNP: ${count} aktywn${count === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru powiadomienia CPNP lub nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009)`,
+                    message: `CPNP/UFI: ${count} aktywn${count === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru CPNP lub UFI, lub nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009 / zał. VIII rozp. CLP)`,
                     type: 'error',
                   };
                 }

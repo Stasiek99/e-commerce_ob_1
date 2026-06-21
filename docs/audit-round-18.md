@@ -187,6 +187,7 @@ The category tree supports arbitrary depth — that's why `findAll()` was rewrit
 
 ---
 
+
 ## Notes — verified clean
 
 **Money & Checkout** — cart's best-effort stock guard, `CouponService`'s atomic `applyInsideTransaction`, frontend idempotency-key/double-submit patterns, `markSessionPaid`'s amount-mismatch defense-in-depth, `partialRefund`'s idempotency-key disambiguation, and the `cancel-lock`/`refund-lock` coverage of `partialRefund`/`refundPayment` themselves (confirmed `markRefunded`'s *caller path* into those two functions is correctly locked — only `markRefunded`'s own discount math, audited above, is wrong) were all re-verified correct. Stripe Checkout Session discount-vs-line-items consistency, `ShippingRatesService`'s cache/CAS handling, and the FREE_SHIPPING/FIXED_AMOUNT coupon UI disclosures were also confirmed already fixed per the exclusion list, not regressed.
