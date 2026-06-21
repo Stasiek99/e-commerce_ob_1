@@ -350,16 +350,32 @@ export async function setupAdmin(
           actions: {
             list: {
               after: async (response: any) => {
-                const result = await prisma.$queryRaw<[{ count: number }]>`
-                  SELECT COUNT(*)::int AS count FROM products
-                  WHERE "isActive" = true
-                    AND ("cpnpNotificationNumber" IS NULL AND "ufiCode" IS NULL OR "responsiblePersonName" IS NULL)
-                `;
-                const count = Number(result[0]?.count ?? 0);
-                if (count > 0) {
+                // Two independent gates so a missing RP name (a data-entry
+                // formality) never masks a missing CPNP/UFI number (an actual
+                // EU market-placement blocker under Art. 13 / CLP Annex VIII).
+                const [cpnpUfiResult, rpResult] = await Promise.all([
+                  prisma.$queryRaw<[{ count: number }]>`
+                    SELECT COUNT(*)::int AS count FROM products
+                    WHERE "isActive" = true
+                      AND "cpnpNotificationNumber" IS NULL AND "ufiCode" IS NULL
+                  `,
+                  prisma.$queryRaw<[{ count: number }]>`
+                    SELECT COUNT(*)::int AS count FROM products
+                    WHERE "isActive" = true AND "responsiblePersonName" IS NULL
+                  `,
+                ]);
+                const cpnpUfiMissing = Number(cpnpUfiResult[0]?.count ?? 0);
+                const rpMissing = Number(rpResult[0]?.count ?? 0);
+
+                if (cpnpUfiMissing > 0) {
                   response.notice = {
-                    message: `CPNP/UFI: ${count} aktywn${count === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru CPNP lub UFI, lub nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009 / zał. VIII rozp. CLP)`,
+                    message: `CPNP/UFI: ${cpnpUfiMissing} aktywn${cpnpUfiMissing === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru CPNP lub UFI (art. 13 rozp. 1223/2009 / zał. VIII rozp. CLP)`,
                     type: 'error',
+                  };
+                } else if (rpMissing > 0) {
+                  response.notice = {
+                    message: `Osoba Odpowiedzialna: ${rpMissing} aktywn${rpMissing === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009)`,
+                    type: 'warning',
                   };
                 }
                 return response;
