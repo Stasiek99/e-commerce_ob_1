@@ -3678,6 +3678,75 @@ describe('PaymentsService', () => {
         data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: 'order-1' },
       });
     });
+
+    // ─── per-order refund lock (covers concurrent admin approvals racing the
+    // same FRAUD_REVIEW → PAID transition — double-click or two admins
+    // approving from the queue simultaneously) ──────────────────────────────
+
+    it('throws 429 when another refund/approval for the order is already in progress', async () => {
+      redis.set.mockResolvedValueOnce(null);
+
+      await expect(service.approveFraudReview('order-1', 'ADMIN')).rejects.toThrow(HttpException);
+      // The status read happens inside the lock — must never run if the lock was not acquired.
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock keyed on refund-lock:<orderId>', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(redis.set).toHaveBeenCalledWith('refund-lock:order-1', expect.any(String), 'EX', 30, 'NX');
+    });
+
+    it('releases the Redis lock after a successful approval', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
+
+    it('releases the Redis lock even when the status check throws', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ ...mockFraudOrder, status: OrderStatus.PAID });
+
+      await expect(service.approveFraudReview('order-1', 'ADMIN')).rejects.toThrow(/Cannot approve order/);
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
+
+    it('a second concurrent approval sees the order already PAID and is rejected instead of double-dispatching', async () => {
+      // Simulates: call A acquires the lock, transitions to PAID, and releases
+      // the lock (fast-path dispatch is fire-and-forget). Call B then acquires
+      // the freed lock and must read the now-PAID status rather than the stale
+      // FRAUD_REVIEW it would have seen without serialization.
+      prisma.order.findUniqueOrThrow.mockResolvedValueOnce(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      expect(prisma.outboxMessage.create).toHaveBeenCalledTimes(1);
+
+      prisma.order.findUniqueOrThrow.mockResolvedValueOnce({ ...mockFraudOrder, status: OrderStatus.PAID });
+
+      await expect(service.approveFraudReview('order-1', 'ADMIN')).rejects.toThrow(/Cannot approve order/);
+      expect(prisma.outboxMessage.create).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ── markSessionPaid idempotency — session-scoped key ──────────────────
