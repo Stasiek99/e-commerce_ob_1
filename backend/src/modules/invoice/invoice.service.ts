@@ -1,6 +1,7 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import type IORedis from 'ioredis';
 import * as path from 'path';
 import * as PDFDocument from 'pdfkit';
 import { PrismaService } from '../prisma/prisma.service';
@@ -64,6 +65,7 @@ export class InvoiceService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {
     this.sellerName = config.get('SELLER_NAME', 'Aromaterie');
     this.sellerNip = config.get('SELLER_NIP', '');
@@ -204,6 +206,15 @@ export class InvoiceService implements OnModuleInit {
    * being cancelled in this call — not from the refund amount — so two
    * unrelated cancellations that happen to total the same refund (common with
    * shared price points) are never treated as the same correction.
+   *
+   * `cancelItemsByUser` (the only caller) invokes this fire-and-forget and
+   * releases its own `cancel-lock` before this promise settles, so a second,
+   * fully sequential cancellation on the same order can start a second call
+   * here while the first's cross-correction read/write is still in flight.
+   * The `invoice-correction-lock` acquired below — distinct from TX1's
+   * per-key idempotency lock above — serializes the prior-corrections read
+   * through the final write across the whole order, so a second call always
+   * sees the first's committed `vatBreakdownByRate` instead of a stale base.
    */
   async processCorrectiveInvoice(
     orderId: string,
@@ -290,47 +301,51 @@ export class InvoiceService implements OnModuleInit {
       },
     });
 
-    // Sum every earlier correction's per-rate delta so the breakdown below
-    // uses the taxable base as it stood immediately before THIS correction
-    // (Art. 106j ust. 2), not the order's pristine pre-any-correction total.
-    const priorCorrections = await this.prisma.invoiceCorrection.findMany({
-      where: { orderId, correctionRequestKey: { not: correctionRequestKey } },
-      select: { vatBreakdownByRate: true },
-    });
-    const priorDeltaGrossByRate = new Map<number, number>();
-    for (const correction of priorCorrections) {
-      const breakdown = correction.vatBreakdownByRate as Record<string, number> | null;
-      if (!breakdown) continue;
-      for (const [rateBasisPoints, deltaGross] of Object.entries(breakdown)) {
-        const rate = Number(rateBasisPoints);
-        priorDeltaGrossByRate.set(rate, (priorDeltaGrossByRate.get(rate) ?? 0) + deltaGross);
+    const correctiveStoragePath = await this.withCorrectionLock(orderId, async () => {
+      // Sum every earlier correction's per-rate delta so the breakdown below
+      // uses the taxable base as it stood immediately before THIS correction
+      // (Art. 106j ust. 2), not the order's pristine pre-any-correction total.
+      const priorCorrections = await this.prisma.invoiceCorrection.findMany({
+        where: { orderId, correctionRequestKey: { not: correctionRequestKey } },
+        select: { vatBreakdownByRate: true },
+      });
+      const priorDeltaGrossByRate = new Map<number, number>();
+      for (const correction of priorCorrections) {
+        const breakdown = correction.vatBreakdownByRate as Record<string, number> | null;
+        if (!breakdown) continue;
+        for (const [rateBasisPoints, deltaGross] of Object.entries(breakdown)) {
+          const rate = Number(rateBasisPoints);
+          priorDeltaGrossByRate.set(rate, (priorDeltaGrossByRate.get(rate) ?? 0) + deltaGross);
+        }
       }
-    }
 
-    const vatBreakdown = this.buildCorrectiveVatBreakdown(order.items, cancelledItems, priorDeltaGrossByRate);
+      const vatBreakdown = this.buildCorrectiveVatBreakdown(order.items, cancelledItems, priorDeltaGrossByRate);
 
-    const pdf = await this.generateCorrectivePdf(
-      order,
-      reserved.correctiveInvoiceNumber,
-      originalInvoiceNumber,
-      refundAmountInCents,
-      vatBreakdown,
-    );
-    const filename = `${reserved.correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
-    const correctiveStoragePath = await this.storage.uploadInvoice(pdf, filename);
+      const pdf = await this.generateCorrectivePdf(
+        order,
+        reserved.correctiveInvoiceNumber,
+        originalInvoiceNumber,
+        refundAmountInCents,
+        vatBreakdown,
+      );
+      const filename = `${reserved.correctiveInvoiceNumber.replace(/\//g, '-')}.pdf`;
+      const storagePath = await this.storage.uploadInvoice(pdf, filename);
 
-    // This correction's own per-rate delta, persisted so later corrections
-    // can include it in their prior-corrections sum above.
-    const thisDeltaGrossByRate: Record<string, number> = {};
-    for (const item of cancelledItems) {
-      const key = String(item.vatRate);
-      thisDeltaGrossByRate[key] = (thisDeltaGrossByRate[key] ?? 0) + item.priceInCents * item.quantity;
-    }
+      // This correction's own per-rate delta, persisted so later corrections
+      // can include it in their prior-corrections sum above.
+      const thisDeltaGrossByRate: Record<string, number> = {};
+      for (const item of cancelledItems) {
+        const key = String(item.vatRate);
+        thisDeltaGrossByRate[key] = (thisDeltaGrossByRate[key] ?? 0) + item.priceInCents * item.quantity;
+      }
 
-    // TX2 — short write: persist the storage path now that upload succeeded
-    await this.prisma.invoiceCorrection.update({
-      where: { orderId_correctionRequestKey: { orderId, correctionRequestKey } },
-      data: { correctiveStoragePath, vatBreakdownByRate: thisDeltaGrossByRate },
+      // TX2 — short write: persist the storage path now that upload succeeded
+      await this.prisma.invoiceCorrection.update({
+        where: { orderId_correctionRequestKey: { orderId, correctionRequestKey } },
+        data: { correctiveStoragePath: storagePath, vatBreakdownByRate: thisDeltaGrossByRate },
+      });
+
+      return storagePath;
     });
 
     this.logger.log(
@@ -340,6 +355,48 @@ export class InvoiceService implements OnModuleInit {
     const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
     const correctiveUrl = await this.storage.getInvoiceSignedUrl(correctiveStoragePath, SEVEN_DAYS_SECONDS);
     return { correctiveUrl, correctiveStoragePath, correctiveInvoiceNumber: reserved.correctiveInvoiceNumber };
+  }
+
+  /**
+   * Serializes the cross-correction VAT-breakdown math for one order: the
+   * "sum all prior corrections" read through the final persisted write.
+   * Needed because the caller (`cancelItemsByUser`) runs this method
+   * fire-and-forget and releases its own `cancel-lock` before it settles —
+   * without a lock here, a second sequential cancellation's read could land
+   * before the first's write commits and compute its taxable base from an
+   * incomplete prior-corrections set. Retries (rather than failing fast)
+   * because this runs in the background with no caller waiting to retry —
+   * failing outright would silently drop a legally-required corrective
+   * invoice instead of just delaying it behind the in-flight one.
+   */
+  private async withCorrectionLock<T>(orderId: string, fn: () => Promise<T>): Promise<T> {
+    const lockKey = `invoice-correction-lock:${orderId}`;
+    const lockToken = randomUUID();
+    const maxAttempts = 30;
+    const retryDelayMs = 500;
+
+    let acquired = false;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      acquired = (await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX')) !== null;
+      if (acquired) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+    if (!acquired) {
+      throw new Error(
+        `Timed out waiting for invoice-correction-lock:${orderId} — another correction for this order is still in flight`,
+      );
+    }
+
+    try {
+      return await fn();
+    } finally {
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
   }
 
   async getCorrectiveInvoiceUrl(orderId: string): Promise<{ correctiveInvoiceUrl: string; correctiveInvoiceNumber: string } | null> {
