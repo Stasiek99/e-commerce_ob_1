@@ -1152,76 +1152,112 @@ export class OrdersService implements OnModuleInit {
   }
 
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
-    const current = await this.prisma.order.findUniqueOrThrow({
-      where: { id },
-      select: {
-        status: true,
-        items: { select: { productVariantId: true, quantity: true, cancelledQuantity: true } },
-      },
-    });
-
-    if (current.status === status) return;
-
-    if (current.status === OrderStatus.DISPUTE_HOLD && status === OrderStatus.CANCELLED) {
-      throw new ConflictException(
-        'Cannot manually cancel an order under dispute. Wait for the Stripe charge.dispute.closed webhook to resolve the dispute before taking action.',
+    // Distributed lock: prevents two concurrent status-transition requests on the same
+    // order (double-click, two admin tabs, stale retry) from both reading the same stale
+    // prior status and double-restoring stock. Mirrors the cancel-lock/refund-lock pattern
+    // in cancelItemsByUser/PaymentsService above.
+    const lockKey = `status-lock:${id}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        'A status update for this order is already in progress — please wait a moment before trying again',
+        HttpStatus.TOO_MANY_REQUESTS,
       );
     }
 
-    if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
-      throw new BadRequestException(
-        `Invalid order status transition: ${current.status} → ${status}`,
-      );
-    }
-
-    const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
-    const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
-
-    // From DISPUTE_LOST_REVIEW, REFUNDED means the admin confirmed the chargeback
-    // stands (goods were delivered, not coming back) — restoring stock there would
-    // recreate the exact oversell risk this review gate exists to prevent. Only
-    // CANCELLED (admin confirms goods were never delivered/were returned) restores it.
-    const isUnverifiedDisputeLossPayout =
-      current.status === OrderStatus.DISPUTE_LOST_REVIEW && status === OrderStatus.REFUNDED;
-
-    const shouldRestoreStock =
-      stockRestoringStatuses.includes(status) &&
-      !stockAlreadyRestored.includes(current.status) &&
-      !isUnverifiedDisputeLossPayout;
-
-    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
-    await this.prisma.$transaction(async (tx) => {
-      if (shouldRestoreStock) {
-        for (const item of current.items) {
-          const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-          if (activeQty > 0) {
-            const updated = await tx.productVariant.update({
-              where: { id: item.productVariantId },
-              data: { stock: { increment: activeQty } },
-            });
-            deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
-          }
-        }
-      }
-
-      await tx.order.update({ where: { id }, data: { status } });
-      await tx.orderEvent.create({
-        data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
+    try {
+      const current = await this.prisma.order.findUniqueOrThrow({
+        where: { id },
+        select: {
+          status: true,
+          items: { select: { productVariantId: true, quantity: true, cancelledQuantity: true } },
+        },
       });
 
-      if (status === OrderStatus.SHIPPED) {
-        await tx.shipment.updateMany({
-          where: { orderId: id, shippedAt: null },
-          data: { shippedAt: new Date() },
-        });
-      }
-    });
-    this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
-      this.logger.warn('notifyStockChangesByDelta failed', err),
-    );
+      if (current.status === status) return;
 
-    if (status === OrderStatus.DELIVERED) {
-      this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
+      if (current.status === OrderStatus.DISPUTE_HOLD && status === OrderStatus.CANCELLED) {
+        throw new ConflictException(
+          'Cannot manually cancel an order under dispute. Wait for the Stripe charge.dispute.closed webhook to resolve the dispute before taking action.',
+        );
+      }
+
+      if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
+        throw new BadRequestException(
+          `Invalid order status transition: ${current.status} → ${status}`,
+        );
+      }
+
+      const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+      const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+
+      // From DISPUTE_LOST_REVIEW, REFUNDED means the admin confirmed the chargeback
+      // stands (goods were delivered, not coming back) — restoring stock there would
+      // recreate the exact oversell risk this review gate exists to prevent. Only
+      // CANCELLED (admin confirms goods were never delivered/were returned) restores it.
+      const isUnverifiedDisputeLossPayout =
+        current.status === OrderStatus.DISPUTE_LOST_REVIEW && status === OrderStatus.REFUNDED;
+
+      const shouldRestoreStock =
+        stockRestoringStatuses.includes(status) &&
+        !stockAlreadyRestored.includes(current.status) &&
+        !isUnverifiedDisputeLossPayout;
+
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+      await this.prisma.$transaction(async (tx) => {
+        // Conditional write keyed on the prior status read above — defense in depth
+        // alongside the Redis lock. If another transaction already moved this order
+        // off `current.status`, this affects 0 rows and we abort before touching stock.
+        const stamped = await tx.order.updateMany({
+          where: { id, status: current.status },
+          data: { status },
+        });
+        if (stamped.count === 0) {
+          throw new ConflictException(
+            `Order ${id} status changed concurrently (expected ${current.status}) — refresh and retry`,
+          );
+        }
+
+        if (shouldRestoreStock) {
+          for (const item of current.items) {
+            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+            if (activeQty > 0) {
+              const updated = await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQty } },
+              });
+              deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
+            }
+          }
+        }
+
+        await tx.orderEvent.create({
+          data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
+        });
+
+        if (status === OrderStatus.SHIPPED) {
+          await tx.shipment.updateMany({
+            where: { orderId: id, shippedAt: null },
+            data: { shippedAt: new Date() },
+          });
+        }
+      });
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
+
+      if (status === OrderStatus.DELIVERED) {
+        this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
+      }
+    } finally {
+      // Release the lock only if we still own it (Lua script is atomic).
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
     }
   }
 
