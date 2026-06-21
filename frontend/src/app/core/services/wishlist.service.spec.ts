@@ -52,6 +52,27 @@ describe('WishlistService', () => {
     return service;
   }
 
+  // Auth starts true so the constructor's effect calls syncFromBackend() directly on the
+  // very first run, with `items` as the guest ids to merge — skips guest revalidation
+  // entirely, which is irrelevant to the merge-batching/failure tests below.
+  function setupAuthenticated(items: WishlistItemData[]): WishlistService {
+    mockStorage = createMockStorage({ [STORAGE_KEY]: JSON.stringify(items) });
+
+    TestBed.configureTestingModule({
+      providers: [
+        WishlistService,
+        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: LOCAL_STORAGE, useValue: mockStorage },
+        { provide: AuthService, useValue: { isAuthenticated: signal(true) } },
+        provideHttpClient(),
+        provideHttpClientTesting(),
+      ],
+    });
+
+    service = TestBed.inject(WishlistService);
+    return service;
+  }
+
   afterEach(() => TestBed.resetTestingModule());
 
   // ── SSR / server platform ─────────────────────────────────────────────────
@@ -375,6 +396,134 @@ describe('WishlistService', () => {
       revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml', slug: 'rose-oud' });
 
       expect(service.items()).toEqual([]);
+    });
+  });
+
+  // ── Guest wishlist merge batching (>100 items) ────────────────────────────
+  // Guards the fix: MergeWishlistDto caps productIds at 100 — a guest wishlist
+  // larger than that must be chunked into sequential batches, not sent in one
+  // request that the backend rejects wholesale.
+
+  describe('guest wishlist merge batching', () => {
+    let httpMock: HttpTestingController;
+
+    afterEach(() => httpMock.verify());
+
+    function makeGuestItems(count: number): WishlistItemData[] {
+      return Array.from({ length: count }, (_, i) => ({
+        id: `product-${i}`,
+        name: `Item ${i}`,
+        slug: `item-${i}`,
+        notifyOnRestock: false,
+      }));
+    }
+
+    it('splits a 150-item guest wishlist into two merge batches of 100 and 50 ids', () => {
+      setupAuthenticated(makeGuestItems(150));
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      const firstBatch = httpMock.expectOne('/api/wishlist/merge');
+      expect((firstBatch.request.body as { productIds: string[] }).productIds).toHaveLength(100);
+      firstBatch.flush({});
+
+      const secondBatch = httpMock.expectOne('/api/wishlist/merge');
+      expect((secondBatch.request.body as { productIds: string[] }).productIds).toHaveLength(50);
+      secondBatch.flush({});
+
+      httpMock.expectOne('/api/wishlist').flush([]);
+    });
+
+    it('does not issue the second batch until the first batch resolves', () => {
+      setupAuthenticated(makeGuestItems(150));
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      const firstPending = httpMock.match('/api/wishlist/merge');
+      expect(firstPending).toHaveLength(1);
+      firstPending[0].flush({});
+
+      const secondPending = httpMock.match('/api/wishlist/merge');
+      expect(secondPending).toHaveLength(1);
+      secondPending[0].flush({});
+
+      httpMock.expectOne('/api/wishlist').flush([]);
+    });
+
+    it('clears localStorage only after every batch and the final fetch succeed', () => {
+      setupAuthenticated(makeGuestItems(150));
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectOne('/api/wishlist/merge').flush({});
+      httpMock.expectOne('/api/wishlist/merge').flush({});
+      httpMock.expectOne('/api/wishlist').flush([]);
+
+      expect(mockStorage.removeItem).toHaveBeenCalledWith(STORAGE_KEY);
+    });
+
+    it('sends a single batch for a wishlist of exactly 100 items', () => {
+      setupAuthenticated(makeGuestItems(100));
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      const batch = httpMock.expectOne('/api/wishlist/merge');
+      expect((batch.request.body as { productIds: string[] }).productIds).toHaveLength(100);
+      batch.flush({});
+
+      httpMock.expectOne('/api/wishlist').flush([]);
+    });
+  });
+
+  // ── Merge failure must not discard the guest wishlist ─────────────────────
+  // Guards the fix: a failed merge batch left localStorage cleared unconditionally,
+  // silently discarding the unmerged guest items. It must now be preserved so the
+  // next sync attempt (e.g. on the next page load) can retry — mergeGuestItems()
+  // on the backend is idempotent (skipDuplicates), so a retry is always safe.
+
+  describe('merge failure handling', () => {
+    let httpMock: HttpTestingController;
+
+    afterEach(() => httpMock.verify());
+
+    it('does not clear localStorage when the merge request fails, and falls back to the current backend wishlist', () => {
+      setupAuthenticated([MOCK_ITEM]);
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock
+        .expectOne('/api/wishlist/merge')
+        .flush('merge failed', { status: 500, statusText: 'Server Error' });
+
+      const backendItems: WishlistItemData[] = [
+        { id: 'backend-item', name: 'Backend Item', slug: 'backend-item', notifyOnRestock: true },
+      ];
+      httpMock.expectOne('/api/wishlist').flush(backendItems);
+
+      expect(service.items()).toEqual(backendItems);
+      expect(mockStorage.removeItem).not.toHaveBeenCalled();
+    });
+
+    it('does not clear localStorage when a later batch fails partway through a multi-batch sync', () => {
+      setupAuthenticated(
+        Array.from({ length: 150 }, (_, i) => ({
+          id: `product-${i}`,
+          name: `Item ${i}`,
+          slug: `item-${i}`,
+          notifyOnRestock: false,
+        })),
+      );
+      httpMock = TestBed.inject(HttpTestingController);
+      TestBed.tick();
+
+      httpMock.expectOne('/api/wishlist/merge').flush({}); // first batch (100) succeeds
+      httpMock
+        .expectOne('/api/wishlist/merge')
+        .flush('boom', { status: 500, statusText: 'Server Error' }); // second batch (50) fails
+
+      httpMock.expectOne('/api/wishlist').flush([]);
+
+      expect(mockStorage.removeItem).not.toHaveBeenCalled();
     });
   });
 });
