@@ -14,8 +14,29 @@ export class CategoriesService {
     const categories = await this.prisma.category.findMany({
       orderBy: { name: 'asc' },
     });
+    return this.buildCategoryTree(categories).roots;
+  }
 
-    type CategoryNode = (typeof categories)[number] & { children: CategoryNode[] };
+  // Shares the arbitrary-depth tree assembly with findAll() — a nested Prisma
+  // `include: { children: true }` here would silently cap children at depth 1,
+  // the exact bug class findAll() above was already fixed for.
+  async findBySlug(slug: string) {
+    const categories = await this.prisma.category.findMany({
+      orderBy: { name: 'asc' },
+    });
+    const { byId } = this.buildCategoryTree(categories);
+
+    const category = [...byId.values()].find((c) => c.slug === slug);
+    if (!category) throw new NotFoundException('Category not found');
+
+    const parentNode = category.parentId ? byId.get(category.parentId) : undefined;
+    const parent = parentNode ? { ...parentNode, children: undefined } : null;
+
+    return { ...category, parent };
+  }
+
+  private buildCategoryTree<T extends { id: string; parentId: string | null }>(categories: T[]) {
+    type CategoryNode = T & { children: CategoryNode[] };
     const byId = new Map<string, CategoryNode>(
       categories.map((category) => [category.id, { ...category, children: [] }]),
     );
@@ -30,16 +51,7 @@ export class CategoriesService {
       }
     }
 
-    return roots;
-  }
-
-  async findBySlug(slug: string) {
-    const category = await this.prisma.category.findUnique({
-      where: { slug },
-      include: { children: true, parent: true },
-    });
-    if (!category) throw new NotFoundException('Category not found');
-    return category;
+    return { byId, roots };
   }
 
   create(data: {
