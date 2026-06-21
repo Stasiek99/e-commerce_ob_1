@@ -865,6 +865,7 @@ export class PaymentsService {
             userId: true,
             orderNumber: true,
             shippingCostInCents: true,
+            totalInCents: true,
             items: {
               select: {
                 productVariantId: true,
@@ -900,6 +901,7 @@ export class PaymentsService {
             select: {
               orderNumber: true,
               shippingCostInCents: true,
+              totalInCents: true,
               items: {
                 select: {
                   productVariantId: true,
@@ -932,6 +934,7 @@ export class PaymentsService {
     order: {
       orderNumber: string;
       shippingCostInCents: number;
+      totalInCents: number;
       items: Array<{
         productVariantId: string;
         snapshotName: string;
@@ -948,6 +951,9 @@ export class PaymentsService {
       paidAt: payment.paidAt,
       orderNumber: payment.order.orderNumber,
       shippingInCents: payment.order.shippingCostInCents,
+      // Authoritative post-discount total — GA4's firePurchaseEvent uses this
+      // instead of summing item gross + shipping, which has no discount awareness.
+      totalInCents: payment.order.totalInCents,
       items: payment.order.items.map((i) => ({
         productVariantId: i.productVariantId,
         productName: i.snapshotName,

@@ -23,6 +23,7 @@ interface PaymentStatusResponse {
   status: string;
   orderNumber: string;
   shippingInCents?: number;
+  totalInCents?: number;
   items?: PaymentStatusItem[];
 }
 
@@ -308,9 +309,15 @@ export class CheckoutSuccessComponent implements OnInit {
   }
 
   private firePurchaseEvent(orderId: string, res: PaymentStatusResponse): void {
-    if (res.items?.length && res.shippingInCents !== undefined) {
-      const totalInCents = res.items.reduce((s, i) => s + i.priceInCents * i.quantity, 0) + res.shippingInCents;
-      this.analytics.trackPurchase({ transactionId: orderId, totalInCents, shippingInCents: res.shippingInCents, items: res.items });
+    // totalInCents is the order's authoritative post-discount total — summing
+    // item gross + shipping would silently overstate revenue on coupon orders.
+    if (res.items?.length && res.shippingInCents !== undefined && res.totalInCents !== undefined) {
+      this.analytics.trackPurchase({
+        transactionId: orderId,
+        totalInCents: res.totalInCents,
+        shippingInCents: res.shippingInCents,
+        items: res.items,
+      });
     } else {
       this.analytics.push({ event: 'purchase', ecommerce: { transaction_id: orderId, currency: 'PLN' } });
     }

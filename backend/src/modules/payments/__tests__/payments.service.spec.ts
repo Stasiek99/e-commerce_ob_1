@@ -1480,6 +1480,28 @@ describe('PaymentsService', () => {
 
       expect(result.items[0].variantLabel).toBe('PERF-CHL-50');
     });
+
+    // FIX: the frontend's GA4 purchase event previously recomputed the order total
+    // from items gross + shipping, which has no discount awareness and overstates
+    // revenue on coupon orders. totalInCents must be the order's authoritative,
+    // already-discounted total so the frontend can use it directly.
+    it('returns the order authoritative totalInCents, net of any coupon discount', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          userId: 'user-1',
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 1200,
+          totalInCents: 34700,
+          items: [],
+        },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.totalInCents).toBe(34700);
+    });
   });
 
   describe('getPaymentStatusByToken', () => {
@@ -1567,6 +1589,24 @@ describe('PaymentsService', () => {
       await expect(
         service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the order authoritative totalInCents, net of any coupon discount', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 1200,
+          totalInCents: 34700,
+          items: [],
+        },
+      });
+      redis.get.mockResolvedValue(VALID_TOKEN);
+
+      const result = await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
+
+      expect(result.totalInCents).toBe(34700);
     });
   });
 
