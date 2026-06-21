@@ -925,6 +925,25 @@ describe('ReturnsService', () => {
       await expect(service.reject('return-id-001')).rejects.toThrow(BadRequestException);
     });
 
+    it('throws BadRequestException when already APPROVED — prevents contradicting a refund-promised approval', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await expect(service.reject('return-id-001')).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not update the record or send an email when rejecting an already-APPROVED request', async () => {
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'APPROVED' }));
+      await createModule(mock);
+
+      await service.reject('return-id-001').catch(() => undefined);
+
+      expect(mock.returnRequest.update).not.toHaveBeenCalled();
+      expect(emailService.sendReturnStatusUpdate).not.toHaveBeenCalled();
+    });
+
     it('updates status to REJECTED and persists adminNote', async () => {
       const mock = buildPrismaMock();
       mock.returnRequest.findUnique.mockResolvedValue(buildReturnRecord({ status: 'IN_REVIEW' }));

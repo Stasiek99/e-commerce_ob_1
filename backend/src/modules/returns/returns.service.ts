@@ -231,6 +231,9 @@ export class ReturnsService {
     if (req.status === 'COMPLETED') {
       throw new BadRequestException('Cannot reject a completed return request');
     }
+    if (req.status === 'APPROVED') {
+      throw new BadRequestException('Cannot reject an already-approved return request');
+    }
 
     await this.prisma.returnRequest.update({
       where: { id },

@@ -897,7 +897,7 @@ export async function setupAdmin(
               icon: 'XCircle',
               label: 'Odrzuć',
               isVisible: (context: any) =>
-                !['REJECTED', 'COMPLETED'].includes(context.record?.params?.status),
+                !['APPROVED', 'REJECTED', 'COMPLETED'].includes(context.record?.params?.status),
               handler: async (request: any, _response: any, context: any) => {
                 const { record } = context;
                 const adminNote = (request.payload?.adminNote as string | undefined)?.trim() || undefined;
