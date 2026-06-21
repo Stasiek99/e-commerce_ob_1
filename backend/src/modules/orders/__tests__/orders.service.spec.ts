@@ -111,6 +111,9 @@ describe('OrdersService', () => {
             expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
             refundPayment: jest.fn().mockResolvedValue(undefined),
             partialRefund: jest.fn().mockResolvedValue(undefined),
+            // Passthrough by default (no discount) — math itself is unit-tested on
+            // PaymentsService directly; tests here only assert the delegation contract.
+            prorateDiscountForRefundItems: jest.fn().mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
           },
         },
         {
@@ -3521,26 +3524,19 @@ describe('OrdersService', () => {
       );
     });
 
-    // ─── discount pro-ration (fix: partial refund must deduct coupon discount) ──
+    // ─── discount pro-ration delegation (fix: cancelItemsByUser and ReturnsService.markRefunded
+    // ─── must compute identical coupon-discounted refunds via one shared helper) ───────────────
+    // The proration math itself is unit-tested directly on
+    // PaymentsService.prorateDiscountForRefundItems (see payments.service.spec.ts). These tests
+    // only assert that cancelItemsByUser delegates to it with the right arguments and forwards
+    // whatever it returns — not the pre-proration resolvedItems — to partialRefund/email/invoice.
 
-    it('passes pro-rated priceInCents to partialRefund when a percentage coupon was applied', async () => {
-      // 20%-off coupon: discountFraction = 4000/20000 = 0.2 → discountedPrice = 16000
+    it('delegates discount proration to paymentsService.prorateDiscountForRefundItems with the order and its items', async () => {
       const discountedOrder = {
         ...mockPaidOrder,
+        couponId: 'coupon-1',
         itemsTotalInCents: 20000,
         discountInCents: 4000,
-        totalInCents: 16000,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 20000,
-          },
-        ],
       };
       prisma.order.findFirst.mockResolvedValue(discountedOrder);
 
@@ -3548,36 +3544,55 @@ describe('OrdersService', () => {
         items: [{ orderItemId: 'item-1', quantity: 1 }],
       });
 
+      expect(paymentsService.prorateDiscountForRefundItems).toHaveBeenCalledWith(
+        discountedOrder,
+        discountedOrder.items,
+        [
+          expect.objectContaining({
+            orderItemId: 'item-1',
+            quantity: 1,
+            priceInCents: 34900,
+            discountAppliedInCents: 0,
+          }),
+        ],
+      );
+    });
+
+    it('forwards the prorated items returned by prorateDiscountForRefundItems to partialRefund, not the pre-proration values', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+      (paymentsService.prorateDiscountForRefundItems as jest.Mock).mockImplementation(
+        async (_order: any, _orderItems: any, items: any[]) => {
+          items.forEach((item) => {
+            item.priceInCents = 16000;
+            item.discountAppliedInCents = 4000;
+          });
+          return items;
+        },
+      );
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
       expect(paymentsService.partialRefund).toHaveBeenCalledWith(
         'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
+        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 16000, discountAppliedInCents: 4000 })],
         OrderStatus.PAID,
         'CUSTOMER',
       );
     });
 
-    it('sends cancellation email with pro-rated amount when a coupon was applied (partial)', async () => {
-      // 20%-off coupon: discountedPrice = 20000 * 0.8 = 16000; cancel qty=1 → email = 16000
-      // Cancels only 1 of 2 units so the partial-refund path (not full withdrawal) is exercised.
-      const discountedOrder = {
-        ...mockPaidOrder,
-        itemsTotalInCents: 20000,
-        discountInCents: 4000,
-        totalInCents: 16000,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 20000,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(discountedOrder);
+    it('reflects the prorated amount — not the pre-proration price — in the cancellation confirmation email', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
       const emailService = (service as any).emailService;
+      (paymentsService.prorateDiscountForRefundItems as jest.Mock).mockImplementation(
+        async (_order: any, _orderItems: any, items: any[]) => {
+          items.forEach((item) => {
+            item.priceInCents = 16000;
+          });
+          return items;
+        },
+      );
 
       await service.cancelItemsByUser('order-1', 'user-1', {
         items: [{ orderItemId: 'item-1', quantity: 1 }],
@@ -3586,232 +3601,6 @@ describe('OrdersService', () => {
 
       expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
         expect.objectContaining({ totalInCents: 16000 }),
-      );
-    });
-
-    it('does not adjust priceInCents when discountInCents is 0', async () => {
-      const noDiscountOrder = {
-        ...mockPaidOrder,
-        discountInCents: 0,
-        itemsTotalInCents: 34900 * 3,
-      };
-      prisma.order.findFirst.mockResolvedValue(noDiscountOrder);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ priceInCents: 34900 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
-      );
-    });
-
-    it('does not adjust priceInCents when itemsTotalInCents is 0 — division-by-zero guard', async () => {
-      const zeroTotalOrder = {
-        ...mockPaidOrder,
-        discountInCents: 100,
-        itemsTotalInCents: 0,
-      };
-      prisma.order.findFirst.mockResolvedValue(zeroTotalOrder);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ priceInCents: 34900 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
-      );
-    });
-
-    // ─── alreadyCancelledDiscount guard (fix: prevent discount compounding on second partial cancel) ─
-
-    it('uses only remaining discount budget on second partial cancel of the same item', async () => {
-      // snapshotPrice=33, qty=2, itemsTotalInCents=66, discountInCents=5
-      // discountFraction = 5/66. cancelledDiscountInCents=3 is the persisted actual amount
-      // the (mocked) first cancel call already applied to item-1's cancelled unit.
-      // maxItemDiscount=round(33*5/66*2)=round(5)=5, alreadyCancelledDiscount=3 (read directly
-      // from the persisted field, not recomputed), remaining=2 → appliedDiscount=min(3,2)=2
-      // → priceInCents=33-2=31.
-      const partiallyRefundedOrder = {
-        ...mockPaidOrder,
-        status: OrderStatus.PARTIALLY_REFUNDED,
-        itemsTotalInCents: 66,
-        discountInCents: 5,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 1,
-            cancelledDiscountInCents: 3,
-            snapshotName: 'Test Item',
-            snapshotSku: 'T-1',
-            snapshotPrice: 33,
-          },
-          {
-            // item-2 still has remaining quantity so the order is not fully cancelled
-            // and partialRefund() — not refundPayment() — is invoked.
-            id: 'item-2',
-            productVariantId: 'pv-2',
-            quantity: 2,
-            cancelledQuantity: 0,
-            cancelledDiscountInCents: 0,
-            snapshotName: 'Other Item',
-            snapshotSku: 'O-1',
-            snapshotPrice: 33,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(partiallyRefundedOrder);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31, discountAppliedInCents: 2 })],
-        OrderStatus.PARTIALLY_REFUNDED,
-        'CUSTOMER',
-      );
-    });
-
-    it('reads alreadyCancelledDiscount from the persisted actual amount, not a Math.round recompute', async () => {
-      // snapshotPrice=50, qty=4, itemsTotalInCents=200, discountInCents=10 → discountFraction=0.05,
-      // maxItemDiscount=round(50*0.05*4)=10.
-      // A first call cancelling qty=3 would apply wanted=round(50*0.05*3)=8, floored per-unit to
-      // floor(8/3)=2 → actual persisted total = 2*3 = 6 (2gr lost to the floor, not the full 8).
-      // This second call cancels the last unit (qty=1): wanted=round(50*0.05*1)=3.
-      //   Old (buggy) recompute: alreadyCancelledDiscount=round(50*0.05*3)=8 → remaining=10-8=2
-      //     → appliedDiscount=min(3,2)=2 → priceInCents=50-2=48 (under-applies the discount,
-      //     over-refunding the customer by 1gr).
-      //   Fixed (persisted actual): alreadyCancelledDiscount=6 → remaining=10-6=4
-      //     → appliedDiscount=min(3,4)=3 → priceInCents=50-3=47 (correct).
-      const order = {
-        ...mockPaidOrder,
-        status: OrderStatus.PARTIALLY_REFUNDED,
-        itemsTotalInCents: 200,
-        discountInCents: 10,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 4,
-            cancelledQuantity: 3,
-            cancelledDiscountInCents: 6,
-            snapshotName: 'Test Item',
-            snapshotSku: 'T-1',
-            snapshotPrice: 50,
-          },
-          {
-            // Keeps the order from being fully cancelled so partialRefund() (not
-            // refundPayment()) is the path under test.
-            id: 'item-2',
-            productVariantId: 'pv-2',
-            quantity: 1,
-            cancelledQuantity: 0,
-            cancelledDiscountInCents: 0,
-            snapshotName: 'Other Item',
-            snapshotSku: 'O-1',
-            snapshotPrice: 50,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(order);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 47, discountAppliedInCents: 3 })],
-        OrderStatus.PARTIALLY_REFUNDED,
-        'CUSTOMER',
-      );
-    });
-
-    // ─── FREE_SHIPPING coupon proration guard (fix: shipping discount must not ──
-    // ─── be divided into item prices) ────────────────────────────────────────
-    // discountInCents on a FREE_SHIPPING order equals shippingCostInCents, which is
-    // unrelated to itemsTotalInCents. Prorating it across item prices would refund
-    // the customer less than they paid for the items themselves.
-
-    it('does not reduce item priceInCents when the order used a FREE_SHIPPING coupon', async () => {
-      // discountInCents (1499, the shipping cost) would otherwise be misread as a
-      // ~7.5% items discount against itemsTotalInCents=20000.
-      const freeShippingOrder = {
-        ...mockPaidOrder,
-        couponId: 'coupon-free-shipping',
-        itemsTotalInCents: 20000,
-        discountInCents: 1499,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 10000,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(freeShippingOrder);
-      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.FREE_SHIPPING });
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(prisma.coupon.findUnique).toHaveBeenCalledWith({
-        where: { id: 'coupon-free-shipping' },
-        select: { discountType: true },
-      });
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 10000 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
-      );
-    });
-
-    it('still prorates item priceInCents when a non-FREE_SHIPPING coupon is applied', async () => {
-      const percentageOrder = {
-        ...mockPaidOrder,
-        couponId: 'coupon-percentage',
-        itemsTotalInCents: 20000,
-        discountInCents: 4000,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 20000,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(percentageOrder);
-      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
       );
     });
 

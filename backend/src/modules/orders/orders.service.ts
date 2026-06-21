@@ -1030,47 +1030,18 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    let isFreeShippingCoupon = false;
-    if (order.couponId) {
-      const coupon = await this.prisma.coupon.findUnique({
-        where: { id: order.couponId },
-        select: { discountType: true },
-      });
-      isFreeShippingCoupon = coupon?.discountType === DiscountType.FREE_SHIPPING;
-    }
-
-    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
-    // items-total discount — prorating it across item prices here would refund
-    // less than the customer paid for the items themselves.
-    if (!isFreeShippingCoupon && order.discountInCents > 0 && order.itemsTotalInCents > 0) {
-      const discountFraction = order.discountInCents / order.itemsTotalInCents;
-      for (const item of resolvedItems) {
-        const orderItem = order.items.find(i => i.id === item.orderItemId)!;
-        // Max discount this item can ever yield (based on all units)
-        const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
-        // Discount actually applied by prior partial cancels. Read from the persisted
-        // running total rather than recomputing an idealized (Math.round) value from
-        // cancelledQuantity — each prior call floors its per-unit discount, so the ideal
-        // recompute overstates what was really deducted and drifts the refund a few
-        // grosz over entitlement across 3+ sequential partial cancellations.
-        const alreadyCancelledDiscount = orderItem.cancelledDiscountInCents ?? 0;
-        const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyCancelledDiscount);
-        // Proportional discount we'd ideally apply to the qty being cancelled now
-        const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
-        const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
-        // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
-        const perUnitDiscount = Math.floor(appliedDiscount / item.quantity);
-        item.priceInCents = item.priceInCents - perUnitDiscount;
-        // Persist the true total deducted this call so the next partial cancel's
-        // alreadyCancelledDiscount reflects reality, not an idealized recompute.
-        item.discountAppliedInCents = perUnitDiscount * item.quantity;
-      }
-    }
+    // Shared with ReturnsService.markRefunded() so both refund-issuing flows compute
+    // the identical discount-prorated price for the identical item/quantity.
+    const proratedItems = await this.paymentsService.prorateDiscountForRefundItems(
+      order,
+      order.items,
+      resolvedItems,
+    );
 
     const allCancelled = order.items.every((item) => {
       const remaining = item.quantity - item.cancelledQuantity;
       if (remaining === 0) return true;
-      const cancelling = resolvedItems.find((r) => r.orderItemId === item.id);
+      const cancelling = proratedItems.find((r) => r.orderItemId === item.id);
       return cancelling ? cancelling.quantity >= remaining : false;
     });
 
@@ -1090,9 +1061,9 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
+    await this.paymentsService.partialRefund(orderId, proratedItems, order.status, 'CUSTOMER');
 
-    const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const refundAmountInCents = proratedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
 
     if (order.invoiceNumber) {
       this.invoiceService
@@ -1101,7 +1072,7 @@ export class OrdersService implements OnModuleInit {
           order.invoiceNumber,
           refundAmountInCents,
           'PARTIAL_CANCELLATION',
-          resolvedItems.map((i) => ({
+          proratedItems.map((i) => ({
             orderItemId: i.orderItemId,
             quantity: i.quantity,
             priceInCents: i.priceInCents,

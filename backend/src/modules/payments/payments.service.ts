@@ -4,7 +4,7 @@ import { BadRequestException, ConflictException, ForbiddenException, HttpExcepti
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { DiscountType, OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -1160,6 +1160,64 @@ export class PaymentsService {
         lockToken,
       );
     }
+  }
+
+  /**
+   * Prorates an order's coupon discount across specific items being refunded/cancelled,
+   * mutating each item's `priceInCents` down and setting `discountAppliedInCents` —
+   * the single source of truth for this math, shared by every refund-issuing caller
+   * (customer self-service cancellation, admin return refunds) so they compute identical
+   * numbers for the identical item/quantity instead of drifting between flows.
+   */
+  async prorateDiscountForRefundItems<
+    T extends { orderItemId: string; quantity: number; priceInCents: number; discountAppliedInCents?: number },
+  >(
+    order: { couponId: string | null; discountInCents: number; itemsTotalInCents: number },
+    orderItems: Array<{
+      id: string;
+      snapshotPrice: number;
+      quantity: number;
+      cancelledDiscountInCents: number | null;
+    }>,
+    items: T[],
+  ): Promise<T[]> {
+    if (!order.couponId || order.discountInCents <= 0 || order.itemsTotalInCents <= 0) {
+      return items;
+    }
+
+    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+    // items-total discount — prorating it across item prices here would refund
+    // less than the customer paid for the items themselves.
+    const coupon = await this.prisma.coupon.findUnique({
+      where: { id: order.couponId },
+      select: { discountType: true },
+    });
+    if (coupon?.discountType === DiscountType.FREE_SHIPPING) {
+      return items;
+    }
+
+    const discountFraction = order.discountInCents / order.itemsTotalInCents;
+    for (const item of items) {
+      const orderItem = orderItems.find((oi) => oi.id === item.orderItemId);
+      if (!orderItem) continue;
+      // Max discount this item can ever yield (based on all units)
+      const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
+      // Discount actually applied by prior partial refunds/cancels. Read from the
+      // persisted running total rather than recomputing an idealized (Math.round)
+      // value from cancelledQuantity — each prior call floors its per-unit discount,
+      // so the ideal recompute overstates what was really deducted and drifts the
+      // refund a few grosz over entitlement across 3+ sequential partial refunds.
+      const alreadyAppliedDiscount = orderItem.cancelledDiscountInCents ?? 0;
+      const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyAppliedDiscount);
+      // Proportional discount we'd ideally apply to the qty being refunded now
+      const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
+      const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
+      // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
+      const perUnitDiscount = Math.floor(appliedDiscount / item.quantity);
+      item.priceInCents = item.priceInCents - perUnitDiscount;
+      item.discountAppliedInCents = perUnitDiscount * item.quantity;
+    }
+    return items;
   }
 
   /**
