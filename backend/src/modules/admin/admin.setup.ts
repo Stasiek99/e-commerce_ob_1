@@ -259,6 +259,11 @@ async function updateReviewStats(prisma: PrismaService, productId: string): Prom
   `;
 }
 
+/** Exported for unit testing. Whitelists the Review resource's plain-Edit fields so
+ *  status/rating/productId can't be changed outside the approve/reject actions, which
+ *  are the only paths that call updateReviewStats(). */
+export const REVIEW_EDIT_PROPERTIES = ['adminReply'];
+
 export async function setupAdmin(
   app: NestExpressApplication,
   prisma: PrismaService,
@@ -968,6 +973,7 @@ export async function setupAdmin(
         options: {
           navigation: { name: 'Moderacja' },
           sort: { direction: 'desc', sortBy: 'createdAt' },
+          editProperties: REVIEW_EDIT_PROPERTIES,
           properties: {
             body: {
               type: 'textarea',
