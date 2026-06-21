@@ -770,4 +770,70 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       expect(mockPrisma.productVariantPriceHistory.groupBy).not.toHaveBeenCalled();
     });
   });
+
+  // --- suggest() — cache key must embed product_cache_v ---
+  // FIX: suggest() was the one cached read path that didn't embed the product
+  // cache version, so admin edits never invalidated stale autocomplete results.
+
+  describe('suggest() — cache version key', () => {
+    const baseProduct = { id: 'p1', name: 'Chanel No 5', slug: 'chanel-no-5', images: [], variants: [] };
+
+    it('embeds the current product_cache_v in the cache lookup and write key', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '3' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: 'p1' }]);
+      mockPrisma.product.findMany.mockResolvedValue([baseProduct]);
+
+      await service.suggest('chanel');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v3:chanel');
+      expect(mockRedis.setex).toHaveBeenCalledWith('suggest:v3:chanel', 600, expect.any(String));
+    });
+
+    it('returns the cached result without querying the DB on a version-matched hit', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '2' : key === 'suggest:v2:chanel' ? JSON.stringify([baseProduct]) : null),
+      );
+
+      const result = await service.suggest('chanel');
+
+      expect(result).toEqual([baseProduct]);
+      expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('misses a cache entry written under a stale version after invalidateProductCaches bumps it', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '1' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: 'p1' }]);
+      mockPrisma.product.findMany.mockResolvedValue([baseProduct]);
+      await service.suggest('chanel');
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v1:chanel');
+
+      jest.clearAllMocks();
+      // Simulates invalidateProductCaches() incrementing product_cache_v after a product edit.
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '2' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: 'p1' }]);
+      mockPrisma.product.findMany.mockResolvedValue([baseProduct]);
+      await service.suggest('chanel');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v2:chanel');
+      expect(mockRedis.get).not.toHaveBeenCalledWith('suggest:v1:chanel');
+    });
+
+    it('lowercases the search term in the cache key', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '0' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+
+      await service.suggest('CHANEL');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v0:chanel');
+    });
+  });
+
 });

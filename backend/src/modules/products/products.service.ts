@@ -801,7 +801,8 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
   async suggest(q: string): Promise<SuggestResult[]> {
     const term = q.trim();
 
-    const cacheKey = `suggest:${term.toLowerCase()}`;
+    const version = await this.getCacheVersion();
+    const cacheKey = `suggest:v${version}:${term.toLowerCase()}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) return JSON.parse(cached) as SuggestResult[];
