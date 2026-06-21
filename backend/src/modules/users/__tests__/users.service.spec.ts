@@ -380,64 +380,85 @@ describe('UsersService', () => {
     });
   });
 
-  // ─── deleteAddress — ownership guard + default promotion ────────────────
+  // ─── deleteAddress — ownership guard + atomic default re-promotion ──────
+  // delete + re-promotion used to be findFirst → delete → findFirst → update as
+  // four unguarded sequential statements — a concurrent updateAddress promoting a
+  // different address could be silently overwritten. Fixed via a transaction
+  // wrapping the delete plus a single $executeRaw UPDATE, guarded by NOT EXISTS so
+  // it's a no-op if some other request already set a default in the meantime.
 
   describe('deleteAddress', () => {
+    const buildDeleteTx = () => ({
+      address: { delete: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(undefined),
+    });
+
     it('throws NotFoundException when address does not belong to the user', async () => {
       prisma.address.findFirst.mockResolvedValue(null);
 
       await expect(service.deleteAddress('user-1', 'addr-99')).rejects.toThrow(NotFoundException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('deletes only when the address belongs to the requesting user', async () => {
+    it('deletes the address inside a transaction', async () => {
       const addr = { id: 'addr-1', userId: 'user-1', isDefault: false };
       prisma.address.findFirst.mockResolvedValue(addr);
-      prisma.address.delete.mockResolvedValue(addr);
+      const tx = buildDeleteTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
 
       await service.deleteAddress('user-1', 'addr-1');
 
-      expect(prisma.address.delete).toHaveBeenCalledWith({ where: { id: 'addr-1' } });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(tx.address.delete).toHaveBeenCalledWith({ where: { id: 'addr-1' } });
     });
 
-    it('promotes the most recently created remaining address when the deleted address was default', async () => {
-      const deleted = { id: 'addr-1', userId: 'user-1', isDefault: true };
-      const next    = { id: 'addr-2', userId: 'user-1', isDefault: false };
-
-      // first findFirst: ownership check; second findFirst: next address lookup
-      prisma.address.findFirst
-        .mockResolvedValueOnce(deleted)
-        .mockResolvedValueOnce(next);
-      prisma.address.delete.mockResolvedValue(deleted);
-      prisma.address.update.mockResolvedValue({ ...next, isDefault: true });
-
-      await service.deleteAddress('user-1', 'addr-1');
-
-      expect(prisma.address.update).toHaveBeenCalledWith({
-        where: { id: 'addr-2' },
-        data: { isDefault: true },
-      });
-    });
-
-    it('does not promote any address when no remaining addresses exist after deleting the default', async () => {
-      const deleted = { id: 'addr-1', userId: 'user-1', isDefault: true };
-
-      prisma.address.findFirst
-        .mockResolvedValueOnce(deleted)
-        .mockResolvedValueOnce(null); // no remaining addresses
-      prisma.address.delete.mockResolvedValue(deleted);
-
-      await service.deleteAddress('user-1', 'addr-1');
-
-      expect(prisma.address.update).not.toHaveBeenCalled();
-    });
-
-    it('does not promote any address when the deleted address was not the default', async () => {
+    it('skips the re-promotion UPDATE when the deleted address was not the default', async () => {
       const addr = { id: 'addr-1', userId: 'user-1', isDefault: false };
       prisma.address.findFirst.mockResolvedValue(addr);
-      prisma.address.delete.mockResolvedValue(addr);
+      const tx = buildDeleteTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
 
       await service.deleteAddress('user-1', 'addr-1');
 
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('runs a single atomic re-promotion UPDATE for the user when the deleted address was default', async () => {
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: true };
+      prisma.address.findFirst.mockResolvedValue(addr);
+      const tx = buildDeleteTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+      // Tagged template literals are called as (templateStrings, ...values).
+      const interpolated = tx.$executeRaw.mock.calls[0].slice(1);
+      expect(interpolated).toEqual(['user-1', 'user-1', 'user-1']);
+    });
+
+    it('runs the delete and the re-promotion UPDATE inside the same transaction', async () => {
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: true };
+      prisma.address.findFirst.mockResolvedValue(addr);
+      const tx = buildDeleteTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(tx.address.delete).toHaveBeenCalledTimes(1);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('never calls the old findFirst-then-update re-promotion pair', async () => {
+      const addr = { id: 'addr-1', userId: 'user-1', isDefault: true };
+      prisma.address.findFirst.mockResolvedValue(addr); // ownership check only
+      const tx = buildDeleteTx();
+      prisma.$transaction.mockImplementation((fn: any) => fn(tx));
+
+      await service.deleteAddress('user-1', 'addr-1');
+
+      expect(prisma.address.findFirst).toHaveBeenCalledTimes(1);
       expect(prisma.address.update).not.toHaveBeenCalled();
     });
   });
