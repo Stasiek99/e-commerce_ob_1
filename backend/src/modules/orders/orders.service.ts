@@ -551,7 +551,7 @@ export class OrdersService implements OnModuleInit {
   async findOneForUser(id: string, userId: string) {
     const order = await this.prisma.order.findFirst({
       where: { id, userId },
-      include: { items: true, payment: true, shipment: true },
+      include: { items: true, payment: true, shipment: true, coupon: { select: { discountType: true } } },
     });
     if (!order) throw new NotFoundException('Order not found');
     return this.mapOrder(order);
@@ -1030,47 +1030,18 @@ export class OrdersService implements OnModuleInit {
       });
     }
 
-    let isFreeShippingCoupon = false;
-    if (order.couponId) {
-      const coupon = await this.prisma.coupon.findUnique({
-        where: { id: order.couponId },
-        select: { discountType: true },
-      });
-      isFreeShippingCoupon = coupon?.discountType === DiscountType.FREE_SHIPPING;
-    }
-
-    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
-    // items-total discount — prorating it across item prices here would refund
-    // less than the customer paid for the items themselves.
-    if (!isFreeShippingCoupon && order.discountInCents > 0 && order.itemsTotalInCents > 0) {
-      const discountFraction = order.discountInCents / order.itemsTotalInCents;
-      for (const item of resolvedItems) {
-        const orderItem = order.items.find(i => i.id === item.orderItemId)!;
-        // Max discount this item can ever yield (based on all units)
-        const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
-        // Discount actually applied by prior partial cancels. Read from the persisted
-        // running total rather than recomputing an idealized (Math.round) value from
-        // cancelledQuantity — each prior call floors its per-unit discount, so the ideal
-        // recompute overstates what was really deducted and drifts the refund a few
-        // grosz over entitlement across 3+ sequential partial cancellations.
-        const alreadyCancelledDiscount = orderItem.cancelledDiscountInCents ?? 0;
-        const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyCancelledDiscount);
-        // Proportional discount we'd ideally apply to the qty being cancelled now
-        const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
-        const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
-        // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
-        const perUnitDiscount = Math.floor(appliedDiscount / item.quantity);
-        item.priceInCents = item.priceInCents - perUnitDiscount;
-        // Persist the true total deducted this call so the next partial cancel's
-        // alreadyCancelledDiscount reflects reality, not an idealized recompute.
-        item.discountAppliedInCents = perUnitDiscount * item.quantity;
-      }
-    }
+    // Shared with ReturnsService.markRefunded() so both refund-issuing flows compute
+    // the identical discount-prorated price for the identical item/quantity.
+    const proratedItems = await this.paymentsService.prorateDiscountForRefundItems(
+      order,
+      order.items,
+      resolvedItems,
+    );
 
     const allCancelled = order.items.every((item) => {
       const remaining = item.quantity - item.cancelledQuantity;
       if (remaining === 0) return true;
-      const cancelling = resolvedItems.find((r) => r.orderItemId === item.id);
+      const cancelling = proratedItems.find((r) => r.orderItemId === item.id);
       return cancelling ? cancelling.quantity >= remaining : false;
     });
 
@@ -1090,9 +1061,9 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    await this.paymentsService.partialRefund(orderId, resolvedItems, order.status, 'CUSTOMER');
+    await this.paymentsService.partialRefund(orderId, proratedItems, order.status, 'CUSTOMER');
 
-    const refundAmountInCents = resolvedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const refundAmountInCents = proratedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
 
     if (order.invoiceNumber) {
       this.invoiceService
@@ -1101,7 +1072,7 @@ export class OrdersService implements OnModuleInit {
           order.invoiceNumber,
           refundAmountInCents,
           'PARTIAL_CANCELLATION',
-          resolvedItems.map((i) => ({
+          proratedItems.map((i) => ({
             orderItemId: i.orderItemId,
             quantity: i.quantity,
             priceInCents: i.priceInCents,
@@ -1181,76 +1152,112 @@ export class OrdersService implements OnModuleInit {
   }
 
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
-    const current = await this.prisma.order.findUniqueOrThrow({
-      where: { id },
-      select: {
-        status: true,
-        items: { select: { productVariantId: true, quantity: true, cancelledQuantity: true } },
-      },
-    });
-
-    if (current.status === status) return;
-
-    if (current.status === OrderStatus.DISPUTE_HOLD && status === OrderStatus.CANCELLED) {
-      throw new ConflictException(
-        'Cannot manually cancel an order under dispute. Wait for the Stripe charge.dispute.closed webhook to resolve the dispute before taking action.',
+    // Distributed lock: prevents two concurrent status-transition requests on the same
+    // order (double-click, two admin tabs, stale retry) from both reading the same stale
+    // prior status and double-restoring stock. Mirrors the cancel-lock/refund-lock pattern
+    // in cancelItemsByUser/PaymentsService above.
+    const lockKey = `status-lock:${id}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        'A status update for this order is already in progress — please wait a moment before trying again',
+        HttpStatus.TOO_MANY_REQUESTS,
       );
     }
 
-    if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
-      throw new BadRequestException(
-        `Invalid order status transition: ${current.status} → ${status}`,
-      );
-    }
-
-    const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
-    const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
-
-    // From DISPUTE_LOST_REVIEW, REFUNDED means the admin confirmed the chargeback
-    // stands (goods were delivered, not coming back) — restoring stock there would
-    // recreate the exact oversell risk this review gate exists to prevent. Only
-    // CANCELLED (admin confirms goods were never delivered/were returned) restores it.
-    const isUnverifiedDisputeLossPayout =
-      current.status === OrderStatus.DISPUTE_LOST_REVIEW && status === OrderStatus.REFUNDED;
-
-    const shouldRestoreStock =
-      stockRestoringStatuses.includes(status) &&
-      !stockAlreadyRestored.includes(current.status) &&
-      !isUnverifiedDisputeLossPayout;
-
-    const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
-    await this.prisma.$transaction(async (tx) => {
-      if (shouldRestoreStock) {
-        for (const item of current.items) {
-          const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
-          if (activeQty > 0) {
-            const updated = await tx.productVariant.update({
-              where: { id: item.productVariantId },
-              data: { stock: { increment: activeQty } },
-            });
-            deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
-          }
-        }
-      }
-
-      await tx.order.update({ where: { id }, data: { status } });
-      await tx.orderEvent.create({
-        data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
+    try {
+      const current = await this.prisma.order.findUniqueOrThrow({
+        where: { id },
+        select: {
+          status: true,
+          items: { select: { productVariantId: true, quantity: true, cancelledQuantity: true } },
+        },
       });
 
-      if (status === OrderStatus.SHIPPED) {
-        await tx.shipment.updateMany({
-          where: { orderId: id, shippedAt: null },
-          data: { shippedAt: new Date() },
-        });
-      }
-    });
-    this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
-      this.logger.warn('notifyStockChangesByDelta failed', err),
-    );
+      if (current.status === status) return;
 
-    if (status === OrderStatus.DELIVERED) {
-      this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
+      if (current.status === OrderStatus.DISPUTE_HOLD && status === OrderStatus.CANCELLED) {
+        throw new ConflictException(
+          'Cannot manually cancel an order under dispute. Wait for the Stripe charge.dispute.closed webhook to resolve the dispute before taking action.',
+        );
+      }
+
+      if (!ORDER_STATUS_TRANSITIONS[current.status].includes(status)) {
+        throw new BadRequestException(
+          `Invalid order status transition: ${current.status} → ${status}`,
+        );
+      }
+
+      const stockRestoringStatuses: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+      const stockAlreadyRestored: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.REFUNDED];
+
+      // From DISPUTE_LOST_REVIEW, REFUNDED means the admin confirmed the chargeback
+      // stands (goods were delivered, not coming back) — restoring stock there would
+      // recreate the exact oversell risk this review gate exists to prevent. Only
+      // CANCELLED (admin confirms goods were never delivered/were returned) restores it.
+      const isUnverifiedDisputeLossPayout =
+        current.status === OrderStatus.DISPUTE_LOST_REVIEW && status === OrderStatus.REFUNDED;
+
+      const shouldRestoreStock =
+        stockRestoringStatuses.includes(status) &&
+        !stockAlreadyRestored.includes(current.status) &&
+        !isUnverifiedDisputeLossPayout;
+
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+      await this.prisma.$transaction(async (tx) => {
+        // Conditional write keyed on the prior status read above — defense in depth
+        // alongside the Redis lock. If another transaction already moved this order
+        // off `current.status`, this affects 0 rows and we abort before touching stock.
+        const stamped = await tx.order.updateMany({
+          where: { id, status: current.status },
+          data: { status },
+        });
+        if (stamped.count === 0) {
+          throw new ConflictException(
+            `Order ${id} status changed concurrently (expected ${current.status}) — refresh and retry`,
+          );
+        }
+
+        if (shouldRestoreStock) {
+          for (const item of current.items) {
+            const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
+            if (activeQty > 0) {
+              const updated = await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQty } },
+              });
+              deltas.push({ variantId: item.productVariantId, delta: activeQty, newStock: updated.stock });
+            }
+          }
+        }
+
+        await tx.orderEvent.create({
+          data: { orderId: id, fromStatus: current.status, toStatus: status, actor },
+        });
+
+        if (status === OrderStatus.SHIPPED) {
+          await tx.shipment.updateMany({
+            where: { orderId: id, shippedAt: null },
+            data: { shippedAt: new Date() },
+          });
+        }
+      });
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
+
+      if (status === OrderStatus.DELIVERED) {
+        this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
+      }
+    } finally {
+      // Release the lock only if we still own it (Lua script is atomic).
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
     }
   }
 
@@ -1428,7 +1435,7 @@ export class OrdersService implements OnModuleInit {
                   select: {
                     name: true,
                     slug: true,
-                    images: { where: { isPrimary: true }, take: 1 },
+                    images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], take: 1 },
                   },
                 },
               },
@@ -1502,15 +1509,21 @@ export class OrdersService implements OnModuleInit {
     T extends {
       items: Array<{ quantity: number; snapshotPrice: number }>;
       payment: { refundedAmountInCents: number } | null;
+      coupon?: { discountType: DiscountType } | null;
     },
   >(order: T) {
+    const { coupon, ...rest } = order;
     return {
-      ...order,
+      ...rest,
       items: order.items.map((item) => ({
         ...item,
         totalPrice: item.quantity * item.snapshotPrice,
       })),
       refundedAmountInCents: order.payment?.refundedAmountInCents ?? 0,
+      // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+      // items-total discount — the frontend's refund-preview proration must mirror
+      // PaymentsService.prorateDiscountForRefundItems' skip of that case exactly.
+      couponDiscountType: coupon?.discountType ?? null,
     };
   }
 

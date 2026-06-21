@@ -4,7 +4,7 @@ import { BadRequestException, ConflictException, ForbiddenException, HttpExcepti
 import type IORedis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { DiscountType, OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -487,65 +487,72 @@ export class PaymentsService {
    * post-payment notifications (invoice PDF + customer confirmation email).
    */
   async approveFraudReview(orderId: string, actor = 'ADMIN'): Promise<void> {
-    const order = await this.prisma.order.findUniqueOrThrow({
-      where: { id: orderId },
-      include: {
-        items: {
-          select: {
-            snapshotName: true,
-            snapshotPrice: true,
-            snapshotVatRate: true,
-            quantity: true,
+    // Guarded by the same lock as refundPayment/partialRefund: this is a
+    // read-then-conditional-write admin transition, and without it two
+    // concurrent approvals (double-click, or two admins racing the same
+    // queue) both read FRAUD_REVIEW, both write PAID, and both fire their
+    // own outbox row + post-payment notification chain for one order.
+    await this.withOrderRefundLock(orderId, async () => {
+      const order = await this.prisma.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: {
+          items: {
+            select: {
+              snapshotName: true,
+              snapshotPrice: true,
+              snapshotVatRate: true,
+              quantity: true,
+            },
           },
         },
-      },
-    });
-
-    if (order.status !== OrderStatus.FRAUD_REVIEW) {
-      throw new Error(`Cannot approve order ${orderId}: status is ${order.status}, expected FRAUD_REVIEW`);
-    }
-
-    const payment = await this.prisma.payment.findUniqueOrThrow({ where: { orderId } });
-
-    // Insert the outbox row atomically alongside the PAID transition — mirrors
-    // markSessionPaid — so a crash between this commit and the in-process
-    // dispatch below can still be recovered by OutboxProcessorService instead
-    // of permanently losing the invoice + confirmation email.
-    const outboxId = await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } });
-      await tx.orderEvent.create({
-        data: {
-          orderId,
-          fromStatus: OrderStatus.FRAUD_REVIEW,
-          toStatus: OrderStatus.PAID,
-          actor,
-          note: 'Fraud review cleared — order approved',
-        },
       });
-      const outbox = await tx.outboxMessage.create({
-        data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId },
+
+      if (order.status !== OrderStatus.FRAUD_REVIEW) {
+        throw new Error(`Cannot approve order ${orderId}: status is ${order.status}, expected FRAUD_REVIEW`);
+      }
+
+      const payment = await this.prisma.payment.findUniqueOrThrow({ where: { orderId } });
+
+      // Insert the outbox row atomically alongside the PAID transition — mirrors
+      // markSessionPaid — so a crash between this commit and the in-process
+      // dispatch below can still be recovered by OutboxProcessorService instead
+      // of permanently losing the invoice + confirmation email.
+      const outboxId = await this.prisma.$transaction(async (tx) => {
+        await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID } });
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.FRAUD_REVIEW,
+            toStatus: OrderStatus.PAID,
+            actor,
+            note: 'Fraud review cleared — order approved',
+          },
+        });
+        const outbox = await tx.outboxMessage.create({
+          data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId },
+        });
+        return outbox.id;
       });
-      return outbox.id;
+
+      this.logger.log(`Fraud review approved for order ${order.orderNumber} by ${actor}`);
+
+      // Fast path — see markSessionPaid for why the outbox PROCESSED write is
+      // chained onto notification completion rather than fired alongside it.
+      const notified = this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
+
+      notified
+        .then(() =>
+          this.prisma.outboxMessage.update({
+            where: { id: outboxId },
+            data: { status: 'PROCESSED', processedAt: new Date() },
+          }),
+        )
+        .catch((err) =>
+          this.logger.warn(
+            `Outbox ${outboxId} left PENDING for recovery — notification dispatch or mark-processed failed: ${(err as Error).message}`,
+          ),
+        );
     });
-
-    this.logger.log(`Fraud review approved for order ${order.orderNumber} by ${actor}`);
-
-    // Fast path — see markSessionPaid for why the outbox PROCESSED write is
-    // chained onto notification completion rather than fired alongside it.
-    const notified = this.dispatchPostPaymentNotifications(order, payment.stripePaymentIntentId);
-
-    notified
-      .then(() =>
-        this.prisma.outboxMessage.update({
-          where: { id: outboxId },
-          data: { status: 'PROCESSED', processedAt: new Date() },
-        }),
-      )
-      .catch((err) =>
-        this.logger.warn(
-          `Outbox ${outboxId} left PENDING for recovery — notification dispatch or mark-processed failed: ${(err as Error).message}`,
-        ),
-      );
   }
 
   private dispatchPostPaymentNotifications(
@@ -865,6 +872,7 @@ export class PaymentsService {
             userId: true,
             orderNumber: true,
             shippingCostInCents: true,
+            totalInCents: true,
             items: {
               select: {
                 productVariantId: true,
@@ -900,6 +908,7 @@ export class PaymentsService {
             select: {
               orderNumber: true,
               shippingCostInCents: true,
+              totalInCents: true,
               items: {
                 select: {
                   productVariantId: true,
@@ -932,6 +941,7 @@ export class PaymentsService {
     order: {
       orderNumber: string;
       shippingCostInCents: number;
+      totalInCents: number;
       items: Array<{
         productVariantId: string;
         snapshotName: string;
@@ -948,6 +958,9 @@ export class PaymentsService {
       paidAt: payment.paidAt,
       orderNumber: payment.order.orderNumber,
       shippingInCents: payment.order.shippingCostInCents,
+      // Authoritative post-discount total — GA4's firePurchaseEvent uses this
+      // instead of summing item gross + shipping, which has no discount awareness.
+      totalInCents: payment.order.totalInCents,
       items: payment.order.items.map((i) => ({
         productVariantId: i.productVariantId,
         productName: i.snapshotName,
@@ -1160,6 +1173,64 @@ export class PaymentsService {
         lockToken,
       );
     }
+  }
+
+  /**
+   * Prorates an order's coupon discount across specific items being refunded/cancelled,
+   * mutating each item's `priceInCents` down and setting `discountAppliedInCents` —
+   * the single source of truth for this math, shared by every refund-issuing caller
+   * (customer self-service cancellation, admin return refunds) so they compute identical
+   * numbers for the identical item/quantity instead of drifting between flows.
+   */
+  async prorateDiscountForRefundItems<
+    T extends { orderItemId: string; quantity: number; priceInCents: number; discountAppliedInCents?: number },
+  >(
+    order: { couponId: string | null; discountInCents: number; itemsTotalInCents: number },
+    orderItems: Array<{
+      id: string;
+      snapshotPrice: number;
+      quantity: number;
+      cancelledDiscountInCents: number | null;
+    }>,
+    items: T[],
+  ): Promise<T[]> {
+    if (!order.couponId || order.discountInCents <= 0 || order.itemsTotalInCents <= 0) {
+      return items;
+    }
+
+    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+    // items-total discount — prorating it across item prices here would refund
+    // less than the customer paid for the items themselves.
+    const coupon = await this.prisma.coupon.findUnique({
+      where: { id: order.couponId },
+      select: { discountType: true },
+    });
+    if (coupon?.discountType === DiscountType.FREE_SHIPPING) {
+      return items;
+    }
+
+    const discountFraction = order.discountInCents / order.itemsTotalInCents;
+    for (const item of items) {
+      const orderItem = orderItems.find((oi) => oi.id === item.orderItemId);
+      if (!orderItem) continue;
+      // Max discount this item can ever yield (based on all units)
+      const maxItemDiscount = Math.round(orderItem.snapshotPrice * discountFraction * orderItem.quantity);
+      // Discount actually applied by prior partial refunds/cancels. Read from the
+      // persisted running total rather than recomputing an idealized (Math.round)
+      // value from cancelledQuantity — each prior call floors its per-unit discount,
+      // so the ideal recompute overstates what was really deducted and drifts the
+      // refund a few grosz over entitlement across 3+ sequential partial refunds.
+      const alreadyAppliedDiscount = orderItem.cancelledDiscountInCents ?? 0;
+      const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyAppliedDiscount);
+      // Proportional discount we'd ideally apply to the qty being refunded now
+      const wantedDiscount = Math.round(orderItem.snapshotPrice * discountFraction * item.quantity);
+      const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
+      // Floor to per-unit (sub-cent remainder is absorbed by the cap in partialRefund)
+      const perUnitDiscount = Math.floor(appliedDiscount / item.quantity);
+      item.priceInCents = item.priceInCents - perUnitDiscount;
+      item.discountAppliedInCents = perUnitDiscount * item.quantity;
+    }
+    return items;
   }
 
   /**

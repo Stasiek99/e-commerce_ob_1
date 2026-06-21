@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { PaymentStatus, OrderStatus, Prisma } from '@prisma/client';
+import { PaymentStatus, OrderStatus, Prisma, DiscountType } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
 import * as Sentry from '@sentry/nestjs';
 import axios from 'axios';
@@ -115,6 +115,9 @@ describe('PaymentsService', () => {
             },
             productVariant: {
               update: jest.fn().mockResolvedValue({ stock: 0 }),
+            },
+            coupon: {
+              findUnique: jest.fn().mockResolvedValue(null),
             },
             couponUse: {
               deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -1477,6 +1480,28 @@ describe('PaymentsService', () => {
 
       expect(result.items[0].variantLabel).toBe('PERF-CHL-50');
     });
+
+    // FIX: the frontend's GA4 purchase event previously recomputed the order total
+    // from items gross + shipping, which has no discount awareness and overstates
+    // revenue on coupon orders. totalInCents must be the order's authoritative,
+    // already-discounted total so the frontend can use it directly.
+    it('returns the order authoritative totalInCents, net of any coupon discount', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          userId: 'user-1',
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 1200,
+          totalInCents: 34700,
+          items: [],
+        },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.totalInCents).toBe(34700);
+    });
   });
 
   describe('getPaymentStatusByToken', () => {
@@ -1564,6 +1589,24 @@ describe('PaymentsService', () => {
       await expect(
         service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the order authoritative totalInCents, net of any coupon discount', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 1200,
+          totalInCents: 34700,
+          items: [],
+        },
+      });
+      redis.get.mockResolvedValue(VALID_TOKEN);
+
+      const result = await service.getPaymentStatusByToken(ORDER_ID, VALID_TOKEN);
+
+      expect(result.totalInCents).toBe(34700);
     });
   });
 
@@ -1792,6 +1835,151 @@ describe('PaymentsService', () => {
       const after = Date.now();
       expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - TWO_HOURS_MS - 1000);
       expect(cutoff.getTime()).toBeLessThanOrEqual(after - TWO_HOURS_MS + 1000);
+    });
+  });
+
+  // Shared by OrdersService.cancelItemsByUser (customer self-service) and
+  // ReturnsService.markRefunded (admin physical-return refund) so both refund-issuing
+  // flows compute an identical coupon-discounted price for the identical item/quantity —
+  // the bug this fixes is markRefunded refunding the full undiscounted snapshotPrice.
+  describe('prorateDiscountForRefundItems', () => {
+    const orderItemsFixture = [
+      {
+        id: 'item-1',
+        snapshotPrice: 20000,
+        quantity: 2,
+        cancelledDiscountInCents: 0,
+      },
+    ];
+
+    it('returns items unchanged when the order has no coupon', async () => {
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 20000 }];
+
+      const result = await service.prorateDiscountForRefundItems(
+        { couponId: null, discountInCents: 0, itemsTotalInCents: 20000 },
+        orderItemsFixture,
+        items,
+      );
+
+      expect(result).toBe(items);
+      expect(result[0].priceInCents).toBe(20000);
+      expect(prisma.coupon.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('returns items unchanged when discountInCents is 0', async () => {
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 20000 }];
+
+      await service.prorateDiscountForRefundItems(
+        { couponId: 'coupon-1', discountInCents: 0, itemsTotalInCents: 20000 },
+        orderItemsFixture,
+        items,
+      );
+
+      expect(items[0].priceInCents).toBe(20000);
+      expect(prisma.coupon.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('returns items unchanged when itemsTotalInCents is 0 — division-by-zero guard', async () => {
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 20000 }];
+
+      await service.prorateDiscountForRefundItems(
+        { couponId: 'coupon-1', discountInCents: 100, itemsTotalInCents: 0 },
+        orderItemsFixture,
+        items,
+      );
+
+      expect(items[0].priceInCents).toBe(20000);
+      expect(prisma.coupon.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('prorates a percentage coupon discount across the refunded item', async () => {
+      // 20%-off coupon: discountFraction = 4000/20000 = 0.2 → discountedPrice = 16000
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 20000, discountAppliedInCents: 0 }];
+
+      await service.prorateDiscountForRefundItems(
+        { couponId: 'coupon-1', discountInCents: 4000, itemsTotalInCents: 20000 },
+        orderItemsFixture,
+        items,
+      );
+
+      expect(items[0].priceInCents).toBe(16000);
+      expect(items[0].discountAppliedInCents).toBe(4000);
+    });
+
+    it('does not prorate a FREE_SHIPPING coupon — its discountInCents is the shipping cost, not an items discount', async () => {
+      // discountInCents (1499, the shipping cost) would otherwise be misread as a
+      // ~7.5% items discount against itemsTotalInCents=20000.
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.FREE_SHIPPING });
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 20000 }];
+
+      await service.prorateDiscountForRefundItems(
+        { couponId: 'coupon-free-shipping', discountInCents: 1499, itemsTotalInCents: 20000 },
+        orderItemsFixture,
+        items,
+      );
+
+      expect(prisma.coupon.findUnique).toHaveBeenCalledWith({
+        where: { id: 'coupon-free-shipping' },
+        select: { discountType: true },
+      });
+      expect(items[0].priceInCents).toBe(20000);
+    });
+
+    it('uses only the remaining discount budget on a second partial refund of the same item', async () => {
+      // snapshotPrice=33, qty=2, itemsTotalInCents=66, discountInCents=5 → discountFraction=5/66.
+      // cancelledDiscountInCents=3 is the persisted actual amount a prior refund already applied.
+      // maxItemDiscount=round(33*5/66*2)=round(5)=5, alreadyAppliedDiscount=3 (read directly from
+      // the persisted field, not recomputed), remaining=2 → appliedDiscount=min(3,2)=2
+      // → priceInCents=33-2=31.
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 33, discountAppliedInCents: 0 }];
+
+      await service.prorateDiscountForRefundItems(
+        { couponId: 'coupon-1', discountInCents: 5, itemsTotalInCents: 66 },
+        [{ id: 'item-1', snapshotPrice: 33, quantity: 2, cancelledDiscountInCents: 3 }],
+        items,
+      );
+
+      expect(items[0].priceInCents).toBe(31);
+      expect(items[0].discountAppliedInCents).toBe(2);
+    });
+
+    it('reads the alreadyAppliedDiscount from the persisted actual amount, not a Math.round recompute', async () => {
+      // snapshotPrice=50, qty=4, itemsTotalInCents=200, discountInCents=10 → discountFraction=0.05,
+      // maxItemDiscount=round(50*0.05*4)=10.
+      // A first refund of qty=3 would apply wanted=round(50*0.05*3)=8, floored per-unit to
+      // floor(8/3)=2 → actual persisted total = 2*3=6 (2gr lost to the floor, not the full 8).
+      // This second refund covers the last unit (qty=1): wanted=round(50*0.05*1)=3.
+      //   Buggy recompute: alreadyAppliedDiscount=round(50*0.05*3)=8 → remaining=10-8=2
+      //     → appliedDiscount=min(3,2)=2 → priceInCents=50-2=48 (over-refunds by 1gr).
+      //   Correct (persisted actual): alreadyAppliedDiscount=6 → remaining=10-6=4
+      //     → appliedDiscount=min(3,4)=3 → priceInCents=50-3=47.
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
+      const items = [{ orderItemId: 'item-1', quantity: 1, priceInCents: 50, discountAppliedInCents: 0 }];
+
+      await service.prorateDiscountForRefundItems(
+        { couponId: 'coupon-1', discountInCents: 10, itemsTotalInCents: 200 },
+        [{ id: 'item-1', snapshotPrice: 50, quantity: 4, cancelledDiscountInCents: 6 }],
+        items,
+      );
+
+      expect(items[0].priceInCents).toBe(47);
+      expect(items[0].discountAppliedInCents).toBe(3);
+    });
+
+    it('skips an item with no matching orderItem instead of throwing', async () => {
+      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
+      const items = [{ orderItemId: 'unknown-item', quantity: 1, priceInCents: 20000 }];
+
+      await expect(
+        service.prorateDiscountForRefundItems(
+          { couponId: 'coupon-1', discountInCents: 4000, itemsTotalInCents: 20000 },
+          orderItemsFixture,
+          items,
+        ),
+      ).resolves.toEqual(items);
+      expect(items[0].priceInCents).toBe(20000);
     });
   });
 
@@ -3489,6 +3677,75 @@ describe('PaymentsService', () => {
       expect(prisma.outboxMessage.create).toHaveBeenCalledWith({
         data: { type: 'POST_PAYMENT_NOTIFICATIONS', orderId: 'order-1' },
       });
+    });
+
+    // ─── per-order refund lock (covers concurrent admin approvals racing the
+    // same FRAUD_REVIEW → PAID transition — double-click or two admins
+    // approving from the queue simultaneously) ──────────────────────────────
+
+    it('throws 429 when another refund/approval for the order is already in progress', async () => {
+      redis.set.mockResolvedValueOnce(null);
+
+      await expect(service.approveFraudReview('order-1', 'ADMIN')).rejects.toThrow(HttpException);
+      // The status read happens inside the lock — must never run if the lock was not acquired.
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock keyed on refund-lock:<orderId>', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(redis.set).toHaveBeenCalledWith('refund-lock:order-1', expect.any(String), 'EX', 30, 'NX');
+    });
+
+    it('releases the Redis lock after a successful approval', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
+
+    it('releases the Redis lock even when the status check throws', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ ...mockFraudOrder, status: OrderStatus.PAID });
+
+      await expect(service.approveFraudReview('order-1', 'ADMIN')).rejects.toThrow(/Cannot approve order/);
+
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'refund-lock:order-1', expect.any(String));
+    });
+
+    it('a second concurrent approval sees the order already PAID and is rejected instead of double-dispatching', async () => {
+      // Simulates: call A acquires the lock, transitions to PAID, and releases
+      // the lock (fast-path dispatch is fire-and-forget). Call B then acquires
+      // the freed lock and must read the now-PAID status rather than the stale
+      // FRAUD_REVIEW it would have seen without serialization.
+      prisma.order.findUniqueOrThrow.mockResolvedValueOnce(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      expect(prisma.outboxMessage.create).toHaveBeenCalledTimes(1);
+
+      prisma.order.findUniqueOrThrow.mockResolvedValueOnce({ ...mockFraudOrder, status: OrderStatus.PAID });
+
+      await expect(service.approveFraudReview('order-1', 'ADMIN')).rejects.toThrow(/Cannot approve order/);
+      expect(prisma.outboxMessage.create).toHaveBeenCalledTimes(1);
     });
   });
 

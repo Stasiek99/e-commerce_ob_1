@@ -1,7 +1,7 @@
 import { Injectable, PLATFORM_ID, computed, effect, inject, signal, untracked } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { switchMap, catchError, forkJoin, of, map } from 'rxjs';
+import { switchMap, catchError, forkJoin, of, map, from, concatMap, toArray } from 'rxjs';
 import { ProductCardData } from '../../shared/product-card/product-card.component';
 import { AuthService } from './auth.service';
 import { LOCAL_STORAGE } from '../tokens/storage.tokens';
@@ -20,6 +20,9 @@ export class WishlistService {
   private readonly storage = inject(LOCAL_STORAGE);
 
   private readonly STORAGE_KEY = 'wishlist_v1';
+  // Matches the backend's MergeWishlistDto ArrayMaxSize(100) — batching keeps a long-lived
+  // guest session's wishlist from being rejected wholesale on login.
+  private readonly MERGE_CHUNK_SIZE = 100;
   private readonly _items = signal<WishlistItemData[]>(this.loadFromStorage());
 
   readonly items = this._items.asReadonly();
@@ -90,26 +93,46 @@ export class WishlistService {
 
     const fetch$ = this.http.get<WishlistItemData[]>(`${environment.apiUrl}/wishlist`);
 
-    const sync$ = guestIds.length
-      ? this.http.post(`${environment.apiUrl}/wishlist/merge`, { productIds: guestIds }).pipe(
-          switchMap(() => fetch$),
-          catchError(() => fetch$),
-        )
-      : fetch$;
+    if (!guestIds.length) {
+      fetch$.subscribe({
+        next: (items) => {
+          this._items.set(items);
+          this.loading.set(false);
+        },
+        error: () => this.loading.set(false),
+      });
+      return;
+    }
 
-    sync$.subscribe({
-      next: (items) => {
-        this._items.set(items);
-        if (this.isBrowser) this.storage.removeItem(this.STORAGE_KEY);
-        this.loading.set(false);
-      },
-      error: () => {
-        // Always clear localStorage even on total failure — prevents infinite re-merge
-        // on subsequent loads when the guest items were already partially processed.
-        if (this.isBrowser) this.storage.removeItem(this.STORAGE_KEY);
-        this.loading.set(false);
-      },
-    });
+    const chunks: string[][] = [];
+    for (let i = 0; i < guestIds.length; i += this.MERGE_CHUNK_SIZE) {
+      chunks.push(guestIds.slice(i, i + this.MERGE_CHUNK_SIZE));
+    }
+
+    from(chunks)
+      .pipe(
+        concatMap((chunk) => this.http.post(`${environment.apiUrl}/wishlist/merge`, { productIds: chunk })),
+        toArray(),
+        switchMap(() => fetch$),
+      )
+      .subscribe({
+        next: (items) => {
+          this._items.set(items);
+          if (this.isBrowser) this.storage.removeItem(this.STORAGE_KEY);
+          this.loading.set(false);
+        },
+        error: () => {
+          // A merge batch (or the post-merge fetch) failed — leave localStorage intact so
+          // the not-yet-merged guest items aren't lost, and retry on the next sync instead.
+          fetch$.subscribe({
+            next: (items) => {
+              this._items.set(items);
+              this.loading.set(false);
+            },
+            error: () => this.loading.set(false),
+          });
+        },
+      });
   }
 
   // Guest items are a frozen localStorage snapshot with no isActive field. Re-fetch each

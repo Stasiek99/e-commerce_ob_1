@@ -36,6 +36,7 @@ function buildOrder(overrides: Partial<InvoiceOrder> = {}): InvoiceOrder {
 describe('InvoiceService', () => {
   let service: InvoiceService;
   let mockStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
+  let mockRedis: { set: jest.Mock; eval: jest.Mock };
   let mockTx: { $executeRawUnsafe: jest.Mock; $queryRawUnsafe: jest.Mock; order: { update: jest.Mock } };
   let mockPrisma: { $transaction: jest.Mock; $executeRawUnsafe: jest.Mock; order: { update: jest.Mock } };
 
@@ -43,6 +44,10 @@ describe('InvoiceService', () => {
     mockStorage = {
       uploadInvoice: jest.fn().mockResolvedValue(MOCK_PATH),
       getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_URL),
+    };
+    mockRedis = {
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(1),
     };
     // mockTx is the Prisma transaction client passed to the $transaction callback.
     // $queryRawUnsafe is called twice per normal processInvoice run:
@@ -83,6 +88,7 @@ describe('InvoiceService', () => {
         },
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StorageService, useValue: mockStorage },
+        { provide: 'REDIS_CLIENT', useValue: mockRedis },
       ],
     }).compile();
 
@@ -1011,6 +1017,7 @@ describe('InvoiceService', () => {
 
     let corrService: InvoiceService;
     let corrStorage: jest.Mocked<Pick<StorageService, 'uploadInvoice' | 'getInvoiceSignedUrl'>>;
+    let corrRedis: { set: jest.Mock; eval: jest.Mock };
     let corrTx: {
       $queryRawUnsafe: jest.Mock;
       $executeRawUnsafe: jest.Mock;
@@ -1041,6 +1048,10 @@ describe('InvoiceService', () => {
       corrStorage = {
         uploadInvoice: jest.fn().mockResolvedValue(MOCK_CORRECTIVE_PATH),
         getInvoiceSignedUrl: jest.fn().mockResolvedValue(MOCK_CORRECTIVE_URL),
+      };
+      corrRedis = {
+        set: jest.fn().mockResolvedValue('OK'),
+        eval: jest.fn().mockResolvedValue(1),
       };
 
       corrTx = {
@@ -1091,6 +1102,7 @@ describe('InvoiceService', () => {
           },
           { provide: PrismaService, useValue: corrPrisma },
           { provide: StorageService, useValue: corrStorage },
+          { provide: 'REDIS_CLIENT', useValue: corrRedis },
         ],
       }).compile();
 
@@ -1422,6 +1434,87 @@ describe('InvoiceService', () => {
       });
     });
 
+    // ── invoice-correction-lock (cross-correction race guard) ──────────────
+    // Regression coverage for: cancelItemsByUser calls this method fire-and-
+    // forget and releases its own cancel-lock before the promise settles, so
+    // a second sequential cancellation could previously start a second call
+    // here while the first's prior-corrections read/write was still in
+    // flight, computing its taxable base from an incomplete prior-corrections
+    // set. The lock below serializes the read-through-write span per order.
+
+    describe('invoice-correction-lock', () => {
+      beforeEach(() => {
+        jest.useFakeTimers();
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('acquires the lock keyed on invoice-correction-lock:<orderId>', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrRedis.set).toHaveBeenCalledWith(
+          `invoice-correction-lock:${ORDER_ID}`,
+          expect.any(String),
+          'EX',
+          30,
+          'NX',
+        );
+      });
+
+      it('releases the lock after a successful correction', async () => {
+        await corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+
+        expect(corrRedis.eval).toHaveBeenCalledWith(
+          expect.any(String),
+          1,
+          `invoice-correction-lock:${ORDER_ID}`,
+          expect.any(String),
+        );
+      });
+
+      it('releases the lock even when the PDF upload fails', async () => {
+        corrStorage.uploadInvoice.mockRejectedValueOnce(new Error('Supabase down'));
+
+        await expect(
+          corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON),
+        ).rejects.toThrow('Supabase down');
+
+        expect(corrRedis.eval).toHaveBeenCalledWith(
+          expect.any(String),
+          1,
+          `invoice-correction-lock:${ORDER_ID}`,
+          expect.any(String),
+        );
+      });
+
+      it('retries lock acquisition when another correction for the order is already in flight, then proceeds once it frees up', async () => {
+        corrRedis.set
+          .mockResolvedValueOnce(null) // 1st attempt: lock held by another in-flight correction
+          .mockResolvedValueOnce('OK'); // 2nd attempt: freed up
+
+        const promise = corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(corrRedis.set).toHaveBeenCalledTimes(2);
+        expect(result.correctiveInvoiceNumber).toBe(MOCK_CORRECTIVE_NUM);
+      });
+
+      it('throws a clear timeout error and never reads prior corrections when the lock is never released', async () => {
+        corrRedis.set.mockResolvedValue(null); // always contended
+
+        const promise = corrService.processCorrectiveInvoice(ORDER_ID, ORIGINAL_INVOICE, REFUND_CENTS, REASON);
+        const assertion = expect(promise).rejects.toThrow(/Timed out waiting for invoice-correction-lock/);
+        await jest.runAllTimersAsync();
+        await assertion;
+
+        expect(corrPrisma.invoiceCorrection.findMany).not.toHaveBeenCalled();
+        expect(corrRedis.eval).not.toHaveBeenCalled();
+      });
+    });
+
     // ── getCorrectiveInvoiceUrl — nullable storagePath guard ───────────────
 
     describe('getCorrectiveInvoiceUrl — nullable storagePath guard', () => {
@@ -1713,6 +1806,10 @@ describe('InvoiceService', () => {
           {
             provide: StorageService,
             useValue: { uploadInvoice: jest.fn(), getInvoiceSignedUrl: jest.fn() },
+          },
+          {
+            provide: 'REDIS_CLIENT',
+            useValue: { set: jest.fn().mockResolvedValue('OK'), eval: jest.fn().mockResolvedValue(1) },
           },
         ],
       }).compile();

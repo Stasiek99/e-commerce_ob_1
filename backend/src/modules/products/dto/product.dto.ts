@@ -13,10 +13,33 @@ import {
   Max,
   MaxLength,
   Min,
+  Validate,
   ValidateIf,
+  ValidationArguments,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProductStatus } from '@prisma/client';
+
+// Cross-field check for variant DTOs: a "was" price that doesn't exceed the current
+// price isn't a discount and must not reach the DB (Omnibus directive compliance).
+// On partial updates, only one of the two fields may be present in the payload — in
+// that case there's nothing in the request to compare against, so this passes and
+// attachOmnibusData() acts as the second line of defense at read time.
+@ValidatorConstraint({ name: 'isGreaterThanPrice', async: false })
+class IsGreaterThanPriceConstraint implements ValidatorConstraintInterface {
+  validate(compareAtPriceInCents: number, args: ValidationArguments): boolean {
+    if (compareAtPriceInCents == null) return true;
+    const priceInCents = (args.object as { priceInCents?: number }).priceInCents;
+    if (priceInCents == null) return true;
+    return compareAtPriceInCents > priceInCents;
+  }
+
+  defaultMessage(): string {
+    return 'compareAtPriceInCents must be greater than priceInCents';
+  }
+}
 
 export class CreateProductDto {
   @IsString()
@@ -292,6 +315,7 @@ export class CreateVariantDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Validate(IsGreaterThanPriceConstraint)
   compareAtPriceInCents?: number;
 
   @IsOptional()
@@ -340,6 +364,7 @@ export class UpdateVariantDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Validate(IsGreaterThanPriceConstraint)
   compareAtPriceInCents?: number;
 
   @IsOptional()

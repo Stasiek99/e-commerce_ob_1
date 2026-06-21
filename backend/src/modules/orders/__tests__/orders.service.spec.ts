@@ -111,6 +111,9 @@ describe('OrdersService', () => {
             expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
             refundPayment: jest.fn().mockResolvedValue(undefined),
             partialRefund: jest.fn().mockResolvedValue(undefined),
+            // Passthrough by default (no discount) — math itself is unit-tested on
+            // PaymentsService directly; tests here only assert the delegation contract.
+            prorateDiscountForRefundItems: jest.fn().mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
           },
         },
         {
@@ -1501,6 +1504,42 @@ describe('OrdersService', () => {
 
       expect(result.refundedAmountInCents).toBe(0);
     });
+
+    // FIX: the order-detail response previously had no way for the frontend to know
+    // a coupon was FREE_SHIPPING (vs. an items discount) — without it, refundPreview()
+    // can't replicate PaymentsService.prorateDiscountForRefundItems()'s skip of that case.
+    it('includes the coupon relation so prorateDiscountForRefundItems-equivalent logic can run client-side', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o-1', items: [], payment: null });
+
+      await service.findOneForUser('o-1', 'user-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith({
+        where: { id: 'o-1', userId: 'user-1' },
+        include: { items: true, payment: true, shipment: true, coupon: { select: { discountType: true } } },
+      });
+    });
+
+    it('flattens the coupon discountType into couponDiscountType', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'o-1',
+        items: [],
+        payment: null,
+        coupon: { discountType: 'FREE_SHIPPING' },
+      });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.couponDiscountType).toBe('FREE_SHIPPING');
+      expect((result as { coupon?: unknown }).coupon).toBeUndefined();
+    });
+
+    it('defaults couponDiscountType to null when the order has no coupon', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o-1', items: [], payment: null, coupon: null });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.couponDiscountType).toBeNull();
+    });
   });
 
   describe('findEventsForUser', () => {
@@ -2007,11 +2046,70 @@ describe('OrdersService', () => {
   });
 
   describe('updateStatus', () => {
-    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdate: jest.Mock; shipmentUpdateMany: jest.Mock }> = {}) => ({
+    const makeTx = (overrides: Partial<{ variantUpdate: jest.Mock; orderUpdateMany: jest.Mock; shipmentUpdateMany: jest.Mock }> = {}) => ({
       productVariant: { update: overrides.variantUpdate ?? jest.fn().mockResolvedValue({ stock: 0 }) },
-      order: { update: overrides.orderUpdate ?? jest.fn() },
+      order: { updateMany: overrides.orderUpdateMany ?? jest.fn().mockResolvedValue({ count: 1 }) },
       orderEvent: { create: jest.fn() },
       shipment: { updateMany: overrides.shipmentUpdateMany ?? jest.fn() },
+    });
+
+    // ── concurrency guards (fix: two concurrent calls on the same order must not ──
+    // ── both restore stock — mirrors the cancel-lock/refund-lock pattern) ─────────
+
+    it('rejects with 429 when another status update for the same order already holds the lock', async () => {
+      redisClient.set.mockResolvedValue(null); // SET NX not acquired
+
+      await expect(service.updateStatus('o-1', OrderStatus.PROCESSING)).rejects.toThrow(
+        'A status update for this order is already in progress',
+      );
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('releases the lock after a successful status update', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(redisClient.set).toHaveBeenCalledWith('status-lock:o-1', expect.any(String), 'EX', 30, 'NX');
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases the lock even when the transaction throws', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      prisma.$transaction.mockRejectedValue(new Error('DB write failed'));
+
+      await expect(service.updateStatus('o-1', OrderStatus.PROCESSING)).rejects.toThrow(
+        'DB write failed',
+      );
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
+    it('aborts and does not restore stock when the conditional update affects 0 rows (status changed concurrently)', async () => {
+      // Simulates a second caller losing the race: by the time this transaction's
+      // UPDATE ... WHERE status=current.status runs, a concurrent call already moved
+      // the row off PAID, so 0 rows match and the per-item stock loop must never run.
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
+      });
+      const txVariantUpdate = jest.fn();
+      const txOrderUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ variantUpdate: txVariantUpdate, orderUpdateMany: txOrderUpdateMany })),
+      );
+
+      await expect(service.updateStatus('o-1', OrderStatus.CANCELLED)).rejects.toThrow(
+        'status changed concurrently',
+      );
+      expect(txVariantUpdate).not.toHaveBeenCalled();
     });
 
     it('transitions non-terminal status without restoring stock', async () => {
@@ -2020,14 +2118,17 @@ describe('OrdersService', () => {
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
       const txVariantUpdate = jest.fn();
-      const txOrderUpdate = jest.fn();
+      const txOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn(makeTx({ variantUpdate: txVariantUpdate, orderUpdate: txOrderUpdate })),
+        fn(makeTx({ variantUpdate: txVariantUpdate, orderUpdateMany: txOrderUpdateMany })),
       );
 
       await service.updateStatus('o-1', OrderStatus.PROCESSING);
 
-      expect(txOrderUpdate).toHaveBeenCalledWith({ where: { id: 'o-1' }, data: { status: OrderStatus.PROCESSING } });
+      expect(txOrderUpdateMany).toHaveBeenCalledWith({
+        where: { id: 'o-1', status: OrderStatus.PAID },
+        data: { status: OrderStatus.PROCESSING },
+      });
       expect(txVariantUpdate).not.toHaveBeenCalled();
     });
 
@@ -2198,7 +2299,7 @@ describe('OrdersService', () => {
   describe('updateStatus — state machine transition guard', () => {
     const makeTx = () => ({
       productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-      order: { update: jest.fn() },
+      order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       orderEvent: { create: jest.fn() },
       shipment: { updateMany: jest.fn() },
     });
@@ -2820,7 +2921,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1', 'o-2']);
@@ -2854,7 +2955,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -2871,7 +2972,7 @@ describe('OrdersService', () => {
       prisma.order.findMany.mockResolvedValue(orders);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       await service.bulkMarkAsShipped(['o-1']);
@@ -3521,26 +3622,19 @@ describe('OrdersService', () => {
       );
     });
 
-    // ─── discount pro-ration (fix: partial refund must deduct coupon discount) ──
+    // ─── discount pro-ration delegation (fix: cancelItemsByUser and ReturnsService.markRefunded
+    // ─── must compute identical coupon-discounted refunds via one shared helper) ───────────────
+    // The proration math itself is unit-tested directly on
+    // PaymentsService.prorateDiscountForRefundItems (see payments.service.spec.ts). These tests
+    // only assert that cancelItemsByUser delegates to it with the right arguments and forwards
+    // whatever it returns — not the pre-proration resolvedItems — to partialRefund/email/invoice.
 
-    it('passes pro-rated priceInCents to partialRefund when a percentage coupon was applied', async () => {
-      // 20%-off coupon: discountFraction = 4000/20000 = 0.2 → discountedPrice = 16000
+    it('delegates discount proration to paymentsService.prorateDiscountForRefundItems with the order and its items', async () => {
       const discountedOrder = {
         ...mockPaidOrder,
+        couponId: 'coupon-1',
         itemsTotalInCents: 20000,
         discountInCents: 4000,
-        totalInCents: 16000,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 20000,
-          },
-        ],
       };
       prisma.order.findFirst.mockResolvedValue(discountedOrder);
 
@@ -3548,36 +3642,55 @@ describe('OrdersService', () => {
         items: [{ orderItemId: 'item-1', quantity: 1 }],
       });
 
+      expect(paymentsService.prorateDiscountForRefundItems).toHaveBeenCalledWith(
+        discountedOrder,
+        discountedOrder.items,
+        [
+          expect.objectContaining({
+            orderItemId: 'item-1',
+            quantity: 1,
+            priceInCents: 34900,
+            discountAppliedInCents: 0,
+          }),
+        ],
+      );
+    });
+
+    it('forwards the prorated items returned by prorateDiscountForRefundItems to partialRefund, not the pre-proration values', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+      (paymentsService.prorateDiscountForRefundItems as jest.Mock).mockImplementation(
+        async (_order: any, _orderItems: any, items: any[]) => {
+          items.forEach((item) => {
+            item.priceInCents = 16000;
+            item.discountAppliedInCents = 4000;
+          });
+          return items;
+        },
+      );
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 1 }],
+      });
+
       expect(paymentsService.partialRefund).toHaveBeenCalledWith(
         'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
+        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 16000, discountAppliedInCents: 4000 })],
         OrderStatus.PAID,
         'CUSTOMER',
       );
     });
 
-    it('sends cancellation email with pro-rated amount when a coupon was applied (partial)', async () => {
-      // 20%-off coupon: discountedPrice = 20000 * 0.8 = 16000; cancel qty=1 → email = 16000
-      // Cancels only 1 of 2 units so the partial-refund path (not full withdrawal) is exercised.
-      const discountedOrder = {
-        ...mockPaidOrder,
-        itemsTotalInCents: 20000,
-        discountInCents: 4000,
-        totalInCents: 16000,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 20000,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(discountedOrder);
+    it('reflects the prorated amount — not the pre-proration price — in the cancellation confirmation email', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
       const emailService = (service as any).emailService;
+      (paymentsService.prorateDiscountForRefundItems as jest.Mock).mockImplementation(
+        async (_order: any, _orderItems: any, items: any[]) => {
+          items.forEach((item) => {
+            item.priceInCents = 16000;
+          });
+          return items;
+        },
+      );
 
       await service.cancelItemsByUser('order-1', 'user-1', {
         items: [{ orderItemId: 'item-1', quantity: 1 }],
@@ -3586,232 +3699,6 @@ describe('OrdersService', () => {
 
       expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
         expect.objectContaining({ totalInCents: 16000 }),
-      );
-    });
-
-    it('does not adjust priceInCents when discountInCents is 0', async () => {
-      const noDiscountOrder = {
-        ...mockPaidOrder,
-        discountInCents: 0,
-        itemsTotalInCents: 34900 * 3,
-      };
-      prisma.order.findFirst.mockResolvedValue(noDiscountOrder);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ priceInCents: 34900 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
-      );
-    });
-
-    it('does not adjust priceInCents when itemsTotalInCents is 0 — division-by-zero guard', async () => {
-      const zeroTotalOrder = {
-        ...mockPaidOrder,
-        discountInCents: 100,
-        itemsTotalInCents: 0,
-      };
-      prisma.order.findFirst.mockResolvedValue(zeroTotalOrder);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ priceInCents: 34900 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
-      );
-    });
-
-    // ─── alreadyCancelledDiscount guard (fix: prevent discount compounding on second partial cancel) ─
-
-    it('uses only remaining discount budget on second partial cancel of the same item', async () => {
-      // snapshotPrice=33, qty=2, itemsTotalInCents=66, discountInCents=5
-      // discountFraction = 5/66. cancelledDiscountInCents=3 is the persisted actual amount
-      // the (mocked) first cancel call already applied to item-1's cancelled unit.
-      // maxItemDiscount=round(33*5/66*2)=round(5)=5, alreadyCancelledDiscount=3 (read directly
-      // from the persisted field, not recomputed), remaining=2 → appliedDiscount=min(3,2)=2
-      // → priceInCents=33-2=31.
-      const partiallyRefundedOrder = {
-        ...mockPaidOrder,
-        status: OrderStatus.PARTIALLY_REFUNDED,
-        itemsTotalInCents: 66,
-        discountInCents: 5,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 1,
-            cancelledDiscountInCents: 3,
-            snapshotName: 'Test Item',
-            snapshotSku: 'T-1',
-            snapshotPrice: 33,
-          },
-          {
-            // item-2 still has remaining quantity so the order is not fully cancelled
-            // and partialRefund() — not refundPayment() — is invoked.
-            id: 'item-2',
-            productVariantId: 'pv-2',
-            quantity: 2,
-            cancelledQuantity: 0,
-            cancelledDiscountInCents: 0,
-            snapshotName: 'Other Item',
-            snapshotSku: 'O-1',
-            snapshotPrice: 33,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(partiallyRefundedOrder);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 31, discountAppliedInCents: 2 })],
-        OrderStatus.PARTIALLY_REFUNDED,
-        'CUSTOMER',
-      );
-    });
-
-    it('reads alreadyCancelledDiscount from the persisted actual amount, not a Math.round recompute', async () => {
-      // snapshotPrice=50, qty=4, itemsTotalInCents=200, discountInCents=10 → discountFraction=0.05,
-      // maxItemDiscount=round(50*0.05*4)=10.
-      // A first call cancelling qty=3 would apply wanted=round(50*0.05*3)=8, floored per-unit to
-      // floor(8/3)=2 → actual persisted total = 2*3 = 6 (2gr lost to the floor, not the full 8).
-      // This second call cancels the last unit (qty=1): wanted=round(50*0.05*1)=3.
-      //   Old (buggy) recompute: alreadyCancelledDiscount=round(50*0.05*3)=8 → remaining=10-8=2
-      //     → appliedDiscount=min(3,2)=2 → priceInCents=50-2=48 (under-applies the discount,
-      //     over-refunding the customer by 1gr).
-      //   Fixed (persisted actual): alreadyCancelledDiscount=6 → remaining=10-6=4
-      //     → appliedDiscount=min(3,4)=3 → priceInCents=50-3=47 (correct).
-      const order = {
-        ...mockPaidOrder,
-        status: OrderStatus.PARTIALLY_REFUNDED,
-        itemsTotalInCents: 200,
-        discountInCents: 10,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 4,
-            cancelledQuantity: 3,
-            cancelledDiscountInCents: 6,
-            snapshotName: 'Test Item',
-            snapshotSku: 'T-1',
-            snapshotPrice: 50,
-          },
-          {
-            // Keeps the order from being fully cancelled so partialRefund() (not
-            // refundPayment()) is the path under test.
-            id: 'item-2',
-            productVariantId: 'pv-2',
-            quantity: 1,
-            cancelledQuantity: 0,
-            cancelledDiscountInCents: 0,
-            snapshotName: 'Other Item',
-            snapshotSku: 'O-1',
-            snapshotPrice: 50,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(order);
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', priceInCents: 47, discountAppliedInCents: 3 })],
-        OrderStatus.PARTIALLY_REFUNDED,
-        'CUSTOMER',
-      );
-    });
-
-    // ─── FREE_SHIPPING coupon proration guard (fix: shipping discount must not ──
-    // ─── be divided into item prices) ────────────────────────────────────────
-    // discountInCents on a FREE_SHIPPING order equals shippingCostInCents, which is
-    // unrelated to itemsTotalInCents. Prorating it across item prices would refund
-    // the customer less than they paid for the items themselves.
-
-    it('does not reduce item priceInCents when the order used a FREE_SHIPPING coupon', async () => {
-      // discountInCents (1499, the shipping cost) would otherwise be misread as a
-      // ~7.5% items discount against itemsTotalInCents=20000.
-      const freeShippingOrder = {
-        ...mockPaidOrder,
-        couponId: 'coupon-free-shipping',
-        itemsTotalInCents: 20000,
-        discountInCents: 1499,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 10000,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(freeShippingOrder);
-      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.FREE_SHIPPING });
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(prisma.coupon.findUnique).toHaveBeenCalledWith({
-        where: { id: 'coupon-free-shipping' },
-        select: { discountType: true },
-      });
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 10000 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
-      );
-    });
-
-    it('still prorates item priceInCents when a non-FREE_SHIPPING coupon is applied', async () => {
-      const percentageOrder = {
-        ...mockPaidOrder,
-        couponId: 'coupon-percentage',
-        itemsTotalInCents: 20000,
-        discountInCents: 4000,
-        items: [
-          {
-            id: 'item-1',
-            productVariantId: 'pv-1',
-            quantity: 2,
-            cancelledQuantity: 0,
-            snapshotName: 'Test Product',
-            snapshotSku: 'TEST-1',
-            snapshotPrice: 20000,
-          },
-        ],
-      };
-      prisma.order.findFirst.mockResolvedValue(percentageOrder);
-      prisma.coupon.findUnique.mockResolvedValue({ discountType: DiscountType.PERCENTAGE });
-
-      await service.cancelItemsByUser('order-1', 'user-1', {
-        items: [{ orderItemId: 'item-1', quantity: 1 }],
-      });
-
-      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
-        'order-1',
-        [expect.objectContaining({ orderItemId: 'item-1', quantity: 1, priceInCents: 16000 })],
-        OrderStatus.PAID,
-        'CUSTOMER',
       );
     });
 
@@ -4574,7 +4461,7 @@ describe('OrdersService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) =>
         fn({
           productVariant: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
         }),
       );
@@ -4608,7 +4495,7 @@ describe('OrdersService', () => {
       }]);
       prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID, items: [] });
       prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn({ productVariant: { update: jest.fn() }, order: { update: jest.fn() }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
+        fn({ productVariant: { update: jest.fn() }, order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) }, orderEvent: { create: jest.fn() }, shipment: { updateMany: jest.fn() } }),
       );
 
       const result = await service.bulkMarkAsShipped(['o-1']);
@@ -4799,7 +4686,7 @@ describe('OrdersService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) =>
         fn({
           productVariant: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           shipment: { updateMany: jest.fn() },
         }),

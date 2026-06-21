@@ -15,7 +15,7 @@ const CART_INCLUDE = {
           product: {
             include: {
               images: {
-                where: { isPrimary: true },
+                orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }],
                 take: 1,
               },
             },

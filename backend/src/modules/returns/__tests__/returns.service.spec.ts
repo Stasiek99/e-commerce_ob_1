@@ -74,8 +74,13 @@ function buildPrismaMock(
   return {
     order: {
       findFirst: jest.fn().mockResolvedValue(orderRow),
-      // Used by markRefunded() to fetch current order status for partialRefund()
-      findUniqueOrThrow: jest.fn().mockResolvedValue({ status: 'SHIPPED' }),
+      // Used by markRefunded() to fetch current order status/discount for partialRefund()
+      findUniqueOrThrow: jest.fn().mockResolvedValue({
+        status: 'SHIPPED',
+        couponId: null,
+        discountInCents: 0,
+        itemsTotalInCents: 34900,
+      }),
     },
     user: {
       findUnique: jest.fn().mockResolvedValue({ email: USER_ACCOUNT_EMAIL }),
@@ -125,6 +130,7 @@ const DEFAULT_ORDER_ITEMS = [
     snapshotPrice: 34900,
     quantity: 1,
     cancelledQuantity: 0,
+    cancelledDiscountInCents: 0,
   },
 ];
 
@@ -137,7 +143,9 @@ describe('ReturnsService', () => {
       'sendReturnConfirmation' | 'sendReturnAdminNotification' | 'sendReturnStatusUpdate'
     >
   >;
-  let paymentsService: jest.Mocked<Pick<PaymentsService, 'refundPayment' | 'partialRefund'>>;
+  let paymentsService: jest.Mocked<
+    Pick<PaymentsService, 'refundPayment' | 'partialRefund' | 'prorateDiscountForRefundItems'>
+  >;
 
   async function createModule(prismaMock = buildPrismaMock()) {
     prisma = prismaMock;
@@ -149,6 +157,11 @@ describe('ReturnsService', () => {
     paymentsService = {
       refundPayment: jest.fn().mockResolvedValue(undefined),
       partialRefund: jest.fn().mockResolvedValue(undefined),
+      // Passthrough by default (no discount) — math itself is unit-tested on
+      // PaymentsService directly; tests here only assert the delegation contract.
+      prorateDiscountForRefundItems: jest
+        .fn()
+        .mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -180,6 +193,11 @@ describe('ReturnsService', () => {
     paymentsService = {
       refundPayment: jest.fn().mockResolvedValue(undefined),
       partialRefund: jest.fn().mockResolvedValue(undefined),
+      // Passthrough by default (no discount) — math itself is unit-tested on
+      // PaymentsService directly; tests here only assert the delegation contract.
+      prorateDiscountForRefundItems: jest
+        .fn()
+        .mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
     };
 
     const configGetMock = jest.fn().mockImplementation((key: string, fallback?: unknown) => {
@@ -1050,6 +1068,77 @@ describe('ReturnsService', () => {
             priceInCents: 34900,
           }),
         ]),
+        'SHIPPED',
+        'RETURN_APPROVAL',
+      );
+    });
+
+    // ── discount pro-ration delegation (fix: markRefunded must not refund the full
+    // ── undiscounted snapshotPrice on coupon-discounted orders) ──────────────────
+    // The proration math itself is unit-tested directly on
+    // PaymentsService.prorateDiscountForRefundItems (see payments.service.spec.ts).
+    // These tests assert markRefunded delegates to it with the right order/items and
+    // forwards whatever it returns — not the raw snapshotPrice — to partialRefund.
+
+    it('delegates discount proration to paymentsService.prorateDiscountForRefundItems with the order and matched order items', async () => {
+      const mock = buildPrismaMock();
+      mock.order.findUniqueOrThrow.mockResolvedValue({
+        status: 'SHIPPED',
+        couponId: 'coupon-1',
+        discountInCents: 6980,
+        itemsTotalInCents: 34900,
+      });
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.prorateDiscountForRefundItems).toHaveBeenCalledWith(
+        { status: 'SHIPPED', couponId: 'coupon-1', discountInCents: 6980, itemsTotalInCents: 34900 },
+        DEFAULT_ORDER_ITEMS,
+        [
+          expect.objectContaining({
+            orderItemId: 'item-uuid-1',
+            productVariantId: 'variant-uuid-1',
+            quantity: 1,
+            priceInCents: 34900,
+            discountAppliedInCents: 0,
+          }),
+        ],
+      );
+    });
+
+    it('forwards the prorated items returned by prorateDiscountForRefundItems to partialRefund — not the full undiscounted snapshotPrice', async () => {
+      // 20%-off coupon: discountFraction = 6980/34900 = 0.2 → discountedPrice = 27920.
+      // Refunding the raw snapshotPrice (34900) here would overpay the customer by 6980.
+      const mock = buildPrismaMock();
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+      (paymentsService.prorateDiscountForRefundItems as jest.Mock).mockImplementation(
+        async (_order: any, _orderItems: any, items: any[]) => {
+          items.forEach((item) => {
+            item.priceInCents = 27920;
+            item.discountAppliedInCents = 6980;
+          });
+          return items;
+        },
+      );
+
+      await service.markRefunded('return-id-001');
+
+      expect(paymentsService.partialRefund).toHaveBeenCalledWith(
+        'order-uuid-1',
+        [
+          expect.objectContaining({
+            orderItemId: 'item-uuid-1',
+            priceInCents: 27920,
+            discountAppliedInCents: 6980,
+          }),
+        ],
         'SHIPPED',
         'RETURN_APPROVAL',
       );

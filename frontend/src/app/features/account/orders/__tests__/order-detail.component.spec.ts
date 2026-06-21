@@ -253,3 +253,110 @@ describe('OrderDetailComponent — shared actionInFlight guard', () => {
   });
 });
 
+// FIX: refundPreview()/lineTotal() previously summed quantity × raw snapshotPrice
+// with no awareness of a coupon discount, so the "Do zwrotu" figure shown to the
+// customer overstated what cancelItemsByUser()/prorateDiscountForRefundItems()
+// would actually refund on a discounted order. These tests replicate the backend's
+// proration formula (backend/src/modules/payments/payments.service.ts) by hand to
+// confirm the frontend now computes the identical prorated amount.
+describe('OrderDetailComponent — refundPreview discount proration', () => {
+  const discountedItem = {
+    id: 'item-1',
+    snapshotName: 'Rose Oud',
+    snapshotSku: 'SKU-1',
+    snapshotPrice: 2000,
+    quantity: 3,
+    cancelledQuantity: 0,
+    cancelledDiscountInCents: 0,
+    productVariantId: 'pv-1',
+  };
+
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).match(() => true).forEach((r) => r.flush(null));
+    TestBed.inject(HttpTestingController).verify();
+    TestBed.resetTestingModule();
+  });
+
+  it('sums flat quantity × price when the order has no coupon discount', () => {
+    const { component } = setup({
+      status: 'PAID',
+      items: [discountedItem],
+      discountInCents: 0,
+      itemsTotalInCents: 6000,
+      couponDiscountType: null,
+    });
+    component.startPartialCancel();
+    component.partialLines[0].selected = true;
+    component.partialLines[0].quantity = 2;
+
+    expect(component.refundPreview()).toBe(4000);
+  });
+
+  it('prorates the discount across the cancelled quantity for a PERCENTAGE coupon', () => {
+    // discountFraction = 1000/10000 = 0.1 → wantedDiscount = round(2000*0.1*2) = 400
+    // perUnitDiscount = floor(400/2) = 200 → (2000-200)*2 = 3600
+    const { component } = setup({
+      status: 'PAID',
+      items: [discountedItem],
+      discountInCents: 1000,
+      itemsTotalInCents: 10000,
+      couponDiscountType: 'PERCENTAGE',
+    });
+    component.startPartialCancel();
+    component.partialLines[0].selected = true;
+    component.partialLines[0].quantity = 2;
+
+    expect(component.refundPreview()).toBe(3600);
+  });
+
+  it('does not prorate a FREE_SHIPPING coupon discount (it refunds shipping, not items)', () => {
+    const { component } = setup({
+      status: 'PAID',
+      items: [discountedItem],
+      discountInCents: 1000,
+      itemsTotalInCents: 10000,
+      couponDiscountType: 'FREE_SHIPPING',
+    });
+    component.startPartialCancel();
+    component.partialLines[0].selected = true;
+    component.partialLines[0].quantity = 2;
+
+    expect(component.refundPreview()).toBe(4000);
+  });
+
+  it('caps the proration at the remaining discount budget after a prior partial cancel already consumed some of it', () => {
+    // maxItemDiscount = round(2000*0.1*3) = 600; already applied 500 → remaining 100
+    // wantedDiscount = round(2000*0.1*2) = 400, capped to 100 → perUnitDiscount = floor(100/2) = 50
+    // (2000-50)*2 = 3900
+    const { component } = setup({
+      status: 'PAID',
+      items: [{ ...discountedItem, cancelledDiscountInCents: 500 }],
+      discountInCents: 1000,
+      itemsTotalInCents: 10000,
+      couponDiscountType: 'PERCENTAGE',
+    });
+    component.startPartialCancel();
+    component.partialLines[0].selected = true;
+    component.partialLines[0].quantity = 2;
+
+    expect(component.refundPreview()).toBe(3900);
+  });
+
+  it('excludes unselected lines from the prorated total', () => {
+    const secondItem = { ...discountedItem, id: 'item-2', snapshotName: 'Vanilla Musk' };
+    const { component } = setup({
+      status: 'PAID',
+      items: [discountedItem, secondItem],
+      discountInCents: 1000,
+      itemsTotalInCents: 10000,
+      couponDiscountType: 'PERCENTAGE',
+    });
+    component.startPartialCancel();
+    component.partialLines[0].selected = true;
+    component.partialLines[0].quantity = 2;
+    // partialLines[1] (secondItem) stays unselected
+
+    expect(component.refundPreview()).toBe(3600);
+  });
+});
+

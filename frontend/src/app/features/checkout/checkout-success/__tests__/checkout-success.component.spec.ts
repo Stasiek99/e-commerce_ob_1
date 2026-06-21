@@ -383,7 +383,7 @@ describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () 
     sessionStorage.removeItem('_pending_purchase');
   });
 
-  it('calls trackPurchase with backend items and computed total when response includes items and shippingInCents', fakeAsync(() => {
+  it('calls trackPurchase with backend items and the backend-supplied totalInCents when response includes items, shippingInCents, and totalInCents', fakeAsync(() => {
     const { fixture, mockAnalytics, httpMock } = setup();
 
     fixture.detectChanges();
@@ -393,13 +393,13 @@ describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () 
       status: 'COMPLETED',
       orderNumber: 'ORD-001',
       shippingInCents: 1200,
+      totalInCents: 39700,
       items: [
         { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
         { productVariantId: 'pv-2', productName: 'Rose', variantLabel: 'EDT 30ml', priceInCents: 8500, quantity: 1 },
       ],
     });
 
-    // total = 15000*2 + 8500*1 + 1200 = 39700
     expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith({
       transactionId: 'order-1',
       totalInCents: 39700,
@@ -412,7 +412,7 @@ describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () 
     expect(mockAnalytics.push).not.toHaveBeenCalled();
   }));
 
-  it('correctly computes totalInCents when shipping is zero', fakeAsync(() => {
+  it('correctly forwards totalInCents when shipping is zero', fakeAsync(() => {
     const { fixture, mockAnalytics, httpMock } = setup();
 
     fixture.detectChanges();
@@ -422,6 +422,7 @@ describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () 
       status: 'COMPLETED',
       orderNumber: 'ORD-002',
       shippingInCents: 0,
+      totalInCents: 1500,
       items: [
         { productVariantId: 'pv-1', productName: 'Sample', variantLabel: '5ml', priceInCents: 500, quantity: 3 },
       ],
@@ -430,6 +431,56 @@ describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () 
     expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith(
       expect.objectContaining({ totalInCents: 1500, shippingInCents: 0 }),
     );
+  }));
+
+  // FIX: firePurchaseEvent previously recomputed the GA4 value as
+  // itemsGross + shipping, which has no discount awareness and overstates
+  // revenue on every coupon order. It must now use the backend's authoritative
+  // totalInCents (already net of any coupon discount) instead.
+  it('uses the backend totalInCents (net of coupon discount) instead of recomputing items gross + shipping', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    // items gross + shipping = 15000*2 + 8500*1 + 1200 = 39700, but a 5000 coupon
+    // discount brings the real total down to 34700 — trackPurchase must report 34700.
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-DISCOUNT',
+      shippingInCents: 1200,
+      totalInCents: 34700,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
+        { productVariantId: 'pv-2', productName: 'Rose', variantLabel: 'EDT 30ml', priceInCents: 8500, quantity: 1 },
+      ],
+    });
+
+    expect(mockAnalytics.trackPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({ totalInCents: 34700 }),
+    );
+  }));
+
+  it('falls back to push when totalInCents is absent even though items and shippingInCents are present', fakeAsync(() => {
+    const { fixture, mockAnalytics, httpMock } = setup();
+
+    fixture.detectChanges();
+    tick(0);
+
+    httpMock.expectOne(statusUrl()).flush({
+      status: 'COMPLETED',
+      orderNumber: 'ORD-NO-TOTAL',
+      shippingInCents: 1200,
+      items: [
+        { productVariantId: 'pv-1', productName: 'Noir', variantLabel: 'EDP 50ml', priceInCents: 15000, quantity: 2 },
+      ],
+    });
+
+    expect(mockAnalytics.push).toHaveBeenCalledWith({
+      event: 'purchase',
+      ecommerce: { transaction_id: 'order-1', currency: 'PLN' },
+    });
+    expect(mockAnalytics.trackPurchase).not.toHaveBeenCalled();
   }));
 
   it('falls back to push with only transaction_id when response lacks items', fakeAsync(() => {
@@ -503,6 +554,7 @@ describe('CheckoutSuccessComponent — firePurchaseEvent uses backend data', () 
       status: 'COMPLETED',
       orderNumber: 'ORD-006',
       shippingInCents: 500,
+      totalInCents: 10500,
       items: [{ productVariantId: 'pv-real', productName: 'Real', variantLabel: 'real', priceInCents: 10000, quantity: 1 }],
     });
 

@@ -338,6 +338,10 @@ export async function setupAdmin(
               description: 'Numer powiadomienia CPNP (wymagany przez art. 13 rozp. 1223/2009 przed wprowadzeniem do obrotu UE)',
               isVisible: { list: false, show: true, edit: true, filter: false },
             },
+            ufiCode: {
+              description: 'Unikalny Identyfikator Formuły (UFI) — wymagany na etykiecie mieszanin niebezpiecznych zgodnie z rozp. CLP 1272/2008 zał. VIII (stosowany zamiast CPNP dla produktów niekosmetycznych, np. dyfuzorów)',
+              isVisible: { list: false, show: true, edit: true, filter: false },
+            },
             responsiblePersonName: {
               description: 'Nazwa/firma Osoby Odpowiedzialnej (RP) zgodnie z rozp. 1223/2009',
               isVisible: { list: false, show: true, edit: true, filter: false },
@@ -346,16 +350,32 @@ export async function setupAdmin(
           actions: {
             list: {
               after: async (response: any) => {
-                const result = await prisma.$queryRaw<[{ count: number }]>`
-                  SELECT COUNT(*)::int AS count FROM products
-                  WHERE "isActive" = true
-                    AND ("cpnpNotificationNumber" IS NULL OR "responsiblePersonName" IS NULL)
-                `;
-                const count = Number(result[0]?.count ?? 0);
-                if (count > 0) {
+                // Two independent gates so a missing RP name (a data-entry
+                // formality) never masks a missing CPNP/UFI number (an actual
+                // EU market-placement blocker under Art. 13 / CLP Annex VIII).
+                const [cpnpUfiResult, rpResult] = await Promise.all([
+                  prisma.$queryRaw<[{ count: number }]>`
+                    SELECT COUNT(*)::int AS count FROM products
+                    WHERE "isActive" = true
+                      AND "cpnpNotificationNumber" IS NULL AND "ufiCode" IS NULL
+                  `,
+                  prisma.$queryRaw<[{ count: number }]>`
+                    SELECT COUNT(*)::int AS count FROM products
+                    WHERE "isActive" = true AND "responsiblePersonName" IS NULL
+                  `,
+                ]);
+                const cpnpUfiMissing = Number(cpnpUfiResult[0]?.count ?? 0);
+                const rpMissing = Number(rpResult[0]?.count ?? 0);
+
+                if (cpnpUfiMissing > 0) {
                   response.notice = {
-                    message: `CPNP: ${count} aktywn${count === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru powiadomienia CPNP lub nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009)`,
+                    message: `CPNP/UFI: ${cpnpUfiMissing} aktywn${cpnpUfiMissing === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} numeru CPNP lub UFI (art. 13 rozp. 1223/2009 / zał. VIII rozp. CLP)`,
                     type: 'error',
+                  };
+                } else if (rpMissing > 0) {
+                  response.notice = {
+                    message: `Osoba Odpowiedzialna: ${rpMissing} aktywn${rpMissing === 1 ? 'y produkt wymaga' : 'e produkty wymagają'} nazwy Osoby Odpowiedzialnej (art. 13 rozp. 1223/2009)`,
+                    type: 'warning',
                   };
                 }
                 return response;

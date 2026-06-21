@@ -111,13 +111,16 @@ describe('WishlistService', () => {
       );
     });
 
-    it('filters images to primary only', async () => {
+    it('orders images primary-first so a product with no primary image still falls back to one', async () => {
       prisma.wishlistItem.findMany.mockResolvedValue([]);
 
       await service.getItems('user-1');
 
       const call = prisma.wishlistItem.findMany.mock.calls[0][0];
-      expect(call.include.product.include.images.where).toEqual({ isPrimary: true });
+      expect(call.include.product.include.images.orderBy).toEqual([
+        { isPrimary: 'desc' },
+        { sortOrder: 'asc' },
+      ]);
       expect(call.include.product.include.images.take).toBe(1);
     });
 

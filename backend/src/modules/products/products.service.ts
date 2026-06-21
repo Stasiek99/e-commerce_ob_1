@@ -267,7 +267,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     // 5 Millesime → 5 Luxury per round. Skipped when any filter is active.
     // Slim query for ordering, full includes only for the current page.
     if (
-      query.category === 'perfumes' &&
+      query.category === 'perfume' &&
       !query.featured &&
       (!query.sortBy || query.sortBy === 'relevance') &&
       !query.brand && !query.gender?.length && !query.scentFamily?.length &&
@@ -778,14 +778,31 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       await this.storageService.deleteFile('product-images', image.storagePath)
         .catch((err) => this.logger.warn(`Supabase delete failed: ${image.storagePath}`, err));
     }
-    await this.prisma.productImage.delete({ where: { id: imageId } });
+
+    // Re-promotion runs in the same transaction as the delete to avoid a race
+    // with a concurrent addImage() landing in the gap and leaving two primaries
+    // (or, worse, zero) for this product.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productImage.delete({ where: { id: imageId } });
+      if (image.isPrimary) {
+        const next = await tx.productImage.findFirst({
+          where: { productId: image.productId },
+          orderBy: { sortOrder: 'asc' },
+        });
+        if (next) {
+          await tx.productImage.update({ where: { id: next.id }, data: { isPrimary: true } });
+        }
+      }
+    });
+
     return image;
   }
 
   async suggest(q: string): Promise<SuggestResult[]> {
     const term = q.trim();
 
-    const cacheKey = `suggest:${term.toLowerCase()}`;
+    const version = await this.getCacheVersion();
+    const cacheKey = `suggest:v${version}:${term.toLowerCase()}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) return JSON.parse(cached) as SuggestResult[];
@@ -963,7 +980,11 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       ...p,
       avgRating: p.avgRating != null ? Number(p.avgRating) : null,
       variants: p.variants.map(v => {
-        const hasVerifiedHistory = verifiedVariantIds.has(v.id);
+        // compareAtPriceInCents must actually be a higher "was" price — guards against
+        // AdminJS data-entry mistakes (swapped values, stale value after a price hike)
+        // reaching the storefront as a fake discount (Omnibus directive compliance).
+        const isValidPromo = v.compareAtPriceInCents != null && v.compareAtPriceInCents > v.priceInCents;
+        const hasVerifiedHistory = isValidPromo && verifiedVariantIds.has(v.id);
         return {
           ...v,
           compareAtPriceInCents: hasVerifiedHistory ? v.compareAtPriceInCents : null,

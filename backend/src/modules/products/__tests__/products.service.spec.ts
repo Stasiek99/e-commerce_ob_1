@@ -76,6 +76,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
     },
     productVariant: { updateMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
     productVariantPriceHistory: { findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), create: jest.fn() },
+    productImage: { findUnique: jest.fn(), findFirst: jest.fn(), delete: jest.fn(), update: jest.fn() },
     wishlistItem: { findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn(),
     $transaction: jest.fn(),
@@ -103,7 +104,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: { queueOrderConfirmation: jest.fn(), sendBackInStock: jest.fn().mockResolvedValue(undefined) } },
-        { provide: StorageService, useValue: { delete: jest.fn() } },
+        { provide: StorageService, useValue: { delete: jest.fn(), deleteFile: jest.fn().mockResolvedValue(undefined) } },
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('redis://localhost:6379') },
@@ -576,6 +577,86 @@ describe('ProductsService — slug P2002 conflict handling', () => {
     });
   });
 
+  // --- removeImage() ---
+  // FIX: deleting the current primary image used to leave the product with
+  // zero isPrimary rows — cart/wishlist/review/email reads that hard-filter
+  // on isPrimary: true would then render no image at all, even though other
+  // images still existed. removeImage() now promotes the next image by
+  // sortOrder to isPrimary inside the same transaction as the delete.
+
+  describe('removeImage()', () => {
+    const IMAGE_ID = 'img-uuid-1';
+    const OTHER_IMAGE_ID = 'img-uuid-2';
+
+    const mockTx = {
+      productImage: { delete: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+    };
+
+    beforeEach(() => {
+      mockPrisma.$transaction.mockImplementation((fn: any) => fn(mockTx));
+    });
+
+    it('throws NotFoundException when the image does not exist', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue(null);
+
+      await expect(service.removeImage(IMAGE_ID)).rejects.toThrow(NotFoundException);
+    });
+
+    it('promotes the next image by sortOrder to primary when the deleted image was primary', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue({
+        id: IMAGE_ID,
+        productId: PRODUCT_ID,
+        storagePath: 'products/img1.jpg',
+        isPrimary: true,
+        sortOrder: 0,
+      });
+      mockTx.productImage.findFirst.mockResolvedValue({ id: OTHER_IMAGE_ID, sortOrder: 1, isPrimary: false });
+
+      await service.removeImage(IMAGE_ID);
+
+      expect(mockTx.productImage.delete).toHaveBeenCalledWith({ where: { id: IMAGE_ID } });
+      expect(mockTx.productImage.findFirst).toHaveBeenCalledWith({
+        where: { productId: PRODUCT_ID },
+        orderBy: { sortOrder: 'asc' },
+      });
+      expect(mockTx.productImage.update).toHaveBeenCalledWith({
+        where: { id: OTHER_IMAGE_ID },
+        data: { isPrimary: true },
+      });
+    });
+
+    it('does not touch other images when the deleted image was not primary', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue({
+        id: IMAGE_ID,
+        productId: PRODUCT_ID,
+        storagePath: 'products/img2.jpg',
+        isPrimary: false,
+        sortOrder: 1,
+      });
+
+      await service.removeImage(IMAGE_ID);
+
+      expect(mockTx.productImage.delete).toHaveBeenCalledWith({ where: { id: IMAGE_ID } });
+      expect(mockTx.productImage.findFirst).not.toHaveBeenCalled();
+      expect(mockTx.productImage.update).not.toHaveBeenCalled();
+    });
+
+    it('does not promote anything when the deleted primary image was the last one', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue({
+        id: IMAGE_ID,
+        productId: PRODUCT_ID,
+        storagePath: 'products/img1.jpg',
+        isPrimary: true,
+        sortOrder: 0,
+      });
+      mockTx.productImage.findFirst.mockResolvedValue(null);
+
+      await service.removeImage(IMAGE_ID);
+
+      expect(mockTx.productImage.update).not.toHaveBeenCalled();
+    });
+  });
+
   // --- category filter — recursive descendant resolution ---
   // FIX: the category filter previously only descended one level of
   // `children`, silently dropping products assigned to grandchild (or
@@ -628,6 +709,174 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       expect(callArg.where.category).toEqual({
         slug: { in: ['perfumy', 'perfumy-meskie', 'perfumy-meskie-nisza'] },
       });
+    });
+  });
+
+  describe('attachOmnibusData()', () => {
+    // FIX: AdminJS edits ProductVariant directly with no cross-field check, so a
+    // compareAtPriceInCents that doesn't actually exceed priceInCents (swapped values,
+    // or stale after a later price hike) must never be displayed as a real discount.
+    const baseVariant = { id: VARIANT_ID, priceInCents: 15000 };
+
+    it('suppresses compareAtPriceInCents and lowestPrice30dInCents when compareAtPriceInCents is below priceInCents', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([{ variantId: VARIANT_ID }]);
+      mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
+        { variantId: VARIANT_ID, _min: { priceInCents: 12000 } },
+      ]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 12000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBeNull();
+      expect((result.variants[0] as any).lowestPrice30dInCents).toBeNull();
+    });
+
+    it('suppresses promo fields when compareAtPriceInCents equals priceInCents', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([{ variantId: VARIANT_ID }]);
+      mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
+        { variantId: VARIANT_ID, _min: { priceInCents: 15000 } },
+      ]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 15000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBeNull();
+    });
+
+    it('keeps compareAtPriceInCents and lowestPrice30dInCents when the promo is genuinely lower and history is verified', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([{ variantId: VARIANT_ID }]);
+      mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
+        { variantId: VARIANT_ID, _min: { priceInCents: 12000 } },
+      ]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 18000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBe(18000);
+      expect((result.variants[0] as any).lowestPrice30dInCents).toBe(12000);
+    });
+
+    it('suppresses promo fields when price history has not yet accumulated 30 days, even with a valid compareAtPriceInCents', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 18000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBeNull();
+      expect(mockPrisma.productVariantPriceHistory.groupBy).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- suggest() — cache key must embed product_cache_v ---
+  // FIX: suggest() was the one cached read path that didn't embed the product
+  // cache version, so admin edits never invalidated stale autocomplete results.
+
+  describe('suggest() — cache version key', () => {
+    const baseProduct = { id: 'p1', name: 'Chanel No 5', slug: 'chanel-no-5', images: [], variants: [] };
+
+    it('embeds the current product_cache_v in the cache lookup and write key', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '3' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: 'p1' }]);
+      mockPrisma.product.findMany.mockResolvedValue([baseProduct]);
+
+      await service.suggest('chanel');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v3:chanel');
+      expect(mockRedis.setex).toHaveBeenCalledWith('suggest:v3:chanel', 600, expect.any(String));
+    });
+
+    it('returns the cached result without querying the DB on a version-matched hit', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '2' : key === 'suggest:v2:chanel' ? JSON.stringify([baseProduct]) : null),
+      );
+
+      const result = await service.suggest('chanel');
+
+      expect(result).toEqual([baseProduct]);
+      expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('misses a cache entry written under a stale version after invalidateProductCaches bumps it', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '1' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: 'p1' }]);
+      mockPrisma.product.findMany.mockResolvedValue([baseProduct]);
+      await service.suggest('chanel');
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v1:chanel');
+
+      jest.clearAllMocks();
+      // Simulates invalidateProductCaches() incrementing product_cache_v after a product edit.
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '2' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: 'p1' }]);
+      mockPrisma.product.findMany.mockResolvedValue([baseProduct]);
+      await service.suggest('chanel');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v2:chanel');
+      expect(mockRedis.get).not.toHaveBeenCalledWith('suggest:v1:chanel');
+    });
+
+    it('lowercases the search term in the cache key', async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(key === 'product_cache_v' ? '0' : null),
+      );
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+
+      await service.suggest('CHANEL');
+
+      expect(mockRedis.get).toHaveBeenCalledWith('suggest:v0:chanel');
+    });
+  });
+
+  // --- findAll() — perfume category curated Millesime/Luxury interleaving ---
+  // FIX: the interleaving block was gated on the plural 'perfumes', which never
+  // matches the real seeded slug 'perfume' — execution always fell through to
+  // plain sortOrder ordering. Regression-guards the real slug and the 5-5
+  // chunk pattern itself, which no prior test exercised.
+
+  describe('findAll() — perfume category curated Millesime/Luxury interleaving', () => {
+    const slimRow = (id: string, line: string) => ({ id, line, category: { slug: 'perfume' } });
+    const fullRow = (id: string) => ({ id, variants: [], avgRating: null });
+
+    it('interleaves Millesime/Luxury in 5-5 chunks for the real "perfume" slug', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockPrisma.$queryRaw.mockResolvedValueOnce([{ slug: 'perfume' }]); // resolveCategorySlugs
+
+      const millesime = Array.from({ length: 7 }, (_, i) => slimRow(`m${i + 1}`, 'Millesime'));
+      const luxury = Array.from({ length: 7 }, (_, i) => slimRow(`l${i + 1}`, 'Luxury'));
+      mockPrisma.product.findMany.mockResolvedValueOnce([...millesime, ...luxury]); // slim query
+      mockPrisma.product.findMany.mockResolvedValueOnce(
+        [...millesime, ...luxury].map((p) => fullRow(p.id)),
+      ); // full page query
+
+      const result = await service.findAll({ category: 'perfume' });
+
+      expect(result.data.map((p: any) => p.id)).toEqual([
+        'm1', 'm2', 'm3', 'm4', 'm5', 'l1', 'l2', 'l3', 'l4', 'l5', 'm6', 'm7', 'l6', 'l7',
+      ]);
+      expect(result.meta.total).toBe(14);
+    });
+
+    it('does not apply curated interleaving when a filter (e.g. brand) is active', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockPrisma.$queryRaw.mockResolvedValueOnce([{ slug: 'perfume' }]); // resolveCategorySlugs
+      mockPrisma.product.findMany.mockResolvedValue([]);
+      mockPrisma.product.count.mockResolvedValue(0);
+
+      await service.findAll({ category: 'perfume', brand: 'Chanel' });
+
+      // Plain path queries once with skip/take, unlike the interleaving path's two-pass slim+full query.
+      expect(mockPrisma.product.findMany).toHaveBeenCalledTimes(1);
+      const callArg = mockPrisma.product.findMany.mock.calls[0][0];
+      expect(callArg.select).not.toEqual({ id: true, line: true, category: { select: { slug: true } } });
     });
   });
 });

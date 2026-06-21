@@ -152,6 +152,73 @@ describe('CategoriesService', () => {
     });
   });
 
+  // ── findBySlug — arbitrary-depth children, same as findAll ───────────────
+  // Invariant: findBySlug() must not silently cap `children` at depth 1. It
+  // previously used a Prisma `include: { children: true, parent: true }`,
+  // which only nests one level — the exact bug class findAll() above was
+  // already fixed for. It now reuses the same flat-query tree assembly.
+
+  describe('findBySlug — arbitrary-depth children', () => {
+    it('throws NotFoundException when no category matches the slug', async () => {
+      prisma.category.findMany.mockResolvedValue([]);
+
+      await expect(service.findBySlug('missing')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns an empty children array for a leaf category with no children', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'a', name: 'A', slug: 'a', parentId: null },
+      ]);
+
+      const result = await service.findBySlug('a');
+
+      expect(result.children).toEqual([]);
+      expect(result.parent).toBeNull();
+    });
+
+    it('nests grandchildren under children — regression guard for the depth-1 cap', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'l1', name: 'L1', slug: 'l1', parentId: null },
+        { id: 'l2', name: 'L2', slug: 'l2', parentId: 'l1' },
+        { id: 'l3', name: 'L3', slug: 'l3', parentId: 'l2' },
+        { id: 'l4', name: 'L4', slug: 'l4', parentId: 'l3' },
+      ]);
+
+      const result = await service.findBySlug('l1');
+
+      const l2 = result.children[0];
+      const l3 = l2.children[0];
+      const l4 = l3.children[0];
+      expect(l2.id).toBe('l2');
+      expect(l3.id).toBe('l3');
+      expect(l4).toMatchObject({ id: 'l4', children: [] });
+    });
+
+    it('attaches the immediate parent as a flat object, without the parent\'s own children array', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'parent', name: 'Parent', slug: 'parent', parentId: null },
+        { id: 'child', name: 'Child', slug: 'child', parentId: 'parent' },
+      ]);
+
+      const result = await service.findBySlug('child');
+
+      expect(result.parent).toMatchObject({ id: 'parent', slug: 'parent' });
+      expect(result.parent?.children).toBeUndefined();
+    });
+
+    it('fetches the whole table flat instead of scoping by slug or parentId', async () => {
+      prisma.category.findMany.mockResolvedValue([
+        { id: 'a', name: 'A', slug: 'a', parentId: null },
+      ]);
+
+      await service.findBySlug('a');
+
+      const callArg = prisma.category.findMany.mock.calls[0][0];
+      expect(callArg).not.toHaveProperty('where');
+      expect(callArg).toEqual(expect.objectContaining({ orderBy: { name: 'asc' } }));
+    });
+  });
+
   // ── remove — pre-checks against FK violation ─────────────────────────────
   // Invariant: remove() must check for assigned products and child categories
   // before calling prisma.category.delete. Without the pre-check Postgres

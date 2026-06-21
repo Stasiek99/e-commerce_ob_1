@@ -27,6 +27,16 @@ const OUT_OF_STOCK_PRODUCT: ProductCardData = {
   variants: [{ id: 'v-1', label: '50ml', priceInCents: 9900, stock: 0 }],
 };
 
+// Backend always orders variants cheapest-first, so v-cheap (sold out) is
+// variants[0] and v-pricier (in stock) is variants[1].
+const CHEAPEST_SOLD_OUT_PRODUCT: ProductCardData = {
+  ...PRODUCT,
+  variants: [
+    { id: 'v-cheap', label: '30ml', priceInCents: 4900, stock: 0 },
+    { id: 'v-pricier', label: '100ml', priceInCents: 14900, stock: 5 },
+  ],
+};
+
 function setup(product: ProductCardData = PRODUCT) {
   const mockCart      = { addItem: jest.fn(), refreshFromServer: jest.fn() };
   const mockWishlist  = { isInWishlist: jest.fn().mockReturnValue(false), toggle: jest.fn() };
@@ -112,6 +122,44 @@ describe('ProductCardComponent — onAddToCart error handling', () => {
     component.onAddToCart(new MouseEvent('click'));
 
     expect(mockCart.addItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductCardComponent — cartVariant (sold-out cheapest variant)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('is not disabled when only the cheapest variant is out of stock and a pricier one has stock', () => {
+    const { component } = setup(CHEAPEST_SOLD_OUT_PRODUCT);
+
+    expect(component.outOfStock).toBe(false);
+  });
+
+  it('adds the in-stock pricier variant to cart, not the sold-out cheapest one', () => {
+    const { component, mockCart } = setup(CHEAPEST_SOLD_OUT_PRODUCT);
+    mockCart.addItem.mockReturnValue(of({ items: [] }));
+
+    component.onAddToCart(new MouseEvent('click'));
+
+    expect(mockCart.addItem).toHaveBeenCalledWith('v-pricier', 1);
+    expect(mockCart.addItem).not.toHaveBeenCalledWith('v-cheap', 1);
+  });
+
+  it('cartVariant returns the first variant with stock > 0', () => {
+    const { component } = setup(CHEAPEST_SOLD_OUT_PRODUCT);
+
+    expect(component.cartVariant?.id).toBe('v-pricier');
+  });
+
+  it('cartVariant falls back to firstVariant when every variant is out of stock', () => {
+    const { component } = setup(OUT_OF_STOCK_PRODUCT);
+
+    expect(component.cartVariant?.id).toBe(component.firstVariant?.id);
+  });
+
+  it('still displays the cheapest variant price regardless of stock', () => {
+    const { component } = setup(CHEAPEST_SOLD_OUT_PRODUCT);
+
+    expect(component.firstVariant?.id).toBe('v-cheap');
   });
 });
 

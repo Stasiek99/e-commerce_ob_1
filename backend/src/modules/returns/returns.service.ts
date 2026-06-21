@@ -299,11 +299,11 @@ export class ReturnsService {
       );
     }
 
-    // Fetch order status and all line items so we can compute the partial refund.
+    // Fetch order status/discount and all line items so we can compute the partial refund.
     const [order, orderItems] = await Promise.all([
       this.prisma.order.findUniqueOrThrow({
         where: { id: req.orderId },
-        select: { status: true },
+        select: { status: true, couponId: true, discountInCents: true, itemsTotalInCents: true },
       }),
       this.prisma.orderItem.findMany({
         where: { orderId: req.orderId },
@@ -314,6 +314,7 @@ export class ReturnsService {
           snapshotPrice: true,
           quantity: true,
           cancelledQuantity: true,
+          cancelledDiscountInCents: true,
         },
       }),
     ]);
@@ -326,6 +327,7 @@ export class ReturnsService {
       productVariantId: string;
       quantity: number;
       priceInCents: number;
+      discountAppliedInCents: number;
     }> = [];
 
     for (const ri of returnedItems) {
@@ -346,6 +348,7 @@ export class ReturnsService {
         productVariantId: orderItem.productVariantId,
         quantity: refundQty,
         priceInCents: orderItem.snapshotPrice,
+        discountAppliedInCents: 0,
       });
     }
 
@@ -355,6 +358,16 @@ export class ReturnsService {
         'All returned items may already be refunded or the product names do not match order line items.',
       );
     }
+
+    // Shared with OrdersService.cancelItemsByUser() so both refund-issuing flows
+    // compute the identical discount-prorated price for the identical item/quantity —
+    // otherwise a coupon-discounted order refunded through this admin path overpays
+    // the customer the full pre-discount price.
+    const proratedRefundItems = await this.payments.prorateDiscountForRefundItems(
+      order,
+      orderItems,
+      refundItems,
+    );
 
     // A return request can sit APPROVED for days awaiting the customer's physical
     // return shipment. If Stripe opens a dispute in that window, handleDisputeCreated
@@ -379,7 +392,7 @@ export class ReturnsService {
     // Throws on Stripe error — intentionally propagated so the return stays APPROVED.
     await this.payments.partialRefund(
       req.orderId,
-      refundItems,
+      proratedRefundItems,
       order.status as OrderStatus,
       'RETURN_APPROVAL',
     );
