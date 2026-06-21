@@ -754,12 +754,16 @@ export class CheckoutPageComponent implements OnInit {
     ).subscribe((rates) => {
       if (!rates?.length) return;
       const priceByCode = new Map(rates.map((r) => [r.carrier, r.priceInCents]));
-      const updated = this.carriers().map((c) => ({ ...c, price: priceByCode.get(c.code) ?? c.price }));
+      // Only carriers present in the live response stay selectable — a carrier
+      // an admin deactivated has no active ShippingRate row and is absent here,
+      // so it must drop out of the list rather than linger at its stale fallback price.
+      const updated = this.carriers()
+        .filter((c) => priceByCode.has(c.code))
+        .map((c) => ({ ...c, price: priceByCode.get(c.code)! }));
       this.carriers.set(updated);
       const sel = this.selectedCarrier();
       if (sel) {
-        const match = updated.find((c) => c.code === sel.code);
-        if (match) this.selectedCarrier.set(match);
+        this.selectedCarrier.set(updated.find((c) => c.code === sel.code) ?? null);
       }
     });
 

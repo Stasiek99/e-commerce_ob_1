@@ -94,15 +94,36 @@ describe('CheckoutPageComponent — live shipping rates sync (GET /shipping/rate
     expect(byCode('GLS')).toBe(2222);
   });
 
-  // ── carrier absent from the live response keeps its existing price ───
+  // ── carrier absent from the live response is deactivated, not stale ──
 
-  it('leaves a carrier price untouched when it is absent from the live rates response', () => {
+  it('removes a carrier from the list when it is absent from the live rates response', () => {
     const { component, http } = setup();
 
     http.expectOne(RATES_URL).flush([{ carrier: 'DHL', priceInCents: 2599 }]);
 
-    const gls = component.carriers().find((c) => c.code === 'GLS');
-    expect(gls?.price).toBe(1799); // unchanged fallback value
+    expect(component.carriers().find((c) => c.code === 'GLS')).toBeUndefined();
+    expect(component.carriers().map((c) => c.code)).toEqual(['DHL']);
+  });
+
+  it('clears selectedCarrier when the previously-selected carrier is absent from the live rates response', () => {
+    const { component, http } = setup();
+
+    component.selectCarrier(component.carriers().find((c) => c.code === 'GLS')!);
+    expect(component.selectedCarrier()).not.toBeNull();
+
+    http.expectOne(RATES_URL).flush([{ carrier: 'DHL', priceInCents: 2599 }]);
+
+    expect(component.selectedCarrier()).toBeNull();
+  });
+
+  it('keeps selectedCarrier set when it is still present in the live rates response', () => {
+    const { component, http } = setup();
+
+    component.selectCarrier(component.carriers().find((c) => c.code === 'DHL')!);
+
+    http.expectOne(RATES_URL).flush([{ carrier: 'DHL', priceInCents: 2599 }]);
+
+    expect(component.selectedCarrier()?.code).toBe('DHL');
   });
 
   // ── selectedCarrier re-synced if chosen before the fetch resolves ─────
