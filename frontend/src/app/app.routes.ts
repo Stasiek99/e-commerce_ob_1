@@ -128,6 +128,22 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'auth/magic-link',
+    title: 'Logowanie linkiem',
+    loadComponent: () =>
+      import('./features/auth/magic-link/magic-link.component').then(
+        (m) => m.MagicLinkComponent,
+      ),
+  },
+  {
+    path: 'auth/magic-login',
+    title: 'Weryfikacja linku logowania',
+    loadComponent: () =>
+      import('./features/auth/magic-login/magic-login.component').then(
+        (m) => m.MagicLoginComponent,
+      ),
+  },
+  {
     path: 'account',
     canActivate: [authGuard],
     children: [

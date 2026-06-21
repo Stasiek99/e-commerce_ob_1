@@ -965,6 +965,38 @@ describe('ShippingService', () => {
       expect(storage.getShippingLabelSignedUrl).not.toHaveBeenCalled();
       expect(result.labelUrl).toBeNull();
     });
+
+    it('self-heals the orphaned labelUrl when the Supabase object is already gone', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        id: 'ship-orphan',
+        labelUrl: 'labels/inpost-orphan.pdf',
+        trackingNumber: 'TRK-ORPHAN',
+      });
+      storage.getShippingLabelSignedUrl.mockResolvedValue(null);
+      prisma.shipment.update.mockResolvedValue({});
+
+      const result = await service.getLabel('order-1');
+
+      expect(result.labelUrl).toBeNull();
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'ship-orphan' },
+        data: { labelUrl: null },
+      });
+    });
+
+    it('still returns a null labelUrl when the self-heal update itself fails', async () => {
+      prisma.shipment.findUnique.mockResolvedValue({
+        id: 'ship-orphan',
+        labelUrl: 'labels/inpost-orphan.pdf',
+        trackingNumber: 'TRK-ORPHAN',
+      });
+      storage.getShippingLabelSignedUrl.mockResolvedValue(null);
+      prisma.shipment.update.mockRejectedValue(new Error('DB unreachable'));
+
+      const result = await service.getLabel('order-1');
+
+      expect(result.labelUrl).toBeNull();
+    });
   });
 
   // ─── cleanupStaleShippingLabels cron ──────────────────────────────────────────
@@ -1027,6 +1059,37 @@ describe('ShippingService', () => {
       await service.cleanupStaleShippingLabels();
 
       expect(storage.deleteShippingLabel).not.toHaveBeenCalled();
+    });
+
+    it('skips carrier-hosted DHL/DPD URLs without calling deleteShippingLabel or nulling labelUrl', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-dhl', labelUrl: 'https://dhl.example.com/labels/external-123.pdf' },
+        { id: 'ship-dpd', labelUrl: 'https://dpd.example.com/labels/external-456.pdf' },
+      ]);
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(storage.deleteShippingLabel).not.toHaveBeenCalled();
+      expect(prisma.shipment.update).not.toHaveBeenCalled();
+    });
+
+    it('processes a real Supabase path alongside a skipped carrier-hosted URL in the same batch', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { id: 'ship-dhl', labelUrl: 'https://dhl.example.com/labels/external-123.pdf' },
+        { id: 'ship-inpost', labelUrl: 'labels/inpost-111.pdf' },
+      ]);
+      storage.deleteShippingLabel.mockResolvedValue(undefined);
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.cleanupStaleShippingLabels();
+
+      expect(storage.deleteShippingLabel).toHaveBeenCalledTimes(1);
+      expect(storage.deleteShippingLabel).toHaveBeenCalledWith('labels/inpost-111.pdf');
+      expect(prisma.shipment.update).toHaveBeenCalledTimes(1);
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'ship-inpost' },
+        data: { labelUrl: null },
+      });
     });
 
     it('continues processing remaining shipments when one deletion fails', async () => {

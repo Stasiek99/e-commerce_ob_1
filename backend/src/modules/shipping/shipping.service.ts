@@ -343,6 +343,14 @@ export class ShippingService {
       !shipment.labelUrl.startsWith('mock-label-')
     ) {
       signedLabelUrl = await this.storage.getShippingLabelSignedUrl(shipment.labelUrl);
+      if (signedLabelUrl === null) {
+        // Object already gone from Supabase (orphaned by a crash mid-cleanup) —
+        // self-heal the stale reference instead of returning it as still-valid.
+        await this.prisma.shipment.update({
+          where: { id: shipment.id },
+          data: { labelUrl: null },
+        }).catch((err) => this.logger.warn(`Failed to self-heal orphaned labelUrl for shipment ${shipment.id}: ${(err as Error).message}`));
+      }
     }
 
     return { labelUrl: signedLabelUrl, trackingNumber: shipment.trackingNumber };
@@ -375,7 +383,11 @@ export class ShippingService {
     let failed = 0;
 
     for (const shipment of staleShipments) {
-      if (!shipment.labelUrl || shipment.labelUrl.startsWith('mock-label-')) continue;
+      // Carrier-hosted DHL/DPD URLs are never Supabase object keys — passing one to
+      // deleteShippingLabel() is a silent no-op (Supabase's remove() doesn't error on
+      // a non-matching key), so skip them rather than nulling labelUrl with nothing
+      // actually deleted. Retention of those URLs is the carrier's own policy.
+      if (!shipment.labelUrl || shipment.labelUrl.startsWith('mock-label-') || isCarrierHostedUrl(shipment.labelUrl)) continue;
       try {
         await this.storage.deleteShippingLabel(shipment.labelUrl);
         await this.prisma.shipment.update({

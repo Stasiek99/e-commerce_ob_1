@@ -177,6 +177,24 @@ export class AuthService {
     );
   }
 
+  requestMagicLink(email: string) {
+    return this.http.post(
+      `${environment.apiUrl}/auth/magic-link`,
+      { email },
+      { withCredentials: true },
+    );
+  }
+
+  verifyMagicLink(token: string) {
+    return this.http
+      .post<TokensResponse>(
+        `${environment.apiUrl}/auth/magic-link/verify`,
+        { token },
+        { withCredentials: true },
+      )
+      .pipe(tap((res) => this.setToken(res.accessToken)));
+  }
+
   loadCurrentUser() {
     if (!this._accessToken()) return;
     this.http

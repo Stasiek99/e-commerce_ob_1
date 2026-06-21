@@ -51,6 +51,10 @@ import { ToastService } from '../../../core/services/toast.service';
           Zaloguj przez Google
         </button>
 
+        <a tuiButton appearance="secondary" type="button" [routerLink]="['/auth/magic-link']" class="btn-full">
+          Zaloguj się linkiem e-mail
+        </a>
+
         <p class="auth-link">
           Nie masz konta? <a [routerLink]="['/auth/register']" [queryParams]="returnTo ? { returnTo } : {}">Zarejestruj się</a>
         </p>

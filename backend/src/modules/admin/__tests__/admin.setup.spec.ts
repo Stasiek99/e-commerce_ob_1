@@ -1,5 +1,11 @@
 import * as bcrypt from 'bcrypt';
-import { buildAdminAuthenticator, isAdminAuthenticated, regenerateSessionOnLogin } from '../admin.setup';
+import {
+  buildAdminAuthenticator,
+  isAdminAuthenticated,
+  regenerateSessionOnLogin,
+  isGenerateLabelVisible,
+  REVIEW_EDIT_PROPERTIES,
+} from '../admin.setup';
 
 jest.mock('bcrypt');
 
@@ -172,5 +178,37 @@ describe('regenerateSessionOnLogin', () => {
 
     expect(next).toHaveBeenCalledWith(error);
     expect(session._regenerated).toBeUndefined();
+  });
+});
+
+describe('isGenerateLabelVisible', () => {
+  it.each(['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED', 'DELIVERED', 'SHIPPED'])(
+    'returns false for %s orders, matching shippingService.generateLabel()\'s allowed-status guard',
+    (status) => {
+      expect(isGenerateLabelVisible(status)).toBe(false);
+    },
+  );
+
+  it.each(['PAID', 'PROCESSING'])(
+    'returns true for %s orders, the only statuses generateLabel() actually accepts',
+    (status) => {
+      expect(isGenerateLabelVisible(status)).toBe(true);
+    },
+  );
+
+  it('returns true when status is undefined', () => {
+    expect(isGenerateLabelVisible(undefined)).toBe(true);
+  });
+});
+
+describe('REVIEW_EDIT_PROPERTIES', () => {
+  it('whitelists only adminReply, keeping status/rating/productId out of the plain Edit form', () => {
+    expect(REVIEW_EDIT_PROPERTIES).toEqual(['adminReply']);
+  });
+
+  it('excludes status, so rating/productId/status changes cannot bypass updateReviewStats()', () => {
+    expect(REVIEW_EDIT_PROPERTIES).not.toContain('status');
+    expect(REVIEW_EDIT_PROPERTIES).not.toContain('rating');
+    expect(REVIEW_EDIT_PROPERTIES).not.toContain('productId');
   });
 });

@@ -220,6 +220,58 @@ describe('AuthService — BroadcastChannel multi-tab logout', () => {
   });
 });
 
+// ── magic link ───────────────────────────────────────────────────────────
+
+const MAGIC_LINK_URL = `${environment.apiUrl}/auth/magic-link`;
+const MAGIC_LINK_VERIFY_URL = `${environment.apiUrl}/auth/magic-link/verify`;
+
+describe('AuthService — magic link', () => {
+  let service: AuthService;
+  let http: HttpTestingController;
+
+  beforeEach(() => {
+    // The preceding BroadcastChannel describe block deletes the global stub in
+    // its afterEach — restore it so AuthService's constructor doesn't throw here too.
+    (global as any).BroadcastChannel = jest.fn(() => ({ postMessage: noop, addEventListener: noop, close: noop }));
+    ({ service, http } = setup());
+  });
+
+  afterEach(() => http.verify());
+
+  describe('requestMagicLink()', () => {
+    it('POSTs the email to /auth/magic-link', () => {
+      service.requestMagicLink('user@example.com').subscribe();
+
+      const req = http.expectOne(MAGIC_LINK_URL);
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body).toEqual({ email: 'user@example.com' });
+      req.flush(null);
+    });
+  });
+
+  describe('verifyMagicLink()', () => {
+    it('POSTs the token to /auth/magic-link/verify', () => {
+      service.verifyMagicLink('raw-token').subscribe();
+
+      const req = http.expectOne(MAGIC_LINK_VERIFY_URL);
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body).toEqual({ token: 'raw-token' });
+      req.flush(MOCK_TOKEN);
+      http.expectOne(ME_URL).flush(MOCK_USER);
+    });
+
+    it('stores the returned access token and logs the user in, same as login()', () => {
+      service.verifyMagicLink('raw-token').subscribe();
+
+      http.expectOne(MAGIC_LINK_VERIFY_URL).flush({ accessToken: 'magic-tok' });
+      http.expectOne(ME_URL).flush(MOCK_USER);
+
+      expect(service.getAccessToken()).toBe('magic-tok');
+      expect(service.isAuthenticated()).toBe(true);
+    });
+  });
+});
+
 // ── isAdmin ──────────────────────────────────────────────────────────────
 
 describe('AuthService — isAdmin', () => {

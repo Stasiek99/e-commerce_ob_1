@@ -24,6 +24,10 @@ function formatPhone(raw: string): string {
   }
 }
 
+// Mirrors backend ChangePasswordDto's @Matches pattern so invalid passwords
+// are caught client-side instead of round-tripping to the server.
+const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+
 @Component({
   selector: 'app-profile',
   standalone: true,
@@ -143,6 +147,82 @@ function formatPhone(raw: string): string {
         </form>
       }
 
+      <!-- ── Account security ──────────────────────────── -->
+      <div tuiCardLarge class="security-card">
+        <header tuiHeader>
+          <h2 tuiTitle>Bezpieczeństwo konta</h2>
+        </header>
+
+        @if (!changingEmail()) {
+          <div class="info-row">
+            <span class="info-label">Adres e-mail</span>
+            <button tuiButton appearance="secondary" size="s" type="button" (click)="startEmailChange()">
+              Zmień e-mail
+            </button>
+          </div>
+        } @else {
+          <form tuiForm [formGroup]="emailForm" (ngSubmit)="submitEmailChange()" class="security-form">
+            <tui-textfield>
+              <label tuiLabel>Nowy adres e-mail</label>
+              <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
+            </tui-textfield>
+            <tui-textfield>
+              <label tuiLabel>Aktualne hasło</label>
+              <input tuiTextfield type="password" formControlName="currentPassword" autocomplete="current-password" />
+            </tui-textfield>
+            <p class="info-text">
+              Na nowy adres wyślemy link potwierdzający. Zmiana zacznie działać po jego kliknięciu.
+            </p>
+            <div class="form-actions">
+              <button tuiButton appearance="secondary" size="s" type="button" [disabled]="emailLoading()" (click)="cancelEmailChange()">
+                Anuluj
+              </button>
+              <button tuiButton size="s" type="submit" [disabled]="emailLoading() || emailForm.invalid">
+                {{ emailLoading() ? 'Wysyłanie…' : 'Wyślij link potwierdzający' }}
+              </button>
+            </div>
+          </form>
+        }
+
+        @if (!changingPassword()) {
+          <div class="info-row">
+            <span class="info-label">Hasło</span>
+            <button tuiButton appearance="secondary" size="s" type="button" (click)="startPasswordChange()">
+              Zmień hasło
+            </button>
+          </div>
+        } @else {
+          <form tuiForm [formGroup]="passwordForm" (ngSubmit)="submitPasswordChange()" class="security-form">
+            <tui-textfield>
+              <label tuiLabel>Aktualne hasło</label>
+              <input tuiTextfield type="password" formControlName="currentPassword" autocomplete="current-password" />
+            </tui-textfield>
+            <tui-textfield>
+              <label tuiLabel>Nowe hasło</label>
+              <input tuiTextfield type="password" formControlName="newPassword" autocomplete="new-password" />
+            </tui-textfield>
+            @if (passwordError(); as msg) {
+              <p class="field-error" role="alert">{{ msg }}</p>
+            }
+            <tui-textfield>
+              <label tuiLabel>Powtórz nowe hasło</label>
+              <input tuiTextfield type="password" formControlName="confirmNewPassword" autocomplete="new-password" />
+            </tui-textfield>
+            @if (passwordForm.errors?.['mismatch'] && passwordForm.controls.confirmNewPassword.dirty) {
+              <p class="field-error" role="alert">Hasła nie są identyczne</p>
+            }
+            <div class="form-actions">
+              <button tuiButton appearance="secondary" size="s" type="button" [disabled]="passwordLoading()" (click)="cancelPasswordChange()">
+                Anuluj
+              </button>
+              <button tuiButton size="s" type="submit" [disabled]="passwordLoading() || passwordForm.invalid">
+                {{ passwordLoading() ? 'Zapisywanie…' : 'Zmień hasło' }}
+              </button>
+            </div>
+          </form>
+        }
+      </div>
+
       <!-- ── Danger zone ─────────────────────────────────── -->
       <div class="danger-zone">
         <h3 class="danger-title">Strefa niebezpieczna</h3>
@@ -228,6 +308,10 @@ function formatPhone(raw: string): string {
 
     .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
 
+    .security-card { display: block; border: 1px solid var(--color-border) !important; margin-top: 24px; }
+    .security-form { display: flex; flex-direction: column; gap: 4px; padding: 12px 0; }
+    .security-form .info-text { font-size: 13px; color: var(--color-secondary); margin: 0; line-height: 1.5; }
+
     .danger-zone { margin-top: 40px; }
     .danger-title { font-size: 14px; font-weight: 600; color: var(--tui-status-negative); margin-bottom: 12px; }
     .danger-card {
@@ -261,6 +345,11 @@ export class ProfileComponent {
   readonly confirmingDelete = signal(false);
   readonly deleting = signal(false);
 
+  readonly changingEmail = signal(false);
+  readonly emailLoading = signal(false);
+  readonly changingPassword = signal(false);
+  readonly passwordLoading = signal(false);
+
   readonly countries: readonly TuiCountryIsoCode[] = [
     'PL',
     ...getCountries().filter((c) => c !== 'PL'),
@@ -275,6 +364,20 @@ export class ProfileComponent {
     phone:     [this.auth.currentUser()?.phone     ?? '', [phoneValidator]],
     nip:       [this.auth.currentUser()?.nip       ?? '', [Validators.pattern(/^\d{10}$/)]],
   });
+
+  readonly emailForm = this.fb.group({
+    email: ['', [Validators.required, Validators.email]],
+    currentPassword: ['', Validators.required],
+  });
+
+  readonly passwordForm = this.fb.group(
+    {
+      currentPassword: ['', Validators.required],
+      newPassword: ['', [Validators.required, Validators.minLength(8), Validators.pattern(PASSWORD_RE)]],
+      confirmNewPassword: ['', Validators.required],
+    },
+    { validators: (g) => g.get('newPassword')!.value === g.get('confirmNewPassword')!.value ? null : { mismatch: true } },
+  );
 
   back(): void { this.location.back(); }
 
@@ -296,6 +399,68 @@ export class ProfileComponent {
     if (ctrl.errors?.['nameInvalid']) return 'Tylko litery, myślniki i apostrofy';
     if (ctrl.errors?.['maxlength']) return 'Maksymalnie 50 znaków';
     return null;
+  }
+
+  passwordError(): string | null {
+    const ctrl = this.passwordForm.controls.newPassword;
+    if (!ctrl.dirty && !ctrl.touched) return null;
+    if (ctrl.errors?.['minlength']) return 'Minimum 8 znaków';
+    if (ctrl.errors?.['pattern']) return 'Hasło musi zawierać wielką literę, małą literę i cyfrę';
+    return null;
+  }
+
+  startEmailChange(): void {
+    this.emailForm.reset({ email: '', currentPassword: '' });
+    this.changingEmail.set(true);
+  }
+
+  cancelEmailChange(): void {
+    this.changingEmail.set(false);
+    this.emailForm.reset();
+  }
+
+  submitEmailChange(): void {
+    if (this.emailForm.invalid) return;
+    this.emailLoading.set(true);
+    const { email, currentPassword } = this.emailForm.getRawValue();
+    this.http.patch(`${environment.apiUrl}/users/me/email`, { email, currentPassword }).subscribe({
+      next: () => {
+        this.toast.success('Wysłaliśmy link potwierdzający na nowy adres e-mail.');
+        this.emailLoading.set(false);
+        this.cancelEmailChange();
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Nie udało się zmienić adresu e-mail.');
+        this.emailLoading.set(false);
+      },
+    });
+  }
+
+  startPasswordChange(): void {
+    this.passwordForm.reset({ currentPassword: '', newPassword: '', confirmNewPassword: '' });
+    this.changingPassword.set(true);
+  }
+
+  cancelPasswordChange(): void {
+    this.changingPassword.set(false);
+    this.passwordForm.reset();
+  }
+
+  submitPasswordChange(): void {
+    if (this.passwordForm.invalid) return;
+    this.passwordLoading.set(true);
+    const { currentPassword, newPassword } = this.passwordForm.getRawValue();
+    this.http.patch(`${environment.apiUrl}/users/me/password`, { currentPassword, newPassword }).subscribe({
+      next: () => {
+        this.toast.success('Hasło zostało zmienione. Zaloguj się ponownie.');
+        this.auth.clearSession();
+        this.router.navigate(['/auth/login']);
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Nie udało się zmienić hasła.');
+        this.passwordLoading.set(false);
+      },
+    });
   }
 
   save(): void {

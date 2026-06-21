@@ -94,20 +94,24 @@ export class UsersService {
     });
     if (!address) throw new NotFoundException('Address not found');
 
-    await this.prisma.address.delete({ where: { id: addressId } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.address.delete({ where: { id: addressId } });
 
-    if (address.isDefault) {
-      const next = await this.prisma.address.findFirst({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (next) {
-        await this.prisma.address.update({
-          where: { id: next.id },
-          data: { isDefault: true },
-        });
-      }
-    }
+      if (!address.isDefault) return;
+
+      // Single atomic UPDATE instead of findFirst-then-update — see createAddress.
+      // Unlike that one, this isn't given an explicit target id by the caller, so the
+      // NOT EXISTS guard re-checks under the transaction's row locks whether some other
+      // request (e.g. a concurrent updateAddress explicitly promoting a different
+      // address) already set a default in the meantime — if so this becomes a no-op
+      // instead of overwriting that explicit choice.
+      await tx.$executeRaw`
+        UPDATE "addresses" SET "isDefault" = true
+        WHERE "userId" = ${userId}
+          AND "id" = (SELECT "id" FROM "addresses" WHERE "userId" = ${userId} ORDER BY "createdAt" DESC LIMIT 1)
+          AND NOT EXISTS (SELECT 1 FROM "addresses" WHERE "userId" = ${userId} AND "isDefault" = true)
+      `;
+    });
   }
 
   async exportData(userId: string, userEmail: string) {
