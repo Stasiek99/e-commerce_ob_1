@@ -734,7 +734,7 @@ export class OrdersService implements OnModuleInit {
       await this.prisma.order.update({ where: { id }, data: { isRead: true } });
     }
 
-    return order;
+    return this.mapOrder(order);
   }
 
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {

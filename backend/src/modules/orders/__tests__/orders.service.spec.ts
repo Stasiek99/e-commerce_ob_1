@@ -4208,6 +4208,36 @@ describe('OrdersService', () => {
 
       expect(prisma.order.update).not.toHaveBeenCalled();
     });
+
+    it('appends totalPrice to each item, matching findAllAdmin', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderAlreadyRead,
+        items: [{ id: 'oi-1', quantity: 2, snapshotPrice: 49900, snapshotName: 'Y', snapshotSku: 'Y-1' }],
+      });
+
+      const result = await service.findOneAdmin('order-1');
+
+      expect(result.items[0].totalPrice).toBe(99800);
+    });
+
+    it('hoists refundedAmountInCents from payment, matching findAllAdmin', async () => {
+      prisma.order.findUnique.mockResolvedValue({
+        ...mockOrderAlreadyRead,
+        payment: { refundedAmountInCents: 9900 },
+      });
+
+      const result = await service.findOneAdmin('order-1');
+
+      expect(result.refundedAmountInCents).toBe(9900);
+    });
+
+    it('defaults refundedAmountInCents to 0 when there is no payment', async () => {
+      prisma.order.findUnique.mockResolvedValue(mockOrderAlreadyRead);
+
+      const result = await service.findOneAdmin('order-1');
+
+      expect(result.refundedAmountInCents).toBe(0);
+    });
   });
 
   // ─── Fix #15 regression harness — price-change race condition ────────────────
