@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 interface Item {
   name: string;
   quantity: number;
@@ -21,7 +23,7 @@ export function invoiceTemplate(data: Data): { subject: string; html: string } {
     .map(
       (i) => `
         <tr>
-          <td style="padding:10px 8px;border-bottom:1px solid #eee;color:#1a1a1a">${i.name}</td>
+          <td style="padding:10px 8px;border-bottom:1px solid #eee;color:#1a1a1a">${escapeHtml(i.name)}</td>
           <td style="padding:10px 8px;border-bottom:1px solid #eee;text-align:center;color:#555">${i.quantity}</td>
           <td style="padding:10px 8px;border-bottom:1px solid #eee;text-align:right;color:#1a1a1a">${formatPrice(i.price)}</td>
           <td style="padding:10px 8px;border-bottom:1px solid #eee;text-align:right;font-weight:600;color:#1a1a1a">${formatPrice(i.price * i.quantity)}</td>
@@ -64,7 +66,7 @@ export function invoiceTemplate(data: Data): { subject: string; html: string } {
           <!-- Body -->
           <tr>
             <td style="padding:36px 40px 0">
-              <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a1a">Dziękujemy, ${data.firstName}!</h1>
+              <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a1a">Dziękujemy, ${escapeHtml(data.firstName)}!</h1>
               <p style="margin:0 0 24px;font-size:15px;color:#555;line-height:1.6">
                 Płatność za zamówienie <strong style="color:#1a1a1a">#${data.orderNumber}</strong> została potwierdzona.
                 W załączniku znajdziesz fakturę VAT w formacie PDF.

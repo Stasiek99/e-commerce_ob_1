@@ -23,10 +23,6 @@
       "source": "/(.*)",
       "headers": [
         {
-          "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://geowidget.easypack24.net https://challenges.cloudflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://backend-production-c004.up.railway.app https://www.google-analytics.com https://analytics.google.com https://geowidget.easypack24.net https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://www.googletagmanager.com https://api.dpd.cz; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; worker-src 'self' https://challenges.cloudflare.com; form-action 'self'; manifest-src 'self';"
-        },
-        {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
         },
@@ -41,6 +37,24 @@
         {
           "key": "Referrer-Policy",
           "value": "strict-origin-when-cross-origin"
+        }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'sha256-VM2mZqyEQZoLzoTrp5EigFvzQ0+f1wSeBuoOn95WHCg=' 'sha256-sJtQRwXhGs3qiB9BaI1yomAMvp6wpH7vkm5wTnIjvWg=' https://www.googletagmanager.com https://geowidget.easypack24.net https://challenges.cloudflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://backend-production-c004.up.railway.app https://www.google-analytics.com https://analytics.google.com https://geowidget.easypack24.net https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://www.googletagmanager.com https://api.dpd.cz; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; worker-src 'self' https://challenges.cloudflare.com; form-action 'self'; manifest-src 'self';"
+        }
+      ]
+    },
+    {
+      "source": "/legal/(terms|privacy|withdrawal)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'sha256-VM2mZqyEQZoLzoTrp5EigFvzQ0+f1wSeBuoOn95WHCg=' 'sha256-sJtQRwXhGs3qiB9BaI1yomAMvp6wpH7vkm5wTnIjvWg=' https://www.googletagmanager.com https://geowidget.easypack24.net https://challenges.cloudflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://backend-production-c004.up.railway.app https://www.google-analytics.com https://analytics.google.com https://geowidget.easypack24.net https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://www.googletagmanager.com https://api.dpd.cz; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; worker-src 'self' https://challenges.cloudflare.com; form-action 'self'; manifest-src 'self';"
         }
       ]
     },

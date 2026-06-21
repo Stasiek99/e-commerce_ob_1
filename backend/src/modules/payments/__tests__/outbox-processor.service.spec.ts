@@ -41,6 +41,7 @@ describe('OutboxProcessorService', () => {
             outboxMessage: {
               findMany: jest.fn().mockResolvedValue([]),
               update: jest.fn(),
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             },
             order: {
               findUniqueOrThrow: jest.fn(),
@@ -67,7 +68,10 @@ describe('OutboxProcessorService', () => {
         },
         {
           provide: 'REDIS_CLIENT',
-          useValue: { set: jest.fn().mockResolvedValue('OK') },
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'),
+            expire: jest.fn().mockResolvedValue(1),
+          },
         },
       ],
     }).compile();
@@ -207,7 +211,7 @@ describe('OutboxProcessorService', () => {
       });
     });
 
-    it('increments retries and captures a Sentry exception when processing throws', async () => {
+    it('increments retries, returns the row to PENDING, and captures a Sentry exception when processing throws', async () => {
       prisma.outboxMessage.findMany.mockResolvedValue([
         { id: 'msg-1', orderId: 'order-1', retries: 0, type: 'POST_PAYMENT_NOTIFICATIONS' },
       ]);
@@ -218,7 +222,7 @@ describe('OutboxProcessorService', () => {
       expect(Sentry.captureException).toHaveBeenCalled();
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'msg-1' },
-        data: { retries: { increment: 1 }, lastError: 'order vanished' },
+        data: { retries: { increment: 1 }, lastError: 'order vanished', status: 'PENDING' },
       });
     });
 
@@ -234,6 +238,51 @@ describe('OutboxProcessorService', () => {
         where: { id: 'msg-1' },
         data: { retries: { increment: 1 }, lastError: 'order vanished', status: 'FAILED' },
       });
+    });
+  });
+
+  // ─── Row claiming (lock-TTL race guard) ────────────────────────────────────
+
+  describe('row claiming', () => {
+    beforeEach(() => {
+      redis.set.mockResolvedValue('OK');
+    });
+
+    it('atomically claims a message from PENDING to PROCESSING before working on it', async () => {
+      prisma.outboxMessage.findMany.mockResolvedValue([
+        { id: 'msg-1', orderId: 'order-1', retries: 0, type: 'POST_PAYMENT_NOTIFICATIONS' },
+      ]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(baseOrder);
+
+      await service.recoverPendingMessages();
+
+      expect(prisma.outboxMessage.updateMany).toHaveBeenCalledWith({
+        where: { id: 'msg-1', status: 'PENDING' },
+        data: { status: 'PROCESSING' },
+      });
+    });
+
+    it('skips a message another runner already claimed (updateMany affected 0 rows)', async () => {
+      prisma.outboxMessage.findMany.mockResolvedValue([
+        { id: 'msg-1', orderId: 'order-1', retries: 0, type: 'POST_PAYMENT_NOTIFICATIONS' },
+      ]);
+      prisma.outboxMessage.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.recoverPendingMessages();
+
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.outboxMessage.update).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the Redis lock TTL after successfully processing a claimed message', async () => {
+      prisma.outboxMessage.findMany.mockResolvedValue([
+        { id: 'msg-1', orderId: 'order-1', retries: 0, type: 'POST_PAYMENT_NOTIFICATIONS' },
+      ]);
+      prisma.order.findUniqueOrThrow.mockResolvedValue(baseOrder);
+
+      await service.recoverPendingMessages();
+
+      expect(redis.expire).toHaveBeenCalledWith('cron:outbox-recovery:lock', 25);
     });
   });
 });

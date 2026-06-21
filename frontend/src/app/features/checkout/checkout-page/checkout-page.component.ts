@@ -660,6 +660,10 @@ export class CheckoutPageComponent implements OnInit {
   readonly selectedLocker = signal<{ code: string; address: string } | null>(null);
   readonly lockerPickerTouched = signal(false);
   private easyPackInitialized = false;
+  private lockerPickerObserver: MutationObserver | null = null;
+  // Guards against the observer outliving the component if the widget's
+  // backdrop never appears before the user navigates away.
+  private readonly _lockerPickerCleanup = this.destroyRef.onDestroy(() => this.lockerPickerObserver?.disconnect());
 
   readonly selectedDpdPoint = signal<{ code: string; address: string } | null>(null);
   readonly dpdPickerTouched = signal(false);
@@ -1031,12 +1035,12 @@ export class CheckoutPageComponent implements OnInit {
     }
 
     // Watch for the modal backdrop easyPack injects into <body>, then add click-outside.
-    const observer = new MutationObserver(() => {
+    this.lockerPickerObserver = new MutationObserver(() => {
       const backdrop = Array.from(document.body.children).find(
         (el) => el instanceof HTMLElement && el.querySelector('.close-modal'),
       ) as HTMLElement | undefined;
       if (!backdrop) return;
-      observer.disconnect();
+      this.lockerPickerObserver?.disconnect();
       backdrop.addEventListener('click', (e: Event) => {
         if (!(e.target instanceof Node)) return;
         const content = backdrop.querySelector('.modal-content') as HTMLElement | null;
@@ -1044,11 +1048,11 @@ export class CheckoutPageComponent implements OnInit {
         (backdrop.querySelector('.close-modal') as HTMLElement | null)?.click();
       });
     });
-    observer.observe(document.body, { childList: true });
+    this.lockerPickerObserver.observe(document.body, { childList: true });
 
     easyPack.modalMap(
       (point, modal) => {
-        observer.disconnect();
+        this.lockerPickerObserver?.disconnect();
         modal.closeModal();
         const { street, building_number, city, post_code } = point.address_details;
         const address = `${street} ${building_number}, ${post_code} ${city}`;

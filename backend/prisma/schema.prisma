@@ -459,12 +459,13 @@ model OrderItem {
   productVariantId String
   productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
 
-  snapshotName      String
-  snapshotSku       String
-  snapshotPrice     Int
-  snapshotVatRate   Int @default(2300)
-  quantity          Int
-  cancelledQuantity Int @default(0)
+  snapshotName             String
+  snapshotSku              String
+  snapshotVariantLabel     String?
+  snapshotPrice            Int
+  snapshotVatRate          Int @default(2300)
+  quantity                 Int
+  cancelledQuantity        Int @default(0)
   // Running total of the actual (floor-applied) discount already deducted from
   // cancelled units of this item, so a later partial cancel can subtract the true
   // remaining budget instead of recomputing an idealized value that drifts from

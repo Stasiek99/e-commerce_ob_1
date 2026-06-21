@@ -1,3 +1,5 @@
+import { escapeHtml, sanitizeUrl } from './html-escape.util';
+
 export function reviewRequestTemplate(data: {
   firstName: string;
   orderNumber: string;
@@ -15,14 +17,14 @@ export function reviewRequestTemplate(data: {
             ${
               p.imageUrl
                 ? `<td style="width: 64px; vertical-align: middle; padding-right: 16px;">
-                     <img src="${p.imageUrl}" width="64" height="64"
-                          style="border-radius: 6px; object-fit: cover; display: block;" alt="${p.name}" />
+                     <img src="${sanitizeUrl(p.imageUrl)}" width="64" height="64"
+                          style="border-radius: 6px; object-fit: cover; display: block;" alt="${escapeHtml(p.name)}" />
                    </td>`
                 : ''
             }
             <td style="vertical-align: middle;">
-              <p style="margin: 0 0 8px; font-size: 15px; font-weight: 600; color: #1a1a1a;">${p.name}</p>
-              <a href="${p.reviewUrl}"
+              <p style="margin: 0 0 8px; font-size: 15px; font-weight: 600; color: #1a1a1a;">${escapeHtml(p.name)}</p>
+              <a href="${sanitizeUrl(p.reviewUrl)}"
                  style="display: inline-block; background: #c9a96e; color: #fff;
                         text-decoration: none; font-size: 13px; font-weight: 600;
                         padding: 8px 20px; border-radius: 4px;">
@@ -58,7 +60,7 @@ export function reviewRequestTemplate(data: {
         <tr>
           <td style="padding: 36px 40px;">
             <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a1a;line-height:1.3;">
-              Dziękujemy za zakup, ${data.firstName || 'drogi kliencie'}!
+              Dziękujemy za zakup, ${data.firstName ? escapeHtml(data.firstName) : 'drogi kliencie'}!
             </h1>
             <p style="margin:0 0 24px;font-size:15px;color:#6b6b6b;line-height:1.6;">
               Mamy nadzieję, że Twoje zamówienie <strong style="color:#1a1a1a;">#${data.orderNumber}</strong>

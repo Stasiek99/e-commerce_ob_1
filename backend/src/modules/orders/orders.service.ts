@@ -394,6 +394,7 @@ export class OrdersService implements OnModuleInit {
               productVariantId: item.productVariantId,
               snapshotName: `${item.productName} – ${item.variantLabel}`,
               snapshotSku: item.sku,
+              snapshotVariantLabel: item.variantLabel,
               snapshotPrice: freshPriceMap.get(item.productVariantId) ?? item.priceInCents,
               snapshotVatRate: item.vatRate,
               quantity: item.quantity,
@@ -733,7 +734,7 @@ export class OrdersService implements OnModuleInit {
       await this.prisma.order.update({ where: { id }, data: { isRead: true } });
     }
 
-    return order;
+    return this.mapOrder(order);
   }
 
   async findAllAdmin(filter: { status?: OrderStatus; page?: number; limit?: number }) {

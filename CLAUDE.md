@@ -157,7 +157,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 
 **Node version pin:** the root `.nvmrc` and the root `package.json` `engines.node` must always be set to the same exact version. CI's `actions/setup-node` reads `.nvmrc` via `node-version-file`. Railway's Railpack builder reads `engines.node` first (higher priority than `.nvmrc` — see [railpack.com/languages/node](https://railpack.com/languages/node/)), so `.nvmrc` alone would not pin the Railway runtime. Bumping the Node version means editing both files together, never just one.
 
-**Required Railway env vars** (set in the service's Variables tab — `backend/.env` is not used in production): all variables from `.env.example` — database URLs, JWT secrets, Google OAuth (with the Railway callback URL), Stripe keys + webhook secret, Resend API key, Supabase keys, Sentry DSN (optional), admin credentials, and `FRONTEND_URL` pointing at the deployed Vercel frontend.
+**Required Railway env vars** (set in the service's Variables tab — `backend/.env` is not used in production): all variables from `.env.example` — database URLs, JWT secrets, Google OAuth (with the Railway callback URL), Stripe keys + webhook secret, Resend API key, Supabase keys, Sentry DSN (see production checklist below — required, not optional), admin credentials, and `FRONTEND_URL` pointing at the deployed Vercel frontend.
 
 #### Production env var checklist
 
@@ -177,6 +177,8 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `ORDER_CANCEL_SECRET` | required (≥32 chars) — dedicated HMAC key for guest order cancel-link tokens, kept separate from `JWT_ACCESS_SECRET` so JWT rotation doesn't invalidate outstanding cancel links | generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
 | `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
+| `SENTRY_DSN` | required (non-empty URI) — boot-fatal if missing; `config.validation.ts` only allows blank/absent outside production | Sentry Dashboard → Project Settings → Client Keys (DSN) |
+| `SENTRY_RELEASE` | not required — `instrument.ts` falls back to Railway's auto-injected `RAILWAY_GIT_COMMIT_SHA` when unset, which already matches the SHA CI tags its sourcemap upload with | no action needed; only set manually if you want to override the release name for a specific deploy |
 
 #### Reconciliation cron (Railway hobby tier — required)
 

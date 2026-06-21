@@ -80,6 +80,12 @@ describe('PaymentsService', () => {
       data: { object },
     }) as unknown as Stripe.Event;
 
+  // Drains the microtask queue past a multi-step promise chain (invoice →
+  // email → outbox update). A fixed number of `await Promise.resolve()` calls
+  // is fragile to chain-length changes; setImmediate runs after the entire
+  // microtask queue has emptied.
+  const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolve));
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1418,6 +1424,58 @@ describe('PaymentsService', () => {
       await expect(service.getPaymentStatus('order-1', 'user-1')).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('maps variantLabel from the snapshotted variant label, not the SKU', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          userId: 'user-1',
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 0,
+          items: [
+            {
+              productVariantId: 'variant-1',
+              snapshotName: 'Chloé EDP',
+              snapshotSku: 'PERF-CHL-50',
+              snapshotVariantLabel: '50ml',
+              snapshotPrice: 25000,
+              quantity: 1,
+            },
+          ],
+        },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.items[0].variantLabel).toBe('50ml');
+    });
+
+    it('falls back to the SKU when snapshotVariantLabel is null (orders placed before the column existed)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          userId: 'user-1',
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 0,
+          items: [
+            {
+              productVariantId: 'variant-1',
+              snapshotName: 'Chloé EDP',
+              snapshotSku: 'PERF-CHL-50',
+              snapshotVariantLabel: null,
+              snapshotPrice: 25000,
+              quantity: 1,
+            },
+          ],
+        },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.items[0].variantLabel).toBe('PERF-CHL-50');
     });
   });
 
@@ -3331,8 +3389,87 @@ describe('PaymentsService', () => {
       prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
 
       await service.approveFraudReview('order-1', 'ADMIN');
-      await Promise.resolve();
+      await flushMicrotasks();
 
+      expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
+        where: { id: 'outbox-fraud-1' },
+        data: { status: 'PROCESSED', processedAt: expect.any(Date) },
+      });
+    });
+
+    // Regression coverage for the bug where the outbox row was marked PROCESSED
+    // in the same tick as kicking off dispatch, instead of after the guarded
+    // notification work (invoice PDF + customer email) actually settled — which
+    // defeats crash recovery: a process crash between the two writes left a
+    // PROCESSED row backing notifications that never went out.
+
+    it('does NOT mark the outbox row PROCESSED until the invoice+email chain resolves', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+
+      let resolveInvoice: (value: { url: string; storagePath: string; pdf: Buffer; invoiceNumber: string }) => void;
+      invoiceService.processInvoice.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveInvoice = resolve;
+          }),
+      );
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await flushMicrotasks();
+
+      expect(prisma.outboxMessage.update).not.toHaveBeenCalled();
+
+      resolveInvoice!({
+        url: 'https://mock-invoice.pdf',
+        storagePath: 'invoices/FV-2026-000001.pdf',
+        pdf: Buffer.from(''),
+        invoiceNumber: 'FV/2026/000001',
+      });
+      await flushMicrotasks();
+
+      expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
+        where: { id: 'outbox-fraud-1' },
+        data: { status: 'PROCESSED', processedAt: expect.any(Date) },
+      });
+    });
+
+    it('leaves the outbox row PENDING when invoice generation and the plain-email fallback both fail', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+      invoiceService.processInvoice.mockRejectedValue(new Error('PDF service timeout'));
+      emailService.sendPaymentConfirmed.mockRejectedValue(new Error('Resend API down'));
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await flushMicrotasks();
+
+      expect(prisma.outboxMessage.update).not.toHaveBeenCalled();
+    });
+
+    it('still marks the outbox row PROCESSED via the plain-email fallback when invoice generation fails', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue(mockFraudOrder);
+      prisma.payment.findUniqueOrThrow.mockResolvedValue({
+        id: 'payment-1',
+        orderId: 'order-1',
+        stripePaymentIntentId: 'pi_test_abc123',
+      });
+      prisma.outboxMessage.create.mockResolvedValue({ id: 'outbox-fraud-1' });
+      invoiceService.processInvoice.mockRejectedValue(new Error('PDF service timeout'));
+
+      await service.approveFraudReview('order-1', 'ADMIN');
+      await flushMicrotasks();
+
+      expect(emailService.sendPaymentConfirmed).toHaveBeenCalled();
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'outbox-fraud-1' },
         data: { status: 'PROCESSED', processedAt: expect.any(Date) },
@@ -4585,6 +4722,57 @@ describe('PaymentsService', () => {
       await expect(
         payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
       ).resolves.not.toThrow();
+    });
+
+    // ── idempotency guard — payout.failed redelivery ────────────────────────
+    // Invariant: every other webhook case records event.id in processedStripeEvent
+    // before acting. payout.failed previously had no such guard, so a Stripe
+    // retry (timeout/non-2xx) re-ran the handler and produced a second Sentry
+    // alert + a second un-deduplicated email job for the same payout failure.
+
+    it('records the event.id in processedStripeEvent for deduplication', async () => {
+      await payoutService.handleWebhookEvent(
+        buildEvent('payout.failed', buildPayout()),
+      );
+
+      expect(payoutPrisma.processedStripeEvent.create).toHaveBeenCalledWith({
+        data: { eventId: 'evt_payout.failed' },
+      });
+    });
+
+    it('swallows P2002 from a duplicate payout.failed delivery — no duplicate Sentry alert or email', async () => {
+      payoutConfigGet.mockImplementation((key: string) => {
+        if (key === 'ADMIN_ALERT_EMAIL') return 'admin@store.com';
+        return undefined;
+      });
+      payoutPrisma.processedStripeEvent.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`event_id`)', {
+          code: 'P2002',
+          clientVersion: '6.0.0',
+          meta: { target: ['event_id'] },
+        }),
+      );
+
+      await expect(
+        payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
+      ).resolves.not.toThrow();
+
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
+      expect(payoutEmail.sendPayoutFailedAlert).not.toHaveBeenCalled();
+    });
+
+    it('re-throws non-P2002 errors from processedStripeEvent.create', async () => {
+      payoutPrisma.processedStripeEvent.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Connection timed out', {
+          code: 'P1001',
+          clientVersion: '6.0.0',
+          meta: {},
+        }),
+      );
+
+      await expect(
+        payoutService.handleWebhookEvent(buildEvent('payout.failed', buildPayout())),
+      ).rejects.toThrow(Prisma.PrismaClientKnownRequestError);
     });
   });
 });

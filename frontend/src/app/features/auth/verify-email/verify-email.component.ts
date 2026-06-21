@@ -1,4 +1,5 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { TuiButton, TuiTitle } from '@taiga-ui/core';
 import { TuiCard, TuiHeader } from '@taiga-ui/layout';
@@ -46,12 +47,19 @@ type State = 'pending' | 'success' | 'error';
   `],
 })
 export class VerifyEmailComponent implements OnInit {
-  private readonly auth  = inject(AuthService);
-  private readonly route = inject(ActivatedRoute);
+  private readonly auth       = inject(AuthService);
+  private readonly route      = inject(ActivatedRoute);
+  private readonly platformId = inject(PLATFORM_ID);
 
   state: State = 'pending';
 
   ngOnInit() {
+    // The token is single-use — only the real browser may consume it. Without
+    // this guard, the SSR render already consumes it server-side, and hydration's
+    // repeat call then hits the backend's used-token guard and overwrites the
+    // genuine success with an error.
+    if (!isPlatformBrowser(this.platformId)) return;
+
     const token = this.route.snapshot.queryParams['token'] as string | undefined;
     if (!token) { this.state = 'error'; return; }
 
