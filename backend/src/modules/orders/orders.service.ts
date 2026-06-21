@@ -1435,7 +1435,7 @@ export class OrdersService implements OnModuleInit {
                   select: {
                     name: true,
                     slug: true,
-                    images: { where: { isPrimary: true }, take: 1 },
+                    images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], take: 1 },
                   },
                 },
               },

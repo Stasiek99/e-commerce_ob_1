@@ -76,6 +76,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
     },
     productVariant: { updateMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
     productVariantPriceHistory: { findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), create: jest.fn() },
+    productImage: { findUnique: jest.fn(), findFirst: jest.fn(), delete: jest.fn(), update: jest.fn() },
     wishlistItem: { findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn(),
     $transaction: jest.fn(),
@@ -103,7 +104,7 @@ describe('ProductsService — slug P2002 conflict handling', () => {
         ProductsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EmailQueueService, useValue: { queueOrderConfirmation: jest.fn(), sendBackInStock: jest.fn().mockResolvedValue(undefined) } },
-        { provide: StorageService, useValue: { delete: jest.fn() } },
+        { provide: StorageService, useValue: { delete: jest.fn(), deleteFile: jest.fn().mockResolvedValue(undefined) } },
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('redis://localhost:6379') },
@@ -573,6 +574,86 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       expect(notifySpy).toHaveBeenCalledWith(
         expect.objectContaining({ previousStock: 0, newStock: 6 }),
       );
+    });
+  });
+
+  // --- removeImage() ---
+  // FIX: deleting the current primary image used to leave the product with
+  // zero isPrimary rows — cart/wishlist/review/email reads that hard-filter
+  // on isPrimary: true would then render no image at all, even though other
+  // images still existed. removeImage() now promotes the next image by
+  // sortOrder to isPrimary inside the same transaction as the delete.
+
+  describe('removeImage()', () => {
+    const IMAGE_ID = 'img-uuid-1';
+    const OTHER_IMAGE_ID = 'img-uuid-2';
+
+    const mockTx = {
+      productImage: { delete: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+    };
+
+    beforeEach(() => {
+      mockPrisma.$transaction.mockImplementation((fn: any) => fn(mockTx));
+    });
+
+    it('throws NotFoundException when the image does not exist', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue(null);
+
+      await expect(service.removeImage(IMAGE_ID)).rejects.toThrow(NotFoundException);
+    });
+
+    it('promotes the next image by sortOrder to primary when the deleted image was primary', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue({
+        id: IMAGE_ID,
+        productId: PRODUCT_ID,
+        storagePath: 'products/img1.jpg',
+        isPrimary: true,
+        sortOrder: 0,
+      });
+      mockTx.productImage.findFirst.mockResolvedValue({ id: OTHER_IMAGE_ID, sortOrder: 1, isPrimary: false });
+
+      await service.removeImage(IMAGE_ID);
+
+      expect(mockTx.productImage.delete).toHaveBeenCalledWith({ where: { id: IMAGE_ID } });
+      expect(mockTx.productImage.findFirst).toHaveBeenCalledWith({
+        where: { productId: PRODUCT_ID },
+        orderBy: { sortOrder: 'asc' },
+      });
+      expect(mockTx.productImage.update).toHaveBeenCalledWith({
+        where: { id: OTHER_IMAGE_ID },
+        data: { isPrimary: true },
+      });
+    });
+
+    it('does not touch other images when the deleted image was not primary', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue({
+        id: IMAGE_ID,
+        productId: PRODUCT_ID,
+        storagePath: 'products/img2.jpg',
+        isPrimary: false,
+        sortOrder: 1,
+      });
+
+      await service.removeImage(IMAGE_ID);
+
+      expect(mockTx.productImage.delete).toHaveBeenCalledWith({ where: { id: IMAGE_ID } });
+      expect(mockTx.productImage.findFirst).not.toHaveBeenCalled();
+      expect(mockTx.productImage.update).not.toHaveBeenCalled();
+    });
+
+    it('does not promote anything when the deleted primary image was the last one', async () => {
+      mockPrisma.productImage.findUnique.mockResolvedValue({
+        id: IMAGE_ID,
+        productId: PRODUCT_ID,
+        storagePath: 'products/img1.jpg',
+        isPrimary: true,
+        sortOrder: 0,
+      });
+      mockTx.productImage.findFirst.mockResolvedValue(null);
+
+      await service.removeImage(IMAGE_ID);
+
+      expect(mockTx.productImage.update).not.toHaveBeenCalled();
     });
   });
 

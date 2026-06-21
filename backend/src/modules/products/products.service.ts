@@ -778,7 +778,23 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       await this.storageService.deleteFile('product-images', image.storagePath)
         .catch((err) => this.logger.warn(`Supabase delete failed: ${image.storagePath}`, err));
     }
-    await this.prisma.productImage.delete({ where: { id: imageId } });
+
+    // Re-promotion runs in the same transaction as the delete to avoid a race
+    // with a concurrent addImage() landing in the gap and leaving two primaries
+    // (or, worse, zero) for this product.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.productImage.delete({ where: { id: imageId } });
+      if (image.isPrimary) {
+        const next = await tx.productImage.findFirst({
+          where: { productId: image.productId },
+          orderBy: { sortOrder: 'asc' },
+        });
+        if (next) {
+          await tx.productImage.update({ where: { id: next.id }, data: { isPrimary: true } });
+        }
+      }
+    });
+
     return image;
   }
 
