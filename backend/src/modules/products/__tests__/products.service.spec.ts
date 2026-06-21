@@ -836,4 +836,47 @@ describe('ProductsService — slug P2002 conflict handling', () => {
     });
   });
 
+  // --- findAll() — perfume category curated Millesime/Luxury interleaving ---
+  // FIX: the interleaving block was gated on the plural 'perfumes', which never
+  // matches the real seeded slug 'perfume' — execution always fell through to
+  // plain sortOrder ordering. Regression-guards the real slug and the 5-5
+  // chunk pattern itself, which no prior test exercised.
+
+  describe('findAll() — perfume category curated Millesime/Luxury interleaving', () => {
+    const slimRow = (id: string, line: string) => ({ id, line, category: { slug: 'perfume' } });
+    const fullRow = (id: string) => ({ id, variants: [], avgRating: null });
+
+    it('interleaves Millesime/Luxury in 5-5 chunks for the real "perfume" slug', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockPrisma.$queryRaw.mockResolvedValueOnce([{ slug: 'perfume' }]); // resolveCategorySlugs
+
+      const millesime = Array.from({ length: 7 }, (_, i) => slimRow(`m${i + 1}`, 'Millesime'));
+      const luxury = Array.from({ length: 7 }, (_, i) => slimRow(`l${i + 1}`, 'Luxury'));
+      mockPrisma.product.findMany.mockResolvedValueOnce([...millesime, ...luxury]); // slim query
+      mockPrisma.product.findMany.mockResolvedValueOnce(
+        [...millesime, ...luxury].map((p) => fullRow(p.id)),
+      ); // full page query
+
+      const result = await service.findAll({ category: 'perfume' });
+
+      expect(result.data.map((p: any) => p.id)).toEqual([
+        'm1', 'm2', 'm3', 'm4', 'm5', 'l1', 'l2', 'l3', 'l4', 'l5', 'm6', 'm7', 'l6', 'l7',
+      ]);
+      expect(result.meta.total).toBe(14);
+    });
+
+    it('does not apply curated interleaving when a filter (e.g. brand) is active', async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockPrisma.$queryRaw.mockResolvedValueOnce([{ slug: 'perfume' }]); // resolveCategorySlugs
+      mockPrisma.product.findMany.mockResolvedValue([]);
+      mockPrisma.product.count.mockResolvedValue(0);
+
+      await service.findAll({ category: 'perfume', brand: 'Chanel' });
+
+      // Plain path queries once with skip/take, unlike the interleaving path's two-pass slim+full query.
+      expect(mockPrisma.product.findMany).toHaveBeenCalledTimes(1);
+      const callArg = mockPrisma.product.findMany.mock.calls[0][0];
+      expect(callArg.select).not.toEqual({ id: true, line: true, category: { select: { slug: true } } });
+    });
+  });
 });

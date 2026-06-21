@@ -267,7 +267,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     // 5 Millesime → 5 Luxury per round. Skipped when any filter is active.
     // Slim query for ordering, full includes only for the current page.
     if (
-      query.category === 'perfumes' &&
+      query.category === 'perfume' &&
       !query.featured &&
       (!query.sortBy || query.sortBy === 'relevance') &&
       !query.brand && !query.gender?.length && !query.scentFamily?.length &&
