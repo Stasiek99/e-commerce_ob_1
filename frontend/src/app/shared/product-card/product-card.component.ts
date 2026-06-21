@@ -60,6 +60,13 @@ export class ProductCardComponent {
     return this.product.variants?.[0];
   }
 
+  // Add-to-cart target: the cheapest variant (firstVariant) is only
+  // guaranteed in stock when every variant is — mirrors
+  // wishlist.component.ts's addAllToCart() variant pick.
+  get cartVariant() {
+    return this.product.variants?.find((v) => v.stock > 0) ?? this.firstVariant;
+  }
+
   get outOfStock(): boolean {
     const variants = this.product.variants;
     if (!variants?.length) return true;
@@ -77,7 +84,7 @@ export class ProductCardComponent {
     event.preventDefault();
     event.stopPropagation();
 
-    const variant = this.firstVariant;
+    const variant = this.cartVariant;
     if (!variant || this.adding() || this.outOfStock) return;
 
     this.adding.set(true);
