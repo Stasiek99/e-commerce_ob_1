@@ -663,6 +663,44 @@ describe('OrdersService', () => {
       expect(capturedOrderData.items.create[0]).toMatchObject({ snapshotVatRate: 500 });
     });
 
+    it('should snapshot snapshotVariantLabel from cart item variantLabel into each order item', async () => {
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+
+      let capturedOrderData: any;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([{ id: 'pv-1', priceInCents: 34900 }, { id: 'pv-2', priceInCents: 44900 }]),
+          },
+          order: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedOrderData = args.data;
+              return { id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 };
+            }),
+          },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await service.createFromCart('user-1', undefined, 'test@example.com', {
+        newAddress: mockAddress,
+        carrierCode: CarrierCode.DHL,
+      });
+
+      const item1 = capturedOrderData.items.create.find((i: any) => i.productVariantId === 'pv-1');
+      expect(item1).toMatchObject({ snapshotVariantLabel: '100ml' });
+      // Must store the real variant label, not the SKU — GA4's purchase event
+      // sources item_variant from this field and must match add_to_cart/view_item.
+      expect(item1.snapshotVariantLabel).not.toBe(item1.snapshotSku);
+    });
+
     it('should atomically decrement stock for each item during order creation', async () => {
       cartService.getOrCreate.mockResolvedValue(mockCart as any);
 

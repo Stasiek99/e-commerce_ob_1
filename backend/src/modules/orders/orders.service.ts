@@ -394,6 +394,7 @@ export class OrdersService implements OnModuleInit {
               productVariantId: item.productVariantId,
               snapshotName: `${item.productName} – ${item.variantLabel}`,
               snapshotSku: item.sku,
+              snapshotVariantLabel: item.variantLabel,
               snapshotPrice: freshPriceMap.get(item.productVariantId) ?? item.priceInCents,
               snapshotVatRate: item.vatRate,
               quantity: item.quantity,

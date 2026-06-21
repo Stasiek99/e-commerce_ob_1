@@ -1425,6 +1425,58 @@ describe('PaymentsService', () => {
         NotFoundException,
       );
     });
+
+    it('maps variantLabel from the snapshotted variant label, not the SKU', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          userId: 'user-1',
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 0,
+          items: [
+            {
+              productVariantId: 'variant-1',
+              snapshotName: 'Chloé EDP',
+              snapshotSku: 'PERF-CHL-50',
+              snapshotVariantLabel: '50ml',
+              snapshotPrice: 25000,
+              quantity: 1,
+            },
+          ],
+        },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.items[0].variantLabel).toBe('50ml');
+    });
+
+    it('falls back to the SKU when snapshotVariantLabel is null (orders placed before the column existed)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        status: PaymentStatus.COMPLETED,
+        paidAt: new Date(),
+        order: {
+          userId: 'user-1',
+          orderNumber: 'ORD-2026-000001',
+          shippingCostInCents: 0,
+          items: [
+            {
+              productVariantId: 'variant-1',
+              snapshotName: 'Chloé EDP',
+              snapshotSku: 'PERF-CHL-50',
+              snapshotVariantLabel: null,
+              snapshotPrice: 25000,
+              quantity: 1,
+            },
+          ],
+        },
+      });
+
+      const result = await service.getPaymentStatus('order-1', 'user-1');
+
+      expect(result.items[0].variantLabel).toBe('PERF-CHL-50');
+    });
   });
 
   describe('getPaymentStatusByToken', () => {

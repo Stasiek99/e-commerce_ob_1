@@ -866,7 +866,14 @@ export class PaymentsService {
             orderNumber: true,
             shippingCostInCents: true,
             items: {
-              select: { productVariantId: true, snapshotName: true, snapshotSku: true, snapshotPrice: true, quantity: true },
+              select: {
+                productVariantId: true,
+                snapshotName: true,
+                snapshotSku: true,
+                snapshotVariantLabel: true,
+                snapshotPrice: true,
+                quantity: true,
+              },
             },
           },
         },
@@ -894,7 +901,14 @@ export class PaymentsService {
               orderNumber: true,
               shippingCostInCents: true,
               items: {
-                select: { productVariantId: true, snapshotName: true, snapshotSku: true, snapshotPrice: true, quantity: true },
+                select: {
+                  productVariantId: true,
+                  snapshotName: true,
+                  snapshotSku: true,
+                  snapshotVariantLabel: true,
+                  snapshotPrice: true,
+                  quantity: true,
+                },
               },
             },
           },
@@ -918,7 +932,14 @@ export class PaymentsService {
     order: {
       orderNumber: string;
       shippingCostInCents: number;
-      items: Array<{ productVariantId: string; snapshotName: string; snapshotSku: string; snapshotPrice: number; quantity: number }>;
+      items: Array<{
+        productVariantId: string;
+        snapshotName: string;
+        snapshotSku: string;
+        snapshotVariantLabel: string | null;
+        snapshotPrice: number;
+        quantity: number;
+      }>;
       userId?: string | null;
     };
   }) {
@@ -930,7 +951,8 @@ export class PaymentsService {
       items: payment.order.items.map((i) => ({
         productVariantId: i.productVariantId,
         productName: i.snapshotName,
-        variantLabel: i.snapshotSku,
+        // Orders placed before snapshotVariantLabel existed fall back to the SKU.
+        variantLabel: i.snapshotVariantLabel ?? i.snapshotSku,
         priceInCents: i.snapshotPrice,
         quantity: i.quantity,
       })),
