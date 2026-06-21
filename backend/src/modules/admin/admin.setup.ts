@@ -259,6 +259,13 @@ async function updateReviewStats(prisma: PrismaService, productId: string): Prom
   `;
 }
 
+/** Exported for unit testing. Mirrors shippingService.generateLabel()'s allowed-status
+ *  guard (PAID/PROCESSING only) so the "Generuj etykietę" button isn't shown on orders
+ *  where clicking it would always fail. */
+export function isGenerateLabelVisible(status: string | undefined): boolean {
+  return !['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED', 'DELIVERED', 'SHIPPED'].includes(status as string);
+}
+
 /** Exported for unit testing. Whitelists the Review resource's plain-Edit fields so
  *  status/rating/productId can't be changed outside the approve/reject actions, which
  *  are the only paths that call updateReviewStats(). */
@@ -523,10 +530,7 @@ export async function setupAdmin(
               icon: 'Truck',
               label: 'Generuj etykietę',
               // Only relevant for orders that are in an active fulfillment state
-              isVisible: (context: any) => {
-                const status = context.record?.params?.status;
-                return !['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED', 'DELIVERED'].includes(status);
-              },
+              isVisible: (context: any) => isGenerateLabelVisible(context.record?.params?.status),
               handler: async (_request: any, _response: any, context: any) => {
                 const { record } = context;
                 const orderId: string = record.params.id;

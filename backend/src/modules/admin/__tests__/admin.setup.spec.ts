@@ -3,6 +3,7 @@ import {
   buildAdminAuthenticator,
   isAdminAuthenticated,
   regenerateSessionOnLogin,
+  isGenerateLabelVisible,
   REVIEW_EDIT_PROPERTIES,
 } from '../admin.setup';
 
@@ -177,6 +178,26 @@ describe('regenerateSessionOnLogin', () => {
 
     expect(next).toHaveBeenCalledWith(error);
     expect(session._regenerated).toBeUndefined();
+  });
+});
+
+describe('isGenerateLabelVisible', () => {
+  it.each(['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED', 'DELIVERED', 'SHIPPED'])(
+    'returns false for %s orders, matching shippingService.generateLabel()\'s allowed-status guard',
+    (status) => {
+      expect(isGenerateLabelVisible(status)).toBe(false);
+    },
+  );
+
+  it.each(['PAID', 'PROCESSING'])(
+    'returns true for %s orders, the only statuses generateLabel() actually accepts',
+    (status) => {
+      expect(isGenerateLabelVisible(status)).toBe(true);
+    },
+  );
+
+  it('returns true when status is undefined', () => {
+    expect(isGenerateLabelVisible(undefined)).toBe(true);
   });
 });
 
