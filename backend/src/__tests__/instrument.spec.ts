@@ -52,6 +52,48 @@ describe('instrument.ts', () => {
     });
   });
 
+  describe('release configuration', () => {
+    beforeEach(() => {
+      process.env.SENTRY_DSN = 'https://key@sentry.io/1';
+    });
+
+    it('uses SENTRY_RELEASE when set', () => {
+      process.env.SENTRY_RELEASE = 'manual-release-123';
+      delete process.env.RAILWAY_GIT_COMMIT_SHA;
+
+      loadInstrument();
+
+      expect(mockInit.mock.calls[0][0]).toMatchObject({ release: 'manual-release-123' });
+    });
+
+    it('falls back to RAILWAY_GIT_COMMIT_SHA when SENTRY_RELEASE is unset', () => {
+      delete process.env.SENTRY_RELEASE;
+      process.env.RAILWAY_GIT_COMMIT_SHA = 'abc123commitsha';
+
+      loadInstrument();
+
+      expect(mockInit.mock.calls[0][0]).toMatchObject({ release: 'abc123commitsha' });
+    });
+
+    it('prefers SENTRY_RELEASE over RAILWAY_GIT_COMMIT_SHA when both are set', () => {
+      process.env.SENTRY_RELEASE = 'manual-release-123';
+      process.env.RAILWAY_GIT_COMMIT_SHA = 'abc123commitsha';
+
+      loadInstrument();
+
+      expect(mockInit.mock.calls[0][0]).toMatchObject({ release: 'manual-release-123' });
+    });
+
+    it('leaves release undefined when neither SENTRY_RELEASE nor RAILWAY_GIT_COMMIT_SHA is set', () => {
+      delete process.env.SENTRY_RELEASE;
+      delete process.env.RAILWAY_GIT_COMMIT_SHA;
+
+      loadInstrument();
+
+      expect(mockInit.mock.calls[0][0]).toMatchObject({ release: undefined });
+    });
+  });
+
   describe('beforeSend — sensitive field scrubbing', () => {
     let beforeSend: BeforeSend;
 

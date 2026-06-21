@@ -177,6 +177,7 @@ Config lives in [`railway.json`](railway.json) at the repo root. Railway auto-de
 | `ORDER_CANCEL_SECRET` | required (≥32 chars) — dedicated HMAC key for guest order cancel-link tokens, kept separate from `JWT_ACCESS_SECRET` so JWT rotation doesn't invalidate outstanding cancel links | generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `FRONTEND_URL` | Vercel production URL | used for CORS + OAuth redirects |
 | `GOOGLE_CALLBACK_URL` | Railway production URL + `/auth/google/callback` | also whitelist it in Google Cloud Console → Credentials → Authorized redirect URIs |
+| `SENTRY_RELEASE` | not required — `instrument.ts` falls back to Railway's auto-injected `RAILWAY_GIT_COMMIT_SHA` when unset, which already matches the SHA CI tags its sourcemap upload with | no action needed; only set manually if you want to override the release name for a specific deploy |
 
 #### Reconciliation cron (Railway hobby tier — required)
 
