@@ -711,4 +711,63 @@ describe('ProductsService — slug P2002 conflict handling', () => {
       });
     });
   });
+
+  describe('attachOmnibusData()', () => {
+    // FIX: AdminJS edits ProductVariant directly with no cross-field check, so a
+    // compareAtPriceInCents that doesn't actually exceed priceInCents (swapped values,
+    // or stale after a later price hike) must never be displayed as a real discount.
+    const baseVariant = { id: VARIANT_ID, priceInCents: 15000 };
+
+    it('suppresses compareAtPriceInCents and lowestPrice30dInCents when compareAtPriceInCents is below priceInCents', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([{ variantId: VARIANT_ID }]);
+      mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
+        { variantId: VARIANT_ID, _min: { priceInCents: 12000 } },
+      ]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 12000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBeNull();
+      expect((result.variants[0] as any).lowestPrice30dInCents).toBeNull();
+    });
+
+    it('suppresses promo fields when compareAtPriceInCents equals priceInCents', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([{ variantId: VARIANT_ID }]);
+      mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
+        { variantId: VARIANT_ID, _min: { priceInCents: 15000 } },
+      ]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 15000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBeNull();
+    });
+
+    it('keeps compareAtPriceInCents and lowestPrice30dInCents when the promo is genuinely lower and history is verified', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([{ variantId: VARIANT_ID }]);
+      mockPrisma.productVariantPriceHistory.groupBy.mockResolvedValue([
+        { variantId: VARIANT_ID, _min: { priceInCents: 12000 } },
+      ]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 18000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBe(18000);
+      expect((result.variants[0] as any).lowestPrice30dInCents).toBe(12000);
+    });
+
+    it('suppresses promo fields when price history has not yet accumulated 30 days, even with a valid compareAtPriceInCents', async () => {
+      mockPrisma.productVariantPriceHistory.findMany.mockResolvedValue([]);
+
+      const [result] = await service.attachOmnibusData([
+        { variants: [{ ...baseVariant, compareAtPriceInCents: 18000 }] } as any,
+      ]);
+
+      expect(result.variants[0].compareAtPriceInCents).toBeNull();
+      expect(mockPrisma.productVariantPriceHistory.groupBy).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -979,7 +979,11 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       ...p,
       avgRating: p.avgRating != null ? Number(p.avgRating) : null,
       variants: p.variants.map(v => {
-        const hasVerifiedHistory = verifiedVariantIds.has(v.id);
+        // compareAtPriceInCents must actually be a higher "was" price — guards against
+        // AdminJS data-entry mistakes (swapped values, stale value after a price hike)
+        // reaching the storefront as a fake discount (Omnibus directive compliance).
+        const isValidPromo = v.compareAtPriceInCents != null && v.compareAtPriceInCents > v.priceInCents;
+        const hasVerifiedHistory = isValidPromo && verifiedVariantIds.has(v.id);
         return {
           ...v,
           compareAtPriceInCents: hasVerifiedHistory ? v.compareAtPriceInCents : null,
