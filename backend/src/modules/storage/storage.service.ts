@@ -78,12 +78,19 @@ export class StorageService {
     return path;
   }
 
-  async getShippingLabelSignedUrl(storagePath: string, expiresInSeconds = 14_400): Promise<string> {
+  // Returns null (instead of throwing) when the object is already gone — e.g. the
+  // stale-label cleanup cron deleted it but crashed before nulling labelUrl on the
+  // Shipment row. Callers should treat null as "no label" rather than an error.
+  async getShippingLabelSignedUrl(storagePath: string, expiresInSeconds = 14_400): Promise<string | null> {
     const { data, error } = await this.supabase.storage
       .from(SHIPPING_LABELS_BUCKET)
       .createSignedUrl(storagePath, expiresInSeconds);
 
-    if (error || !data) throw new Error(`Label signing failed: ${error?.message}`);
+    if (error) {
+      if (error.statusCode === '404' || error.status === 404) return null;
+      throw new Error(`Label signing failed: ${error.message}`);
+    }
+    if (!data) throw new Error('Label signing failed: no data returned');
     return data.signedUrl;
   }
 

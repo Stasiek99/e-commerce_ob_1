@@ -186,6 +186,28 @@ describe('StorageService', () => {
         'Label signing failed',
       );
     });
+
+    it('returns null instead of throwing when Supabase reports the object is already gone (statusCode 404)', async () => {
+      mockCreateSignedUrl.mockResolvedValue({
+        data: null,
+        error: { message: 'Object not found', statusCode: '404' },
+      });
+
+      const result = await service.getShippingLabelSignedUrl('labels/already-deleted.pdf');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null instead of throwing when Supabase reports the object is already gone (numeric status 404)', async () => {
+      mockCreateSignedUrl.mockResolvedValue({
+        data: null,
+        error: { message: 'Object not found', status: 404 },
+      });
+
+      const result = await service.getShippingLabelSignedUrl('labels/already-deleted.pdf');
+
+      expect(result).toBeNull();
+    });
   });
 
   // ─── deleteShippingLabel ──────────────────────────────────────────────────────
