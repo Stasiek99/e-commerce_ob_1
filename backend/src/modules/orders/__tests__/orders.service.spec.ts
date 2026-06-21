@@ -1504,6 +1504,42 @@ describe('OrdersService', () => {
 
       expect(result.refundedAmountInCents).toBe(0);
     });
+
+    // FIX: the order-detail response previously had no way for the frontend to know
+    // a coupon was FREE_SHIPPING (vs. an items discount) — without it, refundPreview()
+    // can't replicate PaymentsService.prorateDiscountForRefundItems()'s skip of that case.
+    it('includes the coupon relation so prorateDiscountForRefundItems-equivalent logic can run client-side', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o-1', items: [], payment: null });
+
+      await service.findOneForUser('o-1', 'user-1');
+
+      expect(prisma.order.findFirst).toHaveBeenCalledWith({
+        where: { id: 'o-1', userId: 'user-1' },
+        include: { items: true, payment: true, shipment: true, coupon: { select: { discountType: true } } },
+      });
+    });
+
+    it('flattens the coupon discountType into couponDiscountType', async () => {
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'o-1',
+        items: [],
+        payment: null,
+        coupon: { discountType: 'FREE_SHIPPING' },
+      });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.couponDiscountType).toBe('FREE_SHIPPING');
+      expect((result as { coupon?: unknown }).coupon).toBeUndefined();
+    });
+
+    it('defaults couponDiscountType to null when the order has no coupon', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o-1', items: [], payment: null, coupon: null });
+
+      const result = await service.findOneForUser('o-1', 'user-1');
+
+      expect(result.couponDiscountType).toBeNull();
+    });
   });
 
   describe('findEventsForUser', () => {

@@ -25,6 +25,7 @@ interface OrderItem {
   snapshotPrice: number;
   quantity: number;
   cancelledQuantity: number;
+  cancelledDiscountInCents: number;
   productVariantId: string;
 }
 
@@ -34,6 +35,9 @@ interface OrderDetail {
   status: string;
   items: OrderItem[];
   shippingCostInCents: number;
+  itemsTotalInCents: number;
+  discountInCents: number;
+  couponDiscountType: 'PERCENTAGE' | 'FIXED_AMOUNT' | 'FREE_SHIPPING' | null;
   totalInCents: number;
   refundedAmountInCents: number;
   invoiceUrl: string | null;
@@ -225,7 +229,7 @@ const STATUS_LABELS: Record<string, string> = {
                              [min]="1" [max]="line.maxQuantity"
                              [(ngModel)]="line.quantity" />
                     </tui-textfield>
-                    <span class="partial-item-price">{{ line.priceInCents * line.quantity | price }}</span>
+                    <span class="partial-item-price">{{ lineTotal(line) | price }}</span>
                   } @else {
                     <span class="partial-item-max">maks. {{ line.maxQuantity }} szt.</span>
                   }
@@ -464,10 +468,41 @@ export class OrderDetailComponent implements OnInit {
     this.partialCancelling.set(true);
   }
 
+  // Mirrors PaymentsService.prorateDiscountForRefundItems() so the preview matches
+  // what the backend will actually refund for coupon-discounted orders — a flat
+  // quantity × priceInCents sum overstates the refund whenever discountInCents > 0.
+  private discountFraction(o: OrderDetail): number {
+    const discount = o.discountInCents ?? 0;
+    const itemsTotal = o.itemsTotalInCents ?? 0;
+    if (discount <= 0 || itemsTotal <= 0) return 0;
+    // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+    // items-total discount — prorateDiscountForRefundItems skips proration entirely.
+    if (o.couponDiscountType === 'FREE_SHIPPING') return 0;
+    return discount / itemsTotal;
+  }
+
+  lineTotal(line: PartialCancelLine): number {
+    const o = this.order();
+    const fraction = o ? this.discountFraction(o) : 0;
+    if (!o || fraction === 0) return line.quantity * line.priceInCents;
+
+    const orderItem = o.items.find(i => i.id === line.orderItemId);
+    if (!orderItem) return line.quantity * line.priceInCents;
+
+    const maxItemDiscount = Math.round(orderItem.snapshotPrice * fraction * orderItem.quantity);
+    const alreadyAppliedDiscount = orderItem.cancelledDiscountInCents ?? 0;
+    const remainingItemDiscount = Math.max(0, maxItemDiscount - alreadyAppliedDiscount);
+    const wantedDiscount = Math.round(orderItem.snapshotPrice * fraction * line.quantity);
+    const appliedDiscount = Math.min(wantedDiscount, remainingItemDiscount);
+    const perUnitDiscount = Math.floor(appliedDiscount / line.quantity);
+
+    return line.quantity * (line.priceInCents - perUnitDiscount);
+  }
+
   refundPreview(): number {
     return this.partialLines
       .filter(l => l.selected)
-      .reduce((sum, l) => sum + l.quantity * l.priceInCents, 0);
+      .reduce((sum, l) => sum + this.lineTotal(l), 0);
   }
 
   doPartialCancel(): void {

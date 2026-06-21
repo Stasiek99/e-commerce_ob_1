@@ -551,7 +551,7 @@ export class OrdersService implements OnModuleInit {
   async findOneForUser(id: string, userId: string) {
     const order = await this.prisma.order.findFirst({
       where: { id, userId },
-      include: { items: true, payment: true, shipment: true },
+      include: { items: true, payment: true, shipment: true, coupon: { select: { discountType: true } } },
     });
     if (!order) throw new NotFoundException('Order not found');
     return this.mapOrder(order);
@@ -1509,15 +1509,21 @@ export class OrdersService implements OnModuleInit {
     T extends {
       items: Array<{ quantity: number; snapshotPrice: number }>;
       payment: { refundedAmountInCents: number } | null;
+      coupon?: { discountType: DiscountType } | null;
     },
   >(order: T) {
+    const { coupon, ...rest } = order;
     return {
-      ...order,
+      ...rest,
       items: order.items.map((item) => ({
         ...item,
         totalPrice: item.quantity * item.snapshotPrice,
       })),
       refundedAmountInCents: order.payment?.refundedAmountInCents ?? 0,
+      // FREE_SHIPPING coupons store the shipping refund in discountInCents, not an
+      // items-total discount — the frontend's refund-preview proration must mirror
+      // PaymentsService.prorateDiscountForRefundItems' skip of that case exactly.
+      couponDiscountType: coupon?.discountType ?? null,
     };
   }
 
