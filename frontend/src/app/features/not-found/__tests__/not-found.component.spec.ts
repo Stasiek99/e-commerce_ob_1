@@ -1,11 +1,12 @@
-import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA } from '@angular/core';
+import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA, PLATFORM_ID } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { RouterLink, provideRouter } from '@angular/router';
 import { Meta } from '@angular/platform-browser';
 import { NotFoundComponent } from '../not-found.component';
 import { SeoService } from '../../../core/services/seo.service';
+import { RESPONSE } from '../../../core/tokens/ssr.tokens';
 
-function setup() {
+function setup(platform: 'browser' | 'server' = 'browser', extraProviders: unknown[] = []) {
   const mockSeo = { updatePageMeta: jest.fn() };
   const mockMeta = { updateTag: jest.fn() };
 
@@ -15,6 +16,8 @@ function setup() {
       provideRouter([]),
       { provide: SeoService, useValue: mockSeo },
       { provide: Meta, useValue: mockMeta },
+      { provide: PLATFORM_ID, useValue: platform },
+      ...extraProviders,
     ],
     schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
   });
@@ -55,6 +58,37 @@ describe('NotFoundComponent', () => {
         name: 'robots',
         content: 'noindex, nofollow',
       });
+    });
+  });
+
+  // ─── SSR status code ─────────────────────────────────────────────────────
+  // Without this, CommonEngine.render() defaults to 200 for the wildcard
+  // route — a soft-404 that's indexable and indistinguishable from a real
+  // page to uptime monitors / Search Console.
+
+  describe('ngOnInit — SSR status code', () => {
+    it('calls ssrResponse.status(404) when platform is server', () => {
+      const mockSsrResponse = { status: jest.fn().mockReturnThis() };
+      const { fixture } = setup('server', [{ provide: RESPONSE, useValue: mockSsrResponse }]);
+
+      fixture.detectChanges();
+
+      expect(mockSsrResponse.status).toHaveBeenCalledWith(404);
+    });
+
+    it('does NOT call ssrResponse.status when platform is browser', () => {
+      const mockSsrResponse = { status: jest.fn().mockReturnThis() };
+      const { fixture } = setup('browser', [{ provide: RESPONSE, useValue: mockSsrResponse }]);
+
+      fixture.detectChanges();
+
+      expect(mockSsrResponse.status).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when platform is server and RESPONSE is not provided', () => {
+      const { fixture } = setup('server');
+
+      expect(() => fixture.detectChanges()).not.toThrow();
     });
   });
 
