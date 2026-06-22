@@ -1058,51 +1058,75 @@ export class PaymentsService {
 
     for (const order of orphaned) {
       try {
-        const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
-        await this.prisma.$transaction(async (tx) => {
-          // Restore stock only for units not already cancelled (mirrors handlePaymentFailure).
-          for (const item of order.items) {
-            const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
-            const updated = await tx.productVariant.update({
-              where: { id: item.productVariantId },
-              data: { stock: { increment: activeQuantity } },
+        // withOrderRefundLock (refund-lock:<orderId>) serializes this against every other
+        // stock/coupon-restoring mutation on the order — including a second, overlapping
+        // reconcilePendingPayments tick whose cron-level lock TTL expired mid-run. The
+        // conditional updateMany below is defense in depth, same as OrdersService.updateStatus:
+        // if another transaction already moved the order off PENDING_PAYMENT between the
+        // findMany above and acquiring this lock, it affects 0 rows and we skip the rest.
+        let claimed = false;
+        await this.withOrderRefundLock(order.id, async () => {
+          const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+          await this.prisma.$transaction(async (tx) => {
+            const stamped = await tx.order.updateMany({
+              where: { id: order.id, status: OrderStatus.PENDING_PAYMENT },
+              data: { status: OrderStatus.CANCELLED },
             });
-            deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
-          }
-          await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
-          if (order.couponId) {
-            await tx.$executeRaw`
-              UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
-              WHERE id = ${order.couponId}::uuid
-            `;
-            await tx.couponUse.deleteMany({ where: { orderId: order.id } });
-          }
-          await tx.orderEvent.create({
-            data: {
-              orderId: order.id,
-              fromStatus: OrderStatus.PENDING_PAYMENT,
-              toStatus: OrderStatus.CANCELLED,
-              actor: 'SYSTEM:reconcile-cron',
-              note: 'Auto-cancelled: no Stripe session was ever recorded for this order',
-            },
+            if (stamped.count === 0) return;
+            claimed = true;
+
+            // Restore stock only for units not already cancelled (mirrors handlePaymentFailure).
+            for (const item of order.items) {
+              const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
+              const updated = await tx.productVariant.update({
+                where: { id: item.productVariantId },
+                data: { stock: { increment: activeQuantity } },
+              });
+              deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
+            }
+            if (order.couponId) {
+              await tx.$executeRaw`
+                UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
+                WHERE id = ${order.couponId}::uuid
+              `;
+              await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+            }
+            await tx.orderEvent.create({
+              data: {
+                orderId: order.id,
+                fromStatus: OrderStatus.PENDING_PAYMENT,
+                toStatus: OrderStatus.CANCELLED,
+                actor: 'SYSTEM:reconcile-cron',
+                note: 'Auto-cancelled: no Stripe session was ever recorded for this order',
+              },
+            });
+          });
+
+          if (!claimed) return;
+
+          this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+            this.logger.warn('notifyStockChangesByDelta failed', err),
+          );
+
+          this.logger.warn(
+            `Auto-cancelled orphaned order ${order.orderNumber} (${order.id}) — stock and coupon capacity restored`,
+          );
+          Sentry.withScope((scope) => {
+            scope.setTag('payment.event', 'orphaned_pending_order_cancelled');
+            scope.setContext('order', { orderId: order.id, orderNumber: order.orderNumber });
+            Sentry.captureMessage(
+              'Auto-cancelled orphaned PENDING_PAYMENT order with no Stripe session',
+              'warning',
+            );
           });
         });
-        this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
-          this.logger.warn('notifyStockChangesByDelta failed', err),
-        );
-
-        this.logger.warn(
-          `Auto-cancelled orphaned order ${order.orderNumber} (${order.id}) — stock and coupon capacity restored`,
-        );
-        Sentry.withScope((scope) => {
-          scope.setTag('payment.event', 'orphaned_pending_order_cancelled');
-          scope.setContext('order', { orderId: order.id, orderNumber: order.orderNumber });
-          Sentry.captureMessage(
-            'Auto-cancelled orphaned PENDING_PAYMENT order with no Stripe session',
-            'warning',
-          );
-        });
       } catch (err) {
+        if (err instanceof HttpException && err.getStatus() === HttpStatus.TOO_MANY_REQUESTS) {
+          this.logger.warn(
+            `Skipping orphaned order ${order.id} — a concurrent mutation is already in progress`,
+          );
+          continue;
+        }
         this.logger.error(
           `Failed to auto-cancel orphaned order ${order.id}: ${(err as Error).message}`,
         );

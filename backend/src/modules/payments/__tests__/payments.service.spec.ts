@@ -103,6 +103,7 @@ describe('PaymentsService', () => {
             order: {
               findUniqueOrThrow: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
               count: jest.fn().mockResolvedValue(0),
               findMany: jest.fn().mockResolvedValue([]),
             },
@@ -1745,8 +1746,8 @@ describe('PaymentsService', () => {
 
       await service.reconcilePendingPayments();
 
-      expect(prisma.order.update).toHaveBeenCalledWith({
-        where: { id: 'order-orphan-1' },
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { id: 'order-orphan-1', status: OrderStatus.PENDING_PAYMENT },
         data: { status: OrderStatus.CANCELLED },
       });
       expect(prisma.productVariant.update).toHaveBeenCalledWith({
@@ -1835,6 +1836,78 @@ describe('PaymentsService', () => {
       const after = Date.now();
       expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - TWO_HOURS_MS - 1000);
       expect(cutoff.getTime()).toBeLessThanOrEqual(after - TWO_HOURS_MS + 1000);
+    });
+
+    // ── Concurrency guard: closes the race where two overlapping reconcile ticks
+    // (cron-lock TTL expired mid-run) both reach the same orphaned order ──
+    describe('concurrency guard (refund-lock)', () => {
+      it('acquires the lock keyed on refund-lock:<orderId> before mutating stock/coupons', async () => {
+        prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+        await service.reconcilePendingPayments();
+
+        expect(redis.set).toHaveBeenCalledWith(
+          'refund-lock:order-orphan-1',
+          expect.any(String),
+          'EX',
+          30,
+          'NX',
+        );
+      });
+
+      it('releases the lock after successfully cancelling the order', async () => {
+        prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+
+        await service.reconcilePendingPayments();
+
+        expect(redis.eval).toHaveBeenCalledWith(
+          expect.any(String),
+          1,
+          'refund-lock:order-orphan-1',
+          expect.any(String),
+        );
+      });
+
+      it('skips an orphaned order without touching stock/coupons when its refund-lock is already held by a concurrent run', async () => {
+        prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+        redis.set.mockResolvedValueOnce('OK'); // cron:reconcile-payments:lock
+        redis.set.mockResolvedValueOnce('OK'); // cron:reconcile-payments:lastRun
+        redis.set.mockResolvedValueOnce(null); // refund-lock:order-orphan-1 — held by the other tick
+
+        await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        expect(prisma.productVariant.update).not.toHaveBeenCalled();
+      });
+
+      it('continues to the next orphaned order when an earlier one is locked by a concurrent run', async () => {
+        const secondOrphan = { ...orphanedOrder, id: 'order-orphan-2', items: [{ productVariantId: 'pv-10', quantity: 1 }] };
+        prisma.order.findMany.mockResolvedValue([orphanedOrder, secondOrphan]);
+        redis.set.mockResolvedValueOnce('OK'); // cron:reconcile-payments:lock
+        redis.set.mockResolvedValueOnce('OK'); // cron:reconcile-payments:lastRun
+        redis.set.mockResolvedValueOnce(null); // refund-lock:order-orphan-1 — held elsewhere
+        redis.set.mockResolvedValueOnce('OK'); // refund-lock:order-orphan-2 — free
+
+        await service.reconcilePendingPayments();
+
+        expect(prisma.order.updateMany).toHaveBeenCalledWith({
+          where: { id: 'order-orphan-2', status: OrderStatus.PENDING_PAYMENT },
+          data: { status: OrderStatus.CANCELLED },
+        });
+        expect(prisma.order.updateMany).not.toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'order-orphan-1', status: OrderStatus.PENDING_PAYMENT } }),
+        );
+      });
+
+      it('does not restore stock or log success when the conditional claim affects 0 rows (order already moved off PENDING_PAYMENT)', async () => {
+        prisma.order.findMany.mockResolvedValue([orphanedOrder]);
+        prisma.order.updateMany.mockResolvedValueOnce({ count: 0 });
+
+        await service.reconcilePendingPayments();
+
+        expect(prisma.productVariant.update).not.toHaveBeenCalled();
+        expect(prisma.orderEvent.create).not.toHaveBeenCalled();
+      });
     });
   });
 
