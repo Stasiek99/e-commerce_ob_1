@@ -44,6 +44,11 @@ interface OrderDetail {
   shipment?: { trackingNumber?: string; carrierCode?: string } | null;
 }
 
+interface CorrectiveInvoiceResponse {
+  correctiveInvoiceUrl: string;
+  correctiveInvoiceNumber: string;
+}
+
 interface PartialCancelLine {
   orderItemId: string;
   name: string;
@@ -102,14 +107,24 @@ const STATUS_LABELS: Record<string, string> = {
         </div>
 
         <!-- ── Invoice download ───────────────────────────── -->
-        @if (canDownloadInvoice(order()!.status)) {
+        @if (canDownloadInvoice(order()!.status) || hasCorrectiveInvoice(order()!.items)) {
           <div class="invoice-row">
-            <button tuiButton appearance="outline" size="s" type="button"
-                    [disabled]="downloadingInvoice()"
-                    (click)="downloadInvoice()">
-              <tui-icon icon="@tui.file-text" />
-              {{ downloadingInvoice() ? 'Generowanie…' : 'Pobierz fakturę' }}
-            </button>
+            @if (canDownloadInvoice(order()!.status)) {
+              <button tuiButton appearance="outline" size="s" type="button"
+                      [disabled]="downloadingInvoice()"
+                      (click)="downloadInvoice()">
+                <tui-icon icon="@tui.file-text" />
+                {{ downloadingInvoice() ? 'Generowanie…' : 'Pobierz fakturę' }}
+              </button>
+            }
+            @if (hasCorrectiveInvoice(order()!.items)) {
+              <button tuiButton appearance="outline" size="s" type="button"
+                      [disabled]="downloadingCorrectiveInvoice()"
+                      (click)="downloadCorrectiveInvoice()">
+                <tui-icon icon="@tui.file-text" />
+                {{ downloadingCorrectiveInvoice() ? 'Generowanie…' : 'Pobierz korektę' }}
+              </button>
+            }
           </div>
         }
 
@@ -272,7 +287,7 @@ const STATUS_LABELS: Record<string, string> = {
     h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
 
     /* ── Invoice ────────────────────────────────────────── */
-    .invoice-row { margin-bottom: 16px; }
+    .invoice-row { display: flex; gap: 8px; margin-bottom: 16px; }
 
     /* ── Items card ─────────────────────────────────────── */
     .items-card {
@@ -403,6 +418,7 @@ export class OrderDetailComponent implements OnInit {
   readonly partialCancelling = signal(false);
   readonly submittingPartial = signal(false);
   readonly downloadingInvoice = signal(false);
+  readonly downloadingCorrectiveInvoice = signal(false);
   // Shared across the full-cancel and partial-cancel zones — without it, a user
   // could fire "cancel whole order" then submit a partial cancellation for the
   // same order before the first request resolves, racing two backend code paths.
@@ -437,6 +453,10 @@ export class OrderDetailComponent implements OnInit {
     return !['PENDING_PAYMENT', 'CANCELLED', 'FRAUD_REVIEW', 'DISPUTE_HOLD'].includes(status);
   }
 
+  hasCorrectiveInvoice(items: OrderItem[]): boolean {
+    return items.some((i) => i.cancelledQuantity > 0);
+  }
+
   downloadInvoice(): void {
     const id = this.route.snapshot.paramMap.get('id')!;
     this.downloadingInvoice.set(true);
@@ -448,6 +468,21 @@ export class OrderDetailComponent implements OnInit {
       error: (err) => {
         this.toast.error(err.error?.message ?? 'Nie udało się wygenerować faktury.');
         this.downloadingInvoice.set(false);
+      },
+    });
+  }
+
+  downloadCorrectiveInvoice(): void {
+    const id = this.route.snapshot.paramMap.get('id')!;
+    this.downloadingCorrectiveInvoice.set(true);
+    this.http.get<CorrectiveInvoiceResponse>(`${environment.apiUrl}/orders/${id}/corrective-invoice`).subscribe({
+      next: ({ correctiveInvoiceUrl }) => {
+        this.downloadingCorrectiveInvoice.set(false);
+        window.open(correctiveInvoiceUrl, '_blank', 'noopener');
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Nie udało się pobrać faktury korygującej.');
+        this.downloadingCorrectiveInvoice.set(false);
       },
     });
   }
