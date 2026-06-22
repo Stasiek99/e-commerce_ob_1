@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CarrierCode, DiscountType, OrderStatus, ReturnStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import { OrdersService } from '../orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../../cart/cart.service';
@@ -11,6 +12,11 @@ import { CouponService } from '../../coupons/coupon.service';
 import { InvoiceService } from '../../invoice/invoice.service';
 import { ShippingRatesService } from '../../shipping/shipping-rates.service';
 import { ProductsService } from '../../products/products.service';
+import { generateOrderToken } from '../../../common/utils/order-token.util';
+
+jest.mock('@sentry/nestjs', () => ({
+  captureException: jest.fn(),
+}));
 
 const MOCK_RATES: Record<CarrierCode, number> = {
   [CarrierCode.INPOST]:      1499,
@@ -4389,6 +4395,10 @@ describe('OrdersService', () => {
   describe('fire-and-forget email error handling', () => {
     const flush = () => new Promise<void>((r) => setImmediate(r));
 
+    beforeEach(() => {
+      (Sentry.captureException as jest.Mock).mockClear();
+    });
+
     it('cancelByUser logs warning and resolves when sendOrderCancellation rejects', async () => {
       const emailError = new Error('Queue connection refused');
       const emailService = (service as any).emailService;
@@ -4420,6 +4430,48 @@ describe('OrdersService', () => {
         expect.stringContaining('cancellation email'),
         emailError,
       );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
+    });
+
+    it('cancelByToken logs warning and resolves when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Queue connection refused');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      const configService = (service as any).configService;
+      configService.get.mockImplementation((key: string, defaultVal?: string) =>
+        key === 'ORDER_CANCEL_SECRET' ? 'test-secret' : defaultVal,
+      );
+
+      const token = generateOrderToken('order-1', 'test@example.com', 'test-secret');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 10000,
+        items: [{ productVariantId: 'pv-1', quantity: 1 }],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        }),
+      );
+
+      await expect(service.cancelByToken('order-1', token)).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('cancellation email'),
+        emailError,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
     });
 
     it('cancelItemsByUser logs warning and resolves when sendOrderCancellation rejects', async () => {
@@ -4448,6 +4500,66 @@ describe('OrdersService', () => {
         expect.stringContaining('cancellation email'),
         emailError,
       );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
+    });
+
+    it('cancelItemsByUser (full cancellation) logs warning and resolves when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Redis write timeout');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PAID,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 100000,
+        invoiceNumber: null,
+        items: [{ id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 0, snapshotName: 'X', snapshotSku: 'X-1', snapshotPrice: 34900 }],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', { items: [{ orderItemId: 'item-1', quantity: 3 }] }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Full-cancellation email'),
+        emailError,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
+    });
+
+    it('cancelItemsByUser logs warning and resolves when processCorrectiveInvoice rejects', async () => {
+      const invoiceError = new Error('PDF render failed');
+      invoiceService.processCorrectiveInvoice.mockRejectedValue(invoiceError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PAID,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 100000,
+        invoiceNumber: 'FV/2026/000001',
+        items: [{ id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 0, snapshotName: 'X', snapshotSku: 'X-1', snapshotPrice: 34900, snapshotVatRate: 2300 }],
+      });
+
+      await expect(
+        service.cancelItemsByUser('order-1', 'user-1', { items: [{ orderItemId: 'item-1', quantity: 1 }] }),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Corrective invoice generation failed'),
+        invoiceError.message,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(invoiceError);
     });
 
     it('updateStatus logs warning and resolves when dispatchReviewRequestEmail rejects', async () => {
@@ -4475,6 +4587,7 @@ describe('OrdersService', () => {
         expect.stringContaining('Review request email'),
         emailError,
       );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
     });
 
     it('bulkMarkAsShipped logs warning and still counts order as succeeded when shipping email rejects', async () => {
@@ -4507,6 +4620,126 @@ describe('OrdersService', () => {
         expect.stringContaining('shipping notification email'),
         emailError,
       );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
+    });
+
+    it('bulkCancel logs warning and still counts order as succeeded when sendOrderCancellation rejects', async () => {
+      const emailError = new Error('Queue connection refused');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderCancellation.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      prisma.order.findMany.mockResolvedValue([{
+        id: 'o-1',
+        orderNumber: 'ORD-001',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 10000,
+        items: [{ productVariantId: 'pv-1', quantity: 2 }],
+      }]);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      const result = await service.bulkCancel(['o-1']);
+      await flush();
+
+      expect(result.succeeded).toBe(1);
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Bulk cancel order cancellation email'),
+        emailError,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
+    });
+
+    it('createFromCart logs warning and resolves when sendOrderAcknowledgement rejects', async () => {
+      const emailError = new Error('BullMQ not reachable');
+      const emailService = (service as any).emailService;
+      emailService.sendOrderAcknowledgement.mockRejectedValue(emailError);
+
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'pv-1', priceInCents: 34900, stock: 8 },
+              { id: 'pv-2', priceInCents: 44900, stock: 4 },
+            ]),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).resolves.toMatchObject({ orderId: 'o-1' });
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Order acknowledged email'),
+        emailError,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(emailError);
+    });
+
+    it('createFromCart logs warning and resolves when sendStockAlertIfNeeded rejects', async () => {
+      const stockAlertError = new Error('Low-stock query failed');
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+      jest.spyOn(service as any, 'sendStockAlertIfNeeded').mockRejectedValue(stockAlertError);
+
+      cartService.getOrCreate.mockResolvedValue(mockCart as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = {
+          $executeRawUnsafe: jest.fn(),
+          $queryRawUnsafe: jest.fn().mockResolvedValue([{ nextval: 1n }]),
+          productVariant: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findMany: jest.fn().mockResolvedValue([
+              { id: 'pv-1', priceInCents: 34900, stock: 8 },
+              { id: 'pv-2', priceInCents: 44900, stock: 4 },
+            ]),
+          },
+          order: { create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-2026-000001', snapshotEmail: 'test@example.com', snapshotFirstName: 'Jan', totalInCents: 114700 }) },
+          cart: { findFirst: jest.fn().mockResolvedValue({ id: 'cart-1' }) },
+          cartItem: { deleteMany: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        };
+        return fn(tx);
+      });
+      paymentsService.initiatePayment.mockResolvedValue({ paymentUrl: 'https://mock/pay' });
+
+      await expect(
+        service.createFromCart('user-1', undefined, 'test@example.com', {
+          newAddress: mockAddress,
+          carrierCode: CarrierCode.DHL,
+        }),
+      ).resolves.toMatchObject({ orderId: 'o-1' });
+      await flush();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('sendStockAlertIfNeeded failed'),
+        stockAlertError,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(stockAlertError);
     });
   });
 
