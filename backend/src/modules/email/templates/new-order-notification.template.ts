@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 export function newOrderNotificationTemplate(data: {
   orderNumber: string;
   customerEmail: string;
@@ -13,7 +15,7 @@ export function newOrderNotificationTemplate(data: {
     .map(
       (i) =>
         `<tr>
-          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:14px;">${i.name}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:14px;">${escapeHtml(i.name)}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:14px;text-align:center;">${i.quantity}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:14px;text-align:right;">${((i.price * i.quantity) / 100).toFixed(2).replace('.', ',')} zł</td>
         </tr>`,
@@ -35,7 +37,7 @@ export function newOrderNotificationTemplate(data: {
       <p style="color:#9ca3af;margin:4px 0 0;font-size:13px;">#${data.orderNumber}</p>
     </div>
     <div style="padding:24px;">
-      <p style="font-size:14px;margin:0 0 4px;"><strong>Klient:</strong> ${data.customerEmail}</p>
+      <p style="font-size:14px;margin:0 0 4px;"><strong>Klient:</strong> ${escapeHtml(data.customerEmail)}</p>
       <p style="font-size:14px;margin:0 0 16px;"><strong>Dostawa:</strong> ${data.carrierCode}</p>
       <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
         <thead>

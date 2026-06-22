@@ -1,3 +1,5 @@
+import { escapeHtml } from './html-escape.util';
+
 interface StockAlertItem {
   sku: string;
   name: string;
@@ -24,8 +26,8 @@ export function lowStockAlertTemplate(data: {
     .map(
       (item) => `
       <tr>
-        <td style="${rowStyle}">${item.name}</td>
-        <td style="${rowStyleMono}">${item.sku}</td>
+        <td style="${rowStyle}">${escapeHtml(item.name)}</td>
+        <td style="${rowStyleMono}">${escapeHtml(item.sku)}</td>
         <td style="${rowStyleCenter}">
           <span style="${item.isOutOfStock ? badgeOut : badgeLow}">
             ${item.isOutOfStock ? 'BRAK' : `${item.stock} szt.`}
