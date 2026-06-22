@@ -15,6 +15,8 @@ import { catchError } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { AnalyticsService } from './core/services/analytics.service';
 import {
+  NavigationEnd,
+  NavigationStart,
   Router,
   TitleStrategy,
   provideRouter,
@@ -39,6 +41,36 @@ import { errorInterceptor } from './core/interceptors/error.interceptor';
 import { ssrTimeoutInterceptor } from './core/interceptors/ssr-timeout.interceptor';
 import { environment } from '../environments/environment';
 import { LOCAL_STORAGE } from './core/tokens/storage.tokens';
+import { RESPONSE } from './core/tokens/ssr.tokens';
+
+// Angular Universal doesn't turn a guard-returned UrlTree into a real HTTP
+// redirect — it silently renders the redirect target's component tree under
+// the originally-requested URL at status 200 (e.g. checkoutGuard redirecting
+// an empty cart to /cart still serves that markup at the /checkout URL).
+// Bridges it to a real 3xx via the RESPONSE token, the same per-request
+// express Response already used for the 404 case in product-detail.component.ts.
+// No-op in the browser and whenever RESPONSE isn't provided (i.e. always, outside
+// the one per-request SSR render in server.ts).
+export function bridgeGuardRedirectsToHttp(): void {
+  if (isPlatformBrowser(inject(PLATFORM_ID))) return;
+  const response = inject(RESPONSE, { optional: true });
+  if (!response) return;
+  const router = inject(Router);
+
+  let requestedUrl: string | null = null;
+  const subscription = router.events.subscribe((event) => {
+    if (event instanceof NavigationStart) {
+      if (requestedUrl === null) requestedUrl = event.url;
+      return;
+    }
+    if (!(event instanceof NavigationEnd)) return;
+
+    if (!response.headersSent && requestedUrl !== null && event.urlAfterRedirects !== requestedUrl) {
+      response.redirect(302, event.urlAfterRedirects);
+    }
+    subscription.unsubscribe();
+  });
+}
 
 const sentryProviders = environment.sentryDsn
   ? [
@@ -69,6 +101,9 @@ export const appConfig: ApplicationConfig = {
     NG_EVENT_PLUGINS,
     provideAppInitializer(() => {
       inject(AnalyticsService).init(environment.gtmId);
+    }),
+    provideAppInitializer(() => {
+      bridgeGuardRedirectsToHttp();
     }),
     provideAppInitializer(async () => {
       // Auth refresh is only meaningful in the browser (needs cookies). Skip in
