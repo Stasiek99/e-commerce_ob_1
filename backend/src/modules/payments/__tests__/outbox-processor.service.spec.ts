@@ -159,7 +159,11 @@ describe('OutboxProcessorService', () => {
       expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'msg-1' },
-        data: { status: 'FAILED', lastError: 'Missing orderId in outbox message' },
+        data: {
+          status: 'FAILED',
+          lastError: 'Missing orderId in outbox message',
+          processedAt: expect.any(Date),
+        },
       });
     });
 
@@ -236,7 +240,12 @@ describe('OutboxProcessorService', () => {
 
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'msg-1' },
-        data: { retries: { increment: 1 }, lastError: 'order vanished', status: 'FAILED' },
+        data: {
+          retries: { increment: 1 },
+          lastError: 'order vanished',
+          status: 'FAILED',
+          processedAt: expect.any(Date),
+        },
       });
     });
   });

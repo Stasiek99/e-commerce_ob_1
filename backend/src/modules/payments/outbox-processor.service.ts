@@ -82,7 +82,7 @@ export class OutboxProcessorService {
     if (!msg.orderId) {
       await this.prisma.outboxMessage.update({
         where: { id: msg.id },
-        data: { status: 'FAILED', lastError: 'Missing orderId in outbox message' },
+        data: { status: 'FAILED', lastError: 'Missing orderId in outbox message', processedAt: new Date() },
       });
       return;
     }
@@ -156,6 +156,7 @@ export class OutboxProcessorService {
         scope.setTag('outbox.order_id', msg.orderId ?? 'unknown');
         Sentry.captureException(err);
       });
+      const exhausted = newRetries >= MAX_RETRIES;
       await this.prisma.outboxMessage.update({
         where: { id: msg.id },
         data: {
@@ -163,7 +164,10 @@ export class OutboxProcessorService {
           lastError: (err as Error).message,
           // Row was claimed into PROCESSING before this attempt — return it to
           // PENDING so the next recovery pass can retry it, unless retries are exhausted.
-          status: newRetries >= MAX_RETRIES ? 'FAILED' : 'PENDING',
+          status: exhausted ? 'FAILED' : 'PENDING',
+          // processedAt doubles as "terminal state reached at" so the retention
+          // cron's existing PROCESSED-cutoff filter also ages out FAILED rows.
+          ...(exhausted && { processedAt: new Date() }),
         },
       });
     }
