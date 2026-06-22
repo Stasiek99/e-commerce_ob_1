@@ -11,9 +11,11 @@ const MAX_RETRIES = 3;
 // Only attempt recovery for messages older than 30s — the in-process fast path
 // (dispatchPostPaymentNotifications) needs time to complete and mark PROCESSED.
 const RECOVERY_DELAY_MS = 30_000;
-// Slightly under the 30s @Interval period so the lock self-clears before the
-// next tick on a normal run, while still preventing overlapping replicas.
-const LOCK_TTL_SECONDS = 25;
+// Sized to the realistic worst-case single-message duration (invoice PDF render +
+// Supabase upload after a cold start), not the 30s @Interval period — the lock is
+// refreshed before each message below, so this only needs to outlast one message,
+// not the whole batch.
+const LOCK_TTL_SECONDS = 60;
 
 @Injectable()
 export class OutboxProcessorService {
@@ -56,6 +58,11 @@ export class OutboxProcessorService {
     for (const msg of messages) {
       if (msg.type !== 'POST_PAYMENT_NOTIFICATIONS') continue;
 
+      // Refresh the lock TTL before starting work, not only after — otherwise the
+      // very first message in a batch is unprotected if it alone runs long enough
+      // to outlive the lock before this loop ever reaches a refresh.
+      await this.redis.expire('cron:outbox-recovery:lock', LOCK_TTL_SECONDS);
+
       // Claim the row before doing any work so a second runner's PENDING-filtered
       // query excludes it — closes the race where the lock TTL expires mid-batch
       // and a concurrent run re-processes rows this run hasn't reached yet.
@@ -68,9 +75,6 @@ export class OutboxProcessorService {
       await this.processPostPaymentNotifications(
         msg as { id: string; orderId: string | null; retries: number },
       );
-
-      // Refresh the lock TTL so a slow batch doesn't outlive it.
-      await this.redis.expire('cron:outbox-recovery:lock', LOCK_TTL_SECONDS);
     }
   }
 
