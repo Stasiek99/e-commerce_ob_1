@@ -1,8 +1,10 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformServer } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Meta } from '@angular/platform-browser';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { SeoService } from '../../core/services/seo.service';
+import { RESPONSE } from '../../core/tokens/ssr.tokens';
 
 @Component({
   selector: 'app-not-found',
@@ -83,6 +85,8 @@ import { SeoService } from '../../core/services/seo.service';
 export class NotFoundComponent implements OnInit {
   private readonly seo = inject(SeoService);
   private readonly meta = inject(Meta);
+  private readonly platformId = inject(PLATFORM_ID);
+  private readonly ssrResponse = inject(RESPONSE, { optional: true });
 
   ngOnInit(): void {
     this.seo.updatePageMeta({
@@ -91,5 +95,8 @@ export class NotFoundComponent implements OnInit {
       path: '/404',
     });
     this.meta.updateTag({ name: 'robots', content: 'noindex, nofollow' });
+    if (isPlatformServer(this.platformId)) {
+      this.ssrResponse?.status(404);
+    }
   }
 }

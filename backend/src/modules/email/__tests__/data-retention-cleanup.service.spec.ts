@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { getQueueToken } from '@nestjs/bullmq';
 import { DataRetentionCleanupService } from '../data-retention-cleanup.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -6,6 +7,7 @@ describe('DataRetentionCleanupService', () => {
   let service: DataRetentionCleanupService;
   let prisma: any;
   let redis: any;
+  let dlq: any;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -24,12 +26,17 @@ describe('DataRetentionCleanupService', () => {
           provide: 'REDIS_CLIENT',
           useValue: { set: jest.fn().mockResolvedValue('OK') },
         },
+        {
+          provide: getQueueToken('email-dlq'),
+          useValue: { clean: jest.fn().mockResolvedValue([]) },
+        },
       ],
     }).compile();
 
     service = module.get(DataRetentionCleanupService);
     prisma = module.get(PrismaService);
     redis = module.get('REDIS_CLIENT');
+    dlq = module.get(getQueueToken('email-dlq'));
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -62,17 +69,52 @@ describe('DataRetentionCleanupService', () => {
 
   // ─── outboxMessage retention ─────────────────────────────────────────────
 
-  it('deletes only PROCESSED outbox messages older than 90 days', async () => {
+  it('deletes both PROCESSED and FAILED outbox messages older than 90 days', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-06-16T00:00:00Z'));
     redis.set.mockResolvedValue('OK');
 
     await service.purgeStaleOperationalLogs();
 
     expect(prisma.outboxMessage.deleteMany).toHaveBeenCalledWith({
-      where: { status: 'PROCESSED', processedAt: { lt: new Date('2026-03-18T00:00:00Z') } },
+      where: {
+        status: { in: ['PROCESSED', 'FAILED'] },
+        processedAt: { lt: new Date('2026-03-18T00:00:00Z') },
+      },
     });
 
     jest.useRealTimers();
+  });
+
+  // ─── email-dlq retention ──────────────────────────────────────────────────
+
+  it('cleans email-dlq jobs older than 90 days from the wait state', async () => {
+    redis.set.mockResolvedValue('OK');
+
+    await service.purgeStaleOperationalLogs();
+
+    expect(dlq.clean).toHaveBeenCalledWith(90 * 24 * 60 * 60 * 1000, 0, 'wait');
+  });
+
+  it('does not clean email-dlq jobs when another replica holds the lock', async () => {
+    redis.set.mockResolvedValue(null);
+
+    await service.purgeStaleOperationalLogs();
+
+    expect(dlq.clean).not.toHaveBeenCalled();
+  });
+
+  it('resolves without error when no email-dlq jobs are old enough to remove', async () => {
+    redis.set.mockResolvedValue('OK');
+    dlq.clean.mockResolvedValue([]);
+
+    await expect(service.purgeStaleOperationalLogs()).resolves.not.toThrow();
+  });
+
+  it('resolves without error when email-dlq jobs are removed', async () => {
+    redis.set.mockResolvedValue('OK');
+    dlq.clean.mockResolvedValue(['job-1', 'job-2']);
+
+    await expect(service.purgeStaleOperationalLogs()).resolves.not.toThrow();
   });
 
   // ─── emailLog retention ──────────────────────────────────────────────────

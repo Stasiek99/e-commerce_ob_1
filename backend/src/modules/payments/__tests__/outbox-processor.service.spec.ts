@@ -106,12 +106,12 @@ describe('OutboxProcessorService', () => {
       expect(prisma.outboxMessage.findMany).toHaveBeenCalledTimes(1);
     });
 
-    it('acquires the lock with key cron:outbox-recovery:lock, a 25s TTL, and NX', async () => {
+    it('acquires the lock with key cron:outbox-recovery:lock, a 60s TTL, and NX', async () => {
       redis.set.mockResolvedValue('OK');
 
       await service.recoverPendingMessages();
 
-      expect(redis.set).toHaveBeenCalledWith('cron:outbox-recovery:lock', '1', 'EX', 25, 'NX');
+      expect(redis.set).toHaveBeenCalledWith('cron:outbox-recovery:lock', '1', 'EX', 60, 'NX');
     });
   });
 
@@ -159,7 +159,11 @@ describe('OutboxProcessorService', () => {
       expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'msg-1' },
-        data: { status: 'FAILED', lastError: 'Missing orderId in outbox message' },
+        data: {
+          status: 'FAILED',
+          lastError: 'Missing orderId in outbox message',
+          processedAt: expect.any(Date),
+        },
       });
     });
 
@@ -236,7 +240,12 @@ describe('OutboxProcessorService', () => {
 
       expect(prisma.outboxMessage.update).toHaveBeenCalledWith({
         where: { id: 'msg-1' },
-        data: { retries: { increment: 1 }, lastError: 'order vanished', status: 'FAILED' },
+        data: {
+          retries: { increment: 1 },
+          lastError: 'order vanished',
+          status: 'FAILED',
+          processedAt: expect.any(Date),
+        },
       });
     });
   });
@@ -274,7 +283,7 @@ describe('OutboxProcessorService', () => {
       expect(prisma.outboxMessage.update).not.toHaveBeenCalled();
     });
 
-    it('refreshes the Redis lock TTL after successfully processing a claimed message', async () => {
+    it('refreshes the Redis lock TTL to 60s before claiming/processing each message', async () => {
       prisma.outboxMessage.findMany.mockResolvedValue([
         { id: 'msg-1', orderId: 'order-1', retries: 0, type: 'POST_PAYMENT_NOTIFICATIONS' },
       ]);
@@ -282,7 +291,34 @@ describe('OutboxProcessorService', () => {
 
       await service.recoverPendingMessages();
 
-      expect(redis.expire).toHaveBeenCalledWith('cron:outbox-recovery:lock', 25);
+      expect(redis.expire).toHaveBeenCalledWith('cron:outbox-recovery:lock', 60);
+    });
+
+    // Regression guard: previously the only refresh ran AFTER a message finished
+    // processing, so a slow first message (e.g. invoice PDF render + Supabase
+    // upload) could outlive the lock before the loop ever reached a refresh.
+    it('refreshes the lock BEFORE claiming/processing the message, not after', async () => {
+      prisma.outboxMessage.findMany.mockResolvedValue([
+        { id: 'msg-1', orderId: 'order-1', retries: 0, type: 'POST_PAYMENT_NOTIFICATIONS' },
+      ]);
+
+      const callOrder: string[] = [];
+      redis.expire.mockImplementation(async () => {
+        callOrder.push('lock-refresh');
+        return 1;
+      });
+      prisma.outboxMessage.updateMany.mockImplementation(async () => {
+        callOrder.push('claim-row');
+        return { count: 1 };
+      });
+      prisma.order.findUniqueOrThrow.mockImplementation(async () => {
+        callOrder.push('process-message');
+        return baseOrder;
+      });
+
+      await service.recoverPendingMessages();
+
+      expect(callOrder).toEqual(['lock-refresh', 'claim-row', 'process-message']);
     });
   });
 });

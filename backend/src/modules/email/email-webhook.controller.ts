@@ -89,7 +89,7 @@ export class EmailWebhookController {
 
     if (type === 'email.bounced') {
       this.logger.warn(`Email bounced for ${to}: ${data.bounce?.message ?? 'unknown reason'}`);
-      const toHash = createHash('sha256').update(to).digest('hex').slice(0, 12);
+      const toHash = to ? createHash('sha256').update(to).digest('hex').slice(0, 12) : 'unknown';
       Sentry.withScope((scope) => {
         scope.setTag('email.event', 'bounced');
         scope.setTag('email.to_hash', toHash);
@@ -111,7 +111,7 @@ export class EmailWebhookController {
 
     if (type === 'email.complained') {
       this.logger.warn(`Spam complaint from ${to} (email_id: ${data.email_id})`);
-      const toHash = createHash('sha256').update(to).digest('hex').slice(0, 12);
+      const toHash = to ? createHash('sha256').update(to).digest('hex').slice(0, 12) : 'unknown';
       Sentry.withScope((scope) => {
         scope.setTag('email.event', 'complained');
         scope.setTag('email.to_hash', toHash);

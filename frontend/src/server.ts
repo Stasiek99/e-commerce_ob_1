@@ -92,10 +92,15 @@ export function app(opts: AppOptions = {}): express.Express {
     Promise.race([renderPromise, timeoutPromise])
       .then(html => {
         clearTimeout(timeoutHandle);
+        // A route guard may have already issued a real HTTP redirect via the
+        // RESPONSE token (see bridgeGuardRedirectsToHttp in app.config.ts) — the
+        // rendered html for whatever route Angular settled on is then stale.
+        if (res.headersSent) return;
         res.send(html);
       })
       .catch(err => {
         clearTimeout(timeoutHandle);
+        if (res.headersSent) return;
         if ((err as Error & { name?: string }).name === 'SSRTimeoutError') {
           console.error(`[SSR timeout] ${SSR_RENDER_TIMEOUT_MS}ms exceeded for ${req.url} — serving CSR shell`);
           res.set('X-SSR-Fallback', 'timeout');

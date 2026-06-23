@@ -24,6 +24,7 @@ import { generateOrderToken, verifyOrderToken } from '../../common/utils/order-t
 import { getStripeMinimumChargeInCents } from '../payments/stripe-minimum-charge.util';
 import type IORedis from 'ioredis';
 import { randomUUID } from 'node:crypto';
+import * as Sentry from '@sentry/nestjs';
 
 
 interface CartItem {
@@ -505,13 +506,19 @@ export class OrdersService implements OnModuleInit {
         paymentUrl,
         cancelUrl,
       })
-      .catch((err) => this.logger.warn('Order acknowledged email failed', err));
+      .catch((err) => {
+        this.logger.warn('Order acknowledged email failed', err);
+        Sentry.captureException(err);
+      });
 
     // Stock alert (fire-and-forget): check post-decrement levels for all ordered variants
     this.sendStockAlertIfNeeded(
       order.orderNumber,
       cart.items.map((i: CartItem) => i.productVariantId),
-    ).catch((err) => this.logger.warn('sendStockAlertIfNeeded failed', err));
+    ).catch((err) => {
+      this.logger.warn('sendStockAlertIfNeeded failed', err);
+      Sentry.captureException(err);
+    });
 
     return { orderId: order.id, orderNumber: order.orderNumber, paymentUrl };
 
@@ -847,7 +854,10 @@ export class OrdersService implements OnModuleInit {
         totalInCents: order.totalInCents,
         isRefund,
       })
-      .catch((err) => this.logger.warn('Order cancellation email failed', err));
+      .catch((err) => {
+        this.logger.warn('Order cancellation email failed', err);
+        Sentry.captureException(err);
+      });
   }
 
   async cancelByToken(orderId: string, token: string, reason?: string): Promise<void> {
@@ -906,7 +916,10 @@ export class OrdersService implements OnModuleInit {
         totalInCents: order.totalInCents,
         isRefund: false,
       })
-      .catch((err) => this.logger.warn('Order cancellation email failed', err));
+      .catch((err) => {
+        this.logger.warn('Order cancellation email failed', err);
+        Sentry.captureException(err);
+      });
   }
 
   async retryPayment(orderId: string, userId: string): Promise<{ paymentUrl: string }> {
@@ -1057,7 +1070,10 @@ export class OrdersService implements OnModuleInit {
           totalInCents: order.totalInCents,
           isRefund: true,
         })
-        .catch((err) => this.logger.warn('Full-cancellation email failed', err));
+        .catch((err) => {
+          this.logger.warn('Full-cancellation email failed', err);
+          Sentry.captureException(err);
+        });
       return;
     }
 
@@ -1079,7 +1095,10 @@ export class OrdersService implements OnModuleInit {
             vatRate: i.vatRate,
           })),
         )
-        .catch((err) => this.logger.warn('Corrective invoice generation failed', (err as Error).message));
+        .catch((err) => {
+          this.logger.warn('Corrective invoice generation failed', (err as Error).message);
+          Sentry.captureException(err);
+        });
     }
 
     this.emailService
@@ -1090,7 +1109,10 @@ export class OrdersService implements OnModuleInit {
         totalInCents: refundAmountInCents,
         isRefund: true,
       })
-      .catch((err) => this.logger.warn('Partial refund cancellation email failed', err));
+      .catch((err) => {
+        this.logger.warn('Partial refund cancellation email failed', err);
+        Sentry.captureException(err);
+      });
 
     } finally {
       // Release the lock only if we still own it (Lua script is atomic).
@@ -1248,7 +1270,10 @@ export class OrdersService implements OnModuleInit {
       );
 
       if (status === OrderStatus.DELIVERED) {
-        this.dispatchReviewRequestEmail(id).catch((err) => this.logger.warn('Review request email failed', err));
+        this.dispatchReviewRequestEmail(id).catch((err) => {
+          this.logger.warn('Review request email failed', err);
+          Sentry.captureException(err);
+        });
       }
     } finally {
       // Release the lock only if we still own it (Lua script is atomic).
@@ -1300,7 +1325,10 @@ export class OrdersService implements OnModuleInit {
                 carrier: CARRIER_DISPLAY_NAMES[order.carrierCode] ?? order.carrierCode,
                 trackingNumber: order.shipment.trackingNumber,
               })
-              .catch((err) => this.logger.warn('Bulk shipped shipping notification email failed', err));
+              .catch((err) => {
+                this.logger.warn('Bulk shipped shipping notification email failed', err);
+                Sentry.captureException(err);
+              });
           }
 
           succeeded.push(order.orderNumber);
@@ -1392,7 +1420,10 @@ export class OrdersService implements OnModuleInit {
               totalInCents: order.totalInCents,
               isRefund,
             })
-            .catch((err) => this.logger.warn('Bulk cancel order cancellation email failed', err));
+            .catch((err) => {
+              this.logger.warn('Bulk cancel order cancellation email failed', err);
+              Sentry.captureException(err);
+            });
 
           succeeded.push(order.orderNumber);
         } catch (err) {

@@ -31,7 +31,7 @@ export function orderConfirmationTemplate(data: Data): { subject: string; html: 
     .map(
       (i) =>
         `<tr>
-          <td style="padding:8px;border-bottom:1px solid #eee">${i.name}</td>
+          <td style="padding:8px;border-bottom:1px solid #eee">${escapeHtml(i.name)}</td>
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:center">${i.quantity}</td>
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:right">${formatPrice(i.price * i.quantity)}</td>
         </tr>`,

@@ -379,6 +379,76 @@ describe('EmailWebhookController', () => {
           expect(prisma.user.updateMany).toHaveBeenCalledTimes(1);
         });
       });
+
+      // ── missing/empty `to` field (malformed Resend payload) ───────────────────
+      // Invariant: createHash('sha256').update(to) must never receive `undefined`.
+      // Resend's retry policy redelivers the identical event on every 500, so a
+      // crash here permanently blocks the suppression flag from ever being set.
+
+      describe('email.bounced / email.complained — missing or empty `to`', () => {
+        it('does not throw for email.bounced when `to` is an empty array', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-empty-to', []));
+
+          await expect(
+            controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature),
+          ).resolves.not.toThrow();
+        });
+
+        it('does not throw for email.bounced when `to` is absent entirely', async () => {
+          const event = makeEvent('email.bounced', 'em-missing-to');
+          delete (event.data as { to?: string[] }).to;
+          const req = makeReq(event);
+
+          await expect(
+            controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature),
+          ).resolves.not.toThrow();
+        });
+
+        it('still creates the emailLog row with an empty `to` when the field is missing', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-empty-to-2', []));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(prisma.emailLog.create).toHaveBeenCalledWith(
+            expect.objectContaining({ data: expect.objectContaining({ to: '' }) }),
+          );
+        });
+
+        it('still reports the bounce to Sentry when `to` is empty (falls back to a placeholder hash)', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-empty-to-3', []));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(Sentry.captureMessage).toHaveBeenCalledWith(
+            expect.stringContaining('bounced'),
+            'warning',
+          );
+        });
+
+        it('does not call user.updateMany for email.bounced when `to` is empty (no email to match on)', async () => {
+          const req = makeReq(makeEvent('email.bounced', 'em-empty-to-4', []));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(prisma.user.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('does not throw for email.complained when `to` is an empty array', async () => {
+          const req = makeReq(makeEvent('email.complained', 'em-empty-to-5', []));
+
+          await expect(
+            controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature),
+          ).resolves.not.toThrow();
+        });
+
+        it('does not call emailService.suppressContact for email.complained when `to` is empty', async () => {
+          const req = makeReq(makeEvent('email.complained', 'em-empty-to-6', []));
+
+          await controller.handle(req as any, SVIX_HEADERS.id, SVIX_HEADERS.timestamp, SVIX_HEADERS.signature);
+
+          expect(emailService.suppressContact).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 });
