@@ -16,7 +16,7 @@ import { CartService } from '../cart/cart.service';
 import { PaymentsService } from '../payments/payments.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { CouponService } from '../coupons/coupon.service';
-import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus, Prisma, ReturnStatus, ShipmentStatus } from '@prisma/client';
 import { InvoiceService } from '../invoice/invoice.service';
 import { ShippingRatesService } from '../shipping/shipping-rates.service';
 import { ProductsService } from '../products/products.service';
@@ -1262,6 +1262,18 @@ export class OrdersService implements OnModuleInit {
           await tx.shipment.updateMany({
             where: { orderId: id, shippedAt: null },
             data: { shippedAt: new Date() },
+          });
+        }
+
+        // Authoritative delivery timestamp for the Art. 27 UoK 14-day withdrawal clock
+        // (see ReturnsService.create) — admin confirmation via this endpoint is currently
+        // the only producer of Shipment.deliveredAt. Guarded on deliveredAt: null so a
+        // re-entrant transition (e.g. DISPUTE_HOLD → DELIVERED) never overwrites the first
+        // real delivery date.
+        if (status === OrderStatus.DELIVERED) {
+          await tx.shipment.updateMany({
+            where: { orderId: id, deliveredAt: null },
+            data: { status: ShipmentStatus.DELIVERED, deliveredAt: new Date() },
           });
         }
       });

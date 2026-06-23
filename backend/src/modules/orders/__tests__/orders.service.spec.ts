@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { CarrierCode, DiscountType, OrderStatus, ReturnStatus } from '@prisma/client';
+import { CarrierCode, DiscountType, OrderStatus, ReturnStatus, ShipmentStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import * as Sentry from '@sentry/nestjs';
 import { OrdersService } from '../orders.service';
@@ -2298,6 +2298,47 @@ describe('OrdersService', () => {
 
       expect(shipmentUpdateMany).not.toHaveBeenCalled();
     });
+
+    // Regression harness — Shipment.deliveredAt previously had no writer anywhere
+    // in the codebase, so ReturnsService's Art. 27 UoK withdrawal-clock check
+    // (order.shipment?.deliveredAt) always fell back to the client-supplied date.
+    // Invariant: when updateStatus transitions an order to DELIVERED, it must call
+    // shipment.updateMany({ where: { orderId, deliveredAt: null },
+    // data: { status: DELIVERED, deliveredAt: <now> } }) inside the same transaction.
+
+    it('sets deliveredAt and shipment status on the shipment when transitioning to DELIVERED', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.SHIPPED,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+      prisma.order.findUnique.mockResolvedValue(null); // dispatchReviewRequestEmail exits early
+
+      await service.updateStatus('o-1', OrderStatus.DELIVERED);
+
+      expect(shipmentUpdateMany).toHaveBeenCalledWith({
+        where: { orderId: 'o-1', deliveredAt: null },
+        data: { status: ShipmentStatus.DELIVERED, deliveredAt: expect.any(Date) },
+      });
+    });
+
+    it('does not overwrite deliveredAt on the shipment for non-DELIVERED transitions', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        status: OrderStatus.PAID,
+        items: [],
+      });
+      const shipmentUpdateMany = jest.fn();
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn(makeTx({ shipmentUpdateMany })),
+      );
+
+      await service.updateStatus('o-1', OrderStatus.PROCESSING);
+
+      expect(shipmentUpdateMany).not.toHaveBeenCalled();
+    });
   });
 
   // ─── updateStatus — state machine transition guard ───────────────────────────
@@ -4575,6 +4616,7 @@ describe('OrdersService', () => {
           productVariant: { update: jest.fn() },
           order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
+          shipment: { updateMany: jest.fn() },
         }),
       );
       // dispatchReviewRequestEmail reads from DB — make it throw to simulate full pipeline failure
