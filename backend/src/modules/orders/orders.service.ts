@@ -1077,9 +1077,12 @@ export class OrdersService implements OnModuleInit {
       return;
     }
 
-    await this.paymentsService.partialRefund(orderId, proratedItems, order.status, 'CUSTOMER');
-
-    const refundAmountInCents = proratedItems.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
+    const refundAmountInCents = await this.paymentsService.partialRefund(
+      orderId,
+      proratedItems,
+      order.status,
+      'CUSTOMER',
+    );
 
     if (order.invoiceNumber) {
       this.invoiceService

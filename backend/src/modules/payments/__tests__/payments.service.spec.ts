@@ -2609,6 +2609,33 @@ describe('PaymentsService', () => {
       expect(capturedPaymentData.refundedAmountInCents).toEqual({ increment: 90000 });
     });
 
+    // ─── return value surfaces the actual refunded amount (fix: callers must not
+    // recompute their own uncapped figure for invoices/emails) ────────────────
+
+    it('resolves with the raw item sum when it does not exceed the available balance', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      const result = await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(result).toBe(114700);
+    });
+
+    it('resolves with the capped amount, not the raw item sum, when raw sum exceeds available', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 150000,
+        refundedAmountInCents: 60000,
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      const result = await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(result).toBe(90000);
+    });
+
     // ─── per-order refund lock (covers concurrent callers: cancelItemsByUser,
     // markRefunded, etc. all funnel through this method) ──────────────────────
 

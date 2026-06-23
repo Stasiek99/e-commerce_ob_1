@@ -116,7 +116,14 @@ describe('OrdersService', () => {
             initiatePayment: jest.fn(),
             expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
             refundPayment: jest.fn().mockResolvedValue(undefined),
-            partialRefund: jest.fn().mockResolvedValue(undefined),
+            // Mirrors the uncapped sum by default — the real cap is unit-tested on
+            // PaymentsService.partialRefund directly; tests here assert that
+            // cancelItemsByUser forwards whatever partialRefund resolves with
+            // (not a value it recomputes itself) to the invoice/email.
+            partialRefund: jest.fn().mockImplementation(
+              async (_orderId: string, items: Array<{ quantity: number; priceInCents: number }>) =>
+                items.reduce((s, i) => s + i.quantity * i.priceInCents, 0),
+            ),
             // Passthrough by default (no discount) — math itself is unit-tested on
             // PaymentsService directly; tests here only assert the delegation contract.
             prorateDiscountForRefundItems: jest.fn().mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
@@ -3879,6 +3886,45 @@ describe('OrdersService', () => {
           expect.objectContaining({ priceInCents: 34900, vatRate: 2300 }),
           expect.objectContaining({ priceInCents: 44900, vatRate: 500 }),
         ]),
+      );
+    });
+
+    // ─── refund-cap fidelity (fix: the corrective invoice and cancellation email
+    // ─── must reflect what Stripe actually refunded, not an independently
+    // ─── recomputed uncapped sum) ───────────────────────────────────────────────
+
+    it('uses the amount partialRefund resolves with — not its own recomputed sum — for the corrective invoice', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...mockPaidOrder, invoiceNumber: 'FV/2026/000003' });
+      // Raw sum would be 69800 (2 × 34900); simulate Stripe's available-balance cap
+      // kicking in and partialRefund resolving with a smaller, capped figure.
+      (paymentsService.partialRefund as jest.Mock).mockResolvedValue(50000);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-1',
+        'FV/2026/000003',
+        50000,
+        'PARTIAL_CANCELLATION',
+        expect.any(Array),
+      );
+    });
+
+    it('uses the amount partialRefund resolves with — not its own recomputed sum — for the cancellation email', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockPaidOrder);
+      const emailService = (service as any).emailService;
+      (paymentsService.partialRefund as jest.Mock).mockResolvedValue(50000);
+
+      await service.cancelItemsByUser('order-1', 'user-1', {
+        items: [{ orderItemId: 'item-1', quantity: 2 }],
+      });
+      await Promise.resolve();
+
+      expect(emailService.sendOrderCancellation).toHaveBeenCalledWith(
+        expect.objectContaining({ totalInCents: 50000 }),
       );
     });
 

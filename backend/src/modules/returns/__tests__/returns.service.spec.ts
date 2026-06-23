@@ -164,7 +164,14 @@ describe('ReturnsService', () => {
     };
     paymentsService = {
       refundPayment: jest.fn().mockResolvedValue(undefined),
-      partialRefund: jest.fn().mockResolvedValue(undefined),
+      // Mirrors the uncapped sum by default — the real cap is unit-tested on
+      // PaymentsService.partialRefund directly; tests here assert that
+      // markRefunded forwards whatever partialRefund resolves with (not a
+      // value it recomputes itself) to the corrective invoice.
+      partialRefund: jest.fn().mockImplementation(
+        async (_orderId: string, items: Array<{ quantity: number; priceInCents: number }>) =>
+          items.reduce((s, i) => s + i.quantity * i.priceInCents, 0),
+      ),
       // Passthrough by default (no discount) — math itself is unit-tested on
       // PaymentsService directly; tests here only assert the delegation contract.
       prorateDiscountForRefundItems: jest
@@ -208,7 +215,14 @@ describe('ReturnsService', () => {
     };
     paymentsService = {
       refundPayment: jest.fn().mockResolvedValue(undefined),
-      partialRefund: jest.fn().mockResolvedValue(undefined),
+      // Mirrors the uncapped sum by default — the real cap is unit-tested on
+      // PaymentsService.partialRefund directly; tests here assert that
+      // markRefunded forwards whatever partialRefund resolves with (not a
+      // value it recomputes itself) to the corrective invoice.
+      partialRefund: jest.fn().mockImplementation(
+        async (_orderId: string, items: Array<{ quantity: number; priceInCents: number }>) =>
+          items.reduce((s, i) => s + i.quantity * i.priceInCents, 0),
+      ),
       // Passthrough by default (no discount) — math itself is unit-tested on
       // PaymentsService directly; tests here only assert the delegation contract.
       prorateDiscountForRefundItems: jest
@@ -1227,6 +1241,34 @@ describe('ReturnsService', () => {
         34900,
         'RETURN_APPROVAL',
         [{ orderItemId: 'item-uuid-1', quantity: 1, priceInCents: 34900, vatRate: 2300 }],
+      );
+    });
+
+    it('uses the amount partialRefund resolves with — not its own recomputed sum — for the corrective invoice', async () => {
+      const mock = buildPrismaMock();
+      mock.order.findUniqueOrThrow.mockResolvedValue({
+        status: 'SHIPPED',
+        couponId: null,
+        discountInCents: 0,
+        itemsTotalInCents: 34900,
+        invoiceNumber: 'FV/2026/000099',
+      });
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+      // Raw sum would be 34900; simulate Stripe's available-balance cap kicking in
+      // and partialRefund resolving with a smaller, capped figure.
+      paymentsService.partialRefund.mockResolvedValue(20000);
+
+      await service.markRefunded('return-id-001');
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-uuid-1',
+        'FV/2026/000099',
+        20000,
+        'RETURN_APPROVAL',
+        expect.any(Array),
       );
     });
 

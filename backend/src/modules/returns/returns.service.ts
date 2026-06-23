@@ -405,7 +405,7 @@ export class ReturnsService {
     // Issues Stripe partial refund for the returned items, restores their stock,
     // and sets order.status → PARTIALLY_REFUNDED or REFUNDED.
     // Throws on Stripe error — intentionally propagated so the return stays APPROVED.
-    await this.payments.partialRefund(
+    const refundAmountInCents = await this.payments.partialRefund(
       req.orderId,
       proratedRefundItems,
       order.status as OrderStatus,
@@ -416,10 +416,6 @@ export class ReturnsService {
     // of which internal flow triggered the refund. Mirrors OrdersService.cancelItemsByUser,
     // the only other producer of InvoiceCorrection rows.
     if (order.invoiceNumber) {
-      const refundAmountInCents = proratedRefundItems.reduce(
-        (s, i) => s + i.quantity * i.priceInCents,
-        0,
-      );
       this.invoiceService
         .processCorrectiveInvoice(
           req.orderId,
