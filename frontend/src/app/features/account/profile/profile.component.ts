@@ -10,7 +10,7 @@ import { tuiInputPhoneInternationalOptionsProvider } from '@taiga-ui/kit';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
 import { getCountries } from 'libphonenumber-js/min';
 import { parsePhoneNumber } from 'libphonenumber-js';
-import { nameValidator, phoneValidator } from '../../../shared/validators/form.validators';
+import { nameValidator, phoneValidator, PASSWORD_RE } from '../../../shared/validators/form.validators';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { environment } from '../../../../environments/environment';
@@ -23,10 +23,6 @@ function formatPhone(raw: string): string {
     return raw;
   }
 }
-
-// Mirrors backend ChangePasswordDto's @Matches pattern so invalid passwords
-// are caught client-side instead of round-tripping to the server.
-const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 
 @Component({
   selector: 'app-profile',

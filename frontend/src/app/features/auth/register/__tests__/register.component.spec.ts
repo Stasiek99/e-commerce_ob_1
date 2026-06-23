@@ -88,10 +88,10 @@ describe('RegisterComponent — errorMsg inline validation', () => {
     expect(component.errorMsg('email')).toBeNull();
   });
 
-  it('returns null for password when touched and meets minimum length', () => {
+  it('returns null for password when touched and meets minimum length and complexity', () => {
     const { component } = setup();
 
-    component.form.get('password')!.setValue('secret12');
+    component.form.get('password')!.setValue('Secret123');
     component.form.get('password')!.markAsTouched();
 
     expect(component.errorMsg('password')).toBeNull();
@@ -137,6 +137,24 @@ describe('RegisterComponent — errorMsg inline validation', () => {
     expect(component.errorMsg('password')).toBe('Minimum 8 znaków');
   });
 
+  it('returns complexity message when password is 8+ chars but lacks an uppercase letter or digit', () => {
+    const { component } = setup();
+
+    component.form.get('password')!.setValue('passwordpass');
+    component.form.get('password')!.markAsTouched();
+
+    expect(component.errorMsg('password')).toBe('Hasło musi zawierać wielką literę, małą literę i cyfrę');
+  });
+
+  it('does not call auth.register() when password is 8+ chars but fails the complexity pattern', () => {
+    const { component, mockAuth } = setup();
+
+    component.form.setValue({ firstName: '', lastName: '', email: 'jan@example.com', password: 'passwordpass' });
+    component.submit();
+
+    expect(mockAuth.register).not.toHaveBeenCalled();
+  });
+
   // ── submit() marks all fields as touched so errors become visible ────────
 
   it('marks all fields as touched on submit when form is invalid', () => {
@@ -176,12 +194,12 @@ describe('RegisterComponent — errorMsg inline validation', () => {
     const { component, mockAuth } = setup();
     mockAuth.register.mockReturnValue(of({}));
 
-    component.form.setValue({ firstName: 'Jan', lastName: 'Kowalski', email: 'jan@example.com', password: 'password123' });
+    component.form.setValue({ firstName: 'Jan', lastName: 'Kowalski', email: 'jan@example.com', password: 'Password123' });
     component.submit();
 
     expect(mockAuth.register).toHaveBeenCalledWith(
       'jan@example.com',
-      'password123',
+      'Password123',
       'Jan',
       'Kowalski',
     );

@@ -5,6 +5,7 @@ import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
+import { PASSWORD_RE } from '../../../shared/validators/form.validators';
 
 @Component({
   selector: 'app-register',
@@ -42,7 +43,7 @@ import { ToastService } from '../../../core/services/toast.service';
         @if (errorMsg('email'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
 
         <tui-textfield>
-          <label tuiLabel>Hasło (min. 8 znaków)</label>
+          <label tuiLabel>Hasło (min. 8 znaków, wielka i mała litera, cyfra)</label>
           <input tuiTextfield type="password" formControlName="password" autocomplete="new-password" />
         </tui-textfield>
         @if (errorMsg('password'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
@@ -86,7 +87,7 @@ export class RegisterComponent {
     firstName: [''],
     lastName:  [''],
     email:     ['', [Validators.required, Validators.email]],
-    password:  ['', [Validators.required, Validators.minLength(8)]],
+    password:  ['', [Validators.required, Validators.minLength(8), Validators.pattern(PASSWORD_RE)]],
   });
 
   errorMsg(field: string): string | null {
@@ -96,6 +97,7 @@ export class RegisterComponent {
     if (e['required']) return 'To pole jest wymagane';
     if (e['email']) return 'Podaj prawidłowy adres e-mail';
     if (e['minlength']) return `Minimum ${e['minlength'].requiredLength} znaków`;
+    if (e['pattern']) return 'Hasło musi zawierać wielką literę, małą literę i cyfrę';
     return null;
   }
 
