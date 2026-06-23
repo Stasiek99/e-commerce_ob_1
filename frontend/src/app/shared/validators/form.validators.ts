@@ -9,6 +9,10 @@ const NAME_RE = /^[\p{L}\p{M}'\- ]+$/u;
 // Must contain at least one letter (street name) and at least one digit (house number).
 const STREET_CHARS_RE = /^[\p{L}\p{M}0-9 .,\-\/]+$/u;
 
+// Mirrors backend's @Matches password pattern (register/reset-password/change-password DTOs)
+// so invalid passwords are caught client-side instead of round-tripping to the server.
+export const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+
 export function nameValidator(control: AbstractControl): { nameTooShort: true } | { nameInvalid: true } | null {
   const val = (control.value as string)?.trim();
   if (!val) return null;

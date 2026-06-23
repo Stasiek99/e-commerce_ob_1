@@ -2,12 +2,18 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
+import * as Sentry from '@sentry/nestjs';
 import { ReturnsService } from '../returns.service';
 import { decryptIban } from '../iban-crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmailQueueService } from '../../email/email-queue.service';
 import { PaymentsService } from '../../payments/payments.service';
+import { InvoiceService } from '../../invoice/invoice.service';
 import { ReturnType as ReturnRequestType } from '../dto/create-return.dto';
+
+jest.mock('@sentry/nestjs', () => ({
+  captureException: jest.fn(),
+}));
 
 const TEST_IBAN_KEY = randomBytes(32).toString('hex');
 
@@ -128,6 +134,7 @@ const DEFAULT_ORDER_ITEMS = [
     productVariantId: 'variant-uuid-1',
     snapshotName: 'Perfumy Gold 50ml',
     snapshotPrice: 34900,
+    snapshotVatRate: 2300,
     quantity: 1,
     cancelledQuantity: 0,
     cancelledDiscountInCents: 0,
@@ -146,6 +153,7 @@ describe('ReturnsService', () => {
   let paymentsService: jest.Mocked<
     Pick<PaymentsService, 'refundPayment' | 'partialRefund' | 'prorateDiscountForRefundItems'>
   >;
+  let invoiceService: jest.Mocked<Pick<InvoiceService, 'processCorrectiveInvoice'>>;
 
   async function createModule(prismaMock = buildPrismaMock()) {
     prisma = prismaMock;
@@ -156,12 +164,26 @@ describe('ReturnsService', () => {
     };
     paymentsService = {
       refundPayment: jest.fn().mockResolvedValue(undefined),
-      partialRefund: jest.fn().mockResolvedValue(undefined),
+      // Mirrors the uncapped sum by default — the real cap is unit-tested on
+      // PaymentsService.partialRefund directly; tests here assert that
+      // markRefunded forwards whatever partialRefund resolves with (not a
+      // value it recomputes itself) to the corrective invoice.
+      partialRefund: jest.fn().mockImplementation(
+        async (_orderId: string, items: Array<{ quantity: number; priceInCents: number }>) =>
+          items.reduce((s, i) => s + i.quantity * i.priceInCents, 0),
+      ),
       // Passthrough by default (no discount) — math itself is unit-tested on
       // PaymentsService directly; tests here only assert the delegation contract.
       prorateDiscountForRefundItems: jest
         .fn()
         .mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
+    };
+    invoiceService = {
+      processCorrectiveInvoice: jest.fn().mockResolvedValue({
+        correctiveUrl: 'https://example.com/corrective.pdf',
+        correctiveStoragePath: 'corrective/path.pdf',
+        correctiveInvoiceNumber: 'FVK/2026/000001',
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -170,6 +192,7 @@ describe('ReturnsService', () => {
         { provide: PrismaService, useValue: prismaMock },
         { provide: EmailQueueService, useValue: emailService },
         { provide: PaymentsService, useValue: paymentsService },
+        { provide: InvoiceService, useValue: invoiceService },
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue(ADMIN_EMAIL) },
@@ -192,12 +215,26 @@ describe('ReturnsService', () => {
     };
     paymentsService = {
       refundPayment: jest.fn().mockResolvedValue(undefined),
-      partialRefund: jest.fn().mockResolvedValue(undefined),
+      // Mirrors the uncapped sum by default — the real cap is unit-tested on
+      // PaymentsService.partialRefund directly; tests here assert that
+      // markRefunded forwards whatever partialRefund resolves with (not a
+      // value it recomputes itself) to the corrective invoice.
+      partialRefund: jest.fn().mockImplementation(
+        async (_orderId: string, items: Array<{ quantity: number; priceInCents: number }>) =>
+          items.reduce((s, i) => s + i.quantity * i.priceInCents, 0),
+      ),
       // Passthrough by default (no discount) — math itself is unit-tested on
       // PaymentsService directly; tests here only assert the delegation contract.
       prorateDiscountForRefundItems: jest
         .fn()
         .mockImplementation(async (_order: any, _orderItems: any, items: any) => items),
+    };
+    invoiceService = {
+      processCorrectiveInvoice: jest.fn().mockResolvedValue({
+        correctiveUrl: 'https://example.com/corrective.pdf',
+        correctiveStoragePath: 'corrective/path.pdf',
+        correctiveInvoiceNumber: 'FVK/2026/000001',
+      }),
     };
 
     const configGetMock = jest.fn().mockImplementation((key: string, fallback?: unknown) => {
@@ -212,6 +249,7 @@ describe('ReturnsService', () => {
         { provide: PrismaService, useValue: prismaMock },
         { provide: EmailQueueService, useValue: emailService },
         { provide: PaymentsService, useValue: paymentsService },
+        { provide: InvoiceService, useValue: invoiceService },
         { provide: ConfigService, useValue: { get: configGetMock } },
       ],
     }).compile();
@@ -1173,6 +1211,108 @@ describe('ReturnsService', () => {
       await service.markRefunded('return-id-001');
 
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    // ── corrective invoice (fix: Art. 106j Ustawy o VAT) ──────────────────────
+    // Before this fix, only OrdersService.cancelItemsByUser generated a corrective
+    // invoice after a partial refund — markRefunded() issued the identical Stripe
+    // refund but never produced one. These tests mirror cancelItemsByUser's gating
+    // and payload contract exactly (see orders.service.spec.ts).
+
+    it('calls invoiceService.processCorrectiveInvoice with the refunded amount and items when the order has an invoiceNumber', async () => {
+      const mock = buildPrismaMock();
+      mock.order.findUniqueOrThrow.mockResolvedValue({
+        status: 'SHIPPED',
+        couponId: null,
+        discountInCents: 0,
+        itemsTotalInCents: 34900,
+        invoiceNumber: 'FV/2026/000099',
+      });
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-uuid-1',
+        'FV/2026/000099',
+        34900,
+        'RETURN_APPROVAL',
+        [{ orderItemId: 'item-uuid-1', quantity: 1, priceInCents: 34900, vatRate: 2300 }],
+      );
+    });
+
+    it('uses the amount partialRefund resolves with — not its own recomputed sum — for the corrective invoice', async () => {
+      const mock = buildPrismaMock();
+      mock.order.findUniqueOrThrow.mockResolvedValue({
+        status: 'SHIPPED',
+        couponId: null,
+        discountInCents: 0,
+        itemsTotalInCents: 34900,
+        invoiceNumber: 'FV/2026/000099',
+      });
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+      // Raw sum would be 34900; simulate Stripe's available-balance cap kicking in
+      // and partialRefund resolving with a smaller, capped figure.
+      paymentsService.partialRefund.mockResolvedValue(20000);
+
+      await service.markRefunded('return-id-001');
+
+      expect(invoiceService.processCorrectiveInvoice).toHaveBeenCalledWith(
+        'order-uuid-1',
+        'FV/2026/000099',
+        20000,
+        'RETURN_APPROVAL',
+        expect.any(Array),
+      );
+    });
+
+    it('does not call processCorrectiveInvoice when the order has no invoiceNumber yet', async () => {
+      const mock = buildPrismaMock();
+      // Default findUniqueOrThrow mock has no invoiceNumber field.
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+
+      await service.markRefunded('return-id-001');
+
+      expect(invoiceService.processCorrectiveInvoice).not.toHaveBeenCalled();
+    });
+
+    it('still completes the return and logs a warning when processCorrectiveInvoice rejects', async () => {
+      const mock = buildPrismaMock();
+      mock.order.findUniqueOrThrow.mockResolvedValue({
+        status: 'SHIPPED',
+        couponId: null,
+        discountInCents: 0,
+        itemsTotalInCents: 34900,
+        invoiceNumber: 'FV/2026/000099',
+      });
+      mock.returnRequest.findUnique.mockResolvedValue(
+        buildReturnRecord({ status: 'APPROVED', returnTrackingNumber: 'INP-TRACK-001' }),
+      );
+      await createModule(mock);
+      const invoiceError = new Error('PDF generation failed');
+      invoiceService.processCorrectiveInvoice.mockRejectedValue(invoiceError);
+      const loggerWarnSpy = jest.spyOn((service as any)['logger'], 'warn');
+
+      await expect(service.markRefunded('return-id-001')).resolves.toBeUndefined();
+      await Promise.resolve();
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'Corrective invoice generation failed',
+        invoiceError.message,
+      );
+      expect(Sentry.captureException).toHaveBeenCalledWith(invoiceError);
+      expect(mock.returnRequest.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
+      );
     });
 
     it('updates return status to COMPLETED after partialRefund succeeds', async () => {

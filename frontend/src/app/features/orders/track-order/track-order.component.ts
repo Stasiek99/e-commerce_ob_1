@@ -13,14 +13,17 @@ const TRACKING_URLS: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT: 'Oczekuje na płatność',
-  FRAUD_REVIEW:    'Weryfikacja',
-  PAID:            'Opłacone',
-  PROCESSING:      'W realizacji',
-  SHIPPED:         'Wysłane',
-  DELIVERED:       'Dostarczone',
-  CANCELLED:       'Anulowane',
-  REFUNDED:        'Zwrócone',
+  PENDING_PAYMENT:     'Oczekuje na płatność',
+  FRAUD_REVIEW:        'Weryfikacja',
+  PAID:                'Opłacone',
+  PROCESSING:          'W realizacji',
+  SHIPPED:             'Wysłane',
+  DELIVERED:           'Dostarczone',
+  CANCELLED:           'Anulowane',
+  REFUNDED:            'Zwrócone',
+  PARTIALLY_REFUNDED:  'Częściowo zwrócone',
+  DISPUTE_HOLD:        'Spór płatniczy',
+  DISPUTE_LOST_REVIEW: 'Weryfikacja zwrotu',
 };
 
 interface TrackResult {
@@ -60,14 +63,7 @@ interface TrackResult {
       @if (result()) {
         <div class="result">
           <div class="result-header">
-            <span class="status"
-              [class.status--paid]="result()!.status === 'PAID'"
-              [class.status--pending_payment]="result()!.status === 'PENDING_PAYMENT'"
-              [class.status--processing]="result()!.status === 'PROCESSING'"
-              [class.status--shipped]="result()!.status === 'SHIPPED'"
-              [class.status--delivered]="result()!.status === 'DELIVERED'"
-              [class.status--cancelled]="result()!.status === 'CANCELLED'"
-              [class.status--refunded]="result()!.status === 'REFUNDED'">
+            <span class="status status--{{ result()!.status.toLowerCase() }}">
               {{ statusLabel(result()!.status) }}
             </span>
           </div>
@@ -117,13 +113,9 @@ interface TrackResult {
       background: var(--color-border);
       white-space: nowrap;
     }
-    .status--paid            { background: var(--color-status-paid-bg);      color: var(--color-status-paid-text); }
-    .status--pending_payment { background: var(--color-status-pending-bg);   color: var(--color-status-pending-text); }
-    .status--cancelled       { background: var(--color-status-cancelled-bg); color: var(--color-status-cancelled-text); }
-    .status--shipped         { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
-    .status--refunded        { background: #f3f4f6; color: #6b7280; }
-    .status--processing      { background: #eff6ff; color: #1d4ed8; }
-    .status--delivered       { background: #f0fdf4; color: #166534; }
+    /* Per-status colors come from the global .status--* rules in styles.scss,
+       which cover all 11 OrderStatus values — keeping a duplicate subset here
+       caused this page to silently miss 3 newer statuses. */
 
     .tracking {
       padding: 16px;

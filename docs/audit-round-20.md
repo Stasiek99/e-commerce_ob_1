@@ -86,13 +86,6 @@ The exclusion list's "Product detail 404 not handled" entry was closed with a ma
 
 ---
 
-
-
-Not yet:
-
-
-
-
 ## 🟡 MEDIUM — `build-and-test`, the CI job gating every merge, has no timeout at any level — unlike its sibling `e2e` job
 
 **Classification:** Bug

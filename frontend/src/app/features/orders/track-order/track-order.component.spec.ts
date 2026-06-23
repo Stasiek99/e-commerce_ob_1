@@ -80,4 +80,22 @@ describe('TrackOrderComponent', () => {
     expect(component.notFound()).toBe(true);
     expect(fixture.debugElement.query(By.css('.result'))).toBeNull();
   });
+
+  it.each([
+    ['PARTIALLY_REFUNDED', 'Częściowo zwrócone'],
+    ['DISPUTE_HOLD', 'Spór płatniczy'],
+    ['DISPUTE_LOST_REVIEW', 'Weryfikacja zwrotu'],
+  ])('renders the Polish label instead of the raw enum string for %s', (status, label) => {
+    submitTrackForm();
+
+    const req = httpMock.expectOne(
+      (r) => r.url === `${environment.apiUrl}/orders/track`,
+    );
+    req.flush({ status, trackingNumber: null, carrier: null });
+    fixture.detectChanges();
+
+    const statusEl = fixture.debugElement.query(By.css('.status'));
+    expect(statusEl.nativeElement.textContent.trim()).toBe(label);
+    expect(statusEl.nativeElement.classList).toContain(`status--${status.toLowerCase()}`);
+  });
 });

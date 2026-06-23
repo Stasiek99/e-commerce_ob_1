@@ -5,7 +5,7 @@ import { ProductsController } from '../products.controller';
 import { ProductsService } from '../products.service';
 import { StorageService } from '../../storage/storage.service';
 
-describe('ProductsController — streamVariantStock global connection cap', () => {
+describe('ProductsController — streamVariantStock per-replica connection cap', () => {
   let controller: ProductsController;
   let productsService: jest.Mocked<Pick<ProductsService, 'createStockStream'>>;
 
@@ -46,9 +46,9 @@ describe('ProductsController — streamVariantStock global connection cap', () =
     subscription.unsubscribe();
   });
 
-  // ── happy path: connection within global cap ──────────────────────────────
+  // ── happy path: connection within per-replica cap ─────────────────────────
 
-  it('creates the stock stream when global connection count is within the cap', (done) => {
+  it('creates the stock stream when the per-replica connection count is within the cap', (done) => {
     productsService.createStockStream.mockReturnValue(EMPTY);
 
     controller.streamVariantStock('pv-1,pv-2').subscribe({
@@ -70,7 +70,7 @@ describe('ProductsController — streamVariantStock global connection cap', () =
     });
   });
 
-  // ── blocked path: global cap exceeded ─────────────────────────────────────
+  // ── blocked path: per-replica cap exceeded ────────────────────────────────
 
   it('errors with HttpException(429) when sseConnCount equals or exceeds 500', (done) => {
     (controller as any).sseConnCount = 500;
@@ -86,7 +86,7 @@ describe('ProductsController — streamVariantStock global connection cap', () =
     });
   });
 
-  it('does not call createStockStream when the global cap is exceeded', (done) => {
+  it('does not call createStockStream when the per-replica cap is exceeded', (done) => {
     (controller as any).sseConnCount = 500;
 
     controller.streamVariantStock('pv-1').subscribe({

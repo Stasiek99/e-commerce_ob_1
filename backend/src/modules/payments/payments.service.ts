@@ -1007,12 +1007,7 @@ export class PaymentsService {
           if (session.payment_status === 'paid') {
             await this.markSessionPaid(session);
           } else if (session.status === 'expired') {
-            await this.handlePaymentFailure(
-              payment.id,
-              payment.orderId,
-              payment.order.items,
-              'Reconciliation: session expired',
-            );
+            await this.markSessionFailed(session, 'reconciliation: session expired');
           }
           // status=open means the customer may still complete payment — leave it
         } catch (err) {
@@ -1368,8 +1363,8 @@ export class PaymentsService {
     }>,
     currentOrderStatus: OrderStatus,
     actor: string,
-  ): Promise<void> {
-    await this.withOrderRefundLock(orderId, async () => {
+  ): Promise<number> {
+    return this.withOrderRefundLock(orderId, async () => {
       const payment = await this.prisma.payment.findUnique({
         where: { orderId },
         select: {
@@ -1472,6 +1467,8 @@ export class PaymentsService {
       this.logger.log(
         `Partial refund of ${refundAmountInCents} gr issued for order ${payment.order.orderNumber}`,
       );
+
+      return refundAmountInCents;
     });
   }
 

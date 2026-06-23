@@ -1648,9 +1648,13 @@ describe('PaymentsService', () => {
         payment_status: 'unpaid',
         status: 'expired',
       } as any);
+      // markSessionFailed (shared with the webhook path) re-fetches the payment by session ID
+      prisma.payment.findUnique.mockResolvedValue(stalePayment);
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -1662,6 +1666,38 @@ describe('PaymentsService', () => {
       await service.reconcilePendingPayments();
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression test: the cron used to call handlePaymentFailure() directly,
+    // bypassing markSessionFailed()'s Stripe coupon cleanup — leaking the
+    // one-time discount coupon whenever the webhook never arrived and the
+    // cron reconciled the expiry instead. Routing through markSessionFailed()
+    // (shared with the webhook path) closes that gap.
+    it('deletes the orphaned Stripe coupon when reconciling an expired discounted session', async () => {
+      prisma.payment.findMany.mockResolvedValue([stalePayment]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        id: mockSession.id,
+        payment_status: 'unpaid',
+        status: 'expired',
+        discounts: [{ coupon: 'co_reconcile_abc' }],
+      } as any);
+      prisma.payment.findUnique.mockResolvedValue(stalePayment);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+          });
+        }
+      });
+
+      await service.reconcilePendingPayments();
+
+      expect(stripeClient.deleteCoupon).toHaveBeenCalledWith('co_reconcile_abc');
     });
 
     it('leaves open sessions untouched (customer may still pay)', async () => {
@@ -2571,6 +2607,33 @@ describe('PaymentsService', () => {
       await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
 
       expect(capturedPaymentData.refundedAmountInCents).toEqual({ increment: 90000 });
+    });
+
+    // ─── return value surfaces the actual refunded amount (fix: callers must not
+    // recompute their own uncapped figure for invoices/emails) ────────────────
+
+    it('resolves with the raw item sum when it does not exceed the available balance', async () => {
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      const result = await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(result).toBe(114700);
+    });
+
+    it('resolves with the capped amount, not the raw item sum, when raw sum exceeds available', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        amountInCents: 150000,
+        refundedAmountInCents: 60000,
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      const result = await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(result).toBe(90000);
     });
 
     // ─── per-order refund lock (covers concurrent callers: cancelItemsByUser,

@@ -1,8 +1,13 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import type IORedis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_CART_QTY_PER_VARIANT = 2;
@@ -28,7 +33,10 @@ const CART_INCLUDE = {
 
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject('REDIS_CLIENT') private readonly redis: IORedis,
+  ) {}
 
   async getOrCreate(userId?: string, sessionId?: string) {
     let cart = await this.findCart(userId, sessionId);
@@ -47,44 +55,46 @@ export class CartService {
     productVariantId: string,
     quantity: number,
   ) {
-    await this.prisma.$transaction(async (tx) => {
-      // Best-effort stock guard: FOR UPDATE is a no-op on pgbouncer transaction mode,
-      // so we read without a lock. The authoritative atomic check-and-decrement
-      // happens in createFromCart via updateMany WHERE stock >= quantity.
-      const variant = await tx.productVariant.findUnique({
-        where: { id: productVariantId },
-        select: { id: true, isActive: true, stock: true },
-      });
-      if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
-
-      const cart =
-        (userId
-          ? await tx.cart.findFirst({ where: { userId } })
-          : await tx.cart.findFirst({ where: { sessionId, userId: null } })) ??
-        (await tx.cart.create({ data: { userId, sessionId } }));
-
-      const existing = await tx.cartItem.findUnique({
-        where: { cartId_productVariantId: { cartId: cart.id, productVariantId } },
-      });
-
-      const newQty = (existing?.quantity ?? 0) + quantity;
-      if (newQty > MAX_CART_QTY_PER_VARIANT)
-        throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
-      if (variant.stock < newQty) throw new BadRequestException('Insufficient stock');
-
-      if (existing) {
-        await tx.cartItem.update({
-          where: { id: existing.id },
-          data: { quantity: newQty },
+    return this.withCheckoutLock(userId, sessionId, async () => {
+      await this.prisma.$transaction(async (tx) => {
+        // Best-effort stock guard: FOR UPDATE is a no-op on pgbouncer transaction mode,
+        // so we read without a lock. The authoritative atomic check-and-decrement
+        // happens in createFromCart via updateMany WHERE stock >= quantity.
+        const variant = await tx.productVariant.findUnique({
+          where: { id: productVariantId },
+          select: { id: true, isActive: true, stock: true },
         });
-      } else {
-        await tx.cartItem.create({
-          data: { cartId: cart.id, productVariantId, quantity },
+        if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
+
+        const cart =
+          (userId
+            ? await tx.cart.findFirst({ where: { userId } })
+            : await tx.cart.findFirst({ where: { sessionId, userId: null } })) ??
+          (await tx.cart.create({ data: { userId, sessionId } }));
+
+        const existing = await tx.cartItem.findUnique({
+          where: { cartId_productVariantId: { cartId: cart.id, productVariantId } },
         });
-      }
+
+        const newQty = (existing?.quantity ?? 0) + quantity;
+        if (newQty > MAX_CART_QTY_PER_VARIANT)
+          throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
+        if (variant.stock < newQty) throw new BadRequestException('Insufficient stock');
+
+        if (existing) {
+          await tx.cartItem.update({
+            where: { id: existing.id },
+            data: { quantity: newQty },
+          });
+        } else {
+          await tx.cartItem.create({
+            data: { cartId: cart.id, productVariantId, quantity },
+          });
+        }
+      });
+
+      return this.getOrCreate(userId, sessionId);
     });
-
-    return this.getOrCreate(userId, sessionId);
   }
 
   async updateItem(
@@ -93,30 +103,32 @@ export class CartService {
     productVariantId: string,
     quantity: number,
   ) {
-    const cart = await this.findCart(userId, sessionId);
-    if (!cart) throw new NotFoundException('Cart not found');
+    return this.withCheckoutLock(userId, sessionId, async () => {
+      const cart = await this.findCart(userId, sessionId);
+      if (!cart) throw new NotFoundException('Cart not found');
 
-    if (quantity <= 0) {
-      return this.removeItem(userId, sessionId, productVariantId);
-    }
+      if (quantity <= 0) {
+        return this.removeItemFromCart(cart.id, productVariantId, userId, sessionId);
+      }
 
-    await this.prisma.$transaction(async (tx) => {
-      const variant = await tx.productVariant.findUnique({
-        where: { id: productVariantId },
-        select: { isActive: true, stock: true },
+      await this.prisma.$transaction(async (tx) => {
+        const variant = await tx.productVariant.findUnique({
+          where: { id: productVariantId },
+          select: { isActive: true, stock: true },
+        });
+        if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
+        if (quantity > MAX_CART_QTY_PER_VARIANT)
+          throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
+        if (variant.stock < quantity) throw new BadRequestException('Insufficient stock');
+
+        await tx.cartItem.updateMany({
+          where: { cartId: cart.id, productVariantId },
+          data: { quantity },
+        });
       });
-      if (!variant || !variant.isActive) throw new NotFoundException('Variant not found');
-      if (quantity > MAX_CART_QTY_PER_VARIANT)
-        throw new BadRequestException(`Maximum ${MAX_CART_QTY_PER_VARIANT} units per product variant allowed`);
-      if (variant.stock < quantity) throw new BadRequestException('Insufficient stock');
 
-      await tx.cartItem.updateMany({
-        where: { cartId: cart.id, productVariantId },
-        data: { quantity },
-      });
+      return this.getOrCreate(userId, sessionId);
     });
-
-    return this.getOrCreate(userId, sessionId);
   }
 
   async removeItem(
@@ -124,14 +136,55 @@ export class CartService {
     sessionId: string | undefined,
     productVariantId: string,
   ) {
-    const cart = await this.findCart(userId, sessionId);
-    if (!cart) throw new NotFoundException('Cart not found');
+    return this.withCheckoutLock(userId, sessionId, async () => {
+      const cart = await this.findCart(userId, sessionId);
+      if (!cart) throw new NotFoundException('Cart not found');
 
+      return this.removeItemFromCart(cart.id, productVariantId, userId, sessionId);
+    });
+  }
+
+  private async removeItemFromCart(
+    cartId: string,
+    productVariantId: string,
+    userId: string | undefined,
+    sessionId: string | undefined,
+  ) {
     await this.prisma.cartItem.deleteMany({
-      where: { cartId: cart.id, productVariantId },
+      where: { cartId, productVariantId },
     });
 
     return this.getOrCreate(userId, sessionId);
+  }
+
+  // Same key OrdersService.createFromCart holds for its full read-cart → charge →
+  // decrement-stock span. Acquiring it here means a cart edit racing an in-flight
+  // checkout in another tab gets rejected (429) instead of silently mutating rows
+  // out from under a checkout transaction that already snapshotted the old cart.
+  private async withCheckoutLock<T>(
+    userId: string | undefined,
+    sessionId: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const lockKey = `checkout-lock:${userId ?? sessionId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        'Checkout already in progress — please wait a moment before trying again',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    try {
+      return await fn();
+    } finally {
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
   }
 
   async mergeGuestCart(userId: string, sessionId: string) {

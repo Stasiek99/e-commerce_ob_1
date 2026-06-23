@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, HttpException, NotFoundException } from '@nestjs/common';
 import { CartService } from '../cart.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -37,6 +37,7 @@ const makeTx = (overrides: Record<string, any> = {}) => ({
 describe('CartService', () => {
   let service: CartService;
   let prisma: any;
+  let redis: any;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -62,11 +63,20 @@ describe('CartService', () => {
             },
           },
         },
+        {
+          provide: 'REDIS_CLIENT',
+          // Lock always free by default — mutation tests aren't exercising contention.
+          useValue: {
+            set: jest.fn().mockResolvedValue('OK'),
+            eval: jest.fn().mockResolvedValue(1),
+          },
+        },
       ],
     }).compile();
 
     service = module.get(CartService);
     prisma = module.get(PrismaService);
+    redis = module.get('REDIS_CLIENT');
   });
 
   describe('addItem', () => {
@@ -677,6 +687,100 @@ describe('CartService', () => {
         where: { cartId: 'cart-1', productVariantId: 'pv-1' },
       });
       expect(result.items).toHaveLength(0);
+    });
+  });
+
+  // ── checkout-lock (fix: cart mutations must not race an in-flight checkout) ──
+  // OrdersService.createFromCart holds `checkout-lock:<userId|sessionId>` for its
+  // entire read-cart → charge → decrement-stock span. Before this fix, addItem/
+  // updateItem/removeItem never checked that lock, so a customer editing their cart
+  // in one tab while another tab's checkout was mid-flight could silently mutate
+  // rows out from under a transaction that already snapshotted the old cart.
+  describe('checkout-lock', () => {
+    it('addItem throws 429 when a checkout is already in progress for the user', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await expect(service.addItem('user-1', undefined, 'pv-1', 1)).rejects.toThrow(
+        HttpException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('updateItem throws 429 when a checkout is already in progress for the session', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await expect(
+        service.updateItem(undefined, 'sess-1', 'pv-1', 2),
+      ).rejects.toThrow(HttpException);
+      expect(prisma.cart.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('removeItem throws 429 when a checkout is already in progress', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await expect(service.removeItem('user-1', undefined, 'pv-1')).rejects.toThrow(
+        HttpException,
+      );
+      expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock keyed on checkout-lock:<userId> when authenticated', async () => {
+      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+      prisma.cartItem.deleteMany.mockResolvedValue({});
+
+      await service.removeItem('user-1', undefined, 'pv-1');
+
+      expect(redis.set).toHaveBeenCalledWith('checkout-lock:user-1', expect.any(String), 'EX', 30, 'NX');
+    });
+
+    it('falls back to checkout-lock:<sessionId> for a guest', async () => {
+      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+      prisma.cartItem.deleteMany.mockResolvedValue({});
+
+      await service.removeItem(undefined, 'sess-1', 'pv-1');
+
+      expect(redis.set).toHaveBeenCalledWith('checkout-lock:sess-1', expect.any(String), 'EX', 30, 'NX');
+    });
+
+    it('releases the lock after a successful mutation', async () => {
+      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+      prisma.cartItem.deleteMany.mockResolvedValue({});
+
+      await service.removeItem('user-1', undefined, 'pv-1');
+
+      expect(redis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        1,
+        'checkout-lock:user-1',
+        expect.any(String),
+      );
+    });
+
+    it('releases the lock even when the mutation throws', async () => {
+      prisma.cart.findFirst.mockResolvedValue(null);
+
+      await expect(service.removeItem('user-1', undefined, 'pv-1')).rejects.toThrow(
+        NotFoundException,
+      );
+
+      expect(redis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        1,
+        'checkout-lock:user-1',
+        expect.any(String),
+      );
+    });
+
+    it('updateItem does not re-acquire the lock when delegating to the qty<=0 removal path', async () => {
+      prisma.cart.findFirst.mockResolvedValue({ ...makeCart(), items: [] });
+      prisma.cartItem.deleteMany.mockResolvedValue({});
+
+      await service.updateItem('user-1', undefined, 'pv-1', 0);
+
+      // One acquire (updateItem) + one release — not two, which would mean the
+      // qty<=0 branch called the locking removeItem() instead of the internal helper.
+      expect(redis.set).toHaveBeenCalledTimes(1);
+      expect(redis.eval).toHaveBeenCalledTimes(1);
     });
   });
 });
