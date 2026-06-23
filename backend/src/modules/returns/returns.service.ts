@@ -8,9 +8,11 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OrderStatus } from '@fragrance-store/shared-types';
+import * as Sentry from '@sentry/nestjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { PaymentsService } from '../payments/payments.service';
+import { InvoiceService } from '../invoice/invoice.service';
 import { CreateReturnRequestDto } from './dto/create-return.dto';
 import { encryptIban } from './iban-crypto';
 
@@ -24,6 +26,7 @@ export class ReturnsService {
     private readonly email: EmailQueueService,
     private readonly config: ConfigService,
     private readonly payments: PaymentsService,
+    private readonly invoiceService: InvoiceService,
   ) {
     this.adminEmail = this.config.get<string>('ADMIN_DEFAULT_EMAIL', 'admin@aromaterie.pl');
   }
@@ -306,7 +309,13 @@ export class ReturnsService {
     const [order, orderItems] = await Promise.all([
       this.prisma.order.findUniqueOrThrow({
         where: { id: req.orderId },
-        select: { status: true, couponId: true, discountInCents: true, itemsTotalInCents: true },
+        select: {
+          status: true,
+          couponId: true,
+          discountInCents: true,
+          itemsTotalInCents: true,
+          invoiceNumber: true,
+        },
       }),
       this.prisma.orderItem.findMany({
         where: { orderId: req.orderId },
@@ -315,6 +324,7 @@ export class ReturnsService {
           productVariantId: true,
           snapshotName: true,
           snapshotPrice: true,
+          snapshotVatRate: true,
           quantity: true,
           cancelledQuantity: true,
           cancelledDiscountInCents: true,
@@ -330,6 +340,7 @@ export class ReturnsService {
       productVariantId: string;
       quantity: number;
       priceInCents: number;
+      vatRate: number;
       discountAppliedInCents: number;
     }> = [];
 
@@ -351,6 +362,7 @@ export class ReturnsService {
         productVariantId: orderItem.productVariantId,
         quantity: refundQty,
         priceInCents: orderItem.snapshotPrice,
+        vatRate: orderItem.snapshotVatRate,
         discountAppliedInCents: 0,
       });
     }
@@ -399,6 +411,33 @@ export class ReturnsService {
       order.status as OrderStatus,
       'RETURN_APPROVAL',
     );
+
+    // Art. 106j VAT act: any price reduction requires a corrective invoice, regardless
+    // of which internal flow triggered the refund. Mirrors OrdersService.cancelItemsByUser,
+    // the only other producer of InvoiceCorrection rows.
+    if (order.invoiceNumber) {
+      const refundAmountInCents = proratedRefundItems.reduce(
+        (s, i) => s + i.quantity * i.priceInCents,
+        0,
+      );
+      this.invoiceService
+        .processCorrectiveInvoice(
+          req.orderId,
+          order.invoiceNumber,
+          refundAmountInCents,
+          'RETURN_APPROVAL',
+          proratedRefundItems.map((i) => ({
+            orderItemId: i.orderItemId,
+            quantity: i.quantity,
+            priceInCents: i.priceInCents,
+            vatRate: i.vatRate,
+          })),
+        )
+        .catch((err) => {
+          this.logger.warn('Corrective invoice generation failed', (err as Error).message);
+          Sentry.captureException(err);
+        });
+    }
 
     await this.prisma.returnRequest.update({
       where: { id },
