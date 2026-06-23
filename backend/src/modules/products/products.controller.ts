@@ -36,14 +36,17 @@ import {
   UpdateVariantStockDto,
 } from './dto/product.dto';
 
-const SSE_MAX_CONNS_GLOBAL = 500;
+// Per-replica cap, not a fleet-wide ceiling — this counter is server-local
+// in-memory state (resets to 0 on every restart, so a crash can never leave
+// stale Redis keys that lock users out until a TTL expires). With N replicas
+// behind the load balancer, the real fleet-wide ceiling is ~N * this value.
+const SSE_MAX_CONNS_PER_REPLICA = 500;
 const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
 
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ProductsController {
-  // Server-local counter — resets to 0 on every restart, so a crash can never
-  // leave stale Redis keys that lock users out until a TTL expires.
+  // Server-local counter — see SSE_MAX_CONNS_PER_REPLICA comment above.
   private sseConnCount = 0;
 
   constructor(
@@ -83,7 +86,7 @@ export class ProductsController {
       .filter(Boolean)
       .slice(0, 10);
 
-    if (this.sseConnCount >= SSE_MAX_CONNS_GLOBAL) {
+    if (this.sseConnCount >= SSE_MAX_CONNS_PER_REPLICA) {
       return throwError(
         () => new HttpException(
           'SSE connection limit reached. Try again later.',
