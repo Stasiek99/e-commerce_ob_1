@@ -1648,9 +1648,13 @@ describe('PaymentsService', () => {
         payment_status: 'unpaid',
         status: 'expired',
       } as any);
+      // markSessionFailed (shared with the webhook path) re-fetches the payment by session ID
+      prisma.payment.findUnique.mockResolvedValue(stalePayment);
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
             order: { update: jest.fn() },
             orderEvent: { create: jest.fn() },
@@ -1662,6 +1666,38 @@ describe('PaymentsService', () => {
       await service.reconcilePendingPayments();
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression test: the cron used to call handlePaymentFailure() directly,
+    // bypassing markSessionFailed()'s Stripe coupon cleanup — leaking the
+    // one-time discount coupon whenever the webhook never arrived and the
+    // cron reconciled the expiry instead. Routing through markSessionFailed()
+    // (shared with the webhook path) closes that gap.
+    it('deletes the orphaned Stripe coupon when reconciling an expired discounted session', async () => {
+      prisma.payment.findMany.mockResolvedValue([stalePayment]);
+      stripeClient.retrieveCheckoutSession.mockResolvedValue({
+        id: mockSession.id,
+        payment_status: 'unpaid',
+        status: 'expired',
+        discounts: [{ coupon: 'co_reconcile_abc' }],
+      } as any);
+      prisma.payment.findUnique.mockResolvedValue(stalePayment);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { update: jest.fn() },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+          });
+        }
+      });
+
+      await service.reconcilePendingPayments();
+
+      expect(stripeClient.deleteCoupon).toHaveBeenCalledWith('co_reconcile_abc');
     });
 
     it('leaves open sessions untouched (customer may still pay)', async () => {
