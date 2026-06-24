@@ -477,12 +477,23 @@ approved-and-shipped *and* refunded.
   stock** (`payments.service.ts:798-861`) — an acknowledged degraded mode (comment at
   806-809) that requires manual admin correction if the synchronous `partialRefund`
   DB write fails after Stripe already succeeded.
-- **Status-write sites that skip a `where: status` guard** (`markSessionPaid`,
-  `handlePaymentFailure`, `refundPayment`, `partialRefund`, `handleRefundUpdate`) rely
-  only on `Payment.status` checks plus event dedup, unlike `updateStatus` and
-  `sweepOrphanedPendingOrders`, which use a conditional `updateMany` keyed on the
-  expected prior status as defense-in-depth. Currently masked by the other guards
-  each method has, but structurally inconsistent and worth aligning.
+- **Status-write sites that skip a `where: status` guard — FIXED.** `markSessionPaid`,
+  `handlePaymentFailure`, `refundPayment`, `partialRefund`, and both branches of
+  `handleRefundUpdate` now all write `Order.status` via a conditional `updateMany`
+  keyed on the status each method read the order as, mirroring `updateStatus`'s/
+  `sweepOrphanedPendingOrders`'s defense-in-depth pattern. Where the target status
+  isn't known until mid-transaction (`partialRefund`, `handleRefundUpdate`'s metadata-
+  recovery branch), a no-op same-status "claim" write is used first instead, the same
+  technique `sweepOrphanedPendingOrders` already uses. A 0-count result throws
+  `OrderStatusRaceError`: webhook-driven methods (`markSessionPaid`,
+  `handlePaymentFailure`, `handleRefundUpdate`) log `[CRITICAL]` + Sentry fatal and
+  return 200 rather than retry-storm Stripe; `refundPayment`/`partialRefund` (Stripe
+  already called by this point) let it flow into their existing post-Stripe-success
+  catch block, which already logs and relies on the webhook to reconcile. Closes a
+  real (if narrow) gap: previously, none of these five methods took the same
+  `status-lock:${id}` or conditional-write precaution `OrdersService.updateStatus`
+  uses, so an admin status change landing on the same order at the same moment as a
+  webhook could be silently overwritten with no detection.
 - **`pruneProcessedStripeEvents`' lock TTL (~23h) is close enough to its 24h cron
   interval that a Railway hobby-tier sleep spanning a tick could push the next
   successful prune out ~48h** (`payments.service.ts:1138-1150`) — the same class of

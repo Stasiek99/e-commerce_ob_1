@@ -1,12 +1,13 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { StripeClient, CreateCheckoutSessionInput } from '../stripe.client';
+import { StripeClient, CreateCheckoutSessionInput, RefundItemInput } from '../stripe.client';
 
 // Mock the Stripe SDK before the module is loaded.
 // StripeClient uses `require('stripe')` internally, so jest.mock intercepts it.
 const mockSessionsCreate = jest.fn();
 const mockCouponsCreate = jest.fn();
 const mockCouponsDel = jest.fn();
+const mockRefundsCreate = jest.fn();
 const mockStripeConstructor = jest.fn();
 jest.mock('stripe', () => {
   return function MockStripe(...args: unknown[]) {
@@ -23,7 +24,7 @@ jest.mock('stripe', () => {
         create: mockCouponsCreate,
         del: mockCouponsDel,
       },
-      refunds: { create: jest.fn() },
+      refunds: { create: mockRefundsCreate },
       webhooks: { constructEvent: jest.fn() },
     };
   };
@@ -386,5 +387,115 @@ describe('StripeClient.deleteCoupon', () => {
     await client.deleteCoupon('co_one_shot');
 
     expect(mockCouponsDel).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── StripeClient.createPartialRefund ──────────────────────────────────────
+// Guards the fix: handleRefundUpdate's crash-recovery path (business-process-
+// model.md A5#3) needs the per-item refund breakdown to reconstruct
+// cancelledQuantity/stock — it can only get that if it's attached here.
+
+describe('StripeClient.createPartialRefund', () => {
+  const oneItem: RefundItemInput[] = [
+    { orderItemId: 'item-1', productVariantId: 'pv-1', quantity: 2, discountAppliedInCents: 150 },
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRefundsCreate.mockResolvedValue({ id: 're_test_abc' });
+  });
+
+  it('passes payment_intent and amount through', async () => {
+    const client = await buildClient();
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', oneItem);
+
+    const params = mockRefundsCreate.mock.calls[0][0];
+    expect(params.payment_intent).toBe('pi_test_abc');
+    expect(params.amount).toBe(34900);
+  });
+
+  it('passes the partial-refund-<key> idempotency key', async () => {
+    const client = await buildClient();
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', oneItem);
+
+    const options = mockRefundsCreate.mock.calls[0][1];
+    expect(options).toEqual({ idempotencyKey: 'partial-refund-order-1-0' });
+  });
+
+  it('encodes the item breakdown into metadata.refundItems as compact tuples', async () => {
+    const client = await buildClient();
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', oneItem);
+
+    const { metadata } = mockRefundsCreate.mock.calls[0][0];
+    expect(JSON.parse(metadata.refundItems)).toEqual([['item-1', 'pv-1', 2, 150]]);
+  });
+
+  it('defaults a missing discountAppliedInCents to 0 in the encoded metadata', async () => {
+    const client = await buildClient();
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', [
+      { orderItemId: 'item-1', productVariantId: 'pv-1', quantity: 1 },
+    ]);
+
+    const { metadata } = mockRefundsCreate.mock.calls[0][0];
+    expect(JSON.parse(metadata.refundItems)).toEqual([['item-1', 'pv-1', 1, 0]]);
+  });
+
+  it('encodes multiple items in one metadata field', async () => {
+    const client = await buildClient();
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', [
+      { orderItemId: 'item-1', productVariantId: 'pv-1', quantity: 2, discountAppliedInCents: 150 },
+      { orderItemId: 'item-2', productVariantId: 'pv-2', quantity: 1, discountAppliedInCents: 0 },
+    ]);
+
+    const { metadata } = mockRefundsCreate.mock.calls[0][0];
+    expect(JSON.parse(metadata.refundItems)).toEqual([
+      ['item-1', 'pv-1', 2, 150],
+      ['item-2', 'pv-2', 1, 0],
+    ]);
+  });
+
+  it('omits metadata entirely when the encoded item list exceeds 500 characters', async () => {
+    const client = await buildClient();
+    // 40 line items, each well over 10 chars once JSON-encoded — guaranteed >500 chars total.
+    const manyItems: RefundItemInput[] = Array.from({ length: 40 }, (_, i) => ({
+      orderItemId: `order-item-id-${i}`,
+      productVariantId: `product-variant-id-${i}`,
+      quantity: 1,
+      discountAppliedInCents: 0,
+    }));
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', manyItems);
+
+    const params = mockRefundsCreate.mock.calls[0][0];
+    expect(params.metadata).toBeUndefined();
+  });
+
+  it('still issues the refund (with correct amount) when metadata is omitted for being too large', async () => {
+    const client = await buildClient();
+    const manyItems: RefundItemInput[] = Array.from({ length: 40 }, (_, i) => ({
+      orderItemId: `order-item-id-${i}`,
+      productVariantId: `product-variant-id-${i}`,
+      quantity: 1,
+      discountAppliedInCents: 0,
+    }));
+
+    await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', manyItems);
+
+    const params = mockRefundsCreate.mock.calls[0][0];
+    expect(params.payment_intent).toBe('pi_test_abc');
+    expect(params.amount).toBe(34900);
+  });
+
+  it('returns the Stripe refund object from the SDK', async () => {
+    const client = await buildClient();
+
+    const result = await client.createPartialRefund('pi_test_abc', 34900, 'order-1-0', oneItem);
+
+    expect(result).toEqual({ id: 're_test_abc' });
   });
 });

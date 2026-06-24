@@ -291,7 +291,7 @@ describe('PaymentsService', () => {
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -314,7 +314,7 @@ describe('PaymentsService', () => {
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -454,7 +454,7 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', mockSession),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
         );
         await Promise.resolve();
@@ -471,7 +471,7 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', mockSession),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
         );
       });
@@ -501,7 +501,7 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', mockSession),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.PAID } }),
         );
         await Promise.resolve();
@@ -519,7 +519,7 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', mockSession),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.PAID } }),
         );
         expect(emailService.sendFraudReviewAlert).not.toHaveBeenCalled();
@@ -533,7 +533,7 @@ describe('PaymentsService', () => {
         );
 
         expect(stripeClient.retrievePaymentIntentWithCharge).not.toHaveBeenCalled();
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.PAID } }),
         );
       });
@@ -593,7 +593,7 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', { ...mockSession, amount_total: 100 }),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.FRAUD_REVIEW } }),
         );
       });
@@ -681,7 +681,7 @@ describe('PaymentsService', () => {
           }),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.PAID } }),
         );
       });
@@ -693,7 +693,7 @@ describe('PaymentsService', () => {
           buildEvent('checkout.session.completed', { ...mockSession, amount_total: null }),
         );
 
-        expect(prisma.order.update).toHaveBeenCalledWith(
+        expect(prisma.order.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ data: { status: OrderStatus.PAID } }),
         );
       });
@@ -1657,7 +1657,7 @@ describe('PaymentsService', () => {
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -1689,7 +1689,7 @@ describe('PaymentsService', () => {
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -2138,6 +2138,7 @@ describe('PaymentsService', () => {
             }),
           },
           order: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             update: jest.fn().mockImplementation((args: any) => {
               capturedOrderUpdate = args;
             }),
@@ -2242,7 +2243,7 @@ describe('PaymentsService', () => {
           findMany: jest.fn().mockResolvedValue(allCancelledItems),
         },
         productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-        order: { update: jest.fn() },
+        order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         payment: { update: jest.fn() },
         orderEvent: { create: jest.fn() },
       };
@@ -2278,6 +2279,7 @@ describe('PaymentsService', () => {
         'pi_test_abc123',
         114700,
         expect.any(String),
+        twoItems,
       );
     });
 
@@ -2341,7 +2343,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
         });
@@ -2380,7 +2382,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
         });
@@ -2427,7 +2429,7 @@ describe('PaymentsService', () => {
               return { stock: 0 };
             }),
           },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: { update: jest.fn() },
           orderEvent: { create: jest.fn() },
         });
@@ -2460,6 +2462,7 @@ describe('PaymentsService', () => {
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             update: jest.fn().mockImplementation((args: any) => {
               capturedOrderStatus = args.data.status;
             }),
@@ -2490,6 +2493,7 @@ describe('PaymentsService', () => {
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           order: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             update: jest.fn().mockImplementation((args: any) => {
               capturedOrderStatus = args.data.status;
             }),
@@ -2518,7 +2522,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedPaymentData = args.data;
@@ -2547,7 +2551,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedPaymentData = args.data;
@@ -2577,7 +2581,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedPaymentData = args.data;
@@ -2606,7 +2610,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: { update: jest.fn() },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -2654,6 +2658,7 @@ describe('PaymentsService', () => {
         'pi_test_abc123',
         90000,
         expect.any(String),
+        twoItems,
       );
     });
 
@@ -2675,7 +2680,7 @@ describe('PaymentsService', () => {
             ]),
           },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           payment: {
             update: jest.fn().mockImplementation((args: any) => {
               capturedPaymentData = args.data;
@@ -2806,8 +2811,9 @@ describe('PaymentsService', () => {
             }),
           },
           order: {
-            update: jest.fn().mockImplementation((args: any) => {
+            updateMany: jest.fn().mockImplementation((args: any) => {
               capturedState.orderStatus = args.data.status;
+              return { count: 1 };
             }),
           },
           productVariant: {
@@ -3028,6 +3034,211 @@ describe('PaymentsService', () => {
 
       expect(prisma.$transaction).toHaveBeenCalled();
     });
+
+    // ─── metadata-driven recovery (business-process-model.md A5#3 fix) ──────
+    // partialRefund() now attaches the per-item breakdown to the Stripe refund's
+    // own metadata. When the sync path fails, this lets the webhook reconstruct
+    // cancelledQuantity/stock instead of only setting PARTIALLY_REFUNDED and
+    // requiring a manual admin correction.
+    describe('reconstructs from refund metadata when the sync path failed', () => {
+      const paymentWithItemIds = {
+        ...refundPayment,
+        // Larger than every refund.amount used below so isFullRefund (amount >=
+        // amountInCents) never accidentally trips and routes into the full-refund
+        // branch instead of the partial-refund recovery branch under test.
+        amountInCents: 20000,
+        order: {
+          ...refundPayment.order,
+          status: OrderStatus.PAID, // sync path never ran
+          items: [
+            { id: 'item-1', productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 0 },
+            { id: 'item-2', productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 },
+          ],
+        },
+      };
+
+      beforeEach(() => {
+        // Extend the suite's default callback-routing $transaction mock with
+        // orderItem, which the recovery path reads/writes but the default
+        // mock (set in the outer beforeEach) doesn't route.
+        prisma.$transaction.mockImplementation(async (fn: any) => {
+          if (typeof fn === 'function') {
+            return fn({
+              processedStripeEvent: prisma.processedStripeEvent,
+              payment: prisma.payment,
+              order: prisma.order,
+              orderEvent: prisma.orderEvent,
+              orderItem: prisma.orderItem,
+              productVariant: prisma.productVariant,
+            });
+          }
+          return Promise.all(fn);
+        });
+      });
+
+      it('increments cancelledQuantity/cancelledDiscountInCents and restores stock for the refunded item', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+        prisma.orderItem.findMany.mockResolvedValue([
+          { id: 'item-1', quantity: 3, cancelledQuantity: 1 },
+          { id: 'item-2', quantity: 2, cancelledQuantity: 0 },
+        ]);
+
+        await service.handleWebhookEvent(
+          buildEvent(
+            'refund.updated',
+            buildRefund({
+              amount: 5000,
+              metadata: { refundItems: JSON.stringify([['item-1', 'pv-1', 1, 200]]) },
+            }),
+          ),
+        );
+
+        expect(prisma.orderItem.update).toHaveBeenCalledWith({
+          where: { id: 'item-1' },
+          data: { cancelledQuantity: { increment: 1 }, cancelledDiscountInCents: { increment: 200 } },
+        });
+        expect(prisma.productVariant.update).toHaveBeenCalledWith({
+          where: { id: 'pv-1' },
+          data: { stock: { increment: 1 } },
+        });
+      });
+
+      it('keeps the order PARTIALLY_REFUNDED when items remain uncancelled', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+        prisma.orderItem.findMany.mockResolvedValue([
+          { id: 'item-1', quantity: 3, cancelledQuantity: 1 },
+          { id: 'item-2', quantity: 2, cancelledQuantity: 0 },
+        ]);
+
+        await service.handleWebhookEvent(
+          buildEvent(
+            'refund.updated',
+            buildRefund({
+              amount: 5000,
+              metadata: { refundItems: JSON.stringify([['item-1', 'pv-1', 1, 200]]) },
+            }),
+          ),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: { status: OrderStatus.PARTIALLY_REFUNDED },
+        });
+        expect(prisma.payment.update).toHaveBeenCalledWith({
+          where: { id: 'payment-1' },
+          data: { refundedAmountInCents: { increment: 5000 } },
+        });
+      });
+
+      it('marks the order and payment REFUNDED when every item ends up cancelled', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+        prisma.orderItem.findMany.mockResolvedValue([
+          { id: 'item-1', quantity: 3, cancelledQuantity: 3 },
+          { id: 'item-2', quantity: 2, cancelledQuantity: 2 },
+        ]);
+
+        await service.handleWebhookEvent(
+          buildEvent(
+            'refund.updated',
+            buildRefund({
+              amount: 14999,
+              metadata: {
+                refundItems: JSON.stringify([
+                  ['item-1', 'pv-1', 3, 0],
+                  ['item-2', 'pv-2', 2, 0],
+                ]),
+              },
+            }),
+          ),
+        );
+
+        expect(prisma.order.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: { status: OrderStatus.REFUNDED },
+        });
+        expect(prisma.payment.update).toHaveBeenCalledWith({
+          where: { id: 'payment-1' },
+          data: { refundedAmountInCents: { increment: 14999 }, status: PaymentStatus.REFUNDED },
+        });
+      });
+
+      it('logs at warning level, not fatal/[CRITICAL], when metadata recovery succeeds', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+        prisma.orderItem.findMany.mockResolvedValue([
+          { id: 'item-1', quantity: 3, cancelledQuantity: 1 },
+          { id: 'item-2', quantity: 2, cancelledQuantity: 0 },
+        ]);
+
+        await service.handleWebhookEvent(
+          buildEvent(
+            'refund.updated',
+            buildRefund({
+              amount: 5000,
+              metadata: { refundItems: JSON.stringify([['item-1', 'pv-1', 1, 200]]) },
+            }),
+          ),
+        );
+
+        // Sentry.captureMessage's mock call history accumulates across every test
+        // in this file, so assert on this test's own (last) call rather than the
+        // full history — the recovered-from-metadata path is the only thing this
+        // test's action can have just appended.
+        const lastCall = (Sentry.captureMessage as jest.Mock).mock.calls.at(-1);
+        expect(lastCall[0]).not.toContain('[CRITICAL]');
+        expect(lastCall[1]).toBe('warning');
+      });
+
+      it('falls back to the manual-correction path when refund metadata is malformed JSON', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+
+        await service.handleWebhookEvent(
+          buildEvent(
+            'refund.updated',
+            buildRefund({ amount: 5000, metadata: { refundItems: 'not-json' } }),
+          ),
+        );
+
+        expect(prisma.orderItem.update).not.toHaveBeenCalled();
+        expect(prisma.order.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: { status: OrderStatus.PARTIALLY_REFUNDED },
+        });
+      });
+
+      it('falls back to the manual-correction path when metadata references an order item not on this order', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+
+        await service.handleWebhookEvent(
+          buildEvent(
+            'refund.updated',
+            buildRefund({
+              amount: 5000,
+              metadata: { refundItems: JSON.stringify([['item-from-another-order', 'pv-1', 1, 0]]) },
+            }),
+          ),
+        );
+
+        expect(prisma.orderItem.update).not.toHaveBeenCalled();
+        expect(prisma.order.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: { status: OrderStatus.PARTIALLY_REFUNDED },
+        });
+      });
+
+      it('falls back to the manual-correction path when the refund carries no metadata at all', async () => {
+        prisma.payment.findUnique.mockResolvedValue(paymentWithItemIds);
+
+        await service.handleWebhookEvent(
+          buildEvent('refund.updated', buildRefund({ amount: 5000 })),
+        );
+
+        expect(prisma.orderItem.update).not.toHaveBeenCalled();
+        expect(prisma.order.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: { status: OrderStatus.PARTIALLY_REFUNDED },
+        });
+      });
+    });
   });
 
   describe('refundPayment', () => {
@@ -3085,7 +3296,7 @@ describe('PaymentsService', () => {
         if (typeof fn === 'function') {
           await fn({
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: {
               update: jest.fn().mockImplementation((args: any) => {
@@ -3115,7 +3326,7 @@ describe('PaymentsService', () => {
       stripeClient.createRefund.mockResolvedValue({} as any);
       const tx = {
         payment: { update: jest.fn() },
-        order: { update: jest.fn() },
+        order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         orderEvent: { create: jest.fn() },
         productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
       };
@@ -3135,7 +3346,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) =>
         fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
         }),
@@ -3157,7 +3368,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
         });
@@ -3181,7 +3392,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
@@ -3207,7 +3418,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: { create: orderEventCreate },
         });
@@ -3270,7 +3481,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
         });
@@ -3300,7 +3511,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
         });
@@ -3320,7 +3531,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
         });
@@ -3519,7 +3730,11 @@ describe('PaymentsService', () => {
             provide: PrismaService,
             useValue: {
               payment: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
-              order: { findUniqueOrThrow: jest.fn(), update: jest.fn() },
+              order: {
+                findUniqueOrThrow: jest.fn(),
+                update: jest.fn(),
+                updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              },
               orderEvent: { create: jest.fn() },
               orderItem: { update: jest.fn(), findMany: jest.fn() },
               productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
@@ -4135,14 +4350,14 @@ describe('PaymentsService', () => {
     it('does NOT cancel the order when SELECT FOR UPDATE sees payment already COMPLETED (completed won the race)', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
 
-      const txOrderUpdate = jest.fn();
+      const txOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.COMPLETED }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
-            order: { update: txOrderUpdate },
+            order: { updateMany: txOrderUpdateMany },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -4153,20 +4368,20 @@ describe('PaymentsService', () => {
         buildEvent('checkout.session.expired', mockSession),
       );
 
-      expect(txOrderUpdate).not.toHaveBeenCalled();
+      expect(txOrderUpdateMany).not.toHaveBeenCalled();
     });
 
     it('DOES cancel the order when SELECT FOR UPDATE sees payment still PENDING (failure path wins)', async () => {
       prisma.payment.findUnique.mockResolvedValue(mockPayment);
 
-      const txOrderUpdate = jest.fn();
+      const txOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
       prisma.$transaction.mockImplementation(async (fn: any) => {
         if (typeof fn === 'function') {
           await fn({
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
             payment: { update: jest.fn() },
-            order: { update: txOrderUpdate },
+            order: { updateMany: txOrderUpdateMany },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -4177,9 +4392,38 @@ describe('PaymentsService', () => {
         buildEvent('checkout.session.expired', mockSession),
       );
 
-      expect(txOrderUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: OrderStatus.CANCELLED } }),
-      );
+      expect(txOrderUpdateMany).toHaveBeenCalledWith({
+        where: { id: mockPayment.orderId, status: OrderStatus.PENDING_PAYMENT },
+        data: { status: OrderStatus.CANCELLED },
+      });
+    });
+
+    it('skips stock restore and coupon release when the order already moved off PENDING_PAYMENT (concurrent transition)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        order: { ...mockPayment.order, couponId: 'coupon-1' },
+      });
+
+      const txProductVariantUpdate = jest.fn().mockResolvedValue({ stock: 0 });
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          await fn({
+            $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+            processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+            payment: { update: jest.fn() },
+            order: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+            orderEvent: { create: jest.fn() },
+            productVariant: { update: txProductVariantUpdate },
+          });
+        }
+      });
+
+      await expect(
+        service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession)),
+      ).resolves.not.toThrow();
+
+      expect(txProductVariantUpdate).not.toHaveBeenCalled();
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
     });
 
     it('inserts session-scoped failed-{session.id} idempotency key inside the transaction', async () => {
@@ -4192,7 +4436,7 @@ describe('PaymentsService', () => {
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: txProcessedCreate },
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -4217,7 +4461,7 @@ describe('PaymentsService', () => {
             $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
             processedStripeEvent: { create: txProcessedCreate },
             payment: { update: jest.fn() },
-            order: { update: jest.fn() },
+            order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
             orderEvent: { create: jest.fn() },
             productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           });
@@ -4265,7 +4509,7 @@ describe('PaymentsService', () => {
           $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
           payment: { update: jest.fn() },
-          order: { update: jest.fn() },
+          order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
           productVariant: {
             update: jest.fn().mockImplementation((args: any) => {
@@ -4347,7 +4591,7 @@ describe('PaymentsService', () => {
         $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
         processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
         payment: { update: jest.fn() },
-        order: { update: jest.fn() },
+        order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         orderEvent: { create: jest.fn() },
         productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
       };
@@ -4541,7 +4785,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -4558,7 +4802,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedEvent = args.data;
@@ -4611,7 +4855,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -4635,7 +4879,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: { create: jest.fn() },
         });
       });
@@ -4756,7 +5000,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           orderEvent: {
             create: jest.fn().mockImplementation((args: any) => {
               capturedEvent = args.data;
@@ -4838,7 +5082,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           productVariant: { update: productVariantUpdate },
           orderEvent: { create: jest.fn() },
         });
@@ -4867,7 +5111,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           productVariant: { update: productVariantUpdate },
           orderEvent: { create: jest.fn() },
         });
@@ -4885,7 +5129,7 @@ describe('PaymentsService', () => {
       prisma.$transaction.mockImplementation(async (fn: any) => {
         await fn({
           processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
-          order: { update: jest.fn() },
+          order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
           productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
           orderEvent: { create: jest.fn() },
         });
@@ -4974,7 +5218,7 @@ describe('PaymentsService', () => {
               $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
               processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
               payment: { update: jest.fn() },
-              order: { update: jest.fn() },
+              order: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
               orderEvent: { create: jest.fn() },
               productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
             });
@@ -5122,7 +5366,12 @@ describe('PaymentsService', () => {
             provide: PrismaService,
             useValue: {
               payment: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
-              order: { findUniqueOrThrow: jest.fn(), update: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+              order: {
+                findUniqueOrThrow: jest.fn(),
+                update: jest.fn(),
+                updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                count: jest.fn().mockResolvedValue(0),
+              },
               orderEvent: { create: jest.fn() },
               orderItem: { update: jest.fn(), findMany: jest.fn() },
               productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },

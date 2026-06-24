@@ -16,6 +16,20 @@ import { InvoiceOrder } from '../invoice/invoice.service';
 import { CouponService } from '../coupons/coupon.service';
 import { ProductsService } from '../products/products.service';
 
+/**
+ * Thrown when a conditional `updateMany({ where: { status: expected } })` guard
+ * (mirroring OrdersService.updateStatus/sweepOrphanedPendingOrders) finds the order
+ * already moved off the status this method read it as — i.e. a concurrent transition
+ * (admin action, another webhook) raced this one. Each call site decides whether that
+ * means "abort before touching stock, log for review" (webhook-driven methods) or
+ * "let the existing post-Stripe-success catch block handle it" (refundPayment/partialRefund).
+ */
+class OrderStatusRaceError extends Error {
+  constructor(orderId: string, expectedStatus: string) {
+    super(`Order ${orderId} was not in expected status ${expectedStatus} — a concurrent transition already moved it`);
+  }
+}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -371,10 +385,19 @@ export class PaymentsService {
             rawWebhookPayload: session as unknown as object,
           },
         });
-        await tx.order.update({
-          where: { id: payment.orderId },
+        // Conditional write keyed on the prior status read above — mirrors
+        // OrdersService.updateStatus's defense-in-depth pattern. The
+        // processedStripeEvent inserts above already exclude duplicate
+        // deliveries of this same event, but not a *different* concurrent
+        // mutator (e.g. an admin status change) landing on this order between
+        // the read and this write.
+        const orderUpdate = await tx.order.updateMany({
+          where: { id: payment.orderId, status: payment.order.status as OrderStatus },
           data: { status: newOrderStatus },
         });
+        if (orderUpdate.count === 0) {
+          throw new OrderStatusRaceError(payment.orderId, payment.order.status as string);
+        }
         await tx.orderEvent.create({
           data: {
             orderId: payment.orderId,
@@ -405,6 +428,16 @@ export class PaymentsService {
         this.logger.warn(
           `Session ${session.id} already processed (eventId: ${eventId ?? 'reconcile'}) — skipping duplicate`,
         );
+        return;
+      }
+      if (err instanceof OrderStatusRaceError) {
+        this.logger.error(`[CRITICAL] ${err.message} (session ${session.id}) — requires manual review`);
+        Sentry.withScope((scope) => {
+          scope.setLevel('fatal');
+          scope.setTag('payment.event', 'order_status_race');
+          scope.setContext('payment', { orderNumber: payment.order.orderNumber, sessionId: session.id });
+          Sentry.captureMessage(`Order status race on markSessionPaid: ${err.message}`, 'fatal');
+        });
         return;
       }
       throw err;
@@ -757,10 +790,17 @@ export class PaymentsService {
             where: { id: payment.id },
             data: { status: PaymentStatus.REFUNDED },
           });
-          await tx.order.update({
-            where: { id: payment.orderId },
+          // Conditional write keyed on the prior status read above — mirrors
+          // OrdersService.updateStatus's defense-in-depth pattern. Aborts before
+          // the stock-restore loop below if a concurrent mutator already moved
+          // the order off the status this method read it as.
+          const orderUpdate = await tx.order.updateMany({
+            where: { id: payment.orderId, status: payment.order.status },
             data: { status: OrderStatus.REFUNDED },
           });
+          if (orderUpdate.count === 0) {
+            throw new OrderStatusRaceError(payment.orderId, payment.order.status);
+          }
           // Restore stock only for units not already restored by a prior partial cancel
           for (const item of payment.order.items) {
             const activeQty = item.quantity - (item.cancelledQuantity ?? 0);
@@ -787,6 +827,16 @@ export class PaymentsService {
           this.logger.debug(`Stripe event ${eventId} already processed — skipping duplicate refund update`);
           return;
         }
+        if (err instanceof OrderStatusRaceError) {
+          this.logger.error(`[CRITICAL] ${err.message} (refund ${refund.id}) — requires manual review`);
+          Sentry.withScope((scope) => {
+            scope.setLevel('fatal');
+            scope.setTag('payment.event', 'order_status_race');
+            scope.setContext('refund', { refundId: refund.id, orderNumber: payment.order.orderNumber });
+            Sentry.captureMessage(`Order status race on handleRefundUpdate (full refund): ${err.message}`, 'fatal');
+          });
+          return;
+        }
         throw err;
       }
       this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
@@ -804,14 +854,131 @@ export class PaymentsService {
         payment.order.status === OrderStatus.REFUNDED;
 
       if (!alreadyHandled) {
-        // Sync path failed (likely a DB crash after Stripe succeeded). Apply best-effort
-        // recovery: mark the order PARTIALLY_REFUNDED and record the refunded amount so
-        // financials are correct. cancelledQuantity per item cannot be reconstructed here —
-        // it requires manual correction in the admin panel.
+        // Sync path failed (likely a DB crash after Stripe succeeded). partialRefund()
+        // attaches the per-item breakdown to the refund's own metadata at creation time
+        // (stripe.client.ts buildRefundItemsMetadata) specifically so this recovery path
+        // can reconstruct cancelledQuantity/stock instead of requiring a manual fix.
+        const recoveredItems = this.parseRefundItemsMetadata(refund.metadata, payment.order.items);
+
+        if (recoveredItems) {
+          this.logger.warn(
+            `Partial refund ${refund.id} succeeded for order ${payment.order.orderNumber} but order ` +
+              `is still ${payment.order.status} — sync path failed. Reconstructing from refund metadata.`,
+          );
+          Sentry.withScope((scope) => {
+            scope.setLevel('warning');
+            scope.setTag('payment.event', 'partial_refund_sync_recovered');
+            scope.setContext('refund', {
+              refundId: refund.id,
+              orderNumber: payment.order.orderNumber,
+              orderStatus: payment.order.status,
+              paymentId: payment.id,
+            });
+            Sentry.captureMessage(
+              `Partial refund sync failure recovered from metadata: order ${payment.order.orderNumber}`,
+              'warning',
+            );
+          });
+
+          const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+          try {
+            await this.prisma.$transaction(async (tx) => {
+              if (eventId) {
+                await tx.processedStripeEvent.create({ data: { eventId } });
+              }
+              // Claim the order via a no-op same-status write before touching stock —
+              // the target status isn't known until the item loop below runs, so this
+              // can't use the direct "write the new status" form the sibling branches
+              // use. Mirrors sweepOrphanedPendingOrders's claim-then-act pattern.
+              const claimed = await tx.order.updateMany({
+                where: { id: payment.orderId, status: payment.order.status },
+                data: { status: payment.order.status },
+              });
+              if (claimed.count === 0) {
+                throw new OrderStatusRaceError(payment.orderId, payment.order.status);
+              }
+              for (const item of recoveredItems) {
+                await tx.orderItem.update({
+                  where: { id: item.orderItemId },
+                  data: {
+                    cancelledQuantity: { increment: item.quantity },
+                    cancelledDiscountInCents: { increment: item.discountAppliedInCents },
+                  },
+                });
+                const updated = await tx.productVariant.update({
+                  where: { id: item.productVariantId },
+                  data: { stock: { increment: item.quantity } },
+                });
+                deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
+              }
+
+              const updatedItems = await tx.orderItem.findMany({ where: { orderId: payment.orderId } });
+              const allItemsCancelled = updatedItems.every((i) => i.cancelledQuantity >= i.quantity);
+              const newOrderStatus = allItemsCancelled ? OrderStatus.REFUNDED : OrderStatus.PARTIALLY_REFUNDED;
+
+              await tx.order.update({ where: { id: payment.orderId }, data: { status: newOrderStatus } });
+
+              if (allItemsCancelled && payment.order.couponId) {
+                await this.couponService.releaseForOrder(tx, payment.orderId, payment.order.couponId);
+              }
+
+              await tx.payment.update({
+                where: { id: payment.id },
+                data: {
+                  refundedAmountInCents: { increment: refund.amount },
+                  ...(allItemsCancelled && { status: PaymentStatus.REFUNDED }),
+                },
+              });
+
+              await tx.orderEvent.create({
+                data: {
+                  orderId: payment.orderId,
+                  fromStatus: payment.order.status,
+                  toStatus: newOrderStatus,
+                  actor: 'SYSTEM:stripe-webhook',
+                  note: `Async partial refund ${refund.id} — cancelledQuantity/stock reconstructed from refund metadata`,
+                },
+              });
+            });
+          } catch (err) {
+            if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+              this.logger.debug(`Stripe event ${eventId} already processed — skipping duplicate refund update`);
+              return;
+            }
+            if (err instanceof OrderStatusRaceError) {
+              this.logger.error(`[CRITICAL] ${err.message} (refund ${refund.id}) — requires manual review`);
+              Sentry.withScope((scope) => {
+                scope.setLevel('fatal');
+                scope.setTag('payment.event', 'order_status_race');
+                scope.setContext('refund', { refundId: refund.id, orderNumber: payment.order.orderNumber });
+                Sentry.captureMessage(
+                  `Order status race on handleRefundUpdate (metadata recovery): ${err.message}`,
+                  'fatal',
+                );
+              });
+              return;
+            }
+            throw err;
+          }
+
+          this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+            this.logger.warn('notifyStockChangesByDelta failed', err),
+          );
+          this.logger.log(
+            `Reconstructed partial refund ${refund.id} for order ${payment.order.orderNumber} from refund metadata`,
+          );
+          return;
+        }
+
+        // No usable metadata (refund predates this fix, or the item list didn't fit
+        // Stripe's 500-char metadata limit) — fall back to the prior best-effort
+        // recovery: mark the order PARTIALLY_REFUNDED and record the refunded amount
+        // so financials are correct. cancelledQuantity per item cannot be reconstructed
+        // here — it requires manual correction in the admin panel.
         this.logger.error(
           `[CRITICAL] Partial refund ${refund.id} succeeded for order ${payment.order.orderNumber} ` +
-            `but order is still ${payment.order.status} — sync path failed. ` +
-            `Applying best-effort recovery; cancelledQuantity requires manual correction.`,
+            `but order is still ${payment.order.status} — sync path failed and no usable refund ` +
+            `metadata was found. Applying best-effort recovery; cancelledQuantity requires manual correction.`,
         );
         Sentry.withScope((scope) => {
           scope.setLevel('fatal');
@@ -860,6 +1027,60 @@ export class PaymentsService {
         );
       }
     }
+  }
+
+  /**
+   * Decodes and validates the per-item refund breakdown StripeClient attaches to a
+   * partial refund's metadata (buildRefundItemsMetadata). Returns null on any
+   * malformed/missing/foreign-order data so the caller falls back to the
+   * manual-correction path rather than risk corrupting unrelated order items.
+   */
+  private parseRefundItemsMetadata(
+    metadata: Record<string, string> | null | undefined,
+    orderItems: Array<{ id: string }>,
+  ): Array<{
+    orderItemId: string;
+    productVariantId: string;
+    quantity: number;
+    discountAppliedInCents: number;
+  }> | null {
+    const raw = metadata?.refundItems;
+    if (!raw) return null;
+
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(decoded) || decoded.length === 0) return null;
+
+    const validOrderItemIds = new Set(orderItems.map((i) => i.id));
+    const result: Array<{
+      orderItemId: string;
+      productVariantId: string;
+      quantity: number;
+      discountAppliedInCents: number;
+    }> = [];
+
+    for (const entry of decoded) {
+      if (!Array.isArray(entry) || entry.length !== 4) return null;
+      const [orderItemId, productVariantId, quantity, discountAppliedInCents] = entry;
+      if (
+        typeof orderItemId !== 'string' ||
+        typeof productVariantId !== 'string' ||
+        typeof quantity !== 'number' ||
+        typeof discountAppliedInCents !== 'number' ||
+        !Number.isInteger(quantity) ||
+        quantity <= 0 ||
+        !validOrderItemIds.has(orderItemId)
+      ) {
+        return null;
+      }
+      result.push({ orderItemId, productVariantId, quantity, discountAppliedInCents });
+    }
+
+    return result;
   }
 
   async getPaymentStatus(orderId: string, requestingUserId: string) {
@@ -1307,10 +1528,20 @@ export class PaymentsService {
             data: { status: PaymentStatus.REFUNDED },
           });
 
-          await tx.order.update({
-            where: { id: orderId },
+          // Conditional write keyed on the prior status read above — mirrors
+          // OrdersService.updateStatus's defense-in-depth pattern. Aborts before
+          // the stock-restore loop below if a concurrent mutator already moved
+          // the order off the status this method read it as. The Stripe refund
+          // already succeeded above, so the existing catch block below (logs
+          // [CRITICAL], relies on the charge.refund.updated webhook to reconcile)
+          // is the correct response — no special-casing needed here.
+          const orderUpdate = await tx.order.updateMany({
+            where: { id: orderId, status: payment.order.status },
             data: { status: OrderStatus.REFUNDED },
           });
+          if (orderUpdate.count === 0) {
+            throw new OrderStatusRaceError(orderId, payment.order.status);
+          }
 
           if (payment.order.couponId) {
             await this.couponService.releaseForOrder(tx, orderId, payment.order.couponId);
@@ -1425,7 +1656,12 @@ export class PaymentsService {
       // identical key and make Stripe replay the cached result of the earlier call.
       const idempotencyKey = `${orderId}-${payment.refundedAmountInCents}-${items.map(i => `${i.orderItemId}:${i.quantity}`).sort().join(',')}`;
 
-      await this.stripeClient.createPartialRefund(payment.stripePaymentIntentId, refundAmountInCents, idempotencyKey);
+      await this.stripeClient.createPartialRefund(
+        payment.stripePaymentIntentId,
+        refundAmountInCents,
+        idempotencyKey,
+        items,
+      );
 
       // Stripe partial refund is now in flight. If the DB transaction below fails or the
       // process crashes, the charge.refund.updated webhook fires and handleRefundUpdate()
@@ -1434,6 +1670,21 @@ export class PaymentsService {
       const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
       try {
       await this.prisma.$transaction(async (tx) => {
+        // Claim the order via a no-op same-status write before touching stock —
+        // the target status (PARTIALLY_REFUNDED vs REFUNDED) isn't known until
+        // the item loop below runs, so this can't use the direct "write the new
+        // status" form refundPayment/markSessionPaid use. Mirrors
+        // sweepOrphanedPendingOrders's claim-then-act pattern. The Stripe refund
+        // already succeeded above, so the existing catch block below (logs
+        // [CRITICAL], relies on the webhook to reconcile) is the correct response.
+        const claimed = await tx.order.updateMany({
+          where: { id: orderId, status: payment.order.status },
+          data: { status: payment.order.status },
+        });
+        if (claimed.count === 0) {
+          throw new OrderStatusRaceError(orderId, payment.order.status);
+        }
+
         for (const item of items) {
           await tx.orderItem.update({
             where: { id: item.orderItemId },
@@ -1843,10 +2094,24 @@ export class PaymentsService {
           },
         });
 
-        await tx.order.update({
-          where: { id: orderId },
+        // Conditional write keyed on the expected prior status (PENDING_PAYMENT) —
+        // mirrors OrdersService.updateStatus's defense-in-depth pattern. The FOR
+        // UPDATE lock above only serialises against a concurrent markSessionPaid;
+        // it says nothing about a different mutator (e.g. a customer self-cancel)
+        // having already moved the order off PENDING_PAYMENT and restored its own
+        // stock — writing CANCELLED again would be harmless, but re-running the
+        // stock-restore loop below would double-credit it. Abort before that loop.
+        const orderUpdate = await tx.order.updateMany({
+          where: { id: orderId, status: OrderStatus.PENDING_PAYMENT },
           data: { status: OrderStatus.CANCELLED },
         });
+        if (orderUpdate.count === 0) {
+          this.logger.warn(
+            `Order ${orderId} was not PENDING_PAYMENT when handling payment failure — ` +
+              `a concurrent transition already moved it; skipping stock restore/coupon release`,
+          );
+          return;
+        }
 
         if (couponId) {
           await this.couponService.releaseForOrder(tx, orderId, couponId);

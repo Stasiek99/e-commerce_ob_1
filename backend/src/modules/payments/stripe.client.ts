@@ -33,6 +33,13 @@ export interface CreateCheckoutSessionInput {
   couponLabel?: string;
 }
 
+export interface RefundItemInput {
+  orderItemId: string;
+  productVariantId: string;
+  quantity: number;
+  discountAppliedInCents?: number;
+}
+
 @Injectable()
 export class StripeClient {
   private readonly logger = new Logger(StripeClient.name);
@@ -173,11 +180,41 @@ export class StripeClient {
     paymentIntentId: string,
     amountInCents: number,
     idempotencyKey: string,
+    items: RefundItemInput[],
   ): Promise<Stripe.Refund> {
+    const metadata = this.buildRefundItemsMetadata(items);
     return this.stripe.refunds.create(
-      { payment_intent: paymentIntentId, amount: amountInCents },
+      {
+        payment_intent: paymentIntentId,
+        amount: amountInCents,
+        ...(metadata && { metadata }),
+      },
       { idempotencyKey: `partial-refund-${idempotencyKey}` },
     );
+  }
+
+  /**
+   * Encodes the per-item refund breakdown into the Stripe refund's own metadata
+   * so handleRefundUpdate's crash-recovery path (payments.service.ts) can
+   * reconstruct cancelledQuantity and stock restoration if the synchronous DB
+   * write after this call never lands. Tuples (not keyed objects) keep the
+   * encoding compact. Stripe caps metadata values at 500 characters — if an
+   * order has enough distinct line items to exceed that, metadata is omitted
+   * and the pre-existing manual-correction fallback applies. Recovery degrades
+   * gracefully; it never corrupts.
+   */
+  private buildRefundItemsMetadata(items: RefundItemInput[]): Record<string, string> | undefined {
+    const encoded = JSON.stringify(
+      items.map((i) => [i.orderItemId, i.productVariantId, i.quantity, i.discountAppliedInCents ?? 0]),
+    );
+    if (encoded.length > 500) {
+      this.logger.warn(
+        `Refund items metadata (${encoded.length} chars) exceeds Stripe's 500-char limit — ` +
+          `omitting; crash recovery for this refund will require manual correction`,
+      );
+      return undefined;
+    }
+    return { refundItems: encoded };
   }
 
   async listDisputesByPaymentIntent(paymentIntentId: string): Promise<Stripe.Dispute[]> {
