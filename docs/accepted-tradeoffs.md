@@ -1,5 +1,10 @@
 # Accepted Tradeoffs
 
+**See also:** [`business-process-model.md`](./business-process-model.md) and
+[`coupon-lifecycle-model.md`](./coupon-lifecycle-model.md), which cite several of the
+entries below inline against the specific state-machine transition they justify (e.g.
+the DISPUTE_LOST_REVIEW no-auto-restore entry, the coupon `Math.round` entry).
+
 Companion to `audit-exclusion-list.md`. That file records resolved *bugs* — things that were wrong and got fixed. This file records *judgment calls*: places where the code deliberately picked one defensible option over another, where reasonable engineers could disagree, and where a future audit round should not re-flag the choice itself as a defect.
 
 The distinction matters because several real findings across this audit series turned out to be the same tradeoff being re-litigated from a different angle each time (e.g. round 13 fixed a coupon-throttler leak; round 14 then flagged that the fix removed `cart/items`'s only incidental rate limit — both findings were real, but the underlying question "how strict should `cart/items` be?" is a tradeoff, not a bug, and deserves one explicit answer instead of N rounds of drive-by opinions).

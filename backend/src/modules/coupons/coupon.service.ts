@@ -132,21 +132,26 @@ export class CouponService {
     userId: string | undefined,
     discountAppliedInCents: number,
   ): Promise<void> {
+    // Column names are quoted camelCase, matching the actual Postgres columns
+    // (no @map on Coupon's fields — Prisma's default is camelCase, not snake_case).
+    // `id`/`couponId`/`userId` are plain TEXT columns (Coupon.id is a String default,
+    // not @db.Uuid), so they must NOT be cast to ::uuid — Postgres has no text = uuid
+    // operator and errors immediately if you try.
     const affected = await tx.$executeRaw`
       UPDATE coupons
-      SET current_uses = current_uses + 1
-      WHERE id = ${couponId}::uuid
-        AND is_active = true
-        AND (expires_at IS NULL OR expires_at > NOW())
-        AND (max_uses_total IS NULL OR current_uses < max_uses_total)
+      SET "currentUses" = "currentUses" + 1
+      WHERE id = ${couponId}
+        AND "isActive" = true
+        AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
+        AND ("maxUsesTotal" IS NULL OR "currentUses" < "maxUsesTotal")
         AND (
-          max_uses_per_user IS NULL
-          OR ${userId ?? null}::uuid IS NULL
+          "maxUsesPerUser" IS NULL
+          OR ${userId ?? null}::text IS NULL
           OR (
             SELECT COUNT(*) FROM coupon_uses
-            WHERE coupon_id = ${couponId}::uuid
-              AND user_id = ${userId ?? null}::uuid
-          ) < max_uses_per_user
+            WHERE "couponId" = ${couponId}
+              AND "userId" = ${userId ?? null}
+          ) < "maxUsesPerUser"
         )
     `;
 
@@ -157,6 +162,20 @@ export class CouponService {
     await tx.couponUse.create({
       data: { couponId, orderId, userId: userId ?? null, discountAppliedInCents },
     });
+  }
+
+  // Releases a coupon's reserved capacity for an order that never completed —
+  // the exact inverse of applyInsideTransaction. Must be called from inside the
+  // same transaction as the order's terminal CANCELLED/REFUNDED write, by every
+  // call site that ends an order's life, or the slot leaks permanently (it isn't
+  // covered by reconcileCurrentUses, which only fixes drift against the
+  // CouponUse rows — it can't tell a "leaked" row from a legitimate one).
+  async releaseForOrder(tx: Prisma.TransactionClient, orderId: string, couponId: string): Promise<void> {
+    await tx.$executeRaw`
+      UPDATE coupons SET "currentUses" = GREATEST("currentUses" - 1, 0)
+      WHERE id = ${couponId}
+    `;
+    await tx.couponUse.deleteMany({ where: { orderId } });
   }
 
   calculateDiscount(type: DiscountType, value: number, cartTotalInCents: number): number {
@@ -240,8 +259,8 @@ export class CouponService {
 
     await this.prisma.$executeRaw`
       UPDATE coupons
-      SET current_uses = (
-        SELECT COUNT(*) FROM coupon_uses WHERE coupon_id = coupons.id
+      SET "currentUses" = (
+        SELECT COUNT(*) FROM coupon_uses WHERE "couponId" = coupons.id
       )
     `;
     this.logger.debug('Coupon currentUses reconciliation complete');

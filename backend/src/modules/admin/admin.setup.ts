@@ -271,6 +271,13 @@ export function isGenerateLabelVisible(status: string | undefined): boolean {
  *  are the only paths that call updateReviewStats(). */
 export const REVIEW_EDIT_PROPERTIES = ['adminReply'];
 
+/** Exported for unit testing. Generic AdminJS property override: hides a field from
+ *  the default Prisma-backed edit form (no business-logic guard, no audit trail) while
+ *  keeping it visible in list/show/filter — used wherever a field must only change
+ *  through a guarded action/endpoint instead. Applied to Order.status, Shipment.status,
+ *  and Coupon.value/discountType. */
+export const EDIT_LOCKED = { isVisible: { list: true, show: true, edit: false, filter: true } };
+
 export async function setupAdmin(
   app: NestExpressApplication,
   prisma: PrismaService,
@@ -464,6 +471,11 @@ export async function setupAdmin(
             invoiceUrl: {
               isVisible: { list: false, show: true, edit: false, filter: false },
             },
+            // Status changes must go through the guarded actions below (and the
+            // dedicated refund/fraud-review endpoints) so Stripe + stock + OrderEvent
+            // stay in sync — the default Prisma-backed edit form has no transition
+            // allowlist, no Stripe call, and writes no audit trail at all.
+            status: EDIT_LOCKED,
           },
           actions: {
             new: { isAccessible: false },
@@ -714,6 +726,11 @@ export async function setupAdmin(
         resource: { model: getModelByName('Shipment'), client: prisma },
         options: {
           navigation: { name: 'Zamówienia' },
+          properties: {
+            // Same rationale as Order.status above — force status changes through
+            // generateLabel/admin updateStatus instead of the raw Prisma edit form.
+            status: EDIT_LOCKED,
+          },
           actions: {
             new: { isAccessible: false },
             delete: { isAccessible: false },
@@ -819,6 +836,12 @@ export async function setupAdmin(
               description: 'Liczba zrealizowanych użyć z tabeli coupon_uses',
             },
             excludedProductIds: { isVisible: { list: false, show: true, edit: false, filter: false } },
+            // value/discountType aren't part of UpdateCouponDto — there is no
+            // supported way to change them post-creation, only a DB-level bypass
+            // through this default Prisma-backed edit form. Locking edit here closes
+            // that bypass without removing any capability admins actually have.
+            value: EDIT_LOCKED,
+            discountType: EDIT_LOCKED,
           },
           actions: {
             delete: { isAccessible: false },

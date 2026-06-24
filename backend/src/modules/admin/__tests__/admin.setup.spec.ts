@@ -5,6 +5,7 @@ import {
   regenerateSessionOnLogin,
   isGenerateLabelVisible,
   REVIEW_EDIT_PROPERTIES,
+  EDIT_LOCKED,
 } from '../admin.setup';
 
 jest.mock('bcrypt');
@@ -210,5 +211,20 @@ describe('REVIEW_EDIT_PROPERTIES', () => {
     expect(REVIEW_EDIT_PROPERTIES).not.toContain('status');
     expect(REVIEW_EDIT_PROPERTIES).not.toContain('rating');
     expect(REVIEW_EDIT_PROPERTIES).not.toContain('productId');
+  });
+});
+
+describe('EDIT_LOCKED', () => {
+  it('hides status from the plain Edit form while keeping it visible elsewhere', () => {
+    expect(EDIT_LOCKED).toEqual({
+      isVisible: { list: true, show: true, edit: false, filter: true },
+    });
+  });
+
+  it('disables edit specifically, so Order.status/Shipment.status cannot be set via the default Prisma-backed form', () => {
+    expect(EDIT_LOCKED.isVisible.edit).toBe(false);
+    expect(EDIT_LOCKED.isVisible.list).toBe(true);
+    expect(EDIT_LOCKED.isVisible.show).toBe(true);
+    expect(EDIT_LOCKED.isVisible.filter).toBe(true);
   });
 });

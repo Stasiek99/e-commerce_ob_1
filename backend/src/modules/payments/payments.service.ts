@@ -676,6 +676,7 @@ export class PaymentsService {
       payment.id,
       payment.orderId,
       payment.order.items,
+      payment.order.couponId,
       `Stripe event: ${reasonType}`,
       eventId,
       session.id,
@@ -1080,11 +1081,7 @@ export class PaymentsService {
               deltas.push({ variantId: item.productVariantId, delta: activeQuantity, newStock: updated.stock });
             }
             if (order.couponId) {
-              await tx.$executeRaw`
-                UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
-                WHERE id = ${order.couponId}::uuid
-              `;
-              await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+              await this.couponService.releaseForOrder(tx, order.id, order.couponId);
             }
             await tx.orderEvent.create({
               data: {
@@ -1260,7 +1257,7 @@ export class PaymentsService {
     await this.withOrderRefundLock(orderId, async () => {
       const payment = await this.prisma.payment.findUnique({
         where: { orderId },
-        include: { order: { select: { orderNumber: true, status: true, items: true } } },
+        include: { order: { select: { orderNumber: true, status: true, items: true, couponId: true } } },
       });
 
       if (!payment) throw new NotFoundException(`No payment found for order ${orderId}`);
@@ -1273,10 +1270,19 @@ export class PaymentsService {
       // Funds were already taken by Stripe via chargeback — stock is deliberately
       // withheld pending an admin's explicit non-delivery confirmation (see
       // handleDisputeClosed). Refunding here would pay the customer back a second
-      // time while bypassing that confirmation gate.
-      if (payment.order.status === OrderStatus.DISPUTE_LOST_REVIEW) {
+      // time while bypassing that confirmation gate. DISPUTE_HOLD is blocked for a
+      // related reason: the same charge is simultaneously being litigated as a
+      // chargeback, and refunding it now undermines the dispute evidence and risks
+      // a double-debit once the dispute resolves. FRAUD_REVIEW is intentionally NOT
+      // in this list — rejectFraudReview legitimately calls refundPayment while the
+      // order is still FRAUD_REVIEW.
+      const disputeBlockedRefundStatuses: OrderStatus[] = [
+        OrderStatus.DISPUTE_HOLD,
+        OrderStatus.DISPUTE_LOST_REVIEW,
+      ];
+      if (disputeBlockedRefundStatuses.includes(payment.order.status)) {
         throw new ConflictException(
-          `Order ${orderId} is in DISPUTE_LOST_REVIEW — an admin must confirm non-delivery via the order status endpoint before a refund can be issued.`,
+          `Order ${orderId} is in ${payment.order.status} — resolve the dispute (or confirm non-delivery via the order status endpoint) before a refund can be issued.`,
         );
       }
 
@@ -1305,6 +1311,10 @@ export class PaymentsService {
             where: { id: orderId },
             data: { status: OrderStatus.REFUNDED },
           });
+
+          if (payment.order.couponId) {
+            await this.couponService.releaseForOrder(tx, orderId, payment.order.couponId);
+          }
 
           // Only restore units not already returned by a prior partial refund
           for (const item of payment.order.items) {
@@ -1373,7 +1383,7 @@ export class PaymentsService {
           stripePaymentIntentId: true,
           amountInCents: true,
           refundedAmountInCents: true,
-          order: { select: { orderNumber: true } },
+          order: { select: { orderNumber: true, status: true, couponId: true } },
         },
       });
 
@@ -1383,6 +1393,22 @@ export class PaymentsService {
       }
       if (!payment.stripePaymentIntentId) {
         throw new Error(`No Stripe PaymentIntent ID on payment ${payment.id}`);
+      }
+
+      // Re-checked here, inside the lock, against the freshly-read order — every
+      // caller (cancelItemsByUser, ReturnsService.markRefunded, ...) reads order.status
+      // before acquiring this lock, so a dispute/fraud-review webhook landing in that
+      // gap would otherwise slip through unblocked (this method previously had no
+      // order.status check at all, only payment.status === COMPLETED).
+      const disputeBlockedRefundStatuses: OrderStatus[] = [
+        OrderStatus.DISPUTE_HOLD,
+        OrderStatus.FRAUD_REVIEW,
+        OrderStatus.DISPUTE_LOST_REVIEW,
+      ];
+      if (disputeBlockedRefundStatuses.includes(payment.order.status)) {
+        throw new ConflictException(
+          `Order ${orderId} is in ${payment.order.status} — resolve the dispute or fraud review before issuing a partial refund.`,
+        );
       }
 
       const rawRefundAmountInCents = items.reduce((s, i) => s + i.quantity * i.priceInCents, 0);
@@ -1431,6 +1457,10 @@ export class PaymentsService {
           where: { id: orderId },
           data: { status: newOrderStatus },
         });
+
+        if (allCancelled && payment.order.couponId) {
+          await this.couponService.releaseForOrder(tx, orderId, payment.order.couponId);
+        }
 
         await tx.payment.update({
           where: { id: payment.id },
@@ -1773,6 +1803,7 @@ export class PaymentsService {
     paymentId: string,
     orderId: string,
     orderItems: Array<{ productVariantId: string; quantity: number; cancelledQuantity: number }>,
+    couponId: string | null,
     failureReason: string,
     eventId?: string,
     sessionId?: string,
@@ -1816,6 +1847,10 @@ export class PaymentsService {
           where: { id: orderId },
           data: { status: OrderStatus.CANCELLED },
         });
+
+        if (couponId) {
+          await this.couponService.releaseForOrder(tx, orderId, couponId);
+        }
 
         for (const item of orderItems) {
           const activeQuantity = item.quantity - (item.cancelledQuantity ?? 0);
