@@ -688,6 +688,17 @@ describe('AuthService', () => {
       expect(redis.set).not.toHaveBeenCalled();
     });
 
+    it('still resolves when Redis is unavailable while writing the revocation fence (DB-side revocation already committed)', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+      redis.set.mockRejectedValueOnce(new Error('Redis unavailable'));
+
+      await expect(service.logout('some-raw-token')).resolves.toBeUndefined();
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { revokedAt: expect.any(Date) } }),
+      );
+    });
+
     it('looks up the refresh token by its SHA-256 hash to obtain the userId before revoking', async () => {
       prisma.refreshToken.findUnique.mockResolvedValue({ userId: 'user-1' });
       prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });

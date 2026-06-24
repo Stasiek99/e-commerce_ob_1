@@ -1,9 +1,11 @@
 # Accepted Tradeoffs
 
-**See also:** [`business-process-model.md`](./business-process-model.md) and
-[`coupon-lifecycle-model.md`](./coupon-lifecycle-model.md), which cite several of the
-entries below inline against the specific state-machine transition they justify (e.g.
-the DISPUTE_LOST_REVIEW no-auto-restore entry, the coupon `Math.round` entry).
+**See also:** [`business-process-model.md`](./business-process-model.md),
+[`coupon-lifecycle-model.md`](./coupon-lifecycle-model.md), and
+[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md), which cite
+several of the entries below inline against the specific state-machine transition they
+justify (e.g. the DISPUTE_LOST_REVIEW no-auto-restore entry, the coupon `Math.round`
+entry, the JWT-Redis-outage fail-open entry).
 
 Companion to `audit-exclusion-list.md`. That file records resolved *bugs* — things that were wrong and got fixed. This file records *judgment calls*: places where the code deliberately picked one defensible option over another, where reasonable engineers could disagree, and where a future audit round should not re-flag the choice itself as a defect.
 

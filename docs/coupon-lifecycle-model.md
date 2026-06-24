@@ -14,7 +14,10 @@ when the order that consumed it never completes.
 
 **See also:** [`audit-exclusion-list.md`](./audit-exclusion-list.md) (existing Coupons
 findings — this doc does not restate any of them); [`accepted-tradeoffs.md`](./accepted-tradeoffs.md)
-(the `Math.round` customer-favorable rounding entry, deliberately not re-flagged below).
+(the `Math.round` customer-favorable rounding entry, deliberately not re-flagged below);
+[`business-process-model.md`](./business-process-model.md) and
+[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md) (same method
+applied to other domains).
 
 ---
 
