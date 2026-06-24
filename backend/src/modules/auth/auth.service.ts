@@ -104,13 +104,14 @@ export class AuthService {
     // Any Redis outage would hang every login until the TimeoutInterceptor fires.
     // Wrap all Redis calls so the rate-limit is advisory: skip it on outage,
     // log to Sentry, and allow login to proceed — same pattern as JwtStrategy.
+    let locked = false;
     try {
-      if (await this.redis.exists(lockKey)) {
-        throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
-      }
+      locked = Boolean(await this.redis.exists(lockKey));
     } catch (err) {
-      if (err instanceof UnauthorizedException) throw err;
       this.logger.error('Redis unavailable in login() — skipping lockout check', (err as Error).message);
+    }
+    if (locked) {
+      throw new UnauthorizedException('Account temporarily locked — too many failed attempts');
     }
 
     const user = await this.usersService.findByEmail(email);
@@ -634,12 +635,23 @@ export class AuthService {
    * token lifetime so Redis doesn't accumulate stale entries.
    */
   async revokeAccessTokensForUser(userId: string): Promise<void> {
-    await this.redis.set(
-      `auth:revoke-before:${userId}`,
-      Date.now().toString(),
-      'EX',
-      this.revokeBeforeTtlSecs,
-    );
+    // Sandwiched after an already-committed DB write in every caller (logout,
+    // changePassword, resetPassword, requestEmailChange) — a Redis outage here
+    // must not turn an already-successful request into a 500. Same fail-open
+    // pattern as the other Redis calls in this file.
+    try {
+      await this.redis.set(
+        `auth:revoke-before:${userId}`,
+        Date.now().toString(),
+        'EX',
+        this.revokeBeforeTtlSecs,
+      );
+    } catch (err) {
+      this.logger.error(
+        'Redis unavailable in revokeAccessTokensForUser() — access-token revocation fence not set',
+        (err as Error).message,
+      );
+    }
   }
 
   /**

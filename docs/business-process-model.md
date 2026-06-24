@@ -23,7 +23,12 @@ you get from A to C bypassing B" question), it's called out inline and again in
 Orders/Payments sections once fixed), [`accepted-tradeoffs.md`](./accepted-tradeoffs.md)
 (deliberate design choices referenced inline above, e.g. the DISPUTE_LOST_REVIEW
 no-auto-restore decision), [`coupon-lifecycle-model.md`](./coupon-lifecycle-model.md)
-(same method applied to the Coupon domain, deliberately scoped out of this doc).
+(same method applied to the Coupon domain, deliberately scoped out of this doc),
+[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md) (same method
+applied to Auth/Sessions/OAuth, also scoped out of this doc),
+[`gdpr-export-erasure-model.md`](./gdpr-export-erasure-model.md) (same method applied
+to the export/erasure flow §8.2 below explicitly scoped out — turns out most of it was
+already built).
 
 ---
 

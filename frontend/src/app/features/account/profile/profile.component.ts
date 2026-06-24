@@ -219,6 +219,26 @@ function formatPhone(raw: string): string {
         }
       </div>
 
+      <!-- ── Data export (GDPR Art. 20) ──────────────────── -->
+      <div tuiCardLarge class="export-card">
+        <header tuiHeader>
+          <h2 tuiTitle>Twoje dane</h2>
+        </header>
+        <div class="info-row">
+          <span class="info-label">Pobierz kopię swoich danych (RODO, art. 20)</span>
+          <button
+            tuiButton
+            appearance="secondary"
+            size="s"
+            type="button"
+            [disabled]="exporting()"
+            (click)="exportData()"
+          >
+            {{ exporting() ? 'Przygotowywanie…' : 'Pobierz moje dane' }}
+          </button>
+        </div>
+      </div>
+
       <!-- ── Danger zone ─────────────────────────────────── -->
       <div class="danger-zone">
         <h3 class="danger-title">Strefa niebezpieczna</h3>
@@ -305,6 +325,7 @@ function formatPhone(raw: string): string {
     .form-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
 
     .security-card { display: block; border: 1px solid var(--color-border) !important; margin-top: 24px; }
+    .export-card { display: block; border: 1px solid var(--color-border) !important; margin-top: 24px; }
     .security-form { display: flex; flex-direction: column; gap: 4px; padding: 12px 0; }
     .security-form .info-text { font-size: 13px; color: var(--color-secondary); margin: 0; line-height: 1.5; }
 
@@ -345,6 +366,7 @@ export class ProfileComponent {
   readonly emailLoading = signal(false);
   readonly changingPassword = signal(false);
   readonly passwordLoading = signal(false);
+  readonly exporting = signal(false);
 
   readonly countries: readonly TuiCountryIsoCode[] = [
     'PL',
@@ -472,6 +494,26 @@ export class ProfileComponent {
       error: () => {
         this.toast.error('Błąd zapisu profilu');
         this.saving.set(false);
+      },
+    });
+  }
+
+  exportData(): void {
+    this.exporting.set(true);
+    this.http.get(`${environment.apiUrl}/users/me/data-export`, { responseType: 'blob' }).subscribe({
+      next: (blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `gdpr-export-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.exporting.set(false);
+        this.toast.success('Twoje dane zostały pobrane.');
+      },
+      error: () => {
+        this.toast.error('Nie udało się pobrać danych. Spróbuj ponownie.');
+        this.exporting.set(false);
       },
     });
   }

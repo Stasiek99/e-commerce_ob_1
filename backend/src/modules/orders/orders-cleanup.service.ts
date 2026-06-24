@@ -42,5 +42,31 @@ export class OrdersCleanupService {
     } else {
       this.logger.debug('Retention purge: no expired orders found');
     }
+
+    // ReturnRequest has no FK-cascade tie to Order and no retentionExpiresAt of
+    // its own (by design — it survives Order hard-deletion via deleteAccount),
+    // so its PII — including a plaintext IBAN in bankAccount — would otherwise
+    // outlive the 5-year window indefinitely unless that customer separately
+    // deletes their whole account. Scrub any ReturnRequest whose parent order
+    // has already passed retention, using the same matching window as above.
+    const { count: returnRequestCount } = await this.prisma.returnRequest.updateMany({
+      where: {
+        order: { retentionExpiresAt: { lt: now } },
+        email: { notIn: ['deleted@deleted'], not: { endsWith: '@deleted.invalid' } },
+      },
+      data: {
+        firstName:   '[usunięto]',
+        lastName:    '[usunięto]',
+        email:       'retention-expired@deleted.invalid',
+        phone:       null,
+        bankAccount: null,
+      },
+    });
+
+    if (returnRequestCount > 0) {
+      this.logger.log(`Retention purge: anonymised PII on ${returnRequestCount} return request(s) past 5-year accounting window`);
+    } else {
+      this.logger.debug('Retention purge: no expired return requests found');
+    }
   }
 }
