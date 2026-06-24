@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const StripeSDK = require('stripe') as {
-  new(key: string, config?: { apiVersion: '2026-05-27.dahlia' }): import('stripe/cjs/stripe.core').Stripe;
+  new(
+    key: string,
+    config?: { apiVersion: '2026-05-27.dahlia'; timeout?: number; maxNetworkRetries?: number },
+  ): import('stripe/cjs/stripe.core').Stripe;
 };
 import type { Stripe } from 'stripe/cjs/stripe.core';
 
@@ -52,7 +55,17 @@ export class StripeClient {
     // reviewing a webhook/session payload shape change. Bump this string
     // deliberately, in its own commit, when intentionally upgrading the
     // integration — not as a side effect of a routine dependency bump.
-    this.stripe = new StripeSDK(apiKey, { apiVersion: '2026-05-27.dahlia' });
+    // No explicit timeout/retries previously meant every call rode the SDK's
+    // defaults (80s timeout, 0 retries) — risking the synchronous webhook
+    // handler (markSessionPaid's Radar check) holding the response open near
+    // Stripe's own retry-patience window (business-process-model.md A7). Calls
+    // that mutate state already pass an idempotencyKey (stripe.client.ts, see
+    // createCheckoutSession/createCoupon), so automatic retries are safe here.
+    this.stripe = new StripeSDK(apiKey, {
+      apiVersion: '2026-05-27.dahlia',
+      timeout: 15000,
+      maxNetworkRetries: 2,
+    });
 
     if (!this.webhookSecret) {
       this.logger.warn(

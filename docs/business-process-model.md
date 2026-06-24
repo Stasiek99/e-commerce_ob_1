@@ -483,6 +483,129 @@ approved-and-shipped *and* refunded.
   `sweepOrphanedPendingOrders`, which use a conditional `updateMany` keyed on the
   expected prior status as defense-in-depth. Currently masked by the other guards
   each method has, but structurally inconsistent and worth aligning.
+- **`pruneProcessedStripeEvents`' lock TTL (~23h) is close enough to its 24h cron
+  interval that a Railway hobby-tier sleep spanning a tick could push the next
+  successful prune out ~48h** (`payments.service.ts:1138-1150`) — the same class of
+  risk already solved for `reconcilePendingPayments` via an external
+  `POST /payments/reconcile` keep-alive trigger (`payments.controller.ts:116-135`,
+  CLAUDE.md's documented Railway Cron Job). No equivalent external trigger exists for
+  this prune job specifically, but its only consequence is `ProcessedStripeEvent` rows
+  surviving a few extra days before deletion (disk growth, not a correctness/money
+  issue — Stripe stops retrying webhooks after 3 days regardless). Low priority; the
+  documented health-check-ping keep-alive (CLAUDE.md, "Alternative (simpler, free)")
+  already prevents the container from sleeping at all if that's the configured option.
+
+---
+
+## Extended Payments/Stripe audit (2026-06-24)
+
+Following the same staleness pattern already found in
+[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md) (16 of 17 raw
+bullets already fixed) and [`gdpr-export-erasure-model.md`](./gdpr-export-erasure-model.md)
+(7 of 7), `audit-exclusion-list.md`'s "Payments / Stripe" section — the largest raw
+bullet cluster in that file outside Frontend/SSR — was re-verified line-by-line against
+current `payments.service.ts`, `stripe.client.ts`, `payments.controller.ts`, and
+`orders.service.ts`. **22 of 24 checked bullets are stale** (already fixed, several
+documented nowhere until now — see [Resolved](#resolved-extended-payments-sweep) below).
+Two real, previously-undocumented gaps surfaced from reading the webhook dispatch path
+end-to-end rather than re-checking old bullets:
+
+### A6 — HIGH (FIXED): the Stripe Dashboard webhook endpoint is very likely never subscribed to dispute or payout events at all
+
+`handleWebhookEvent`'s dispatcher (`payments.service.ts:241-277`) fully handles
+`charge.dispute.created`, `charge.dispute.closed`, and `payout.failed` — three real,
+tested code paths (`handleDisputeCreated`, `handleDisputeClosed`, `handlePayoutFailed`).
+But `CLAUDE.md`'s own production setup checklist, under `STRIPE_WEBHOOK_SECRET`, tells
+whoever configures the Stripe Dashboard webhook endpoint to subscribe to exactly four
+events: `checkout.session.completed`, `checkout.session.expired`,
+`checkout.session.async_payment_failed`, `charge.refund.updated`. **None of the three
+dispute/payout event types are in that list.**
+
+A Stripe webhook endpoint only delivers the event types explicitly selected when it's
+configured — there is no "send everything" fallback. If the production endpoint was set
+up by literally following the documented checklist (the most likely scenario, since it's
+the only setup instruction that exists), `charge.dispute.created`/`closed` and
+`payout.failed` never arrive at all. The practical impact is severe and silent:
+
+- **The entire `DISPUTE_HOLD`/`DISPUTE_LOST_REVIEW` state machine (§1, §7 above) never
+  activates.** A real chargeback leaves the order sitting in `PAID` indefinitely —
+  `refundPayment`'s `disputeBlockedRefundStatuses` guard (A3, fixed) can never trigger
+  because the order never reaches `DISPUTE_HOLD` in the first place. An admin could
+  refund an order that's *simultaneously* the subject of an active, un-tracked
+  chargeback, exactly the double-loss scenario A3 was built to prevent — closed in code,
+  reopened by a missing Dashboard checkbox.
+- No dispute alert email (`sendDisputeAlert`) or Sentry `fatal`-level capture
+  (`payments.service.ts:1567-1582`) ever fires — disputes are invisible to the merchant
+  until Stripe's own dashboard/email notifies them, well after the evidence-submission
+  clock (`evidence_details.due_by`) has started running.
+- `payout.failed` — already independently flagged by the original (correct) exclusion-list
+  bullet — has the identical root cause, just for payout risk instead of disputes.
+
+This is not a code bug; the handlers are correct and tested. It's a **documentation gap
+with a production-correctness consequence** — the one channel that tells a human how to
+wire up the Dashboard is incomplete.
+
+**Fixed:** added `charge.dispute.created`, `charge.dispute.closed`, and `payout.failed`
+to `CLAUDE.md`'s Stripe webhook event list (`STRIPE_WEBHOOK_SECRET` row), with a note
+explaining the silent-disable consequence if they're missing. This is a documentation
+fix only — since the actual Dashboard subscription can't be verified by reading the
+repo, **confirm directly in the Stripe Dashboard** (Developers → Webhooks → the
+production endpoint → "Listening for") that all seven events are actually selected,
+not just the four that were previously documented.
+
+### A7 — MEDIUM (FIXED): Stripe SDK client has no configured request timeout or retry policy
+
+`stripe.client.ts:55` constructs the SDK with only `apiVersion` set —
+`new StripeSDK(apiKey, { apiVersion: '2026-05-27.dahlia' })`. No `timeout` or
+`maxNetworkRetries` option is passed, so every call rides `stripe-node`'s defaults
+(80-second timeout, zero automatic retries). `markSessionPaid` — invoked synchronously
+from the webhook handler, on Stripe's own delivery thread — calls
+`retrievePaymentIntentWithCharge` (the Radar risk-level check, `payments.service.ts:340`)
+before it can respond `{received:true}`. A slow Stripe API response anywhere close to
+that 80-second ceiling holds the webhook open well past Stripe's own expected response
+window (Stripe's dashboard recommends acknowledging within a few seconds and treats slow
+responses as a delivery problem worth retrying). A subsequent Stripe retry of the same
+event is idempotency-safe (`processedStripeEvent` unique constraint, §2), so this isn't a
+double-processing risk — it's wasted retry volume and slower fraud-review latency under
+any Stripe-side or network degradation, with no code path currently bounding it.
+
+**Fixed:** passed `timeout: 15000` and `maxNetworkRetries: 2` to the `StripeSDK`
+constructor (`stripe.client.ts:55-59`) — comfortably under Stripe's own webhook
+patience window, with retries safe since every state-mutating call already carries an
+explicit `idempotencyKey`. Regression test asserts both options are passed
+(`stripe.client.spec.ts`, "configures a bounded timeout and automatic network
+retries").
+
+### Resolved — extended Payments sweep
+
+| Exclusion-list claim | Verified status |
+|---|---|
+| "Coupon discount not subtracted in Stripe line items (overcharge)" | **Stale.** `createCheckoutSession` creates a real Stripe `amount_off` coupon and applies it via `discounts` (`stripe.client.ts:75-88`), idempotency-keyed `coupon-{paymentId}`. |
+| "Reconciliation cron bypasses idempotency guard vs webhook race" | **Stale.** Both the webhook and the cron call the same `markSessionPaid`, which inserts a session-scoped `paid-{sessionId}` dedup key inside its `$transaction` regardless of caller (`payments.service.ts:357-363`) — whichever commits first wins, the other gets `P2002` and returns. |
+| "Stripe webhook out-of-order (`expired` before `completed`) flips paid order to cancelled" | **Not reproducible as described.** `markSessionFailed` explicitly returns early if `payment.status === COMPLETED` (`payments.service.ts:661-664`), and Stripe's own Checkout Session lifecycle makes `expired`-after-`completed` for the *same* session unreachable (a session is binary-terminal). The realistic case (a late `async_payment_failed` arriving after `completed`) is exactly what that guard blocks. |
+| "No idempotency key on `sessions.create` / `coupons.create`" | **Stale.** Both calls carry `idempotencyKey: checkout-{paymentId}` / `coupon-{paymentId}` (`stripe.client.ts:85,122`). |
+| "Orphaned Stripe coupon objects never deleted (on retry, on expiry)" | **Stale.** Deleted on successful payment (`extractSessionCouponId`+`deleteCoupon`, `payments.service.ts:417-418`), on failure (`markSessionFailed`, `:685-686`), and before a retry creates a new session (`initiatePayment`, `:142-144`). |
+| "`retryPayment` P2002 crash creating second Payment row" | **Stale.** `initiatePayment` upserts via `findUnique` then conditional `update`/`create` (`payments.service.ts:93-168`) — no plain `create` on a retry path. |
+| "Sub-50gr order total bypasses Stripe minimum...50gr instead of 200gr" | **Stale.** A dedicated `getStripeMinimumChargeInCents()` util with a real per-currency map (200gr PLN fallback) is enforced inside `createFromCart`'s transaction (`orders.service.ts:358-365`), with boundary tests at 199/200 cents (`orders.service.spec.ts:1209-1255`). |
+| "Payment record created after Stripe API call (ordering risk)" | **Stale — already the opposite.** `initiatePayment` creates/updates the `Payment` row (`payments.service.ts:149-167`) *before* calling `stripeClient.createCheckoutSession` (`:178`). |
+| "Invoice PDF base64 stored in BullMQ/Redis payload" | **Stale.** `dispatchPostPaymentNotifications` passes `invoiceStoragePath` (a Supabase path, not a payload) to the email queue (`payments.service.ts:613-628`). |
+| "`charge.dispute.created`/`closed` not handled" + bypass/double-refund sub-claims | **Stale.** Both handled (`handleDisputeCreated`/`Closed`, `:1505-1728`); the admin-bypass and double-refund sub-claims were closed by A1/A3 above. **But see [A6](#a6--high-the-stripe-dashboard-webhook-endpoint-is-very-likely-never-subscribed-to-dispute-or-payout-events-at-all) — the handlers work, the Dashboard subscription documented in CLAUDE.md likely doesn't include these events at all.** |
+| "`cancelItemsByUser` refunds pre-discount gross; FREE_SHIPPING proration wrong; no cap" | **Stale, fully superseded.** `partialRefund` caps via `Math.min(rawRefundAmountInCents, available)` (`:1421`); `prorateDiscountForRefundItems` skips `FREE_SHIPPING` coupons and persists actual-applied (not idealized) discount per unit (`:1213-1247`). |
+| "Timing attack on `PAYMENTS_RECONCILE_SECRET` comparison" | **Stale.** `timingSafeEqual` with equal-length buffers (`payments.controller.ts:124-128`). |
+| "`pg_advisory_xact_lock` ineffective through pgbouncer (sequence DDL)" | **Resolved by design change, not a fix-in-place.** `onModuleInit`'s comment (`orders.service.ts:113-117`) explains the lock was deliberately *not used* — `CREATE SEQUENCE IF NOT EXISTS` is naturally idempotent/safe under concurrent execution without needing a lock at all. |
+| "`FOR UPDATE` inside interactive transactions is a no-op under pgbouncer (oversell protection broken)" | **Not reproducible as a general claim.** The checkout stock guard (`createFromCart`) uses an atomic `updateMany` conditional on `stock >= quantity` (`orders.service.ts:298-308`), not `FOR UPDATE` — immune to this concern by construction. The one real `FOR UPDATE` use (`handlePaymentFailure`, `payments.service.ts:1818-1820`) runs inside a single Prisma interactive transaction, which pins one physical connection for the transaction's full duration even under pgbouncer transaction-mode pooling — the failure mode described (statements split across connections) applies to multi-statement *non-interactive* `$transaction([...])` arrays or session-scoped advisory locks, neither of which this call is. |
+| "Stripe payout failure not monitored (`payout.failed` not subscribed)" | **Confirmed real — folded into [A6](#a6--high-the-stripe-dashboard-webhook-endpoint-is-very-likely-never-subscribed-to-dispute-or-payout-events-at-all), which found the same gap also covers both dispute events.** |
+| "Guest cancel-token leaks via Referer; TTL too short for P24/BLIK (1h)" | **Stale, both halves.** The opaque Redis `order-token:{orderId}` lookup key already replaced any meaningful secret in the URL, and its TTL is 7 days (`payments.service.ts:170-174`), explicitly sized for P24's multi-day settlement window. |
+| "Shipping rate fetched outside order transaction → stale price charged" | **Stale.** Explicitly fetched inside `createFromCart`'s transaction now (`orders.service.ts:332-334`). |
+| "City-level velocity guard ineffective/blocks legit Warsaw customers" + "Radar fires post-payment, no pre-checkout velocity check" | **Stale, both.** Replaced with an identity-based (`userId`/`snapshotEmail`) pre-checkout velocity guard — 5 orders/30min — with an explicit comment rejecting city-level checks as useless at Warsaw's scale (`payments.service.ts:58-71`). |
+| "Duplicate order creation: no idempotency/lock on `createFromCart`" | **Stale.** Both an `idempotencyKey` early-return (`orders.service.ts:171-182`) and a `checkout-lock:{userId|sessionId}` Redis lock (`:188-193`). |
+| "`markRefunded` issues full refund regardless of partial return items" | **Stale.** Clamps each item to `orderItem.quantity - orderItem.cancelledQuantity` and calls `partialRefund` with only the matched, clamped items (`returns.service.ts:347-368,408-410`). |
+| "`ProductsModule` local `REDIS_CLIENT` shadows global client" | **Stale — provider no longer exists.** Only one `REDIS_CLIENT` provider exists repo-wide, in the shared `redis.module.ts`. |
+| "`retryPayment`...no try/catch/rollback at all" | **Stale.** Full try/catch with stock/coupon rollback on Stripe rejection (`orders.service.ts:954-987`). |
+| "`markSessionPaid` never cross-checks Stripe's captured amount" | **Stale.** Explicit `amountMismatch` check against `session.amount_total`, routing to `FRAUD_REVIEW` with a `fatal`-level Sentry capture on mismatch (`payments.service.ts:306-328`). |
+| "`handlePaymentFailure` stock-restore credited full original quantity" | **Stale.** Already `item.quantity - (item.cancelledQuantity ?? 0)` (`payments.service.ts:1856`). |
+
+**24 bullets checked, 22 stale, 2 new (A6, A7) — both fixed in this pass.**
 
 ---
 

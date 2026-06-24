@@ -80,7 +80,7 @@ describe('StripeClient construction', () => {
 
     expect(mockStripeConstructor).toHaveBeenCalledWith(
       'sk_test_dummy',
-      { apiVersion: '2026-05-27.dahlia' },
+      { apiVersion: '2026-05-27.dahlia', timeout: 15000, maxNetworkRetries: 2 },
     );
   });
 
@@ -89,6 +89,18 @@ describe('StripeClient construction', () => {
 
     const [apiKey] = mockStripeConstructor.mock.calls[0];
     expect(apiKey).toBe('sk_test_dummy');
+  });
+
+  // Guards business-process-model.md finding A7: no timeout/retry config meant
+  // every call rode the SDK's defaults (80s timeout, 0 retries), risking the
+  // synchronous webhook handler holding its response open near Stripe's own
+  // retry-patience window.
+  it('configures a bounded timeout and automatic network retries', async () => {
+    await buildClient();
+
+    const [, config] = mockStripeConstructor.mock.calls[0];
+    expect(config.timeout).toBe(15000);
+    expect(config.maxNetworkRetries).toBe(2);
   });
 });
 
