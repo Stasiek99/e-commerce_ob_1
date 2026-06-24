@@ -335,10 +335,10 @@ Uses a separate `.component.html` (the one outlier — all other components use 
 
 | Element | Handler | Action | Backend dependency |
 |---|---|---|---|
-| "Zarejestruj się bezpośrednio" buttons (×5: hero, footer CTA, 3× sidebar) | **none** | **Dead — no `(click)` binding anywhere in the template or component class.** Visually styled as primary CTAs but inert. | — *(bug candidate, not a gap in this mapping: confirmed by reading the full template and `partnership.component.ts` — `buttonSize` is the only class member, no handler methods exist at all)* |
+| "Zarejestruj się bezpośrednio" buttons (×6: hero, footer CTA, 4× sidebar — corrected from the originally-reported ×5, the sidebar has 4 tiles not 3) | `(click)="registerCta()"` | Navigates to `/` — **interim placeholder, fixed**, was previously dead (no handler at all) | — *(see ROADMAP.md Phase 7 for the still-open decision: real Chogan URL vs. removing the page entirely)* |
 | "info@parfum-traum.de" | `href="mailto:..."` | Opens user's mail client | — |
 
-This page reads as an MLM/affiliate landing page for a third-party brand ("Chogan") rather than this store's own B2B program — worth confirming with whoever owns this content whether the CTA buttons were meant to link out to an external Chogan registration URL.
+This page reads as an MLM/affiliate landing page for a third-party brand ("Chogan") rather than this store's own B2B program. The CTA buttons now consistently navigate to `/` (matching the sitewide banner below) as a deliberate stopgap — the real decision (external Chogan URL vs. removing the page) is tracked in `ROADMAP.md` Phase 7, not resolved here.
 
 ---
 
@@ -530,7 +530,7 @@ Binary accept/reject only — no granular per-category cookie preference UI.
 | Legal / Compliance | `/legal/terms` | Cross-links to withdrawal/privacy | `routerLink` | — |
 | Legal / Compliance | `/legal/privacy` | *(none — static page)* | — | — |
 | Legal / Compliance | `/legal/withdrawal` | "Złóż odstąpienie online" | `routerLink` + query param | — *(deep-link into Returns)* |
-| B2B / Partnership | `/partnership` | "Zarejestruj się bezpośrednio" (×5) | **none bound** | — ⚠ **dead button, see Findings** |
+| B2B / Partnership | `/partnership` | "Zarejestruj się bezpośrednio" (×6) | `(click)="registerCta()"` | — *(fixed: navigates to `/`, was dead — see Findings)* |
 | B2B / Partnership | `/partnership` | mailto link | `href` | External |
 | Shared (app shell) | global | Logo | `routerLink` | — |
 | Shared (app shell) | global | Category dropdown trigger + items | `router.navigate()` / `routerLink` | — |
@@ -541,7 +541,7 @@ Binary accept/reject only — no granular per-category cookie preference UI.
 | Shared (app shell) | global | Footer catalog/account links | `routerLink` | — |
 | Shared (app shell) | global | Footer legal links (×3) | `routerLink` | Legal (nav) |
 | Shared (app shell) | global | Footer ODR link | `href` (external) | External |
-| Shared (app shell) | global | Announcement banner | `routerLink="/"` | — ⚠ **mislinked, see Findings** |
+| Shared (app shell) | global | Announcement banner | `routerLink="/"` | — *(intentional placeholder, not mislinked — see Findings)* |
 | Shared (app shell) | global | Cookie consent privacy link | `routerLink` | Legal (nav) |
 | Shared (app shell) | global | Cookie accept-all / reject-non-essential | `acceptAll()` / `rejectNonEssential()` | — |
 | Shared (ProductCard) | Catalog list | Card body | `routerLink` | — |
@@ -552,8 +552,8 @@ Binary accept/reject only — no granular per-category cookie preference UI.
 
 ### Findings (carried over from Steps 2–3)
 
-1. **Dead CTA buttons** — all 5 "Zarejestruj się bezpośrednio" buttons on `/partnership` have no handler at all.
-2. **Mislinked sitewide banner** — `AnnouncementBannerComponent` ("ZOSTAŃ PARTNEREM CHOGAN... Kliknij i dołącz") routes to `/` instead of `/partnership`, on every page.
+1. **Dead CTA buttons — FIXED (interim placeholder).** All 6 "Zarejestruj się bezpośrednio" buttons on `/partnership` (corrected count — hero, footer CTA, 4× sidebar, not the originally-reported 5) had no handler at all. Now call `registerCta()`, navigating to `/`, matching the sitewide banner's existing target. This is a deliberate stopgap, not the real destination — see `ROADMAP.md` Phase 7 for the still-open decision (real Chogan URL vs. removing the page).
+2. **Sitewide banner — reclassified, not a bug.** `AnnouncementBannerComponent` ("ZOSTAŃ PARTNEREM CHOGAN... Kliknij i dołącz") routes to `/` rather than `/partnership`. Originally flagged as "mislinked"; now treated as the intentional placeholder target both elements share until the Partnership-page decision above is made.
 3. **Dead code, not a live issue** — Home's Sentry-test button is gated behind `showDebug`, hardcoded `false`. Confirmed safe.
 
 ### Orphan check (b) — backend domains with zero frontend clickable
@@ -695,16 +695,16 @@ flowchart LR
   S5 --> B_CART
   S5 --> B_WISHLIST
 
-  BUG1["dead CTA buttons<br/>x5, no click handler"]
+  BUG1["x6 CTA buttons fixed<br/>now navigate to '/' (placeholder)"]
   P1 -.-> BUG1
 
-  BUG2["routerLink='/' actual<br/>copy implies /partnership intended"]
+  BUG2["routerLink='/' is now the<br/>shared, intentional placeholder"]
   S3 -.-> BUG2
 
-  classDef bug fill:#ffe0e0,stroke:#cc0000,stroke-width:2px,color:#900
+  classDef bug fill:#fff4e0,stroke:#cc8800,stroke-width:2px,color:#7a5500
   classDef orphan fill:#eee,stroke:#999,stroke-width:1px,stroke-dasharray: 5 5,color:#666
   class BUG1,BUG2,P1 bug
   class B_ADMIN,B_STORAGE orphan
 ```
 
-**Legend:** solid arrow = a clickable on that page/component fires a real API call to that backend module. Dashed red = a finding from Steps 2–3 (the Partnership domain and AnnouncementBanner are styled red because they're implicated, not because they call a backend module). Dashed gray = `Admin` and `Storage` confirmed to have zero SPA callers — matches the Step 5 orphan check, expected by design.
+**Legend:** solid arrow = a clickable on that page/component fires a real API call to that backend module. Dashed amber = a Steps 2–3 finding now resolved with an interim placeholder (the Partnership domain and AnnouncementBanner are styled amber because they're implicated, not because they call a backend module — see Findings above and `ROADMAP.md` Phase 7 for the still-open real decision). Dashed gray = `Admin` and `Storage` confirmed to have zero SPA callers — matches the Step 5 orphan check, expected by design.

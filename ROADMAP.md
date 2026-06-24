@@ -373,6 +373,12 @@ Everything in this phase MUST be done before the first real order.
 - Polish Ustawa o prawach konsumenta Art. 12 ust. 1 pkt 3 requires the seller's **telephone number** to be displayed in pre-contractual information — before the consumer is bound to the contract. The checkout summary and Regulamin show an email address and company address but no phone number. This is a mandatory disclosure; its absence is a basis for UOKiK complaints and retail inspections.
 - **Fix:** Add seller telephone number to checkout Step 2 summary and to the Regulamin's seller data block (`Dane sprzedawcy` section).
 
+- ### 🟡 MEDIUM — `/partnership` page is a temporary placeholder, needs a real decision *(not yet scheduled)*
+- `frontend/src/app/features/partnership/` reads as an MLM/affiliate landing page for a third-party brand (Chogan) rather than this store's own B2B program. All 6 "Zarejestruj się bezpośrednio" CTA buttons previously had no handler at all (dead clicks); the sitewide `AnnouncementBannerComponent` banner ("ZOSTAŃ PARTNEREM CHOGAN... Kliknij i dołącz") already routed to `/` instead of `/partnership`.
+- **Interim fix (this session):** added a `registerCta()` handler (`partnership.component.ts`) navigating to `/`, so all 6 buttons now behave consistently with the existing banner instead of doing nothing — but this is explicitly a stopgap, not a real destination.
+- **Decision needed before launch:** either (a) link the CTAs/banner to a real external Chogan registration URL, if this is genuinely meant to drive affiliate signups for a third-party brand, or (b) remove the `/partnership` route, component, and banner entirely if it's not actually this store's B2B program. Whoever owns this content should confirm which.
+- **Fix:** once decided, update `registerCta()` (and the banner's `routerLink`) to the real target, or delete the route/component/banner if (b).
+
 - ### 🟢 LOW — No newsletter signup *(not yet scheduled)*
 - No `POST /newsletter/subscribe` backend endpoint
 - No signup form in footer, homepage hero, or post-purchase flow

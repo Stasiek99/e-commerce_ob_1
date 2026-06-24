@@ -1,6 +1,7 @@
 import { Component, DestroyRef, inject } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { BreakpointObserver } from '@angular/cdk/layout';
+import { Router } from '@angular/router';
 import { TuiButton, TuiLink } from '@taiga-ui/core';
 import { BreadcrumbComponent } from '../../shared/components/breadcrumb/breadcrumb.component';
 
@@ -14,6 +15,7 @@ import { BreadcrumbComponent } from '../../shared/components/breadcrumb/breadcru
 export class PartnershipComponent {
   private readonly bp = inject(BreakpointObserver);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly router = inject(Router);
 
   readonly crumbs = [
     { label: 'Strona główna', link: '/' },
@@ -28,5 +30,11 @@ export class PartnershipComponent {
       .subscribe(({ matches }) => {
         this.buttonSize = matches ? 'm' : 'l';
       });
+  }
+
+  // Placeholder pending a real B2B decision — matches AnnouncementBannerComponent's
+  // existing routerLink="/" so every "join" CTA behaves consistently in the meantime.
+  registerCta(): void {
+    this.router.navigate(['/']);
   }
 }
