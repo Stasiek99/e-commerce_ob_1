@@ -863,6 +863,53 @@ describe('AuthService', () => {
       expect(typeof result.refreshToken).toBe('string');
     });
 
+    // ─── multi-tab race, end-to-end (regression — auth-session-lifecycle-model.md §5) ──
+    // Two tabs share one cookie jar. TabA refreshes first and rotates the only
+    // live token. TabB still holds the now-stale cookie and refreshes moments
+    // later, inside REFRESH_GRACE_MS. Unlike the synthetic-state tests above,
+    // this drives two real sequential service.refresh() calls from the same
+    // starting token to prove the documented claim end-to-end: both tabs end
+    // up authenticated, neither gets logged out nor triggers theft detection.
+    it('keeps both tabs authenticated when TabB redeems the same stale cookie inside the grace window', async () => {
+      // TabA: refreshes first with the only live token in the family.
+      prisma.refreshToken.findUnique.mockResolvedValueOnce({ ...validToken });
+
+      const resultA = await service.refresh('user-1', 'shared-raw-token');
+      expect(resultA).toHaveProperty('accessToken');
+      expect(resultA).toHaveProperty('refreshToken');
+
+      // TabB: same raw token, now stale — TabA already rotated it. Within the
+      // grace window, refresh() recovers by looking up the replacement TabA's
+      // rotation created.
+      prisma.refreshToken.findUnique
+        .mockResolvedValueOnce({
+          ...validToken,
+          revokedAt: new Date(), // just rotated by TabA
+          replacedBy: 'tabA-replacement-hash',
+        })
+        .mockResolvedValueOnce({
+          id: 'rt-tabA-replacement',
+          userId: 'user-1',
+          family: 'family-abc',
+          replacedBy: null,
+          revokedAt: null,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        });
+
+      const resultB = await service.refresh('user-1', 'shared-raw-token');
+
+      // TabB must recover into a fresh session — not get logged out, and not
+      // trigger the family-wide theft revocation.
+      expect(resultB).toHaveProperty('accessToken');
+      expect(resultB).toHaveProperty('refreshToken');
+      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ family: 'family-abc', revokedAt: null }),
+          data: { revokedAt: expect.any(Date) },
+        }),
+      );
+    });
+
     // ─── concurrent-tab double-rotation guard (fix) ──────────────────────────
     // Two browser tabs can both receive a 401 and both retry refresh() with the
     // same stale raw token within the grace window. Before the fix, rotateToken()
