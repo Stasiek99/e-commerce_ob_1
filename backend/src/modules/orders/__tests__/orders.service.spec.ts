@@ -40,6 +40,7 @@ describe('OrdersService', () => {
   let emailService: jest.Mocked<EmailQueueService>;
   let productsService: { notifyStockChangesByDelta: jest.Mock };
   let redisClient: { set: jest.Mock; eval: jest.Mock };
+  let couponService: { releaseForOrder: jest.Mock };
 
   const mockAddress = {
     firstName: 'Jan',
@@ -116,6 +117,7 @@ describe('OrdersService', () => {
             initiatePayment: jest.fn(),
             expirePendingCheckoutSession: jest.fn().mockResolvedValue(undefined),
             refundPayment: jest.fn().mockResolvedValue(undefined),
+            approveFraudReview: jest.fn().mockResolvedValue(undefined),
             // Mirrors the uncapped sum by default — the real cap is unit-tested on
             // PaymentsService.partialRefund directly; tests here assert that
             // cancelItemsByUser forwards whatever partialRefund resolves with
@@ -145,6 +147,7 @@ describe('OrdersService', () => {
           useValue: {
             validate: jest.fn().mockResolvedValue({ valid: false }),
             applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+            releaseForOrder: jest.fn().mockResolvedValue(undefined),
             calculateDiscount: jest.fn().mockImplementation((type: DiscountType, value: number, cartTotal: number) => {
               if (type === DiscountType.PERCENTAGE) return Math.round((cartTotal * value) / 100);
               if (type === DiscountType.FIXED_AMOUNT) return Math.min(value, cartTotal);
@@ -199,6 +202,7 @@ describe('OrdersService', () => {
     invoiceService = module.get(InvoiceService);
     emailService = module.get(EmailQueueService);
     productsService = module.get(ProductsService);
+    couponService = module.get(CouponService);
     invoiceService.processCorrectiveInvoice.mockResolvedValue({
       correctiveUrl: 'https://cdn.example.com/corrective.pdf',
       correctiveStoragePath: 'invoices/corrective.pdf',
@@ -2108,9 +2112,9 @@ describe('OrdersService', () => {
     it('aborts and does not restore stock when the conditional update affects 0 rows (status changed concurrently)', async () => {
       // Simulates a second caller losing the race: by the time this transaction's
       // UPDATE ... WHERE status=current.status runs, a concurrent call already moved
-      // the row off PAID, so 0 rows match and the per-item stock loop must never run.
+      // the row off PENDING_PAYMENT, so 0 rows match and the per-item stock loop must never run.
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PAID,
+        status: OrderStatus.PENDING_PAYMENT,
         items: [{ productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 0 }],
       });
       const txVariantUpdate = jest.fn();
@@ -2146,8 +2150,11 @@ describe('OrdersService', () => {
     });
 
     it('restores active stock when transitioning to CANCELLED', async () => {
+      // PENDING_PAYMENT → CANCELLED is the only non-dispute source this generic
+      // endpoint still allows into CANCELLED — no payment was captured, so there's
+      // no Stripe side effect being skipped (see the money-captured-state guard below).
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PAID,
+        status: OrderStatus.PENDING_PAYMENT,
         items: [
           { productVariantId: 'pv-1', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
           { productVariantId: 'pv-2', quantity: 2, cancelledQuantity: 0 }, // activeQty = 2
@@ -2169,26 +2176,6 @@ describe('OrdersService', () => {
         { id: 'pv-1', amount: 2 },
         { id: 'pv-2', amount: 2 },
       ]);
-    });
-
-    it('restores active stock when transitioning to REFUNDED', async () => {
-      prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.SHIPPED,
-        items: [{ productVariantId: 'pv-1', quantity: 1, cancelledQuantity: 0 }],
-      });
-      const increments: Array<{ id: string; amount: number }> = [];
-      prisma.$transaction.mockImplementation(async (fn: any) =>
-        fn(makeTx({
-          variantUpdate: jest.fn().mockImplementation((args: any) => {
-            increments.push({ id: args.where.id, amount: args.data.stock.increment });
-            return { stock: 0 };
-          }),
-        })),
-      );
-
-      await service.updateStatus('o-1', OrderStatus.REFUNDED);
-
-      expect(increments).toEqual([{ id: 'pv-1', amount: 1 }]);
     });
 
     it('throws BadRequestException when attempting to exit terminal state CANCELLED', async () => {
@@ -2229,8 +2216,11 @@ describe('OrdersService', () => {
     });
 
     it('skips fully-cancelled items (activeQty = 0) when restoring stock', async () => {
+      // DISPUTE_LOST_REVIEW → CANCELLED is the other non-PENDING_PAYMENT source this
+      // endpoint allows into a stock-restoring target (admin confirms goods never
+      // delivered/were returned) — exercises the same skip-already-cancelled logic.
       prisma.order.findUniqueOrThrow.mockResolvedValue({
-        status: OrderStatus.PARTIALLY_REFUNDED,
+        status: OrderStatus.DISPUTE_LOST_REVIEW,
         items: [
           { productVariantId: 'pv-1', quantity: 2, cancelledQuantity: 2 }, // activeQty = 0 — skip
           { productVariantId: 'pv-2', quantity: 3, cancelledQuantity: 1 }, // activeQty = 2
@@ -2246,7 +2236,7 @@ describe('OrdersService', () => {
         })),
       );
 
-      await service.updateStatus('o-1', OrderStatus.REFUNDED);
+      await service.updateStatus('o-1', OrderStatus.CANCELLED);
 
       expect(increments).toHaveLength(1);
       expect(increments[0]).toEqual({ id: 'pv-2', amount: 2 });
@@ -2422,15 +2412,8 @@ describe('OrdersService', () => {
         [OrderStatus.PENDING_PAYMENT,    OrderStatus.CANCELLED],
         [OrderStatus.PAID,               OrderStatus.PROCESSING],
         [OrderStatus.PAID,               OrderStatus.SHIPPED],
-        [OrderStatus.PAID,               OrderStatus.CANCELLED],
-        [OrderStatus.PAID,               OrderStatus.REFUNDED],
         [OrderStatus.PROCESSING,         OrderStatus.SHIPPED],
-        [OrderStatus.PROCESSING,         OrderStatus.CANCELLED],
-        [OrderStatus.PROCESSING,         OrderStatus.REFUNDED],
         [OrderStatus.SHIPPED,            OrderStatus.DELIVERED],
-        [OrderStatus.SHIPPED,            OrderStatus.REFUNDED],
-        [OrderStatus.DELIVERED,          OrderStatus.REFUNDED],
-        [OrderStatus.PARTIALLY_REFUNDED, OrderStatus.REFUNDED],
       ];
 
       prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
@@ -2441,6 +2424,52 @@ describe('OrdersService', () => {
 
         await expect(service.updateStatus('o-1', target)).resolves.not.toThrow();
       }
+    });
+
+    // ── A1 fix: money-captured states can't reach CANCELLED/REFUNDED/PARTIALLY_REFUNDED
+    // through this generic endpoint ────────────────────────────────────────────
+    // Previously PAID/PROCESSING/SHIPPED/DELIVERED/FRAUD_REVIEW → CANCELLED/REFUNDED
+    // were all "valid" per the allowlist, restoring stock and writing a legitimate-
+    // looking OrderEvent while Stripe was never called and Payment.status stayed
+    // COMPLETED — the merchant kept the charge. These transitions must now go through
+    // refundPayment/partialRefund/approveFraudReview/rejectFraudReview instead.
+
+    it('blocks every money-captured-state transition into CANCELLED/REFUNDED/PARTIALLY_REFUNDED', async () => {
+      const blockedTransitions: Array<[OrderStatus, OrderStatus]> = [
+        [OrderStatus.PAID,               OrderStatus.CANCELLED],
+        [OrderStatus.PAID,               OrderStatus.REFUNDED],
+        [OrderStatus.PAID,               OrderStatus.PARTIALLY_REFUNDED],
+        [OrderStatus.PROCESSING,         OrderStatus.CANCELLED],
+        [OrderStatus.PROCESSING,         OrderStatus.REFUNDED],
+        [OrderStatus.PROCESSING,         OrderStatus.PARTIALLY_REFUNDED],
+        [OrderStatus.SHIPPED,            OrderStatus.REFUNDED],
+        [OrderStatus.SHIPPED,            OrderStatus.PARTIALLY_REFUNDED],
+        [OrderStatus.DELIVERED,          OrderStatus.REFUNDED],
+        [OrderStatus.DELIVERED,          OrderStatus.PARTIALLY_REFUNDED],
+        [OrderStatus.PARTIALLY_REFUNDED, OrderStatus.REFUNDED],
+        [OrderStatus.FRAUD_REVIEW,       OrderStatus.PAID],
+        [OrderStatus.FRAUD_REVIEW,       OrderStatus.REFUNDED],
+        [OrderStatus.FRAUD_REVIEW,       OrderStatus.CANCELLED],
+      ];
+
+      for (const [current, target] of blockedTransitions) {
+        prisma.order.findUniqueOrThrow.mockResolvedValue({ status: current, items: [] });
+
+        await expect(service.updateStatus('o-1', target)).rejects.toThrow(BadRequestException);
+      }
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('still allows DISPUTE_LOST_REVIEW → CANCELLED/REFUNDED, the one legitimate DB-only exception', async () => {
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(makeTx()));
+      prisma.order.findUnique.mockResolvedValue(null);
+
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.DISPUTE_LOST_REVIEW, items: [] });
+      await expect(service.updateStatus('o-1', OrderStatus.CANCELLED)).resolves.not.toThrow();
+
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.DISPUTE_LOST_REVIEW, items: [] });
+      await expect(service.updateStatus('o-1', OrderStatus.REFUNDED)).resolves.not.toThrow();
     });
 
     // ── DISPUTE_HOLD → CANCELLED guard ────────────────────────────────────────
@@ -2548,6 +2577,75 @@ describe('OrdersService', () => {
       await service.updateStatus('o-1', OrderStatus.REFUNDED);
 
       expect(tx.productVariant.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── A4 fix: approveFraudReview/rejectFraudReview must be serialized ───────────
+  // Previously each read order.status, then delegated into PaymentsService with no
+  // lock held across both steps — a concurrent approve+reject pair could both pass
+  // the FRAUD_REVIEW check before either committed, leaving an order both
+  // approved-and-shipped AND refunded. Both methods now share a Redis lock keyed by
+  // orderId, acquired before the status read and held through the PaymentsService call.
+
+  describe('approveFraudReview / rejectFraudReview — concurrency guard', () => {
+    it('approveFraudReview acquires and releases fraud-review-lock around the status check + delegation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.FRAUD_REVIEW });
+
+      await service.approveFraudReview('o-1');
+
+      expect(redisClient.set).toHaveBeenCalledWith('fraud-review-lock:o-1', expect.any(String), 'EX', 30, 'NX');
+      expect(paymentsService.approveFraudReview).toHaveBeenCalledWith('o-1', 'ADMIN');
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejectFraudReview acquires and releases fraud-review-lock around the status check + delegation', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.FRAUD_REVIEW });
+
+      await service.rejectFraudReview('o-1');
+
+      expect(redisClient.set).toHaveBeenCalledWith('fraud-review-lock:o-1', expect.any(String), 'EX', 30, 'NX');
+      expect(paymentsService.refundPayment).toHaveBeenCalledWith('o-1', 'ADMIN:fraud-reject');
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects approveFraudReview with 429 when a reject decision for the same order already holds the lock', async () => {
+      redisClient.set.mockResolvedValue(null); // SET NX not acquired
+
+      await expect(service.approveFraudReview('o-1')).rejects.toThrow(
+        'A fraud-review decision for this order is already in progress',
+      );
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(paymentsService.approveFraudReview).not.toHaveBeenCalled();
+    });
+
+    it('rejects rejectFraudReview with 429 when an approve decision for the same order already holds the lock', async () => {
+      redisClient.set.mockResolvedValue(null); // SET NX not acquired
+
+      await expect(service.rejectFraudReview('o-1')).rejects.toThrow(
+        'A fraud-review decision for this order is already in progress',
+      );
+      expect(prisma.order.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+    });
+
+    it('releases the lock and rejects without delegating when the order is no longer FRAUD_REVIEW', async () => {
+      // Simulates losing the race: by the time this call acquired the lock, a sibling
+      // approve/reject call already moved the order off FRAUD_REVIEW.
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.PAID });
+
+      await expect(service.rejectFraudReview('o-1')).rejects.toThrow(
+        'Order is not in FRAUD_REVIEW status (current: PAID)',
+      );
+      expect(paymentsService.refundPayment).not.toHaveBeenCalled();
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases the lock even when the delegated call throws', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({ status: OrderStatus.FRAUD_REVIEW });
+      paymentsService.approveFraudReview.mockRejectedValueOnce(new Error('Stripe down'));
+
+      await expect(service.approveFraudReview('o-1')).rejects.toThrow('Stripe down');
+      expect(redisClient.eval).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -2889,6 +2987,37 @@ describe('OrdersService', () => {
       expect(paymentsService.refundPayment).not.toHaveBeenCalled();
     });
 
+    // A1 fix (coupon-lifecycle-model.md): cancelling a PENDING_PAYMENT order
+    // previously restored stock but never released a reserved coupon slot.
+    it('releases coupon capacity when cancelling a PENDING_PAYMENT order that used a coupon', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...mockOrderWithItems, couponId: 'coupon-1' });
+      const tx = {
+        productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        order: { update: jest.fn() },
+        orderEvent: { create: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'order-1', 'coupon-1');
+    });
+
+    it('does not touch coupon capacity when the cancelled PENDING_PAYMENT order had no coupon', async () => {
+      prisma.order.findFirst.mockResolvedValue(mockOrderWithItems);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        });
+      });
+
+      await service.cancelByUser('order-1', 'user-1');
+
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
+    });
+
     // FIX: cancellation stock restores previously never reached the live-stock
     // SSE stream or the back-in-stock notifier.
     it('notifies ProductsService of the restored variant after cancelling a PENDING_PAYMENT order', async () => {
@@ -2953,6 +3082,63 @@ describe('OrdersService', () => {
         'CUSTOMER',
         'Withdrawal reason',
       );
+    });
+  });
+
+  describe('cancelByToken', () => {
+    beforeEach(() => {
+      const configService = (service as any).configService;
+      configService.get.mockImplementation((key: string, defaultVal?: string) =>
+        key === 'ORDER_CANCEL_SECRET' ? 'test-secret' : defaultVal,
+      );
+    });
+
+    // A1 fix (coupon-lifecycle-model.md): the guest cancel-link flow restored
+    // stock but never released a reserved coupon slot.
+    it('releases coupon capacity when the guest-cancelled order used a coupon', async () => {
+      const token = generateOrderToken('order-1', 'test@example.com', 'test-secret');
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 10000,
+        couponId: 'coupon-1',
+        items: [{ productVariantId: 'pv-1', quantity: 1 }],
+      });
+      const tx = {
+        productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        order: { update: jest.fn() },
+        orderEvent: { create: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.cancelByToken('order-1', token);
+
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'order-1', 'coupon-1');
+    });
+
+    it('does not touch coupon capacity when the guest-cancelled order had no coupon', async () => {
+      const token = generateOrderToken('order-1', 'test@example.com', 'test-secret');
+      prisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        status: OrderStatus.PENDING_PAYMENT,
+        snapshotEmail: 'test@example.com',
+        snapshotFirstName: 'Jan',
+        totalInCents: 10000,
+        items: [{ productVariantId: 'pv-1', quantity: 1 }],
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+        }),
+      );
+
+      await service.cancelByToken('order-1', token);
+
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
     });
   });
 
@@ -3095,6 +3281,23 @@ describe('OrdersService', () => {
       expect(result.succeeded).toBe(1);
       expect(result.failed).toHaveLength(0);
       expect(stockRestored).toContain('pv-1');
+    });
+
+    // A1 fix (coupon-lifecycle-model.md): bulk-cancelling a PENDING_PAYMENT order
+    // restored stock but never released a reserved coupon slot.
+    it('releases coupon capacity when bulk-cancelling a PENDING_PAYMENT order that used a coupon', async () => {
+      const orders = [{ ...makeOrder('o-1', 'ORD-001', OrderStatus.PENDING_PAYMENT), couponId: 'coupon-1' }];
+      prisma.order.findMany.mockResolvedValue(orders);
+      const tx = {
+        productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        order: { update: jest.fn() },
+        orderEvent: { create: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.bulkCancel(['o-1']);
+
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'o-1', 'coupon-1');
     });
 
     it('calls refundPayment for PAID orders instead of the manual transaction', async () => {
@@ -3399,8 +3602,7 @@ describe('OrdersService', () => {
 
         await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow('Stripe down');
 
-        expect(tx.$executeRaw).toHaveBeenCalled();
-        expect(tx.couponUse.deleteMany).toHaveBeenCalledWith({ where: { orderId: 'order-1' } });
+        expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'order-1', 'coupon-1');
       });
 
       it('does not touch coupon usage when the order had no coupon', async () => {
@@ -3411,8 +3613,7 @@ describe('OrdersService', () => {
 
         await expect(service.retryPayment('order-1', 'user-1')).rejects.toThrow('Stripe down');
 
-        expect(tx.$executeRaw).not.toHaveBeenCalled();
-        expect(tx.couponUse.deleteMany).not.toHaveBeenCalled();
+        expect(couponService.releaseForOrder).not.toHaveBeenCalled();
       });
 
       it('does not roll back when initiatePayment succeeds', async () => {
@@ -4056,6 +4257,7 @@ describe('OrdersService', () => {
             useValue: {
               validate: jest.fn().mockResolvedValue({ valid: false }),
               applyInsideTransaction: jest.fn().mockResolvedValue(undefined),
+              releaseForOrder: jest.fn().mockResolvedValue(undefined),
               calculateDiscount: jest.fn().mockImplementation((type: DiscountType, value: number, cartTotal: number) => {
                 if (type === DiscountType.PERCENTAGE) return Math.round((cartTotal * value) / 100);
                 if (type === DiscountType.FIXED_AMOUNT) return Math.min(value, cartTotal);

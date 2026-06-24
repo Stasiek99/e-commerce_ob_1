@@ -48,16 +48,28 @@ const CARRIER_DISPLAY_NAMES: Record<CarrierCode, string> = {
   [CarrierCode.DPD_COURIER]: 'DPD Kurier',
 };
 
-// Explicit state-machine allowlist. Any transition not listed here is invalid.
-// Terminal states (CANCELLED, REFUNDED) have empty arrays — no exit.
+// Explicit state-machine allowlist for the GENERIC admin status endpoint
+// (OrdersService.updateStatus) only. Any transition not listed here is invalid
+// through that endpoint. Terminal states (CANCELLED, REFUNDED) have empty arrays.
+//
+// Money-captured states (PAID/PROCESSING/SHIPPED/DELIVERED/FRAUD_REVIEW) deliberately
+// have NO path here into CANCELLED/REFUNDED/PARTIALLY_REFUNDED: this table has no
+// Stripe side effect, so allowing it would let an admin flip Order.status to a
+// refund-implying value while Payment.status stays COMPLETED and the customer's
+// money is never returned. Those transitions only exist via refundPayment/
+// partialRefund/approveFraudReview/rejectFraudReview, which call Stripe and update
+// Payment.status atomically with Order.status.
+// DISPUTE_LOST_REVIEW → REFUNDED is the sole legitimate exception: the chargeback
+// already moved the money outside Stripe's normal refund flow, so this is correctly
+// DB-only bookkeeping (see isUnverifiedDisputeLossPayout below).
 const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING_PAYMENT]:    [OrderStatus.PAID, OrderStatus.CANCELLED, OrderStatus.FRAUD_REVIEW],
-  [OrderStatus.FRAUD_REVIEW]:       [OrderStatus.PAID, OrderStatus.REFUNDED, OrderStatus.CANCELLED],
-  [OrderStatus.PAID]:               [OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
-  [OrderStatus.PROCESSING]:         [OrderStatus.SHIPPED, OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
-  [OrderStatus.SHIPPED]:            [OrderStatus.DELIVERED, OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
-  [OrderStatus.DELIVERED]:          [OrderStatus.REFUNDED, OrderStatus.PARTIALLY_REFUNDED],
-  [OrderStatus.PARTIALLY_REFUNDED]: [OrderStatus.REFUNDED],
+  [OrderStatus.FRAUD_REVIEW]:       [],
+  [OrderStatus.PAID]:               [OrderStatus.PROCESSING, OrderStatus.SHIPPED],
+  [OrderStatus.PROCESSING]:         [OrderStatus.SHIPPED],
+  [OrderStatus.SHIPPED]:            [OrderStatus.DELIVERED],
+  [OrderStatus.DELIVERED]:          [],
+  [OrderStatus.PARTIALLY_REFUNDED]: [],
   [OrderStatus.CANCELLED]:          [],
   [OrderStatus.REFUNDED]:           [],
   [OrderStatus.DISPUTE_HOLD]:       [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.DELIVERED],
@@ -453,11 +465,7 @@ export class OrdersService implements OnModuleInit {
         }
         await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
         if (resolvedCouponId) {
-          await tx.$executeRaw`
-            UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
-            WHERE id = ${resolvedCouponId}::uuid
-          `;
-          await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+          await this.couponService.releaseForOrder(tx, order.id, resolvedCouponId);
         }
         await tx.orderEvent.create({
           data: {
@@ -825,6 +833,9 @@ export class OrdersService implements OnModuleInit {
           deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
         }
         await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+        if (order.couponId) {
+          await this.couponService.releaseForOrder(tx, orderId, order.couponId);
+        }
         await tx.orderEvent.create({
           data: {
             orderId,
@@ -892,6 +903,9 @@ export class OrdersService implements OnModuleInit {
         deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
       }
       await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+      if (order.couponId) {
+        await this.couponService.releaseForOrder(tx, orderId, order.couponId);
+      }
       await tx.orderEvent.create({
         data: {
           orderId,
@@ -954,11 +968,7 @@ export class OrdersService implements OnModuleInit {
         }
         await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
         if (order.couponId) {
-          await tx.$executeRaw`
-            UPDATE coupons SET current_uses = GREATEST(current_uses - 1, 0)
-            WHERE id = ${order.couponId}::uuid
-          `;
-          await tx.couponUse.deleteMany({ where: { orderId: order.id } });
+          await this.couponService.releaseForOrder(tx, order.id, order.couponId);
         }
         await tx.orderEvent.create({
           data: {
@@ -1151,29 +1161,60 @@ export class OrdersService implements OnModuleInit {
   }
 
   async approveFraudReview(orderId: string): Promise<void> {
-    const order = await this.prisma.order.findUniqueOrThrow({
-      where: { id: orderId },
-      select: { status: true },
+    await this.withFraudReviewLock(orderId, async () => {
+      const order = await this.prisma.order.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { status: true },
+      });
+      if (order.status !== OrderStatus.FRAUD_REVIEW) {
+        throw new BadRequestException(
+          `Order is not in FRAUD_REVIEW status (current: ${order.status})`,
+        );
+      }
+      await this.paymentsService.approveFraudReview(orderId, 'ADMIN');
     });
-    if (order.status !== OrderStatus.FRAUD_REVIEW) {
-      throw new BadRequestException(
-        `Order is not in FRAUD_REVIEW status (current: ${order.status})`,
-      );
-    }
-    await this.paymentsService.approveFraudReview(orderId, 'ADMIN');
   }
 
   async rejectFraudReview(orderId: string): Promise<void> {
-    const order = await this.prisma.order.findUniqueOrThrow({
-      where: { id: orderId },
-      select: { status: true },
+    await this.withFraudReviewLock(orderId, async () => {
+      const order = await this.prisma.order.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { status: true },
+      });
+      if (order.status !== OrderStatus.FRAUD_REVIEW) {
+        throw new BadRequestException(
+          `Order is not in FRAUD_REVIEW status (current: ${order.status})`,
+        );
+      }
+      await this.paymentsService.refundPayment(orderId, 'ADMIN:fraud-reject');
     });
-    if (order.status !== OrderStatus.FRAUD_REVIEW) {
-      throw new BadRequestException(
-        `Order is not in FRAUD_REVIEW status (current: ${order.status})`,
+  }
+
+  // Serializes approve vs reject on the same order: without this, the status read
+  // above and the delegation into PaymentsService are two separate steps, so a
+  // concurrent approve+reject pair can both pass the FRAUD_REVIEW check before
+  // either commits — one approves (→PAID, ships) and the other still refunds the
+  // same payment, since refundPayment has no idea this was "the fraud-reject path."
+  private async withFraudReviewLock<T>(orderId: string, fn: () => Promise<T>): Promise<T> {
+    const lockKey = `fraud-review-lock:${orderId}`;
+    const lockToken = randomUUID();
+    const acquired = await this.redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        'A fraud-review decision for this order is already in progress — please wait a moment before trying again',
+        HttpStatus.TOO_MANY_REQUESTS,
       );
     }
-    await this.paymentsService.refundPayment(orderId, 'ADMIN:fraud-reject');
+    try {
+      return await fn();
+    } finally {
+      await this.redis.eval(
+        `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
+    }
   }
 
   async updateStatus(id: string, status: OrderStatus, actor = 'ADMIN') {
@@ -1412,6 +1453,9 @@ export class OrdersService implements OnModuleInit {
                 where: { id: order.id },
                 data: { status: OrderStatus.CANCELLED },
               });
+              if (order.couponId) {
+                await this.couponService.releaseForOrder(tx, order.id, order.couponId);
+              }
               await tx.orderEvent.create({
                 data: {
                   orderId: order.id,

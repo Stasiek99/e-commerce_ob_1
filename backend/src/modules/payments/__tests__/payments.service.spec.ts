@@ -187,6 +187,7 @@ describe('PaymentsService', () => {
           provide: CouponService,
           useValue: {
             validate: jest.fn().mockResolvedValue({ valid: true }),
+            releaseForOrder: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -1829,9 +1830,11 @@ describe('PaymentsService', () => {
 
       await service.reconcilePendingPayments();
 
-      expect(prisma.couponUse.deleteMany).toHaveBeenCalledWith({
-        where: { orderId: 'order-orphan-1' },
-      });
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(
+        expect.anything(),
+        'order-orphan-1',
+        'coupon-1',
+      );
     });
 
     it('does not touch coupon tables when the orphaned order has no coupon', async () => {
@@ -1839,7 +1842,7 @@ describe('PaymentsService', () => {
 
       await service.reconcilePendingPayments();
 
-      expect(prisma.couponUse.deleteMany).not.toHaveBeenCalled();
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
     });
 
     it('logs and captures the exception but does not throw when auto-cancellation fails', async () => {
@@ -2099,7 +2102,7 @@ describe('PaymentsService', () => {
       stripePaymentIntentId: 'pi_test_abc123',
       amountInCents: 200000,
       refundedAmountInCents: 0,
-      order: { orderNumber: 'ORD-2026-000001' },
+      order: { orderNumber: 'ORD-2026-000001', status: OrderStatus.PAID },
     };
 
     const twoItems = [
@@ -2183,6 +2186,84 @@ describe('PaymentsService', () => {
       await expect(
         service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
       ).rejects.toThrow('No Stripe PaymentIntent ID on payment payment-1');
+    });
+
+    // ─── A3 fix: partialRefund previously had NO order.status check at all (only
+    // payment.status === COMPLETED) — every caller (cancelItemsByUser, ReturnsService
+    // .markRefunded) reads order.status before acquiring this method's lock, so a
+    // dispute/fraud-review webhook landing in that gap could slip through unblocked.
+    // The check now re-fetches order.status fresh, inside the lock, right before Stripe.
+
+    it.each([OrderStatus.DISPUTE_HOLD, OrderStatus.FRAUD_REVIEW, OrderStatus.DISPUTE_LOST_REVIEW])(
+      'throws ConflictException and skips the Stripe call when the freshly-read order is %s',
+      async (blockedStatus) => {
+        prisma.payment.findUnique.mockResolvedValue({
+          ...completedPayment,
+          order: { ...completedPayment.order, status: blockedStatus },
+        });
+
+        await expect(
+          service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER'),
+        ).rejects.toThrow(ConflictException);
+        expect(stripeClient.createPartialRefund).not.toHaveBeenCalled();
+      },
+    );
+
+    it('does not block on the stale currentOrderStatus parameter — only the freshly-read order.status matters', async () => {
+      // currentOrderStatus (3rd arg) is the caller's possibly-stale snapshot; the
+      // freshly-read payment.order.status here is the non-blocked PAID, so the call
+      // must proceed even though the caller-supplied value claims DISPUTE_HOLD.
+      prisma.payment.findUnique.mockResolvedValue(completedPayment);
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await expect(
+        service.partialRefund('order-1', twoItems, OrderStatus.DISPUTE_HOLD, 'CUSTOMER'),
+      ).resolves.not.toThrow();
+      expect(stripeClient.createPartialRefund).toHaveBeenCalled();
+    });
+
+    // A1 fix (coupon-lifecycle-model.md): when a partial refund cancels the last
+    // remaining items (order.status → REFUNDED), the coupon slot must be released
+    // too — restoring stock without releasing the coupon was the original gap.
+    it('releases coupon capacity when the partial refund fully cancels the order (allCancelled)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        order: { ...completedPayment.order, couponId: 'coupon-1' },
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      const allCancelledItems = [
+        { id: 'item-1', quantity: 2, cancelledQuantity: 2 },
+        { id: 'item-2', quantity: 1, cancelledQuantity: 1 },
+      ];
+      const tx = {
+        orderItem: {
+          update: jest.fn(),
+          findMany: jest.fn().mockResolvedValue(allCancelledItems),
+        },
+        productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        order: { update: jest.fn() },
+        payment: { update: jest.fn() },
+        orderEvent: { create: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'order-1', 'coupon-1');
+    });
+
+    it('does not release coupon capacity when the partial refund leaves items remaining (not allCancelled)', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...completedPayment,
+        order: { ...completedPayment.order, couponId: 'coupon-1' },
+      });
+      stripeClient.createPartialRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(buildPartialTx());
+
+      await service.partialRefund('order-1', twoItems, OrderStatus.PAID, 'CUSTOMER');
+
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
     });
 
     it('calls createPartialRefund with correct amount (sum of qty × price)', async () => {
@@ -3022,6 +3103,49 @@ describe('PaymentsService', () => {
       expect(stockRestored).toContain('pv-1');
     });
 
+    // A1 fix (coupon-lifecycle-model.md): a full refund previously restored stock
+    // but never released a reserved coupon slot, permanently burning single-use
+    // coupons the moment a customer's order got refunded.
+    it('releases coupon capacity when the refunded order used a coupon', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+        order: { ...mockPayment.order, couponId: 'coupon-1' },
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+      const tx = {
+        payment: { update: jest.fn() },
+        order: { update: jest.fn() },
+        orderEvent: { create: jest.fn() },
+        productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.refundPayment('order-1');
+
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'order-1', 'coupon-1');
+    });
+
+    it('does not touch coupon capacity when the refunded order had no coupon', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        }),
+      );
+
+      await service.refundPayment('order-1');
+
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
+    });
+
     // FIX: refund stock restores previously never reached the live-stock SSE
     // stream or the back-in-stock notifier.
     it('notifies ProductsService of the restored variant after the refund transaction commits', async () => {
@@ -3116,6 +3240,44 @@ describe('PaymentsService', () => {
 
       await expect(service.refundPayment('order-1')).rejects.toThrow(ConflictException);
       expect(stripeClient.createRefund).not.toHaveBeenCalled();
+    });
+
+    // ─── A3 fix: refundPayment previously blocked DISPUTE_LOST_REVIEW but had no
+    // check for DISPUTE_HOLD — the admin refund endpoint would pass every guard and
+    // issue a real Stripe refund while the same charge is simultaneously the subject
+    // of an open chargeback (undermines dispute evidence, risks a double-debit).
+
+    it('throws ConflictException and skips the Stripe call when order is in DISPUTE_HOLD', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+        order: { ...mockPayment.order, status: OrderStatus.DISPUTE_HOLD },
+      });
+
+      await expect(service.refundPayment('order-1')).rejects.toThrow(ConflictException);
+      expect(stripeClient.createRefund).not.toHaveBeenCalled();
+    });
+
+    // FRAUD_REVIEW must NOT be blocked here: rejectFraudReview legitimately calls
+    // refundPayment while the order is still FRAUD_REVIEW (it's the rejection path).
+    it('does not block FRAUD_REVIEW — rejectFraudReview depends on calling through while order is still FRAUD_REVIEW', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        status: PaymentStatus.COMPLETED,
+        order: { ...mockPayment.order, status: OrderStatus.FRAUD_REVIEW },
+      });
+      stripeClient.createRefund.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        await fn({
+          payment: { update: jest.fn() },
+          order: { update: jest.fn() },
+          orderEvent: { create: jest.fn() },
+          productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+        });
+      });
+
+      await expect(service.refundPayment('order-1', 'ADMIN:fraud-reject')).resolves.not.toThrow();
+      expect(stripeClient.createRefund).toHaveBeenCalled();
     });
 
     // ─── per-order refund lock (covers concurrent callers: cancelByUser,
@@ -3411,7 +3573,10 @@ describe('PaymentsService', () => {
           },
           {
             provide: CouponService,
-            useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
+            useValue: {
+              validate: jest.fn().mockResolvedValue({ valid: true }),
+              releaseForOrder: jest.fn().mockResolvedValue(undefined),
+            },
           },
           {
             provide: ProductsService,
@@ -4168,6 +4333,38 @@ describe('PaymentsService', () => {
       await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
 
       expect(state.stockRestored).toEqual([{ id: 'pv-1', increment: 2 }]);
+    });
+
+    // A1 fix (coupon-lifecycle-model.md): a session.expired/async_payment_failed
+    // webhook restored stock via handlePaymentFailure but never released a
+    // reserved coupon slot — a 6th leak site beyond the 5 the original audit found.
+    it('releases coupon capacity when the failed order used a coupon', async () => {
+      prisma.payment.findUnique.mockResolvedValue({
+        ...mockPayment,
+        order: { ...mockPayment.order, couponId: 'coupon-1' },
+      });
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ status: PaymentStatus.PENDING }]),
+        processedStripeEvent: { create: jest.fn().mockResolvedValue({}) },
+        payment: { update: jest.fn() },
+        order: { update: jest.fn() },
+        orderEvent: { create: jest.fn() },
+        productVariant: { update: jest.fn().mockResolvedValue({ stock: 0 }) },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(couponService.releaseForOrder).toHaveBeenCalledWith(tx, 'order-1', 'coupon-1');
+    });
+
+    it('does not touch coupon capacity when the failed order had no coupon', async () => {
+      prisma.payment.findUnique.mockResolvedValue(mockPayment);
+      prisma.$transaction.mockImplementation(buildFailureTx({}));
+
+      await service.handleWebhookEvent(buildEvent('checkout.session.expired', mockSession));
+
+      expect(couponService.releaseForOrder).not.toHaveBeenCalled();
     });
   });
 
@@ -4975,7 +5172,10 @@ describe('PaymentsService', () => {
           },
           {
             provide: CouponService,
-            useValue: { validate: jest.fn().mockResolvedValue({ valid: true }) },
+            useValue: {
+              validate: jest.fn().mockResolvedValue({ valid: true }),
+              releaseForOrder: jest.fn().mockResolvedValue(undefined),
+            },
           },
           {
             provide: ProductsService,
