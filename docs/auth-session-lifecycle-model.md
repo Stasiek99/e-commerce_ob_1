@@ -21,7 +21,9 @@ Orders/Payments/Shipments/Returns), [`coupon-lifecycle-model.md`](./coupon-lifec
 correction in both directions, overstated and understated), [`audit-exclusion-list.md`](./audit-exclusion-list.md)
 (condensed history — this doc's findings get folded into its Auth section once fixes
 land), [`accepted-tradeoffs.md`](./accepted-tradeoffs.md) (the JWT-Redis-outage
-fail-open entry is cited directly below).
+fail-open entry is cited directly below), [`gdpr-export-erasure-model.md`](./gdpr-export-erasure-model.md)
+(same method, GDPR export/erasure — cites this doc's `JwtStrategy.validate()` re-fetch
+behavior to confirm a deleted account's access token stops working immediately).
 
 ---
 

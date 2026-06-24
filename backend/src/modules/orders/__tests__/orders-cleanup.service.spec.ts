@@ -17,6 +17,9 @@ describe('OrdersCleanupService', () => {
             order: {
               updateMany: jest.fn(),
             },
+            returnRequest: {
+              updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            },
           },
         },
         {
@@ -100,6 +103,57 @@ describe('OrdersCleanupService', () => {
       const call = prisma.order.updateMany.mock.calls[0][0];
       expect(call.data.snapshotEmail).toBe('retention-expired@deleted.invalid');
       expect(call.data.snapshotEmail).not.toMatch(/^deleted\+/);
+    });
+  });
+
+  // ─── ReturnRequest retention scrub (GDPR Art. 5(1)(e), A2) ───────────────────
+
+  describe('ReturnRequest retention scrub', () => {
+    it('skips the scrub when another replica holds the lock', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await service.purgeExpiredOrderRetention();
+
+      expect(prisma.returnRequest.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('matches ReturnRequest rows via their parent order\'s retentionExpiresAt', async () => {
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      prisma.returnRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.purgeExpiredOrderRetention();
+
+      const call = prisma.returnRequest.updateMany.mock.calls[0][0];
+      expect(call.where.order).toEqual({ retentionExpiresAt: { lt: expect.any(Date) } });
+    });
+
+    it('skips rows already scrubbed by deleteAccount or a prior retention purge', async () => {
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      prisma.returnRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.purgeExpiredOrderRetention();
+
+      const call = prisma.returnRequest.updateMany.mock.calls[0][0];
+      expect(call.where.email).toEqual({
+        notIn: ['deleted@deleted'],
+        not: { endsWith: '@deleted.invalid' },
+      });
+    });
+
+    it('scrubs name/email/phone/bankAccount with the retention sentinel', async () => {
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      prisma.returnRequest.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.purgeExpiredOrderRetention();
+
+      const call = prisma.returnRequest.updateMany.mock.calls[0][0];
+      expect(call.data).toEqual({
+        firstName:   '[usunięto]',
+        lastName:    '[usunięto]',
+        email:       'retention-expired@deleted.invalid',
+        phone:       null,
+        bankAccount: null,
+      });
     });
   });
 

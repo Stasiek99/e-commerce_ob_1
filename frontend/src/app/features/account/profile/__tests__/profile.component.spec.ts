@@ -12,6 +12,11 @@ import { ProfileComponent } from '../profile.component';
 import { AuthService } from '../../../../core/services/auth.service';
 import { ToastService } from '../../../../core/services/toast.service';
 
+// jsdom does not implement URL.createObjectURL/revokeObjectURL — stub them so
+// exportData()'s blob-download path can run under test.
+URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+URL.revokeObjectURL = jest.fn();
+
 function setup() {
   const mockUser = {
     id: 'user-1',
@@ -175,6 +180,58 @@ describe('ProfileComponent — deleteAccount', () => {
       httpMock.expectOne('/api/users/me').flush('Internal Server Error', { status: 500, statusText: 'Server Error' });
 
       expect(router.navigate).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('ProfileComponent — exportData', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  describe('happy path', () => {
+    it('sends GET /api/users/me/data-export with a blob response type', () => {
+      const { component, httpMock } = setup();
+
+      component.exportData();
+
+      const req = httpMock.expectOne('/api/users/me/data-export');
+      expect(req.request.method).toBe('GET');
+      expect(req.request.responseType).toBe('blob');
+      req.flush(new Blob(['{}'], { type: 'application/json' }));
+      httpMock.verify();
+    });
+
+    it('sets exporting to true while the request is in flight', () => {
+      const { component, httpMock } = setup();
+
+      component.exportData();
+      expect(component.exporting()).toBe(true);
+
+      httpMock.expectOne('/api/users/me/data-export').flush(new Blob(['{}'], { type: 'application/json' }));
+      httpMock.verify();
+    });
+
+    it('resets exporting to false and shows a success toast on completion', () => {
+      const { component, httpMock, toastService } = setup();
+
+      component.exportData();
+      httpMock.expectOne('/api/users/me/data-export').flush(new Blob(['{}'], { type: 'application/json' }));
+
+      expect(component.exporting()).toBe(false);
+      expect(toastService.success).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('error path', () => {
+    it('resets exporting to false and shows an error toast when the request fails', () => {
+      const { component, httpMock, toastService } = setup();
+
+      component.exportData();
+      httpMock
+        .expectOne('/api/users/me/data-export')
+        .flush(new Blob(['Internal Server Error']), { status: 500, statusText: 'Server Error' });
+
+      expect(component.exporting()).toBe(false);
+      expect(toastService.error).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -1,8 +1,9 @@
 # Accepted Tradeoffs
 
 **See also:** [`business-process-model.md`](./business-process-model.md),
-[`coupon-lifecycle-model.md`](./coupon-lifecycle-model.md), and
-[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md), which cite
+[`coupon-lifecycle-model.md`](./coupon-lifecycle-model.md),
+[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md), and
+[`gdpr-export-erasure-model.md`](./gdpr-export-erasure-model.md), which cite
 several of the entries below inline against the specific state-machine transition they
 justify (e.g. the DISPUTE_LOST_REVIEW no-auto-restore entry, the coupon `Math.round`
 entry, the JWT-Redis-outage fail-open entry).
