@@ -184,6 +184,11 @@ export const envValidationSchema = Joi.object({
   DHL_SHIPPER_POSTAL_CODE: Joi.string().optional(),
   DHL_SHIPPER_PHONE: Joi.string().optional(),
   DHL_SHIPPER_EMAIL: Joi.string().email().optional(),
+  // DHL's Shipment Tracking - Unified API is a separate subscription from the MyDHL
+  // API credentials above (different host, different DHL-API-Key auth) — optional
+  // everywhere, since ShippingService.pollShipmentTracking warns and skips DHL
+  // shipments rather than crashing the boot when it's absent.
+  DHL_TRACKING_API_KEY: Joi.string().optional(),
   GLS_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
   GLS_SENDER_ID: requiredInProdUnlessMocked('GLS_SENDER_ID', 'GLS_MOCK_ENABLED'),
   GLS_USERNAME: requiredInProdUnlessMocked('GLS_USERNAME', 'GLS_MOCK_ENABLED'),
@@ -191,6 +196,13 @@ export const envValidationSchema = Joi.object({
   DPD_MOCK_ENABLED: Joi.string().valid('true', 'false').default('false'),
   DPD_SENDER_ID: requiredInProdUnlessMocked('DPD_SENDER_ID', 'DPD_MOCK_ENABLED'),
   DPD_API_KEY: requiredInProdUnlessMocked('DPD_API_KEY', 'DPD_MOCK_ENABLED'),
+  // Mock-mode-only: how long ShippingService.pollShipmentTracking waits (from
+  // labelGeneratedAt) before a mocked carrier reports IN_TRANSIT / DELIVERED. Lets a
+  // developer watch the full shipment lifecycle locally within minutes instead of
+  // real-world transit times. Ignored entirely once a carrier's own *_MOCK_ENABLED
+  // flag is false.
+  SHIPMENT_MOCK_IN_TRANSIT_AFTER_MINUTES: Joi.number().positive().optional(),
+  SHIPMENT_MOCK_DELIVERED_AFTER_MINUTES: Joi.number().positive().optional(),
 
   // ── Invoice / Seller info ──
   // Required in production to generate legally-compliant Polish VAT invoices.

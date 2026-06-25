@@ -42,7 +42,8 @@ type EmailKind =
   | 'fraud_review_alert'
   | 'payout_failed_alert'
   | 'dispute_alert'
-  | 'order_acknowledged';
+  | 'order_acknowledged'
+  | 'shipment_exception_alert';
 
 @Injectable()
 export class EmailService {
@@ -330,6 +331,36 @@ export class EmailService {
       <p><strong>Uwaga:</strong> Klienci mają prawo do zwrotu środków w ciągu 14 dni zgodnie z Art. 32 UoK, niezależnie od statusu wypłat Stripe.</p>
     `;
     return this.send('payout_failed_alert', data.to, subject, html, { payoutId: data.payoutId });
+  }
+
+  async sendShipmentExceptionAlert(data: {
+    to: string;
+    orderNumber: string;
+    status: 'FAILED' | 'RETURNED';
+    adminUrl?: string;
+  }) {
+    const isReturned = data.status === 'RETURNED';
+    const subject = isReturned
+      ? `[PRZESYŁKA] Zamówienie ${data.orderNumber} — paczka wróciła do nadawcy`
+      : `[PRZESYŁKA] Zamówienie ${data.orderNumber} — dostawa nieudana`;
+    const adminLink = data.adminUrl ? `<p><a href="${data.adminUrl}">Przejdź do zamówienia →</a></p>` : '';
+    const html = `
+      <h2>${isReturned ? 'Przesyłka wróciła do nadawcy' : 'Dostawa nieudana'}</h2>
+      <p>Przewoźnik zgłosił, że ${
+        isReturned
+          ? 'paczka została odesłana do nadawcy (np. odbiorca jej nie odebrał lub odmówił przyjęcia)'
+          : 'dostawa nie powiodła się'
+      } dla zamówienia <strong>${data.orderNumber}</strong>.</p>
+      ${adminLink}
+      <h3>Działania</h3>
+      <ol>
+        <li>Skontaktuj się z klientem, aby ustalić dalsze kroki (ponowna wysyłka lub zwrot środków).</li>
+        <li>Sprawdź szczegóły przesyłki na stronie przewoźnika.</li>
+        <li>Jeśli klient wybiera zwrot środków, użyj panelu zwrotów lub <code>POST /payments/:orderId/refund</code>.</li>
+      </ol>
+      <p><em>Status zamówienia nie został zmieniony automatycznie — wymagana jest decyzja administratora.</em></p>
+    `;
+    return this.send('shipment_exception_alert', data.to, subject, html, { orderNumber: data.orderNumber });
   }
 
   async suppressContact(email: string): Promise<void> {

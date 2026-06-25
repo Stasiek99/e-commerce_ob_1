@@ -20,9 +20,10 @@ const PAYLOAD = { receiver: RECEIVER, weightKg: 2, reference: 'ORD-001' };
 
 describe('DpdClient', () => {
   const mockPost = jest.fn();
+  const mockGet = jest.fn();
 
   beforeEach(() => {
-    mockedAxios.create.mockReturnValue({ post: mockPost } as any);
+    mockedAxios.create.mockReturnValue({ post: mockPost, get: mockGet } as any);
     jest.clearAllMocks();
   });
 
@@ -173,6 +174,86 @@ describe('DpdClient', () => {
       mockPost.mockRejectedValue(Object.assign(new Error('DPD 400 Bad Request'), { code: 'ERR_BAD_REQUEST' }));
 
       await expect(client.createShipment(PAYLOAD)).rejects.toThrow('DPD 400 Bad Request');
+    });
+  });
+
+  // ── getTrackingStatus ──────────────────────────────────────────────────────
+
+  describe('getTrackingStatus', () => {
+    describe('mock mode', () => {
+      it('returns null before the configured IN_TRANSIT threshold elapses', async () => {
+        const client = buildClient({ DPD_MOCK_ENABLED: 'true' });
+
+        const result = await client.getTrackingStatus('DPD123', new Date(Date.now() - 60_000));
+
+        expect(result).toBeNull();
+      });
+
+      it('returns DELIVERED with a deliveredAt timestamp once the DELIVERED threshold elapses', async () => {
+        const client = buildClient({ DPD_MOCK_ENABLED: 'true' });
+
+        const result = await client.getTrackingStatus('DPD123', new Date(Date.now() - 6 * 60_000));
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+    });
+
+    describe('real mode', () => {
+      it('GETs the parcel events endpoint for the given tracking number', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { events: [{ statusCode: 'IN_TRANSIT' }] } });
+
+        await client.getTrackingStatus('DPD123456', new Date());
+
+        const [url] = mockGet.mock.calls[0];
+        expect(url).toBe('/parcels/DPD123456/events');
+      });
+
+      it('maps statusCode "DELIVERED" to DELIVERED with a deliveredAt timestamp', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { events: [{ statusCode: 'DELIVERED' }] } });
+
+        const result = await client.getTrackingStatus('DPD1', new Date());
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+
+      it('maps statusCode "RETURNED_TO_SENDER" to RETURNED', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { events: [{ statusCode: 'RETURNED_TO_SENDER' }] } });
+
+        const result = await client.getTrackingStatus('DPD1', new Date());
+
+        expect(result?.status).toBe('RETURNED');
+      });
+
+      it('falls back to parcels[0].events[0] when the top-level events array is absent', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { parcels: [{ events: [{ statusCode: 'DELIVERED' }] }] } });
+
+        const result = await client.getTrackingStatus('DPD1', new Date());
+
+        expect(result?.status).toBe('DELIVERED');
+      });
+
+      it('returns null for an unrecognized statusCode', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { events: [{ statusCode: 'SOMETHING_NEW' }] } });
+
+        const result = await client.getTrackingStatus('DPD1', new Date());
+
+        expect(result).toBeNull();
+      });
+
+      it('throws ServiceUnavailableException on a timed-out tracking lookup', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockGet.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.getTrackingStatus('DPD1', new Date())).rejects.toThrow(ServiceUnavailableException);
+      });
     });
   });
 });

@@ -182,4 +182,8 @@ export class EmailQueueService {
   sendOrderAcknowledgement(data: Payload<'order_acknowledged'>) {
     return this.enqueue('order_acknowledged', { type: 'order_acknowledged', payload: data });
   }
+
+  sendShipmentExceptionAlert(data: Payload<'shipment_exception_alert'>) {
+    return this.enqueue('shipment_exception_alert', { type: 'shipment_exception_alert', payload: data });
+  }
 }

@@ -147,30 +147,49 @@ their own idempotency keys (`checkout-`, `coupon-`, `refund-`, `partial-refund-`
 
 ## 3. Shipment status state machine
 
-`ShipmentStatus` (`enums.ts:27-35`) has **3 of 7 values that are dead code** — defined
-in the schema, never written by any code path. There is no carrier webhook, no
-tracking poller, and no admin endpoint for in-transit/delivery-failure events.
+`ShipmentStatus` (`enums.ts:27-35`) — **FIXED.** `IN_TRANSIT`/`FAILED`/`RETURNED` used
+to be dead code (defined in the schema, never written by any code path), and
+`Shipment.deliveredAt` — the sole authoritative source for the Art. 27 UoK 14-day
+withdrawal clock (`returns.service.ts:104-106`) — was only ever set by an admin
+manually clicking "Delivered", never by an actual carrier signal. `ShippingService.
+pollShipmentTracking` (`shipping.service.ts`) now runs every 15 minutes, asks each
+carrier client's `getTrackingStatus()` for the real status of every `LABEL_GENERATED`/
+`IN_TRANSIT` shipment on a non-terminal order, and writes the result directly —
+including `deliveredAt`, guarded on `deliveredAt: null` so it can't be clobbered by a
+later admin click (or vice versa; whichever writer gets there first wins). A
+`FAILED`/`RETURNED` result triggers an admin alert email
+(`sendShipmentExceptionAlert`) but deliberately does **not** mutate `Order.status` —
+same "human must decide" pattern as `DISPUTE_LOST_REVIEW`.
+
+Caveat: this is real in InPost's case (status mapping confirmed against InPost's
+ShipX docs) and DHL's case (confirmed against DHL's "Shipment Tracking - Unified"
+API, which needs its own `DHL_TRACKING_API_KEY` — a separate subscription from the
+MyDHL API key used for label creation; polling is skipped, not boot-fatal, if it's
+unset). GLS/DPD Poland have no public API reference, so their real branches are a
+best-effort field-shape guess mirroring this file's existing (equally unverified)
+`createShipment` branches — confirm against real account docs before relying on them
+in production. All four fall back to a deterministic mock progression
+(`SHIPMENT_MOCK_IN_TRANSIT_AFTER_MINUTES`/`SHIPMENT_MOCK_DELIVERED_AFTER_MINUTES`)
+under each carrier's existing `*_MOCK_ENABLED` flag.
 
 ```mermaid
 stateDiagram-v2
     [*] --> LABEL_GENERATED: admin generateLabel\n(shipping.service.ts:253-274)
     [*] --> LABEL_ERROR: carrier API/upload failure\n(shipping.service.ts:301-319)
     LABEL_ERROR --> LABEL_GENERATED: admin retries generateLabel\n(shipping.service.ts:95-98)
-    LABEL_GENERATED --> DELIVERED: mirrors Order→DELIVERED\n(orders.service.ts:1276-1281) —\nNOT a carrier confirmation
-
-    state "IN_TRANSIT (dead — no writer)" as IN_TRANSIT
-    state "FAILED (dead — no writer)" as FAILED
-    state "RETURNED (dead — no writer)" as RETURNED
-    LABEL_GENERATED --> IN_TRANSIT: never happens in code
-    IN_TRANSIT --> FAILED: never happens in code
-    IN_TRANSIT --> RETURNED: never happens in code
+    LABEL_GENERATED --> IN_TRANSIT: carrier tracking poll\n(pollShipmentTracking, every 15 min)
+    IN_TRANSIT --> DELIVERED: carrier tracking poll —\nsets deliveredAt from the carrier's\nown signal (Art. 27 UoK clock)
+    LABEL_GENERATED --> DELIVERED: carrier tracking poll\n(skipped straight to delivered)
+    IN_TRANSIT --> FAILED: carrier tracking poll —\ntriggers admin alert email
+    IN_TRANSIT --> RETURNED: carrier tracking poll —\ntriggers admin alert email
+    LABEL_GENERATED --> DELIVERED: admin marks Order→DELIVERED\n(orders.service.ts:1276-1281) —\nno-ops if deliveredAt already set by the poll
 
     note right of DELIVERED
-      Shipment.deliveredAt is the SOLE authoritative
-      source for the Art. 27 UoK 14-day withdrawal clock
-      (returns.service.ts:104-106), yet it is only ever
-      set by an admin manually clicking "Delivered" on
-      the Order — never by an actual carrier signal.
+      Shipment.deliveredAt is the SOLE authoritative source for the
+      Art. 27 UoK 14-day withdrawal clock (returns.service.ts:104-106).
+      Now sourced from the carrier's own tracking signal (FIXED) —
+      the admin "Delivered" click remains as a manual fallback but
+      is a no-op once the poll has already stamped a real date.
     end note
 ```
 
@@ -466,13 +485,19 @@ approved-and-shipped *and* refunded.
 
 ### A5 — Structural gaps worth tracking, not exploits
 
-- **Shipment status is carrier-blind.** `IN_TRANSIT`/`FAILED`/`RETURNED` are dead
-  code (§3) — a lost or refused parcel is invisible to the system; nothing here is a
-  security bug, but it means any future automation built "on top of" `Shipment.status`
-  will be working from incomplete signal.
-- **The Art. 27 14-day clock runs on admin trust, not carrier confirmation** — see the
-  note in §3. An admin who clicks "Delivered" early or late directly shifts the
-  customer's legal withdrawal deadline.
+- **Shipment status was carrier-blind — FIXED.** `IN_TRANSIT`/`FAILED`/`RETURNED`
+  used to be dead code (§3) — a lost or refused parcel was invisible to the system.
+  `ShippingService.pollShipmentTracking` now polls each carrier's own tracking status
+  every 15 minutes and writes the real result, with a `FAILED`/`RETURNED` outcome
+  alerting an admin by email rather than silently sitting unactioned. See §3 for the
+  per-carrier confidence caveat (InPost/DHL mappings are confirmed against real docs;
+  GLS/DPD are a best-effort guess, same as their existing `createShipment` branches).
+- **The Art. 27 14-day clock ran on admin trust, not carrier confirmation — FIXED**
+  by the same change. `Shipment.deliveredAt` (§3 note) is now stamped from the
+  carrier's own delivery signal as soon as the poll observes it, guarded on
+  `deliveredAt: null` so it can't be overwritten by a later (now redundant) admin
+  click — closing the gap where an admin clicking "Delivered" early or late could
+  directly shift the customer's legal withdrawal deadline.
 - **`handleRefundUpdate`'s partial-refund webhook-recovery branch couldn't restore
   stock — FIXED.** `partialRefund` now attaches the per-item
   `orderItemId`/`productVariantId`/`quantity`/`discountAppliedInCents` breakdown to the

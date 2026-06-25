@@ -184,6 +184,15 @@ export type EmailJobData =
       };
     }
   | {
+      type: 'shipment_exception_alert';
+      payload: {
+        to: string;
+        orderNumber: string;
+        status: 'FAILED' | 'RETURNED';
+        adminUrl?: string;
+      };
+    }
+  | {
       type: 'order_acknowledged';
       payload: {
         to: string;

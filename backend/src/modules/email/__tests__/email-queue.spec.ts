@@ -309,6 +309,36 @@ describe('EmailQueueService', () => {
     });
   });
 
+  describe('sendShipmentExceptionAlert', () => {
+    it('enqueues job with correct type and payload', async () => {
+      const data = {
+        to: 'admin@store.com',
+        orderNumber: 'ORD-1',
+        status: 'FAILED' as const,
+        adminUrl: 'https://store.pl/admin/orders/order-1',
+      };
+
+      await service.sendShipmentExceptionAlert(data);
+
+      expect(queueAdd).toHaveBeenCalledWith(
+        'shipment_exception_alert',
+        { type: 'shipment_exception_alert', payload: data },
+        expect.any(Object),
+      );
+    });
+
+    it('sets jobId = shipment_exception_alert-{orderNumber} to deduplicate repeated polls', async () => {
+      await service.sendShipmentExceptionAlert({
+        to: 'admin@store.com',
+        orderNumber: 'ORD-2026-000099',
+        status: 'RETURNED',
+      });
+
+      const [, , opts] = queueAdd.mock.calls[0];
+      expect(opts.jobId).toBe('shipment_exception_alert-ORD-2026-000099');
+    });
+  });
+
   describe('sendNewOrderNotification', () => {
     it('enqueues admin-facing notification with correct job type', async () => {
       await service.sendNewOrderNotification({
@@ -855,6 +885,7 @@ describe('EmailQueueProcessor', () => {
             sendFraudReviewAlert: jest.fn().mockResolvedValue(undefined),
             sendDisputeAlert: jest.fn().mockResolvedValue(undefined),
             sendPayoutFailedAlert: jest.fn().mockResolvedValue(undefined),
+            sendShipmentExceptionAlert: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -1177,6 +1208,19 @@ describe('EmailQueueProcessor', () => {
     await processor.process(makeJob({ type: 'payout_failed_alert' as const, payload }));
 
     expect(emailService.sendPayoutFailedAlert).toHaveBeenCalledWith(payload);
+  });
+
+  it('routes shipment_exception_alert to emailService.sendShipmentExceptionAlert', async () => {
+    const payload = {
+      to: 'admin@store.com',
+      orderNumber: 'ORD-1',
+      status: 'FAILED' as const,
+      adminUrl: 'https://store.pl/admin/orders/order-1',
+    };
+
+    await processor.process(makeJob({ type: 'shipment_exception_alert' as const, payload }));
+
+    expect(emailService.sendShipmentExceptionAlert).toHaveBeenCalledWith(payload);
   });
 
   // ── PDF fetched at processing time (no pre-signed URL in Redis) ─────────────

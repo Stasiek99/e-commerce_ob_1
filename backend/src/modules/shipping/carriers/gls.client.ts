@@ -1,6 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { CarrierTrackingResult, deriveMockTrackingStatus } from './carrier-tracking.types';
 
 interface GlsShipmentPayload {
   receiver: {
@@ -28,11 +29,16 @@ export class GlsClient {
   private readonly senderId: string;
   private readonly logger = new Logger(GlsClient.name);
   private readonly mockEnabled: boolean;
+  private readonly mockInTransitAfterMs: number;
+  private readonly mockDeliveredAfterMs: number;
 
   constructor(configService: ConfigService) {
     this.mockEnabled = configService.get<string>('GLS_MOCK_ENABLED') === 'true';
 
     this.senderId = this.mockEnabled ? '' : configService.getOrThrow<string>('GLS_SENDER_ID');
+
+    this.mockInTransitAfterMs = configService.get<number>('SHIPMENT_MOCK_IN_TRANSIT_AFTER_MINUTES', 2) * 60_000;
+    this.mockDeliveredAfterMs = configService.get<number>('SHIPMENT_MOCK_DELIVERED_AFTER_MINUTES', 5) * 60_000;
 
     this.client = axios.create({
       baseURL: 'https://adeplus.gls-poland.com/adeplus/pm1/ade_webapi2.php',
@@ -121,6 +127,55 @@ export class GlsClient {
 
   getTrackingUrl(trackingNumber: string): string {
     return `https://gls-group.eu/PL/pl/sledzenie-paczek?match=${trackingNumber}`;
+  }
+
+  /**
+   * Polls the GLS ADE WebAPI2 for the parcel's latest tracking event. GLS Poland's
+   * ADE-Plus API is account-gated with no public field reference (same constraint as
+   * createShipment/fetchLabelPdf above) — the field/status-code shapes below are a
+   * best-effort guess mirroring this file's existing response-shape assumptions.
+   * Confirm against real account docs before relying on this in production.
+   */
+  async getTrackingStatus(parcelId: string, labelGeneratedAt: Date): Promise<CarrierTrackingResult | null> {
+    if (this.mockEnabled) {
+      return this.mockGetTrackingStatus(labelGeneratedAt);
+    }
+
+    let response: Awaited<ReturnType<typeof this.client.post<any>>>;
+    try {
+      response = await this.client.post<any>('?track', { Parcels: [parcelId] });
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('GLS tracking lookup timed out');
+      }
+      throw err;
+    }
+
+    const event = response.data?.Parcel?.[0]?.Events?.[0];
+    const code = event?.StatusCode as string | undefined;
+    switch (code) {
+      case 'DELIVERED':
+        return { status: 'DELIVERED', deliveredAt: new Date(), raw: event };
+      case 'RETURNED':
+        return { status: 'RETURNED', raw: event };
+      case 'UNDELIVERED':
+      case 'CANCELED':
+        return { status: 'FAILED', raw: event };
+      case 'IN_TRANSIT':
+      case 'OUT_FOR_DELIVERY':
+      case 'PICKED_UP':
+        return { status: 'IN_TRANSIT', raw: event };
+      default:
+        return null;
+    }
+  }
+
+  private mockGetTrackingStatus(labelGeneratedAt: Date): CarrierTrackingResult | null {
+    const elapsedMs = Date.now() - labelGeneratedAt.getTime();
+    const status = deriveMockTrackingStatus(elapsedMs, this.mockInTransitAfterMs, this.mockDeliveredAfterMs);
+    if (!status) return null;
+    this.logger.log(`[MOCK] GLS tracking status derived from elapsed time: ${status}`);
+    return status === 'DELIVERED' ? { status, deliveredAt: new Date() } : { status };
   }
 
   private mockCreateShipment(data: GlsShipmentPayload): GlsShipmentResult {

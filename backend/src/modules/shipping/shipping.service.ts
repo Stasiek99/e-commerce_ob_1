@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, HttpException, HttpStatus, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
 import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
 import type IORedis from 'ioredis';
@@ -11,6 +12,25 @@ import { DhlClient } from './carriers/dhl.client';
 import { GlsClient } from './carriers/gls.client';
 import { DpdClient } from './carriers/dpd.client';
 import { ShippingRatesService } from './shipping-rates.service';
+import { CarrierTrackingResult } from './carriers/carrier-tracking.types';
+
+// Shipments still being tracked — anything outside this set is terminal (delivered,
+// failed, returned, or never got a label) and no longer worth polling the carrier for.
+const TRACKED_SHIPMENT_STATUSES: ShipmentStatus[] = [ShipmentStatus.LABEL_GENERATED, ShipmentStatus.IN_TRANSIT];
+
+type TrackedShipment = {
+  id: string;
+  orderId: string;
+  carrierCode: CarrierCode;
+  status: ShipmentStatus;
+  shipmentId: string | null;
+  trackingNumber: string | null;
+  shippedAt: Date | null;
+  deliveredAt: Date | null;
+  labelGeneratedAt: Date | null;
+  createdAt: Date;
+  order: { orderNumber: string };
+};
 
 /** DHL/DPD store the carrier's own externally hosted label URL in `labelUrl`;
  *  InPost/GLS store a bare Supabase storage path. Must be checked before the
@@ -49,6 +69,7 @@ export class ShippingService {
     private readonly gls: GlsClient,
     private readonly dpd: DpdClient,
     private readonly shippingRates: ShippingRatesService,
+    private readonly configService: ConfigService,
     @Inject('REDIS_CLIENT') private readonly redis: IORedis,
   ) {}
 
@@ -402,6 +423,142 @@ export class ShippingService {
     }
 
     this.logger.log(`Stale shipping label cleanup: ${deleted} deleted, ${failed} failed`);
+  }
+
+  // Runs every 15 minutes. Closes the "carrier-blind" gap documented in
+  // docs/business-process-model.md §3/A5: IN_TRANSIT/FAILED/RETURNED were dead enum
+  // values with no writer, and Shipment.deliveredAt — the sole authoritative source
+  // for the Art. 27 UoK 14-day withdrawal clock (see ReturnsService.create) — was only
+  // ever set by an admin manually clicking "Delivered", never by an actual carrier
+  // signal. This polls each carrier's own tracking status and writes the result.
+  @Cron('*/15 * * * *')
+  async pollShipmentTracking(): Promise<void> {
+    // TTL comfortably covers the 15-minute interval so a slow run can't overlap the next.
+    const acquired = await this.redis.set('cron:poll-shipment-tracking:lock', '1', 'EX', 800, 'NX');
+    if (!acquired) return;
+
+    const shipments = await this.prisma.shipment.findMany({
+      where: {
+        status: { in: TRACKED_SHIPMENT_STATUSES },
+        order: { status: { notIn: [OrderStatus.CANCELLED, OrderStatus.REFUNDED] } },
+      },
+      select: {
+        id: true,
+        orderId: true,
+        carrierCode: true,
+        status: true,
+        shipmentId: true,
+        trackingNumber: true,
+        shippedAt: true,
+        deliveredAt: true,
+        labelGeneratedAt: true,
+        createdAt: true,
+        order: { select: { orderNumber: true } },
+      },
+    });
+
+    if (shipments.length === 0) return;
+
+    let updated = 0;
+    let failed = 0;
+
+    for (const shipment of shipments) {
+      try {
+        const result = await this.fetchCarrierTrackingStatus(shipment);
+        if (result && result.status !== shipment.status) {
+          await this.applyTrackingUpdate(shipment, result);
+          updated++;
+        }
+      } catch (err) {
+        failed++;
+        this.logger.warn(
+          `Tracking poll failed for shipment ${shipment.id} (order ${shipment.order.orderNumber}): ${(err as Error).message}`,
+        );
+      }
+    }
+
+    this.logger.log(`Shipment tracking poll: ${shipments.length} checked, ${updated} updated, ${failed} failed`);
+  }
+
+  private async fetchCarrierTrackingStatus(shipment: TrackedShipment): Promise<CarrierTrackingResult | null> {
+    const since = shipment.labelGeneratedAt ?? shipment.createdAt;
+    switch (shipment.carrierCode) {
+      case CarrierCode.INPOST:
+        return shipment.shipmentId ? this.inpost.getTrackingStatus(shipment.shipmentId, since) : null;
+      case CarrierCode.DHL:
+        return shipment.trackingNumber ? this.dhl.getTrackingStatus(shipment.trackingNumber, since) : null;
+      case CarrierCode.GLS:
+        return shipment.shipmentId ? this.gls.getTrackingStatus(shipment.shipmentId, since) : null;
+      case CarrierCode.DPD:
+      case CarrierCode.DPD_COURIER:
+        return shipment.trackingNumber ? this.dpd.getTrackingStatus(shipment.trackingNumber, since) : null;
+      default:
+        return null;
+    }
+  }
+
+  private async applyTrackingUpdate(shipment: TrackedShipment, result: CarrierTrackingResult): Promise<void> {
+    const newStatus = result.status as ShipmentStatus;
+
+    if (newStatus === ShipmentStatus.DELIVERED) {
+      // Authoritative Art. 27 UoK delivery timestamp, sourced from the carrier's own
+      // signal. Guarded on deliveredAt: null — same guard OrdersService.updateStatus
+      // already uses for its own (admin-driven) write — so whichever of the two writers
+      // gets there first wins, and the other becomes a harmless no-op rather than
+      // clobbering the first real delivery date.
+      const stamped = await this.prisma.shipment.updateMany({
+        where: { id: shipment.id, deliveredAt: null },
+        data: {
+          status: ShipmentStatus.DELIVERED,
+          deliveredAt: result.deliveredAt ?? new Date(),
+          rawCarrierResponse: (result.raw ?? undefined) as any,
+        },
+      });
+      if (stamped.count === 0) {
+        await this.prisma.shipment.update({
+          where: { id: shipment.id },
+          data: { status: ShipmentStatus.DELIVERED },
+        });
+      }
+      return;
+    }
+
+    await this.prisma.shipment.update({
+      where: { id: shipment.id },
+      data: {
+        status: newStatus,
+        ...(newStatus === ShipmentStatus.IN_TRANSIT && !shipment.shippedAt ? { shippedAt: new Date() } : {}),
+        rawCarrierResponse: (result.raw ?? undefined) as any,
+      },
+    });
+
+    if (newStatus === ShipmentStatus.FAILED || newStatus === ShipmentStatus.RETURNED) {
+      const alertStatus = newStatus === ShipmentStatus.FAILED ? 'FAILED' : 'RETURNED';
+      this.alertShipmentException(shipment.orderId, shipment.order.orderNumber, alertStatus).catch((err) =>
+        this.logger.warn(`Shipment exception alert failed for order ${shipment.order.orderNumber}: ${(err as Error).message}`),
+      );
+    }
+  }
+
+  // A failed/returned parcel needs a human decision (re-ship vs. refund) — this only
+  // surfaces it, it never mutates Order.status itself. Mirrors the dispute/payout
+  // alert pattern in PaymentsService (sendDisputeAlert/sendPayoutFailedAlert).
+  private async alertShipmentException(
+    orderId: string,
+    orderNumber: string,
+    status: 'FAILED' | 'RETURNED',
+  ): Promise<void> {
+    const adminEmail =
+      this.configService.get<string>('ADMIN_ALERT_EMAIL') || this.configService.get<string>('EMAIL_FROM');
+    if (!adminEmail) return;
+
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL', '');
+    await this.emailService.sendShipmentExceptionAlert({
+      to: adminEmail,
+      orderNumber,
+      status,
+      adminUrl: frontendUrl ? `${frontendUrl}/admin/orders/${orderId}` : undefined,
+    });
   }
 
   // Catches a malformed/changed carrier response shape immediately, so it fails

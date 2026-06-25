@@ -23,7 +23,7 @@ describe('GlsClient', () => {
     };
     const config = { ...defaults, ...overrides };
     const configService = {
-      get: jest.fn((key: string) => config[key] ?? undefined),
+      get: jest.fn((key: string, fallback?: unknown) => config[key] ?? fallback),
       getOrThrow: jest.fn((key: string) => {
         const val = config[key];
         if (!val) throw new Error(`Missing config: ${key}`);
@@ -131,6 +131,76 @@ describe('GlsClient', () => {
         mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
 
         await expect(client.fetchLabelPdf('P_TIMEOUT')).rejects.toThrow(ServiceUnavailableException);
+      });
+    });
+  });
+
+  // ── getTrackingStatus ──────────────────────────────────────────────────────
+
+  describe('getTrackingStatus', () => {
+    describe('mock mode', () => {
+      it('returns null before the configured IN_TRANSIT threshold elapses', async () => {
+        const client = buildClient({ GLS_MOCK_ENABLED: 'true' });
+
+        const result = await client.getTrackingStatus('P001', new Date(Date.now() - 60_000));
+
+        expect(result).toBeNull();
+      });
+
+      it('returns DELIVERED with a deliveredAt timestamp once the DELIVERED threshold elapses', async () => {
+        const client = buildClient({ GLS_MOCK_ENABLED: 'true' });
+
+        const result = await client.getTrackingStatus('P001', new Date(Date.now() - 6 * 60_000));
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+    });
+
+    describe('real mode', () => {
+      it('POSTs to ?track with the parcel ID', async () => {
+        const client = buildClient();
+        mockPost.mockResolvedValue({ data: { Parcel: [{ Events: [{ StatusCode: 'IN_TRANSIT' }] }] } });
+
+        await client.getTrackingStatus('P12345', new Date());
+
+        expect(mockPost).toHaveBeenCalledWith('?track', { Parcels: ['P12345'] });
+      });
+
+      it('maps StatusCode "DELIVERED" to DELIVERED with a deliveredAt timestamp', async () => {
+        const client = buildClient();
+        mockPost.mockResolvedValue({ data: { Parcel: [{ Events: [{ StatusCode: 'DELIVERED' }] }] } });
+
+        const result = await client.getTrackingStatus('P1', new Date());
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+
+      it('maps StatusCode "RETURNED" to RETURNED', async () => {
+        const client = buildClient();
+        mockPost.mockResolvedValue({ data: { Parcel: [{ Events: [{ StatusCode: 'RETURNED' }] }] } });
+
+        const result = await client.getTrackingStatus('P1', new Date());
+
+        expect(result?.status).toBe('RETURNED');
+      });
+
+      it('returns null for an unrecognized StatusCode', async () => {
+        const client = buildClient();
+        mockPost.mockResolvedValue({ data: { Parcel: [{ Events: [{ StatusCode: 'SOMETHING_NEW' }] }] } });
+
+        const result = await client.getTrackingStatus('P1', new Date());
+
+        expect(result).toBeNull();
+      });
+
+      it('throws ServiceUnavailableException on a timed-out tracking lookup', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockPost.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.getTrackingStatus('P1', new Date())).rejects.toThrow(ServiceUnavailableException);
       });
     });
   });

@@ -282,4 +282,117 @@ describe('InpostClient', () => {
       });
     });
   });
+
+  // ── getTrackingStatus ──────────────────────────────────────────────────────
+
+  describe('getTrackingStatus', () => {
+    describe('mock mode', () => {
+      it('returns null before the configured IN_TRANSIT threshold elapses', async () => {
+        const client = buildClient({ INPOST_MOCK_ENABLED: 'true' });
+        const labelGeneratedAt = new Date(Date.now() - 60_000); // 1 minute ago (< default 2 min)
+
+        const result = await client.getTrackingStatus('MOCK_INPOST_X', labelGeneratedAt);
+
+        expect(result).toBeNull();
+      });
+
+      it('returns IN_TRANSIT once the IN_TRANSIT threshold elapses', async () => {
+        const client = buildClient({ INPOST_MOCK_ENABLED: 'true' });
+        const labelGeneratedAt = new Date(Date.now() - 3 * 60_000); // 3 minutes ago
+
+        const result = await client.getTrackingStatus('MOCK_INPOST_X', labelGeneratedAt);
+
+        expect(result).toEqual({ status: 'IN_TRANSIT' });
+      });
+
+      it('returns DELIVERED with a deliveredAt timestamp once the DELIVERED threshold elapses', async () => {
+        const client = buildClient({ INPOST_MOCK_ENABLED: 'true' });
+        const labelGeneratedAt = new Date(Date.now() - 6 * 60_000); // 6 minutes ago
+
+        const result = await client.getTrackingStatus('MOCK_INPOST_X', labelGeneratedAt);
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+
+      it('respects custom SHIPMENT_MOCK_*_AFTER_MINUTES overrides', async () => {
+        const client = buildClient({
+          INPOST_MOCK_ENABLED: 'true',
+          SHIPMENT_MOCK_IN_TRANSIT_AFTER_MINUTES: '0' as any,
+          SHIPMENT_MOCK_DELIVERED_AFTER_MINUTES: '0' as any,
+        });
+        const labelGeneratedAt = new Date(Date.now() - 1_000);
+
+        const result = await client.getTrackingStatus('MOCK_INPOST_X', labelGeneratedAt);
+
+        expect(result?.status).toBe('DELIVERED');
+      });
+    });
+
+    describe('real mode', () => {
+      it('GETs the organization shipment endpoint for the given shipment ID', async () => {
+        const client = buildClient({ INPOST_ORGANIZATION_ID: 'org-456' });
+        mockGet.mockResolvedValue({ data: { status: 'out_for_delivery' } });
+
+        await client.getTrackingStatus('ship-99', new Date());
+
+        const [url] = mockGet.mock.calls[0];
+        expect(url).toBe('/organizations/org-456/shipments/ship-99');
+      });
+
+      it('maps "delivered" to DELIVERED with a deliveredAt timestamp', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { status: 'delivered' } });
+
+        const result = await client.getTrackingStatus('ship-1', new Date());
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+
+      it('maps "returned_to_sender" to RETURNED', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { status: 'returned_to_sender' } });
+
+        const result = await client.getTrackingStatus('ship-1', new Date());
+
+        expect(result?.status).toBe('RETURNED');
+      });
+
+      it('maps "canceled" to FAILED', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { status: 'canceled' } });
+
+        const result = await client.getTrackingStatus('ship-1', new Date());
+
+        expect(result?.status).toBe('FAILED');
+      });
+
+      it('maps "out_for_delivery" to IN_TRANSIT', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { status: 'out_for_delivery' } });
+
+        const result = await client.getTrackingStatus('ship-1', new Date());
+
+        expect(result?.status).toBe('IN_TRANSIT');
+      });
+
+      it('returns null for statuses with no externally-visible movement yet', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { status: 'confirmed' } });
+
+        const result = await client.getTrackingStatus('ship-1', new Date());
+
+        expect(result).toBeNull();
+      });
+
+      it('throws ServiceUnavailableException on a timed-out tracking lookup', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockGet.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.getTrackingStatus('ship-1', new Date())).rejects.toThrow(ServiceUnavailableException);
+      });
+    });
+  });
 });
