@@ -473,10 +473,22 @@ approved-and-shipped *and* refunded.
 - **The Art. 27 14-day clock runs on admin trust, not carrier confirmation** — see the
   note in §3. An admin who clicks "Delivered" early or late directly shifts the
   customer's legal withdrawal deadline.
-- **`handleRefundUpdate`'s partial-refund webhook-recovery branch cannot restore
-  stock** (`payments.service.ts:798-861`) — an acknowledged degraded mode (comment at
-  806-809) that requires manual admin correction if the synchronous `partialRefund`
-  DB write fails after Stripe already succeeded.
+- **`handleRefundUpdate`'s partial-refund webhook-recovery branch couldn't restore
+  stock — FIXED.** `partialRefund` now attaches the per-item
+  `orderItemId`/`productVariantId`/`quantity`/`discountAppliedInCents` breakdown to the
+  Stripe refund's own metadata at creation time (`StripeClient.buildRefundItemsMetadata`,
+  `stripe.client.ts`). If the synchronous DB write after the Stripe call fails,
+  `handleRefundUpdate`'s recovery branch (`payments.service.ts:849-936`) decodes and
+  validates that metadata (`parseRefundItemsMetadata`, `payments.service.ts:1038-1082`
+  — returns `null` on malformed JSON, a foreign order item, or any non-positive/non-integer
+  quantity) and reconstructs `cancelledQuantity`, stock, and `Order`/`Payment` status
+  itself, logging at `warning` rather than `[CRITICAL]`/`fatal`. Metadata is capped at
+  Stripe's 500-char value limit; an order with enough distinct line items to exceed it
+  (or a refund issued before this fix shipped) falls back to the original best-effort
+  behavior — order flagged `PARTIALLY_REFUNDED`, `[CRITICAL]` + Sentry `fatal`,
+  `cancelledQuantity` requires manual admin correction. See
+  `payments.service.spec.ts`'s "reconstructs from refund metadata when the sync path
+  failed" describe block and `stripe.client.spec.ts`'s `createPartialRefund` suite.
 - **Status-write sites that skip a `where: status` guard — FIXED.** `markSessionPaid`,
   `handlePaymentFailure`, `refundPayment`, `partialRefund`, and both branches of
   `handleRefundUpdate` now all write `Order.status` via a conditional `updateMany`
@@ -494,17 +506,21 @@ approved-and-shipped *and* refunded.
   `status-lock:${id}` or conditional-write precaution `OrdersService.updateStatus`
   uses, so an admin status change landing on the same order at the same moment as a
   webhook could be silently overwritten with no detection.
-- **`pruneProcessedStripeEvents`' lock TTL (~23h) is close enough to its 24h cron
+- **`pruneProcessedStripeEvents`' lock TTL (~23h) was close enough to its 24h cron
   interval that a Railway hobby-tier sleep spanning a tick could push the next
-  successful prune out ~48h** (`payments.service.ts:1138-1150`) — the same class of
-  risk already solved for `reconcilePendingPayments` via an external
-  `POST /payments/reconcile` keep-alive trigger (`payments.controller.ts:116-135`,
-  CLAUDE.md's documented Railway Cron Job). No equivalent external trigger exists for
-  this prune job specifically, but its only consequence is `ProcessedStripeEvent` rows
-  surviving a few extra days before deletion (disk growth, not a correctness/money
-  issue — Stripe stops retrying webhooks after 3 days regardless). Low priority; the
-  documented health-check-ping keep-alive (CLAUDE.md, "Alternative (simpler, free)")
-  already prevents the container from sleeping at all if that's the configured option.
+  successful prune out ~48h — FIXED.** `reconcilePendingPayments` (`payments.service.ts:1202-1259`)
+  now calls `pruneProcessedStripeEvents()` itself at the end of every tick, wrapped in
+  its own try/catch so a prune failure can't fail reconciliation. Since
+  `reconcilePendingPayments` runs every 10 minutes in-process *and* already has the
+  external `POST /payments/reconcile` keep-alive trigger (`payments.controller.ts:116-135`,
+  CLAUDE.md's documented Railway Cron Job), the prune now gets ~144 chances/day to run
+  instead of 1 — and `pruneProcessedStripeEvents`' own NX lock (`cron:prune-stripe-events:lock`,
+  `payments.service.ts:1372-1373`) makes every call that isn't the first to land after
+  the ~23h TTL expires a no-op, so this adds no duplicate-work risk. Still a low-stakes
+  gap either way — its only consequence was `ProcessedStripeEvent` rows surviving a few
+  extra days before deletion (disk growth, not a correctness/money issue — Stripe stops
+  retrying webhooks after 3 days regardless) — but it no longer depends on the container
+  being awake at exactly one specific minute of the day.
 
 ---
 

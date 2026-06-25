@@ -1246,6 +1246,18 @@ export class PaymentsService {
     }
 
     await this.sweepOrphanedPendingOrders();
+
+    // Piggyback the once-daily prune behind this 10-minute cron (and its external
+    // `/payments/reconcile` keep-alive trigger) so a quiet-traffic midnight Railway
+    // sleep skipping pruneProcessedStripeEvents' own @Cron tick doesn't strand it for
+    // a full extra day — its own NX lock (~23h TTL) makes calling it here a no-op on
+    // every tick that isn't the first one to land after the lock expires.
+    try {
+      await this.pruneProcessedStripeEvents();
+    } catch (err) {
+      this.logger.error(`pruneProcessedStripeEvents failed: ${(err as Error).message}`);
+      Sentry.captureException(err);
+    }
   }
 
   /**

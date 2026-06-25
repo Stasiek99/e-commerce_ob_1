@@ -1754,6 +1754,30 @@ describe('PaymentsService', () => {
       expect(prisma.payment.findMany).not.toHaveBeenCalled();
       expect(prisma.order.findMany).not.toHaveBeenCalled();
     });
+
+    // Regression: pruneProcessedStripeEvents' own @Cron(EVERY_DAY_AT_MIDNIGHT) tick can be
+    // skipped entirely by a quiet-traffic Railway hobby-tier sleep, stranding the dedup-row
+    // cleanup for up to ~48h (business-process-model.md §A5). Piggybacking it behind this
+    // 10-minute cron (which also has its own external /payments/reconcile keep-alive trigger)
+    // gives it far more chances/day to run, gated by its own NX lock so repeat calls are no-ops.
+    it('also runs pruneProcessedStripeEvents at the end of every tick', async () => {
+      prisma.payment.findMany.mockResolvedValue([]);
+
+      await service.reconcilePendingPayments();
+
+      expect(prisma.processedStripeEvent.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: expect.any(Date) } },
+      });
+    });
+
+    it('does not let a pruneProcessedStripeEvents failure fail the reconciliation tick', async () => {
+      prisma.payment.findMany.mockResolvedValue([]);
+      prisma.processedStripeEvent.deleteMany.mockRejectedValueOnce(new Error('DB down'));
+
+      await expect(service.reconcilePendingPayments()).resolves.not.toThrow();
+
+      expect(Sentry.captureException).toHaveBeenCalled();
+    });
   });
 
   // ── Secondary sweep: orders left PENDING_PAYMENT with no Stripe session ──
