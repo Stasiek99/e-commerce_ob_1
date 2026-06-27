@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { CarrierCode, OrderStatus, ShipmentStatus } from '@prisma/client';
 import { ShippingService } from '../shipping.service';
 import { ShippingRatesService } from '../shipping-rates.service';
@@ -29,6 +30,7 @@ describe('ShippingService', () => {
   let storage: jest.Mocked<StorageService>;
   let emailService: jest.Mocked<EmailQueueService>;
   let shippingRates: jest.Mocked<ShippingRatesService>;
+  let config: { get: jest.Mock };
   let redis: { set: jest.Mock; eval: jest.Mock };
 
   const mockOrderBase = {
@@ -65,6 +67,7 @@ describe('ShippingService', () => {
               upsert: jest.fn(),
               findMany: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn(),
             },
           },
         },
@@ -72,6 +75,7 @@ describe('ShippingService', () => {
           provide: EmailQueueService,
           useValue: {
             sendShippingNotification: jest.fn().mockResolvedValue(undefined),
+            sendShipmentExceptionAlert: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -88,6 +92,7 @@ describe('ShippingService', () => {
             createShipment: jest.fn(),
             fetchLabelPdf: jest.fn(),
             getTrackingUrl: jest.fn().mockReturnValue('https://inpost.pl/track/TRK'),
+            getTrackingStatus: jest.fn(),
           },
         },
         {
@@ -95,6 +100,7 @@ describe('ShippingService', () => {
           useValue: {
             createShipment: jest.fn(),
             getTrackingUrl: jest.fn().mockReturnValue('https://dhl.com/track/TRK'),
+            getTrackingStatus: jest.fn(),
           },
         },
         {
@@ -103,6 +109,7 @@ describe('ShippingService', () => {
             createShipment: jest.fn(),
             fetchLabelPdf: jest.fn(),
             getTrackingUrl: jest.fn().mockReturnValue('https://gls-group.eu/track/TRK'),
+            getTrackingStatus: jest.fn(),
           },
         },
         {
@@ -110,6 +117,7 @@ describe('ShippingService', () => {
           useValue: {
             createShipment: jest.fn(),
             getTrackingUrl: jest.fn().mockReturnValue('https://dpd.com/track/TRK'),
+            getTrackingStatus: jest.fn(),
           },
         },
         {
@@ -117,6 +125,12 @@ describe('ShippingService', () => {
           useValue: {
             getRateMap: jest.fn().mockResolvedValue(MOCK_RATE_MAP),
             getRateForCarrier: jest.fn((code: CarrierCode) => Promise.resolve(MOCK_RATE_MAP[code])),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string, fallback?: unknown) => fallback),
           },
         },
         {
@@ -138,6 +152,7 @@ describe('ShippingService', () => {
     storage = module.get(StorageService);
     emailService = module.get(EmailQueueService);
     shippingRates = module.get(ShippingRatesService);
+    config = module.get(ConfigService);
     redis = module.get('REDIS_CLIENT');
 
     // Default: no existing shipment — tests that need a different value override this
@@ -1134,6 +1149,237 @@ describe('ShippingService', () => {
         'EX',
         82000,
         'NX',
+      );
+    });
+  });
+
+  // ─── pollShipmentTracking cron ─────────────────────────────────────────────
+
+  describe('pollShipmentTracking', () => {
+    const baseShipment = {
+      id: 'shipment-1',
+      orderId: 'order-1',
+      carrierCode: CarrierCode.INPOST,
+      status: ShipmentStatus.LABEL_GENERATED,
+      shipmentId: 'MOCK_INPOST_1',
+      trackingNumber: 'TRK1',
+      shippedAt: null as Date | null,
+      deliveredAt: null as Date | null,
+      labelGeneratedAt: new Date('2026-06-01T00:00:00Z'),
+      createdAt: new Date('2026-06-01T00:00:00Z'),
+      order: { orderNumber: 'ORD-2026-000001' },
+    };
+
+    it('skips the poll when another replica already holds the lock', async () => {
+      redis.set.mockResolvedValue(null);
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('acquires the lock with NX and an 800-second TTL', async () => {
+      redis.set.mockResolvedValue('OK');
+      prisma.shipment.findMany.mockResolvedValue([]);
+
+      await service.pollShipmentTracking();
+
+      expect(redis.set).toHaveBeenCalledWith('cron:poll-shipment-tracking:lock', '1', 'EX', 800, 'NX');
+    });
+
+    it('queries only LABEL_GENERATED/IN_TRANSIT shipments on non-terminal orders', async () => {
+      prisma.shipment.findMany.mockResolvedValue([]);
+
+      await service.pollShipmentTracking();
+
+      const [args] = prisma.shipment.findMany.mock.calls[0];
+      expect(args.where.status).toEqual({ in: [ShipmentStatus.LABEL_GENERATED, ShipmentStatus.IN_TRANSIT] });
+      expect(args.where.order.status).toEqual({ notIn: [OrderStatus.CANCELLED, OrderStatus.REFUNDED] });
+    });
+
+    it('does nothing when there are no shipments to poll', async () => {
+      prisma.shipment.findMany.mockResolvedValue([]);
+
+      await service.pollShipmentTracking();
+
+      expect(inpost.getTrackingStatus).not.toHaveBeenCalled();
+      expect(prisma.shipment.update).not.toHaveBeenCalled();
+    });
+
+    it('dispatches to the right carrier client using shipmentId for InPost', async () => {
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, carrierCode: CarrierCode.INPOST }]);
+      inpost.getTrackingStatus.mockResolvedValue(null);
+
+      await service.pollShipmentTracking();
+
+      expect(inpost.getTrackingStatus).toHaveBeenCalledWith('MOCK_INPOST_1', baseShipment.labelGeneratedAt);
+    });
+
+    it('dispatches to DHL using trackingNumber', async () => {
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, carrierCode: CarrierCode.DHL }]);
+      dhl.getTrackingStatus.mockResolvedValue(null);
+
+      await service.pollShipmentTracking();
+
+      expect(dhl.getTrackingStatus).toHaveBeenCalledWith('TRK1', baseShipment.labelGeneratedAt);
+    });
+
+    it('dispatches to GLS using shipmentId', async () => {
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, carrierCode: CarrierCode.GLS }]);
+      gls.getTrackingStatus.mockResolvedValue(null);
+
+      await service.pollShipmentTracking();
+
+      expect(gls.getTrackingStatus).toHaveBeenCalledWith('MOCK_INPOST_1', baseShipment.labelGeneratedAt);
+    });
+
+    it('dispatches DPD_COURIER to the DPD client using trackingNumber', async () => {
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, carrierCode: CarrierCode.DPD_COURIER }]);
+      dpd.getTrackingStatus.mockResolvedValue(null);
+
+      await service.pollShipmentTracking();
+
+      expect(dpd.getTrackingStatus).toHaveBeenCalledWith('TRK1', baseShipment.labelGeneratedAt);
+    });
+
+    it('does not write anything when the carrier reports no change', async () => {
+      prisma.shipment.findMany.mockResolvedValue([baseShipment]);
+      inpost.getTrackingStatus.mockResolvedValue(null);
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.update).not.toHaveBeenCalled();
+      expect(prisma.shipment.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does not re-write when the carrier reports the same status the shipment already has', async () => {
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, status: ShipmentStatus.IN_TRANSIT }]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'IN_TRANSIT' });
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.update).not.toHaveBeenCalled();
+    });
+
+    it('writes IN_TRANSIT and stamps shippedAt when not already set', async () => {
+      prisma.shipment.findMany.mockResolvedValue([baseShipment]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'IN_TRANSIT' });
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'shipment-1' },
+        data: expect.objectContaining({ status: ShipmentStatus.IN_TRANSIT, shippedAt: expect.any(Date) }),
+      });
+    });
+
+    it('does not overwrite shippedAt when it is already set', async () => {
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, shippedAt: new Date('2026-06-02T00:00:00Z') }]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'IN_TRANSIT' });
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.pollShipmentTracking();
+
+      const [{ data }] = prisma.shipment.update.mock.calls[0];
+      expect(data.shippedAt).toBeUndefined();
+    });
+
+    // ─── deliveredAt — the Art. 27 UoK authoritative timestamp ───────────────
+
+    it('writes DELIVERED + deliveredAt via a conditional updateMany guarded on deliveredAt: null', async () => {
+      prisma.shipment.findMany.mockResolvedValue([baseShipment]);
+      const deliveredAt = new Date('2026-06-05T12:00:00Z');
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'DELIVERED', deliveredAt });
+      prisma.shipment.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.updateMany).toHaveBeenCalledWith({
+        where: { id: 'shipment-1', deliveredAt: null },
+        data: expect.objectContaining({ status: ShipmentStatus.DELIVERED, deliveredAt }),
+      });
+      expect(prisma.shipment.update).not.toHaveBeenCalled();
+    });
+
+    it('falls back to a plain status update without touching deliveredAt when an admin already set it', async () => {
+      const alreadyDelivered = new Date('2026-06-03T00:00:00Z');
+      prisma.shipment.findMany.mockResolvedValue([{ ...baseShipment, deliveredAt: alreadyDelivered }]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'DELIVERED', deliveredAt: new Date() });
+      prisma.shipment.updateMany.mockResolvedValue({ count: 0 }); // deliveredAt: null guard didn't match
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'shipment-1' },
+        data: { status: ShipmentStatus.DELIVERED },
+      });
+    });
+
+    // ─── FAILED / RETURNED — human-decision exceptions ───────────────────────
+
+    it('writes FAILED and sends an admin alert email without touching Order.status', async () => {
+      config.get.mockImplementation((key: string, fallback?: unknown) =>
+        key === 'ADMIN_ALERT_EMAIL' ? 'admin@example.com' : fallback,
+      );
+      prisma.shipment.findMany.mockResolvedValue([baseShipment]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'FAILED' });
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.pollShipmentTracking();
+
+      expect(prisma.shipment.update).toHaveBeenCalledWith({
+        where: { id: 'shipment-1' },
+        data: expect.objectContaining({ status: ShipmentStatus.FAILED }),
+      });
+      await Promise.resolve(); // flush the fire-and-forget alert call
+      expect(emailService.sendShipmentExceptionAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'admin@example.com', orderNumber: 'ORD-2026-000001', status: 'FAILED' }),
+      );
+    });
+
+    it('writes RETURNED and sends an admin alert email', async () => {
+      config.get.mockImplementation((key: string, fallback?: unknown) =>
+        key === 'ADMIN_ALERT_EMAIL' ? 'admin@example.com' : fallback,
+      );
+      prisma.shipment.findMany.mockResolvedValue([baseShipment]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'RETURNED' });
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.pollShipmentTracking();
+
+      await Promise.resolve();
+      expect(emailService.sendShipmentExceptionAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'RETURNED' }),
+      );
+    });
+
+    it('skips the alert when no admin email is configured', async () => {
+      prisma.shipment.findMany.mockResolvedValue([baseShipment]);
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'FAILED' });
+      prisma.shipment.update.mockResolvedValue({});
+
+      await service.pollShipmentTracking();
+
+      await Promise.resolve();
+      expect(emailService.sendShipmentExceptionAlert).not.toHaveBeenCalled();
+    });
+
+    it('continues processing remaining shipments when one carrier lookup throws', async () => {
+      prisma.shipment.findMany.mockResolvedValue([
+        { ...baseShipment, id: 'shipment-fail', carrierCode: CarrierCode.DHL, trackingNumber: 'TRK-FAIL' },
+        { ...baseShipment, id: 'shipment-ok' },
+      ]);
+      dhl.getTrackingStatus.mockRejectedValue(new Error('DHL API down'));
+      inpost.getTrackingStatus.mockResolvedValue({ status: 'IN_TRANSIT' });
+      prisma.shipment.update.mockResolvedValue({});
+
+      await expect(service.pollShipmentTracking()).resolves.toBeUndefined();
+
+      expect(prisma.shipment.update).toHaveBeenCalledTimes(1);
+      expect(prisma.shipment.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'shipment-ok' } }),
       );
     });
   });

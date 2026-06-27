@@ -147,30 +147,49 @@ their own idempotency keys (`checkout-`, `coupon-`, `refund-`, `partial-refund-`
 
 ## 3. Shipment status state machine
 
-`ShipmentStatus` (`enums.ts:27-35`) has **3 of 7 values that are dead code** — defined
-in the schema, never written by any code path. There is no carrier webhook, no
-tracking poller, and no admin endpoint for in-transit/delivery-failure events.
+`ShipmentStatus` (`enums.ts:27-35`) — **FIXED.** `IN_TRANSIT`/`FAILED`/`RETURNED` used
+to be dead code (defined in the schema, never written by any code path), and
+`Shipment.deliveredAt` — the sole authoritative source for the Art. 27 UoK 14-day
+withdrawal clock (`returns.service.ts:104-106`) — was only ever set by an admin
+manually clicking "Delivered", never by an actual carrier signal. `ShippingService.
+pollShipmentTracking` (`shipping.service.ts`) now runs every 15 minutes, asks each
+carrier client's `getTrackingStatus()` for the real status of every `LABEL_GENERATED`/
+`IN_TRANSIT` shipment on a non-terminal order, and writes the result directly —
+including `deliveredAt`, guarded on `deliveredAt: null` so it can't be clobbered by a
+later admin click (or vice versa; whichever writer gets there first wins). A
+`FAILED`/`RETURNED` result triggers an admin alert email
+(`sendShipmentExceptionAlert`) but deliberately does **not** mutate `Order.status` —
+same "human must decide" pattern as `DISPUTE_LOST_REVIEW`.
+
+Caveat: this is real in InPost's case (status mapping confirmed against InPost's
+ShipX docs) and DHL's case (confirmed against DHL's "Shipment Tracking - Unified"
+API, which needs its own `DHL_TRACKING_API_KEY` — a separate subscription from the
+MyDHL API key used for label creation; polling is skipped, not boot-fatal, if it's
+unset). GLS/DPD Poland have no public API reference, so their real branches are a
+best-effort field-shape guess mirroring this file's existing (equally unverified)
+`createShipment` branches — confirm against real account docs before relying on them
+in production. All four fall back to a deterministic mock progression
+(`SHIPMENT_MOCK_IN_TRANSIT_AFTER_MINUTES`/`SHIPMENT_MOCK_DELIVERED_AFTER_MINUTES`)
+under each carrier's existing `*_MOCK_ENABLED` flag.
 
 ```mermaid
 stateDiagram-v2
     [*] --> LABEL_GENERATED: admin generateLabel\n(shipping.service.ts:253-274)
     [*] --> LABEL_ERROR: carrier API/upload failure\n(shipping.service.ts:301-319)
     LABEL_ERROR --> LABEL_GENERATED: admin retries generateLabel\n(shipping.service.ts:95-98)
-    LABEL_GENERATED --> DELIVERED: mirrors Order→DELIVERED\n(orders.service.ts:1276-1281) —\nNOT a carrier confirmation
-
-    state "IN_TRANSIT (dead — no writer)" as IN_TRANSIT
-    state "FAILED (dead — no writer)" as FAILED
-    state "RETURNED (dead — no writer)" as RETURNED
-    LABEL_GENERATED --> IN_TRANSIT: never happens in code
-    IN_TRANSIT --> FAILED: never happens in code
-    IN_TRANSIT --> RETURNED: never happens in code
+    LABEL_GENERATED --> IN_TRANSIT: carrier tracking poll\n(pollShipmentTracking, every 15 min)
+    IN_TRANSIT --> DELIVERED: carrier tracking poll —\nsets deliveredAt from the carrier's\nown signal (Art. 27 UoK clock)
+    LABEL_GENERATED --> DELIVERED: carrier tracking poll\n(skipped straight to delivered)
+    IN_TRANSIT --> FAILED: carrier tracking poll —\ntriggers admin alert email
+    IN_TRANSIT --> RETURNED: carrier tracking poll —\ntriggers admin alert email
+    LABEL_GENERATED --> DELIVERED: admin marks Order→DELIVERED\n(orders.service.ts:1276-1281) —\nno-ops if deliveredAt already set by the poll
 
     note right of DELIVERED
-      Shipment.deliveredAt is the SOLE authoritative
-      source for the Art. 27 UoK 14-day withdrawal clock
-      (returns.service.ts:104-106), yet it is only ever
-      set by an admin manually clicking "Delivered" on
-      the Order — never by an actual carrier signal.
+      Shipment.deliveredAt is the SOLE authoritative source for the
+      Art. 27 UoK 14-day withdrawal clock (returns.service.ts:104-106).
+      Now sourced from the carrier's own tracking signal (FIXED) —
+      the admin "Delivered" click remains as a manual fallback but
+      is a no-op once the poll has already stamped a real date.
     end note
 ```
 
@@ -466,23 +485,179 @@ approved-and-shipped *and* refunded.
 
 ### A5 — Structural gaps worth tracking, not exploits
 
-- **Shipment status is carrier-blind.** `IN_TRANSIT`/`FAILED`/`RETURNED` are dead
-  code (§3) — a lost or refused parcel is invisible to the system; nothing here is a
-  security bug, but it means any future automation built "on top of" `Shipment.status`
-  will be working from incomplete signal.
-- **The Art. 27 14-day clock runs on admin trust, not carrier confirmation** — see the
-  note in §3. An admin who clicks "Delivered" early or late directly shifts the
-  customer's legal withdrawal deadline.
-- **`handleRefundUpdate`'s partial-refund webhook-recovery branch cannot restore
-  stock** (`payments.service.ts:798-861`) — an acknowledged degraded mode (comment at
-  806-809) that requires manual admin correction if the synchronous `partialRefund`
-  DB write fails after Stripe already succeeded.
-- **Status-write sites that skip a `where: status` guard** (`markSessionPaid`,
-  `handlePaymentFailure`, `refundPayment`, `partialRefund`, `handleRefundUpdate`) rely
-  only on `Payment.status` checks plus event dedup, unlike `updateStatus` and
-  `sweepOrphanedPendingOrders`, which use a conditional `updateMany` keyed on the
-  expected prior status as defense-in-depth. Currently masked by the other guards
-  each method has, but structurally inconsistent and worth aligning.
+- **Shipment status was carrier-blind — FIXED.** `IN_TRANSIT`/`FAILED`/`RETURNED`
+  used to be dead code (§3) — a lost or refused parcel was invisible to the system.
+  `ShippingService.pollShipmentTracking` now polls each carrier's own tracking status
+  every 15 minutes and writes the real result, with a `FAILED`/`RETURNED` outcome
+  alerting an admin by email rather than silently sitting unactioned. See §3 for the
+  per-carrier confidence caveat (InPost/DHL mappings are confirmed against real docs;
+  GLS/DPD are a best-effort guess, same as their existing `createShipment` branches).
+- **The Art. 27 14-day clock ran on admin trust, not carrier confirmation — FIXED**
+  by the same change. `Shipment.deliveredAt` (§3 note) is now stamped from the
+  carrier's own delivery signal as soon as the poll observes it, guarded on
+  `deliveredAt: null` so it can't be overwritten by a later (now redundant) admin
+  click — closing the gap where an admin clicking "Delivered" early or late could
+  directly shift the customer's legal withdrawal deadline.
+- **`handleRefundUpdate`'s partial-refund webhook-recovery branch couldn't restore
+  stock — FIXED.** `partialRefund` now attaches the per-item
+  `orderItemId`/`productVariantId`/`quantity`/`discountAppliedInCents` breakdown to the
+  Stripe refund's own metadata at creation time (`StripeClient.buildRefundItemsMetadata`,
+  `stripe.client.ts`). If the synchronous DB write after the Stripe call fails,
+  `handleRefundUpdate`'s recovery branch (`payments.service.ts:849-936`) decodes and
+  validates that metadata (`parseRefundItemsMetadata`, `payments.service.ts:1038-1082`
+  — returns `null` on malformed JSON, a foreign order item, or any non-positive/non-integer
+  quantity) and reconstructs `cancelledQuantity`, stock, and `Order`/`Payment` status
+  itself, logging at `warning` rather than `[CRITICAL]`/`fatal`. Metadata is capped at
+  Stripe's 500-char value limit; an order with enough distinct line items to exceed it
+  (or a refund issued before this fix shipped) falls back to the original best-effort
+  behavior — order flagged `PARTIALLY_REFUNDED`, `[CRITICAL]` + Sentry `fatal`,
+  `cancelledQuantity` requires manual admin correction. See
+  `payments.service.spec.ts`'s "reconstructs from refund metadata when the sync path
+  failed" describe block and `stripe.client.spec.ts`'s `createPartialRefund` suite.
+- **Status-write sites that skip a `where: status` guard — FIXED.** `markSessionPaid`,
+  `handlePaymentFailure`, `refundPayment`, `partialRefund`, and both branches of
+  `handleRefundUpdate` now all write `Order.status` via a conditional `updateMany`
+  keyed on the status each method read the order as, mirroring `updateStatus`'s/
+  `sweepOrphanedPendingOrders`'s defense-in-depth pattern. Where the target status
+  isn't known until mid-transaction (`partialRefund`, `handleRefundUpdate`'s metadata-
+  recovery branch), a no-op same-status "claim" write is used first instead, the same
+  technique `sweepOrphanedPendingOrders` already uses. A 0-count result throws
+  `OrderStatusRaceError`: webhook-driven methods (`markSessionPaid`,
+  `handlePaymentFailure`, `handleRefundUpdate`) log `[CRITICAL]` + Sentry fatal and
+  return 200 rather than retry-storm Stripe; `refundPayment`/`partialRefund` (Stripe
+  already called by this point) let it flow into their existing post-Stripe-success
+  catch block, which already logs and relies on the webhook to reconcile. Closes a
+  real (if narrow) gap: previously, none of these five methods took the same
+  `status-lock:${id}` or conditional-write precaution `OrdersService.updateStatus`
+  uses, so an admin status change landing on the same order at the same moment as a
+  webhook could be silently overwritten with no detection.
+- **`pruneProcessedStripeEvents`' lock TTL (~23h) was close enough to its 24h cron
+  interval that a Railway hobby-tier sleep spanning a tick could push the next
+  successful prune out ~48h — FIXED.** `reconcilePendingPayments` (`payments.service.ts:1202-1259`)
+  now calls `pruneProcessedStripeEvents()` itself at the end of every tick, wrapped in
+  its own try/catch so a prune failure can't fail reconciliation. Since
+  `reconcilePendingPayments` runs every 10 minutes in-process *and* already has the
+  external `POST /payments/reconcile` keep-alive trigger (`payments.controller.ts:116-135`,
+  CLAUDE.md's documented Railway Cron Job), the prune now gets ~144 chances/day to run
+  instead of 1 — and `pruneProcessedStripeEvents`' own NX lock (`cron:prune-stripe-events:lock`,
+  `payments.service.ts:1372-1373`) makes every call that isn't the first to land after
+  the ~23h TTL expires a no-op, so this adds no duplicate-work risk. Still a low-stakes
+  gap either way — its only consequence was `ProcessedStripeEvent` rows surviving a few
+  extra days before deletion (disk growth, not a correctness/money issue — Stripe stops
+  retrying webhooks after 3 days regardless) — but it no longer depends on the container
+  being awake at exactly one specific minute of the day.
+
+---
+
+## Extended Payments/Stripe audit (2026-06-24)
+
+Following the same staleness pattern already found in
+[`auth-session-lifecycle-model.md`](./auth-session-lifecycle-model.md) (16 of 17 raw
+bullets already fixed) and [`gdpr-export-erasure-model.md`](./gdpr-export-erasure-model.md)
+(7 of 7), `audit-exclusion-list.md`'s "Payments / Stripe" section — the largest raw
+bullet cluster in that file outside Frontend/SSR — was re-verified line-by-line against
+current `payments.service.ts`, `stripe.client.ts`, `payments.controller.ts`, and
+`orders.service.ts`. **22 of 24 checked bullets are stale** (already fixed, several
+documented nowhere until now — see [Resolved](#resolved-extended-payments-sweep) below).
+Two real, previously-undocumented gaps surfaced from reading the webhook dispatch path
+end-to-end rather than re-checking old bullets:
+
+### A6 — HIGH (FIXED): the Stripe Dashboard webhook endpoint is very likely never subscribed to dispute or payout events at all
+
+`handleWebhookEvent`'s dispatcher (`payments.service.ts:241-277`) fully handles
+`charge.dispute.created`, `charge.dispute.closed`, and `payout.failed` — three real,
+tested code paths (`handleDisputeCreated`, `handleDisputeClosed`, `handlePayoutFailed`).
+But `CLAUDE.md`'s own production setup checklist, under `STRIPE_WEBHOOK_SECRET`, tells
+whoever configures the Stripe Dashboard webhook endpoint to subscribe to exactly four
+events: `checkout.session.completed`, `checkout.session.expired`,
+`checkout.session.async_payment_failed`, `charge.refund.updated`. **None of the three
+dispute/payout event types are in that list.**
+
+A Stripe webhook endpoint only delivers the event types explicitly selected when it's
+configured — there is no "send everything" fallback. If the production endpoint was set
+up by literally following the documented checklist (the most likely scenario, since it's
+the only setup instruction that exists), `charge.dispute.created`/`closed` and
+`payout.failed` never arrive at all. The practical impact is severe and silent:
+
+- **The entire `DISPUTE_HOLD`/`DISPUTE_LOST_REVIEW` state machine (§1, §7 above) never
+  activates.** A real chargeback leaves the order sitting in `PAID` indefinitely —
+  `refundPayment`'s `disputeBlockedRefundStatuses` guard (A3, fixed) can never trigger
+  because the order never reaches `DISPUTE_HOLD` in the first place. An admin could
+  refund an order that's *simultaneously* the subject of an active, un-tracked
+  chargeback, exactly the double-loss scenario A3 was built to prevent — closed in code,
+  reopened by a missing Dashboard checkbox.
+- No dispute alert email (`sendDisputeAlert`) or Sentry `fatal`-level capture
+  (`payments.service.ts:1567-1582`) ever fires — disputes are invisible to the merchant
+  until Stripe's own dashboard/email notifies them, well after the evidence-submission
+  clock (`evidence_details.due_by`) has started running.
+- `payout.failed` — already independently flagged by the original (correct) exclusion-list
+  bullet — has the identical root cause, just for payout risk instead of disputes.
+
+This is not a code bug; the handlers are correct and tested. It's a **documentation gap
+with a production-correctness consequence** — the one channel that tells a human how to
+wire up the Dashboard is incomplete.
+
+**Fixed:** added `charge.dispute.created`, `charge.dispute.closed`, and `payout.failed`
+to `CLAUDE.md`'s Stripe webhook event list (`STRIPE_WEBHOOK_SECRET` row), with a note
+explaining the silent-disable consequence if they're missing. This is a documentation
+fix only — since the actual Dashboard subscription can't be verified by reading the
+repo, **confirm directly in the Stripe Dashboard** (Developers → Webhooks → the
+production endpoint → "Listening for") that all seven events are actually selected,
+not just the four that were previously documented.
+
+### A7 — MEDIUM (FIXED): Stripe SDK client has no configured request timeout or retry policy
+
+`stripe.client.ts:55` constructs the SDK with only `apiVersion` set —
+`new StripeSDK(apiKey, { apiVersion: '2026-05-27.dahlia' })`. No `timeout` or
+`maxNetworkRetries` option is passed, so every call rides `stripe-node`'s defaults
+(80-second timeout, zero automatic retries). `markSessionPaid` — invoked synchronously
+from the webhook handler, on Stripe's own delivery thread — calls
+`retrievePaymentIntentWithCharge` (the Radar risk-level check, `payments.service.ts:340`)
+before it can respond `{received:true}`. A slow Stripe API response anywhere close to
+that 80-second ceiling holds the webhook open well past Stripe's own expected response
+window (Stripe's dashboard recommends acknowledging within a few seconds and treats slow
+responses as a delivery problem worth retrying). A subsequent Stripe retry of the same
+event is idempotency-safe (`processedStripeEvent` unique constraint, §2), so this isn't a
+double-processing risk — it's wasted retry volume and slower fraud-review latency under
+any Stripe-side or network degradation, with no code path currently bounding it.
+
+**Fixed:** passed `timeout: 15000` and `maxNetworkRetries: 2` to the `StripeSDK`
+constructor (`stripe.client.ts:55-59`) — comfortably under Stripe's own webhook
+patience window, with retries safe since every state-mutating call already carries an
+explicit `idempotencyKey`. Regression test asserts both options are passed
+(`stripe.client.spec.ts`, "configures a bounded timeout and automatic network
+retries").
+
+### Resolved — extended Payments sweep
+
+| Exclusion-list claim | Verified status |
+|---|---|
+| "Coupon discount not subtracted in Stripe line items (overcharge)" | **Stale.** `createCheckoutSession` creates a real Stripe `amount_off` coupon and applies it via `discounts` (`stripe.client.ts:75-88`), idempotency-keyed `coupon-{paymentId}`. |
+| "Reconciliation cron bypasses idempotency guard vs webhook race" | **Stale.** Both the webhook and the cron call the same `markSessionPaid`, which inserts a session-scoped `paid-{sessionId}` dedup key inside its `$transaction` regardless of caller (`payments.service.ts:357-363`) — whichever commits first wins, the other gets `P2002` and returns. |
+| "Stripe webhook out-of-order (`expired` before `completed`) flips paid order to cancelled" | **Not reproducible as described.** `markSessionFailed` explicitly returns early if `payment.status === COMPLETED` (`payments.service.ts:661-664`), and Stripe's own Checkout Session lifecycle makes `expired`-after-`completed` for the *same* session unreachable (a session is binary-terminal). The realistic case (a late `async_payment_failed` arriving after `completed`) is exactly what that guard blocks. |
+| "No idempotency key on `sessions.create` / `coupons.create`" | **Stale.** Both calls carry `idempotencyKey: checkout-{paymentId}` / `coupon-{paymentId}` (`stripe.client.ts:85,122`). |
+| "Orphaned Stripe coupon objects never deleted (on retry, on expiry)" | **Stale.** Deleted on successful payment (`extractSessionCouponId`+`deleteCoupon`, `payments.service.ts:417-418`), on failure (`markSessionFailed`, `:685-686`), and before a retry creates a new session (`initiatePayment`, `:142-144`). |
+| "`retryPayment` P2002 crash creating second Payment row" | **Stale.** `initiatePayment` upserts via `findUnique` then conditional `update`/`create` (`payments.service.ts:93-168`) — no plain `create` on a retry path. |
+| "Sub-50gr order total bypasses Stripe minimum...50gr instead of 200gr" | **Stale.** A dedicated `getStripeMinimumChargeInCents()` util with a real per-currency map (200gr PLN fallback) is enforced inside `createFromCart`'s transaction (`orders.service.ts:358-365`), with boundary tests at 199/200 cents (`orders.service.spec.ts:1209-1255`). |
+| "Payment record created after Stripe API call (ordering risk)" | **Stale — already the opposite.** `initiatePayment` creates/updates the `Payment` row (`payments.service.ts:149-167`) *before* calling `stripeClient.createCheckoutSession` (`:178`). |
+| "Invoice PDF base64 stored in BullMQ/Redis payload" | **Stale.** `dispatchPostPaymentNotifications` passes `invoiceStoragePath` (a Supabase path, not a payload) to the email queue (`payments.service.ts:613-628`). |
+| "`charge.dispute.created`/`closed` not handled" + bypass/double-refund sub-claims | **Stale.** Both handled (`handleDisputeCreated`/`Closed`, `:1505-1728`); the admin-bypass and double-refund sub-claims were closed by A1/A3 above. **But see [A6](#a6--high-the-stripe-dashboard-webhook-endpoint-is-very-likely-never-subscribed-to-dispute-or-payout-events-at-all) — the handlers work, the Dashboard subscription documented in CLAUDE.md likely doesn't include these events at all.** |
+| "`cancelItemsByUser` refunds pre-discount gross; FREE_SHIPPING proration wrong; no cap" | **Stale, fully superseded.** `partialRefund` caps via `Math.min(rawRefundAmountInCents, available)` (`:1421`); `prorateDiscountForRefundItems` skips `FREE_SHIPPING` coupons and persists actual-applied (not idealized) discount per unit (`:1213-1247`). |
+| "Timing attack on `PAYMENTS_RECONCILE_SECRET` comparison" | **Stale.** `timingSafeEqual` with equal-length buffers (`payments.controller.ts:124-128`). |
+| "`pg_advisory_xact_lock` ineffective through pgbouncer (sequence DDL)" | **Resolved by design change, not a fix-in-place.** `onModuleInit`'s comment (`orders.service.ts:113-117`) explains the lock was deliberately *not used* — `CREATE SEQUENCE IF NOT EXISTS` is naturally idempotent/safe under concurrent execution without needing a lock at all. |
+| "`FOR UPDATE` inside interactive transactions is a no-op under pgbouncer (oversell protection broken)" | **Not reproducible as a general claim.** The checkout stock guard (`createFromCart`) uses an atomic `updateMany` conditional on `stock >= quantity` (`orders.service.ts:298-308`), not `FOR UPDATE` — immune to this concern by construction. The one real `FOR UPDATE` use (`handlePaymentFailure`, `payments.service.ts:1818-1820`) runs inside a single Prisma interactive transaction, which pins one physical connection for the transaction's full duration even under pgbouncer transaction-mode pooling — the failure mode described (statements split across connections) applies to multi-statement *non-interactive* `$transaction([...])` arrays or session-scoped advisory locks, neither of which this call is. |
+| "Stripe payout failure not monitored (`payout.failed` not subscribed)" | **Confirmed real — folded into [A6](#a6--high-the-stripe-dashboard-webhook-endpoint-is-very-likely-never-subscribed-to-dispute-or-payout-events-at-all), which found the same gap also covers both dispute events.** |
+| "Guest cancel-token leaks via Referer; TTL too short for P24/BLIK (1h)" | **Stale, both halves.** The opaque Redis `order-token:{orderId}` lookup key already replaced any meaningful secret in the URL, and its TTL is 7 days (`payments.service.ts:170-174`), explicitly sized for P24's multi-day settlement window. |
+| "Shipping rate fetched outside order transaction → stale price charged" | **Stale.** Explicitly fetched inside `createFromCart`'s transaction now (`orders.service.ts:332-334`). |
+| "City-level velocity guard ineffective/blocks legit Warsaw customers" + "Radar fires post-payment, no pre-checkout velocity check" | **Stale, both.** Replaced with an identity-based (`userId`/`snapshotEmail`) pre-checkout velocity guard — 5 orders/30min — with an explicit comment rejecting city-level checks as useless at Warsaw's scale (`payments.service.ts:58-71`). |
+| "Duplicate order creation: no idempotency/lock on `createFromCart`" | **Stale.** Both an `idempotencyKey` early-return (`orders.service.ts:171-182`) and a `checkout-lock:{userId|sessionId}` Redis lock (`:188-193`). |
+| "`markRefunded` issues full refund regardless of partial return items" | **Stale.** Clamps each item to `orderItem.quantity - orderItem.cancelledQuantity` and calls `partialRefund` with only the matched, clamped items (`returns.service.ts:347-368,408-410`). |
+| "`ProductsModule` local `REDIS_CLIENT` shadows global client" | **Stale — provider no longer exists.** Only one `REDIS_CLIENT` provider exists repo-wide, in the shared `redis.module.ts`. |
+| "`retryPayment`...no try/catch/rollback at all" | **Stale.** Full try/catch with stock/coupon rollback on Stripe rejection (`orders.service.ts:954-987`). |
+| "`markSessionPaid` never cross-checks Stripe's captured amount" | **Stale.** Explicit `amountMismatch` check against `session.amount_total`, routing to `FRAUD_REVIEW` with a `fatal`-level Sentry capture on mismatch (`payments.service.ts:306-328`). |
+| "`handlePaymentFailure` stock-restore credited full original quantity" | **Stale.** Already `item.quantity - (item.cancelledQuantity ?? 0)` (`payments.service.ts:1856`). |
+
+**24 bullets checked, 22 stale, 2 new (A6, A7) — both fixed in this pass.**
 
 ---
 

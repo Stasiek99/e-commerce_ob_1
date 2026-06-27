@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const StripeSDK = require('stripe') as {
-  new(key: string, config?: { apiVersion: '2026-05-27.dahlia' }): import('stripe/cjs/stripe.core').Stripe;
+  new(
+    key: string,
+    config?: { apiVersion: '2026-05-27.dahlia'; timeout?: number; maxNetworkRetries?: number },
+  ): import('stripe/cjs/stripe.core').Stripe;
 };
 import type { Stripe } from 'stripe/cjs/stripe.core';
 
@@ -30,6 +33,13 @@ export interface CreateCheckoutSessionInput {
   couponLabel?: string;
 }
 
+export interface RefundItemInput {
+  orderItemId: string;
+  productVariantId: string;
+  quantity: number;
+  discountAppliedInCents?: number;
+}
+
 @Injectable()
 export class StripeClient {
   private readonly logger = new Logger(StripeClient.name);
@@ -52,7 +62,17 @@ export class StripeClient {
     // reviewing a webhook/session payload shape change. Bump this string
     // deliberately, in its own commit, when intentionally upgrading the
     // integration — not as a side effect of a routine dependency bump.
-    this.stripe = new StripeSDK(apiKey, { apiVersion: '2026-05-27.dahlia' });
+    // No explicit timeout/retries previously meant every call rode the SDK's
+    // defaults (80s timeout, 0 retries) — risking the synchronous webhook
+    // handler (markSessionPaid's Radar check) holding the response open near
+    // Stripe's own retry-patience window (business-process-model.md A7). Calls
+    // that mutate state already pass an idempotencyKey (stripe.client.ts, see
+    // createCheckoutSession/createCoupon), so automatic retries are safe here.
+    this.stripe = new StripeSDK(apiKey, {
+      apiVersion: '2026-05-27.dahlia',
+      timeout: 15000,
+      maxNetworkRetries: 2,
+    });
 
     if (!this.webhookSecret) {
       this.logger.warn(
@@ -160,11 +180,41 @@ export class StripeClient {
     paymentIntentId: string,
     amountInCents: number,
     idempotencyKey: string,
+    items: RefundItemInput[],
   ): Promise<Stripe.Refund> {
+    const metadata = this.buildRefundItemsMetadata(items);
     return this.stripe.refunds.create(
-      { payment_intent: paymentIntentId, amount: amountInCents },
+      {
+        payment_intent: paymentIntentId,
+        amount: amountInCents,
+        ...(metadata && { metadata }),
+      },
       { idempotencyKey: `partial-refund-${idempotencyKey}` },
     );
+  }
+
+  /**
+   * Encodes the per-item refund breakdown into the Stripe refund's own metadata
+   * so handleRefundUpdate's crash-recovery path (payments.service.ts) can
+   * reconstruct cancelledQuantity and stock restoration if the synchronous DB
+   * write after this call never lands. Tuples (not keyed objects) keep the
+   * encoding compact. Stripe caps metadata values at 500 characters — if an
+   * order has enough distinct line items to exceed that, metadata is omitted
+   * and the pre-existing manual-correction fallback applies. Recovery degrades
+   * gracefully; it never corrupts.
+   */
+  private buildRefundItemsMetadata(items: RefundItemInput[]): Record<string, string> | undefined {
+    const encoded = JSON.stringify(
+      items.map((i) => [i.orderItemId, i.productVariantId, i.quantity, i.discountAppliedInCents ?? 0]),
+    );
+    if (encoded.length > 500) {
+      this.logger.warn(
+        `Refund items metadata (${encoded.length} chars) exceeds Stripe's 500-char limit — ` +
+          `omitting; crash recovery for this refund will require manual correction`,
+      );
+      return undefined;
+    }
+    return { refundItems: encoded };
   }
 
   async listDisputesByPaymentIntent(paymentIntentId: string): Promise<Stripe.Dispute[]> {

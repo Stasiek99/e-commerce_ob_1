@@ -80,6 +80,7 @@ describe('PaymentsService — orphaned coupon cleanup on payment retry', () => {
             order: {
               findUniqueOrThrow: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
               count: jest.fn().mockResolvedValue(0),
             },
             orderEvent: { create: jest.fn() },

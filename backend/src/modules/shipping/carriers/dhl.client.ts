@@ -1,6 +1,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { CarrierTrackingResult, deriveMockTrackingStatus } from './carrier-tracking.types';
 
 interface DhlShipmentPayload {
   receiver: {
@@ -24,9 +25,13 @@ interface DhlShipmentResult {
 @Injectable()
 export class DhlClient {
   private readonly client: AxiosInstance;
+  private readonly trackingClient: AxiosInstance;
+  private readonly trackingApiKey: string;
   private readonly accountNumber: string;
   private readonly logger = new Logger(DhlClient.name);
   private readonly mockEnabled: boolean;
+  private readonly mockInTransitAfterMs: number;
+  private readonly mockDeliveredAfterMs: number;
 
   private readonly shipperName: string;
   private readonly shipperStreet: string;
@@ -54,6 +59,19 @@ export class DhlClient {
       },
       headers: { 'Content-Type': 'application/json' },
     });
+
+    // DHL's "Shipment Tracking - Unified" API is a separate product/subscription from
+    // MyDHL API (used above for shipment creation) — different base URL, different
+    // DHL-API-Key header auth instead of the Basic Auth used for createShipment.
+    this.trackingApiKey = configService.get<string>('DHL_TRACKING_API_KEY', '');
+    this.trackingClient = axios.create({
+      baseURL: 'https://api-eu.dhl.com/track',
+      timeout: 15_000,
+      headers: { 'DHL-API-Key': this.trackingApiKey },
+    });
+
+    this.mockInTransitAfterMs = configService.get<number>('SHIPMENT_MOCK_IN_TRANSIT_AFTER_MINUTES', 2) * 60_000;
+    this.mockDeliveredAfterMs = configService.get<number>('SHIPMENT_MOCK_DELIVERED_AFTER_MINUTES', 5) * 60_000;
 
     this.shipperName = configService.get<string>('DHL_SHIPPER_NAME', 'Fragrance Store');
     this.shipperStreet = configService.get<string>('DHL_SHIPPER_STREET', 'ul. Sklep 1');
@@ -133,6 +151,59 @@ export class DhlClient {
 
   getTrackingUrl(trackingNumber: string): string {
     return `https://www.dhl.com/pl-pl/home/tracking/tracking-express.html?submit=1&tracking-id=${trackingNumber}`;
+  }
+
+  /**
+   * Polls DHL's "Shipment Tracking - Unified" API (developer.dhl.com/api-reference/
+   * shipment-tracking, confirmed 2026-06) for the shipment's normalized status, which
+   * the API reports as one of: pre-transit | transit | delivered | failure | unknown.
+   * Requires DHL_TRACKING_API_KEY — a separate subscription from the MyDHL API
+   * credentials used for shipment creation. Without it, polling is skipped (warned
+   * once) rather than failing the whole cron run.
+   */
+  async getTrackingStatus(trackingNumber: string, labelGeneratedAt: Date): Promise<CarrierTrackingResult | null> {
+    if (this.mockEnabled) {
+      return this.mockGetTrackingStatus(labelGeneratedAt);
+    }
+
+    if (!this.trackingApiKey) {
+      this.logger.warn(
+        'DHL_TRACKING_API_KEY not set — skipping tracking poll for DHL shipments (separate subscription from the MyDHL API key used for label creation)',
+      );
+      return null;
+    }
+
+    let response: Awaited<ReturnType<typeof this.trackingClient.get<any>>>;
+    try {
+      response = await this.trackingClient.get<any>('/shipments', { params: { trackingNumber } });
+    } catch (err) {
+      if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT')) {
+        throw new ServiceUnavailableException('DHL tracking lookup timed out');
+      }
+      throw err;
+    }
+
+    const shipment = response.data?.shipments?.[0];
+    const statusCode = shipment?.status?.statusCode as string | undefined;
+    switch (statusCode) {
+      case 'delivered':
+        return { status: 'DELIVERED', deliveredAt: new Date(), raw: shipment };
+      case 'transit':
+        return { status: 'IN_TRANSIT', raw: shipment };
+      case 'failure':
+        return { status: 'FAILED', raw: shipment };
+      default:
+        // pre-transit / unknown — nothing worth writing yet.
+        return null;
+    }
+  }
+
+  private mockGetTrackingStatus(labelGeneratedAt: Date): CarrierTrackingResult | null {
+    const elapsedMs = Date.now() - labelGeneratedAt.getTime();
+    const status = deriveMockTrackingStatus(elapsedMs, this.mockInTransitAfterMs, this.mockDeliveredAfterMs);
+    if (!status) return null;
+    this.logger.log(`[MOCK] DHL tracking status derived from elapsed time: ${status}`);
+    return status === 'DELIVERED' ? { status, deliveredAt: new Date() } : { status };
   }
 
   private mockCreateShipment(data: DhlShipmentPayload): DhlShipmentResult {

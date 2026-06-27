@@ -18,9 +18,10 @@ const RECEIVER = {
 
 describe('DhlClient', () => {
   const mockPost = jest.fn();
+  const mockGet = jest.fn();
 
   beforeEach(() => {
-    mockedAxios.create.mockReturnValue({ post: mockPost } as any);
+    mockedAxios.create.mockReturnValue({ post: mockPost, get: mockGet } as any);
     jest.clearAllMocks();
   });
 
@@ -30,6 +31,7 @@ describe('DhlClient', () => {
       DHL_ACCOUNT_NUMBER: 'ACC123',
       DHL_API_KEY: 'key',
       DHL_API_SECRET: 'secret',
+      DHL_TRACKING_API_KEY: 'track-key',
       DHL_SHIPPER_NAME: 'Test Store',
       DHL_SHIPPER_STREET: 'ul. Magazyn 5',
       DHL_SHIPPER_CITY: 'Gdańsk',
@@ -253,6 +255,85 @@ describe('DhlClient', () => {
       await expect(
         client.createShipment({ receiver: RECEIVER, weightKg: 1, description: 'Test' }),
       ).rejects.toThrow('DHL 401 Unauthorized');
+    });
+  });
+
+  // ── getTrackingStatus ──────────────────────────────────────────────────────
+
+  describe('getTrackingStatus', () => {
+    describe('mock mode', () => {
+      it('returns null before the configured IN_TRANSIT threshold elapses', async () => {
+        const client = buildClient({ DHL_MOCK_ENABLED: 'true' });
+
+        const result = await client.getTrackingStatus('TRK1', new Date(Date.now() - 60_000));
+
+        expect(result).toBeNull();
+      });
+
+      it('returns DELIVERED with a deliveredAt timestamp once the DELIVERED threshold elapses', async () => {
+        const client = buildClient({ DHL_MOCK_ENABLED: 'true' });
+
+        const result = await client.getTrackingStatus('TRK1', new Date(Date.now() - 6 * 60_000));
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+    });
+
+    describe('real mode', () => {
+      it('skips the lookup and returns null when DHL_TRACKING_API_KEY is not set', async () => {
+        const client = buildClient({ DHL_TRACKING_API_KEY: undefined });
+
+        const result = await client.getTrackingStatus('TRK1', new Date());
+
+        expect(result).toBeNull();
+        expect(mockGet).not.toHaveBeenCalled();
+      });
+
+      it('maps statusCode "delivered" to DELIVERED with a deliveredAt timestamp', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { shipments: [{ status: { statusCode: 'delivered' } }] } });
+
+        const result = await client.getTrackingStatus('TRK1', new Date());
+
+        expect(result?.status).toBe('DELIVERED');
+        expect(result?.deliveredAt).toBeInstanceOf(Date);
+      });
+
+      it('maps statusCode "transit" to IN_TRANSIT', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { shipments: [{ status: { statusCode: 'transit' } }] } });
+
+        const result = await client.getTrackingStatus('TRK1', new Date());
+
+        expect(result?.status).toBe('IN_TRANSIT');
+      });
+
+      it('maps statusCode "failure" to FAILED', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { shipments: [{ status: { statusCode: 'failure' } }] } });
+
+        const result = await client.getTrackingStatus('TRK1', new Date());
+
+        expect(result?.status).toBe('FAILED');
+      });
+
+      it('returns null for "pre-transit"/"unknown" statusCode', async () => {
+        const client = buildClient();
+        mockGet.mockResolvedValue({ data: { shipments: [{ status: { statusCode: 'pre-transit' } }] } });
+
+        const result = await client.getTrackingStatus('TRK1', new Date());
+
+        expect(result).toBeNull();
+      });
+
+      it('throws ServiceUnavailableException on a timed-out tracking lookup', async () => {
+        const client = buildClient();
+        mockedAxios.isAxiosError.mockReturnValue(true);
+        mockGet.mockRejectedValue(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }));
+
+        await expect(client.getTrackingStatus('TRK1', new Date())).rejects.toThrow(ServiceUnavailableException);
+      });
     });
   });
 });
