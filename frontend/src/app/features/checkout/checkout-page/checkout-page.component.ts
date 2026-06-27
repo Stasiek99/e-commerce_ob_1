@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID, ElementRef } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -8,8 +8,8 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
 import { CdkTrapFocus } from '@angular/cdk/a11y';
-import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
-import { tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
+import { TuiCheckbox, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
@@ -71,8 +71,8 @@ interface AppliedCoupon {
     ReactiveFormsModule,
     RouterLink,
     PricePipe,
-    TuiButton, TuiLabel, TuiTextfield,
-    TuiTitle,
+    TuiButton, TuiIcon, TuiLabel, TuiTextfield,
+    TuiTitle, TuiCheckbox,
     TuiStepper,
     TuiCard,
     TuiElasticContainer,
@@ -250,7 +250,7 @@ interface AppliedCoupon {
 
               @if (auth.currentUser() && selectedSavedId() === null) {
                 <label class="save-addr-label">
-                  <input type="checkbox" [checked]="saveAddress()" (change)="saveAddress.set($any($event.target).checked)" />
+                  <input type="checkbox" tuiCheckbox [checked]="saveAddress()" (change)="saveAddress.set($any($event.target).checked)" />
                   {{ savedAddresses().length === 0 ? 'Zapisz jako domyślny adres dostawy' : 'Zapisz adres w adresach dostawy' }}
                 </label>
               }
@@ -368,7 +368,7 @@ interface AppliedCoupon {
               <div class="coupon-section">
                 @if (!appliedCoupon()) {
                   @if (!couponExpanded()) {
-                    <button type="button" class="coupon-toggle" (click)="couponExpanded.set(true)">
+                    <button type="button" tuiButton appearance="flat" size="s" class="coupon-toggle" (click)="couponExpanded.set(true)">
                       Masz kod promocyjny?
                     </button>
                   } @else {
@@ -403,7 +403,7 @@ interface AppliedCoupon {
                 } @else {
                   <div class="coupon-applied">
                     <span class="coupon-applied__badge">✓ {{ appliedCoupon()!.code }}</span>
-                    <button type="button" class="coupon-remove" (click)="removeCoupon()">Usuń</button>
+                    <button type="button" tuiButton appearance="ghost" size="s" (click)="removeCoupon()">Usuń</button>
                   </div>
                   @if (appliedCoupon()!.appliesToItemsOnly) {
                     <p class="coupon-items-only-note">Rabat nie obejmuje kosztu dostawy</p>
@@ -451,9 +451,9 @@ interface AppliedCoupon {
               <label class="consent-label">
                 <input
                   type="checkbox"
+                  tuiCheckbox
                   [checked]="termsAccepted()"
-                  (change)="termsAccepted.set($any($event.target).checked)"
-                  class="consent-checkbox" />
+                  (change)="termsAccepted.set($any($event.target).checked)" />
                 <span>
                   Akceptuję <a routerLink="/legal/terms" target="_blank">regulamin sklepu</a>
                   i&nbsp;<a routerLink="/legal/privacy" target="_blank">politykę prywatności</a>. *
@@ -477,7 +477,9 @@ interface AppliedCoupon {
             cdkTrapFocusAutoCapture
             (click)="$event.stopPropagation()"
           >
-            <button type="button" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">✕</button>
+            <button type="button" tuiButton appearance="ghost" size="s" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">
+              <tui-icon icon="@tui.x" />
+            </button>
             <iframe
               class="dpd-modal-iframe"
               [src]="dpdWidgetUrl"
@@ -585,14 +587,12 @@ interface AppliedCoupon {
 
     /* Consent */
     .consent-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-    .consent-checkbox { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary); }
     .consent-label span { font-size: 13px; line-height: 1.5; color: var(--color-primary); }
     .consent-label a { color: var(--color-primary); text-decoration: underline; }
     .consent-label--marketing span { color: var(--color-secondary); }
 
     /* Save address */
     .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 0; cursor: pointer; }
-    .save-addr-label input { width: 15px; height: 15px; accent-color: var(--color-primary); cursor: pointer; }
 
     /* Address picker */
     .addr-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 0; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
@@ -606,11 +606,10 @@ interface AppliedCoupon {
 
     /* Coupon — follows the same column+gap pattern as .inpost-section and .form-actions */
     .coupon-section { margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
-    .coupon-toggle { background: none; border: none; padding: 0; font-size: 13px; color: var(--color-primary); text-decoration: underline; cursor: pointer; align-self: flex-start; }
+    .coupon-toggle { align-self: flex-start; }
     .coupon-actions { display: flex; justify-content: flex-end; }
     .coupon-applied { display: flex; align-items: center; gap: 12px; }
     .coupon-applied__badge { background: #e8f5e9; color: #2a9d4e; border: 1px solid #a5d6a7; border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
-    .coupon-remove { background: none; border: none; font-size: 12px; color: var(--color-secondary); text-decoration: underline; cursor: pointer; padding: 0; }
     .coupon-items-only-note { margin: 0; font-size: 12px; color: var(--color-secondary); }
     .total-row--discount { color: #2a9d4e; }
     .discount-value { font-weight: 600; color: #2a9d4e; }
@@ -618,8 +617,7 @@ interface AppliedCoupon {
     /* DPD modal */
     .dpd-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
     .dpd-modal-content { position: relative; width: min(560px, 96vw); height: min(640px, 90vh); background: #fff; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
-    .dpd-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; background: #fff; border: 1px solid var(--color-border); border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
-    .dpd-modal-close:hover { background: #f0f0f5; }
+    .dpd-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; }
     .dpd-modal-iframe { flex: 1; width: 100%; border: none; }
 
     /* Footer nav */
@@ -661,9 +659,6 @@ export class CheckoutPageComponent implements OnInit {
   readonly lockerPickerTouched = signal(false);
   private easyPackInitialized = false;
   private lockerPickerObserver: MutationObserver | null = null;
-  // Guards against the observer outliving the component if the widget's
-  // backdrop never appears before the user navigates away.
-  private readonly _lockerPickerCleanup = this.destroyRef.onDestroy(() => this.lockerPickerObserver?.disconnect());
 
   readonly selectedDpdPoint = signal<{ code: string; address: string } | null>(null);
   readonly dpdPickerTouched = signal(false);
@@ -673,9 +668,6 @@ export class CheckoutPageComponent implements OnInit {
   );
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   private dpdOpenerEl: HTMLElement | null = null;
-  // Guards against the message listener outliving the component (e.g. back
-  // button or an auth-guard redirect while the DPD modal is open).
-  private readonly _dpdModalCleanup = this.destroyRef.onDestroy(() => this.closeDpdModal());
   private readonly checkoutIdempotencyKey = crypto.randomUUID();
   readonly placing = signal(false);
   readonly termsAccepted = signal(false);
@@ -745,6 +737,8 @@ export class CheckoutPageComponent implements OnInit {
   });
 
   ngOnInit(): void {
+    this.destroyRef.onDestroy(() => this.lockerPickerObserver?.disconnect());
+    this.destroyRef.onDestroy(() => this.closeDpdModal());
     // Live, admin-editable rates (GET /shipping/rates is @Public()) — replaces
     // the hardcoded CARRIERS prices so the pre-payment total shown here can't
     // silently diverge from what orders.service.ts charges server-side.

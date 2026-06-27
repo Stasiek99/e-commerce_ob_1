@@ -1,11 +1,12 @@
 import { Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { TuiButton } from '@taiga-ui/core';
 import { ConsentService } from '../../../core/services/consent.service';
 
 @Component({
   selector: 'app-cookie-consent',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, TuiButton],
   template: `
     @if (visible()) {
       <div class="banner" role="dialog" aria-label="Zgoda na pliki cookie" aria-live="polite">
@@ -17,10 +18,10 @@ import { ConsentService } from '../../../core/services/consent.service';
           </p>
 
           <div class="banner__actions">
-            <button class="btn-primary" (click)="acceptAll()">
+            <button tuiButton appearance="primary" type="button" class="btn-accept" (click)="acceptAll()">
               Akceptuj wszystkie
             </button>
-            <button class="btn-minimal" (click)="rejectNonEssential()">
+            <button tuiButton appearance="flat" type="button" class="btn-reject" (click)="rejectNonEssential()">
               Tylko niezbędne
             </button>
           </div>
@@ -73,35 +74,11 @@ import { ConsentService } from '../../../core/services/consent.service';
       flex-shrink: 0;
     }
 
-    /* Primary CTA — solid, clearly the "yes" button */
-    .btn-primary {
-      background: #c9a96e;
-      color: #1a1a1a;
-      border: none;
-      padding: 11px 28px;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: opacity 0.15s;
-      white-space: nowrap;
-      width: 100%;
-    }
-    .btn-primary:hover { opacity: 0.88; }
+    .btn-accept { width: 100%; }
 
-    /* Secondary opt-out — visible but low visual weight */
-    .btn-minimal {
-      background: none;
-      border: none;
-      padding: 2px 0;
-      font-size: 12px;
-      color: rgba(255, 255, 255, 0.70);
-      cursor: pointer;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-      transition: color 0.15s;
-    }
-    .btn-minimal:hover { color: rgba(255, 255, 255, 0.90); }
+    /* Flat button text is dark by default — override for the dark banner */
+    .btn-reject { color: rgba(255, 255, 255, 0.70); font-size: 12px; }
+    .btn-reject:hover { color: rgba(255, 255, 255, 0.90); }
   `],
 })
 export class CookieConsentComponent {

@@ -4,7 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
 import { TuiButton, TuiIcon, TuiLabel, TuiTextfield } from '@taiga-ui/core';
-import { TuiTextarea } from '@taiga-ui/kit';
+import { TuiCheckbox, TuiTextarea } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 
 const WITHDRAWAL_DEADLINE_DAYS = 14;
@@ -12,7 +12,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
 @Component({
   selector: 'app-return-request',
   standalone: true,
-  imports: [ReactiveFormsModule, RouterLink, DatePipe, TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTextarea],
+  imports: [ReactiveFormsModule, RouterLink, DatePipe, TuiButton, TuiCheckbox, TuiIcon, TuiLabel, TuiTextfield, TuiTextarea],
   template: `
     <div class="page">
       <div class="page__inner">
@@ -234,7 +234,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                       </tui-textfield>
                     </div>
                     @if (items.length > 1) {
-                      <button type="button" class="item-row__remove"
+                      <button type="button" tuiButton appearance="ghost" size="s"
                               (click)="removeItem($index)"
                               aria-label="Usuń produkt">
                         <tui-icon icon="@tui.x" />
@@ -254,8 +254,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
               <div class="section">
                 <label class="checkbox-row"
                        [class.checkbox-row--error]="sealError()">
-                  <input type="checkbox" formControlName="sealIntact"
-                         class="checkbox-row__input" />
+                  <input type="checkbox" tuiCheckbox formControlName="sealIntact" />
                   <span>
                     Potwierdzam, że zwracane produkty posiadają <strong>nienaruszone,
                     oryginalne opakowanie</strong> z nietkniętą folią ochronną/plombą.
@@ -334,8 +333,7 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
             <div class="section">
               <label class="checkbox-row"
                      [class.checkbox-row--error]="touched('rodoConsent') && form.get('rodoConsent')?.invalid">
-                <input type="checkbox" formControlName="rodoConsent"
-                       class="checkbox-row__input" />
+                <input type="checkbox" tuiCheckbox formControlName="rodoConsent" />
                 <span>
                   Wyrażam zgodę na przetwarzanie moich danych osobowych przez Aromaterie
                   w celu rozpatrzenia zgłoszenia zwrotu/reklamacji, zgodnie z
@@ -434,15 +432,6 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
     /* Items list */
     .items-list { display: flex; flex-direction: column; gap: 10px; }
     .item-row { display: grid; grid-template-columns: 1fr 90px auto; gap: 10px; align-items: end; }
-    .item-row__remove {
-      background: none; border: none; cursor: pointer;
-      color: var(--color-secondary); padding: 8px;
-      display: flex; align-items: center; justify-content: center;
-      border-radius: 4px; transition: color 0.15s, background 0.15s;
-      margin-bottom: 2px;
-    }
-    .item-row__remove:hover { color: var(--color-error); background: #fff0f0; }
-
     /* Checkboxes */
     .checkbox-row {
       display: flex; align-items: flex-start; gap: 10px;
@@ -452,7 +441,6 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
     }
     .checkbox-row:hover { border-color: var(--color-primary); }
     .checkbox-row--error { border-color: var(--color-error); background: #fff8f8; }
-    .checkbox-row__input { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; accent-color: var(--color-primary); cursor: pointer; }
     .checkbox-row a { color: var(--color-primary); text-decoration: underline; }
 
     .field-error { font-size: 12px; color: var(--tui-status-negative, #d32f2f); margin: 4px 0 0; }
