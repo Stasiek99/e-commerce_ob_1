@@ -2,11 +2,14 @@
 // eslint-disable-next-line import/order
 import './instrument';
 
+import * as crypto from 'crypto';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { Logger } from 'nestjs-pino';
 import * as cookieParser from 'cookie-parser';
+import * as session from 'express-session';
+import connectPgSimple = require('connect-pg-simple');
 import helmet from 'helmet';
 import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
@@ -54,6 +57,36 @@ async function bootstrap() {
     helmetDefault(req, res, next);
   });
   app.use(cookieParser());
+
+  // Passport's built-in OAuth `state` CSRF check uses `req.session` to store
+  // and verify the nonce between the initial redirect and the callback. Scoped
+  // to the two OAuth routes only — a global session is unnecessary and heavy.
+  // Uses connect-pg-simple over DIRECT_URL (port 5432, bypasses pgbouncer) so
+  // the state survives across Railway replicas. Falls back to MemoryStore in
+  // dev when DIRECT_URL is absent (single-instance, short-lived flow).
+  const oauthStore = process.env.DIRECT_URL
+    ? new (connectPgSimple(session))({
+        conString: process.env.DIRECT_URL,
+        tableName: 'oauth_sessions',
+        createTableIfMissing: true,
+        pool: { max: 2 } as any,
+      })
+    : undefined;
+  const oauthSession = session({
+    store: oauthStore,
+    name: 'oauth_state',
+    secret: process.env.ADMIN_SESSION_SECRET ?? crypto.randomBytes(32).toString('hex'),
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax' as const,
+      maxAge: 5 * 60 * 1000, // 5 min is sufficient for the OAuth round-trip
+    },
+  });
+  app.use('/auth/google', oauthSession);
+  app.use('/auth/google/callback', oauthSession);
 
   app.useGlobalFilters(new PrismaPoolExceptionFilter());
   // 8 s < Railway's SIGTERM→SIGKILL window (≈10 s), so in-flight requests are

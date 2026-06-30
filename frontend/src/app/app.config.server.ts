@@ -21,6 +21,7 @@ const serverConfig: ApplicationConfig = {
       withRoutes([
         { path: 'auth/magic-login', renderMode: RenderMode.Client },
         { path: 'auth/verify-email', renderMode: RenderMode.Client },
+        { path: 'auth/callback',     renderMode: RenderMode.Client },
       ] satisfies ServerRoute[]),
     ),
     {
