@@ -480,12 +480,25 @@ interface AppliedCoupon {
             <button type="button" tuiButton appearance="ghost" size="s" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">
               <tui-icon icon="@tui.x" />
             </button>
-            <iframe
-              class="dpd-modal-iframe"
-              [src]="dpdWidgetUrl"
-              title="Wybierz punkt DPD"
-              referrerpolicy="no-referrer"
-            ></iframe>
+            @if (dpdWidgetError()) {
+              <div class="dpd-modal-error" role="alert">
+                <p>Nie udało się załadować mapy punktów DPD.</p>
+                <p>Spróbuj ponownie lub wybierz inną metodę dostawy.</p>
+              </div>
+            } @else {
+              @if (dpdWidgetLoading()) {
+                <div class="dpd-modal-loader" aria-live="polite">Ładowanie mapy…</div>
+              }
+              <iframe
+                class="dpd-modal-iframe"
+                [src]="dpdWidgetUrl"
+                title="Wybierz punkt DPD"
+                referrerpolicy="no-referrer"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                (load)="onDpdWidgetLoad()"
+                (error)="onDpdWidgetError()"
+              ></iframe>
+            }
           </div>
         </div>
       }
@@ -609,6 +622,8 @@ interface AppliedCoupon {
     .dpd-modal-content { position: relative; width: min(560px, 96vw); height: min(640px, 90vh); background: #fff; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
     .dpd-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; }
     .dpd-modal-iframe { flex: 1; width: 100%; border: none; }
+    .dpd-modal-loader { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--color-secondary); }
+    .dpd-modal-error { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; font-size: 14px; color: var(--color-error); background: #fff0f0; }
 
     /* Footer nav */
     .checkout__nav { display: flex; justify-content: space-between; margin-top: 24px; }
@@ -654,8 +669,10 @@ export class CheckoutPageComponent implements OnInit {
   readonly dpdPickerTouched = signal(false);
   readonly dpdModalOpen = signal(false);
   readonly dpdWidgetUrl: SafeResourceUrl = this.sanitizer.bypassSecurityTrustResourceUrl(
-    'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
+    environment.dpdWidgetUrl,
   );
+  readonly dpdWidgetLoading = signal(false);
+  readonly dpdWidgetError = signal(false);
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   private dpdOpenerEl: HTMLElement | null = null;
   private readonly checkoutIdempotencyKey = crypto.randomUUID();
@@ -985,7 +1002,10 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   openDpdPicker(): void {
+    if (!isPlatformBrowser(this.platformId)) return;
     this.dpdOpenerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    this.dpdWidgetLoading.set(true);
+    this.dpdWidgetError.set(false);
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
       if (e.origin !== 'https://api.dpd.cz') return;
@@ -1000,8 +1020,19 @@ export class CheckoutPageComponent implements OnInit {
     window.addEventListener('message', this.dpdMessageListener);
   }
 
+  onDpdWidgetLoad(): void {
+    this.dpdWidgetLoading.set(false);
+  }
+
+  onDpdWidgetError(): void {
+    this.dpdWidgetLoading.set(false);
+    this.dpdWidgetError.set(true);
+  }
+
   closeDpdModal(): void {
     this.dpdModalOpen.set(false);
+    this.dpdWidgetLoading.set(false);
+    this.dpdWidgetError.set(false);
     if (this.dpdMessageListener) {
       window.removeEventListener('message', this.dpdMessageListener);
       this.dpdMessageListener = null;

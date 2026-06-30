@@ -111,6 +111,17 @@ export class ReturnsService {
             'Podana data dostarczenia nie może być wcześniejsza niż faktyczna data dostarczenia przesyłki.',
           );
         }
+      } else {
+        // No DB delivery timestamp yet (tracking lag / mock mode). Guard against a
+        // future-dated client-supplied date that would artificially extend the 14-day window.
+        const submitted = new Date(dto.deliveryDate);
+        const endOfToday = new Date();
+        endOfToday.setUTCHours(23, 59, 59, 999);
+        if (submitted > endOfToday) {
+          throw new BadRequestException(
+            'Podana data dostarczenia nie może być w przyszłości.',
+          );
+        }
       }
       // Art. 27 UoK: 14-day period starts the day AFTER delivery.
       // +15 sets the window end to the end of the 14th day after delivery,
@@ -193,6 +204,21 @@ export class ReturnsService {
     return { id: request.id, orderNumber: request.orderNumber };
   }
 
+  async setInReview(id: string, adminNote?: string): Promise<void> {
+    const req = await this.prisma.returnRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException(`Return request ${id} not found`);
+    if (req.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Only PENDING requests can be moved to IN_REVIEW (current: ${req.status})`,
+      );
+    }
+    await this.prisma.returnRequest.update({
+      where: { id },
+      data: { status: 'IN_REVIEW', adminNote: adminNote ?? null },
+    });
+    this.logger.log(`Return request set to IN_REVIEW: ${id} (order ${req.orderNumber})`);
+  }
+
   async approve(id: string, adminNote?: string): Promise<void> {
     const req = await this.prisma.returnRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Return request ${id} not found`);
@@ -202,6 +228,7 @@ export class ReturnsService {
     if (req.status === 'REJECTED') {
       throw new BadRequestException('Cannot approve a rejected return request');
     }
+    // PENDING and IN_REVIEW are both valid source states for approval.
 
     await this.prisma.returnRequest.update({
       where: { id },

@@ -49,8 +49,7 @@ function fillValidWithdrawal(c: ReturnRequestComponent) {
   c.form.patchValue({
     type: 'WITHDRAWAL',
     orderNumber: 'ORD-2026-001',
-    email: 'jan@example.com',
-    deliveryDate: '2026-05-15', // deadline = 2026-05-29, 7 days left → 'ok'
+    deliveryDate: '2026-05-15', // deadline = 2026-05-30, 7 days left → 'ok'
     firstName: 'Jan',
     lastName: 'Kowalski',
     sealIntact: true,
@@ -63,12 +62,11 @@ function fillValidComplaint(c: ReturnRequestComponent) {
   c.form.patchValue({
     type: 'COMPLAINT',
     orderNumber: 'ORD-2026-001',
-    email: 'jan@example.com',
     deliveryDate: '2026-05-10',
     firstName: 'Jan',
     lastName: 'Kowalski',
     requestedResolution: 'REFUND',
-    reason: 'Produkt jest wadliwy',
+    reason: 'Produkt jest wadliwy i niezgodny z opisem',
     rodoConsent: true,
   });
   c.form.get('items')!.get([0])!.patchValue({ productName: 'Perfumy Gold 50ml', quantity: 1 });

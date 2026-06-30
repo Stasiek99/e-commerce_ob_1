@@ -6,6 +6,7 @@ export const environment = {
   turnstileSiteKey: '1x00000000000000000000AA',
   sentryTracesSampleRate: 1.0,
   sentryTracePropagationTargets: ['localhost', '/api'],
+  dpdWidgetUrl: 'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
   seller: {
     name: 'Aromaterie',
     legalName: '[UZUPEŁNIĆ — pełna nazwa prawna]',

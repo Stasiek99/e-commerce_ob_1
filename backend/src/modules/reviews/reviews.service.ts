@@ -32,6 +32,7 @@ export class ReviewsService {
     }
 
     let verifiedOrderId: string | undefined;
+    let isSuspicious = false;
 
     if (dto.orderId) {
       const order = await this.prisma.order.findFirst({
@@ -56,19 +57,39 @@ export class ReviewsService {
       }
 
       // Detect accounts that register, order, and review all within 24 hours —
-      // a pattern consistent with coordinated review bombing.
+      // a pattern consistent with coordinated review bombing. Keep the review
+      // in PENDING for manual moderation rather than just alerting.
       const windowMs = SUSPICIOUS_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000;
       const now = Date.now();
       if (
         now - user.createdAt.getTime() < windowMs &&
         now - order.createdAt.getTime() < windowMs
       ) {
+        isSuspicious = true;
         const msg = `Suspicious review activity: user ${userId} registered, ordered, and reviewed within ${SUSPICIOUS_ACTIVITY_WINDOW_HOURS}h`;
         this.logger.warn(msg);
         Sentry.captureMessage(msg, 'warning');
       }
 
       verifiedOrderId = order.id;
+    } else {
+      // orderId not supplied — enforce server-side purchase lookup so the check
+      // cannot be bypassed by omitting the field from a direct API call.
+      const deliveredOrder = await this.prisma.order.findFirst({
+        where: {
+          userId,
+          status: OrderStatus.DELIVERED,
+          items: { some: { productVariant: { productId: dto.productId } } },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (!deliveredOrder) {
+        throw new ForbiddenException(
+          'Możesz ocenić produkt tylko po jego dostarczeniu.',
+        );
+      }
+      verifiedOrderId = deliveredOrder.id;
     }
 
     const product = await this.prisma.product.findUnique({
@@ -76,8 +97,13 @@ export class ReviewsService {
     });
     if (!product || !product.isActive) throw new NotFoundException('Product not found');
 
+    // Auto-approve verified-purchase reviews that aren't suspicious so they
+    // appear immediately in the public listing without requiring admin action.
+    const autoApprove = !!verifiedOrderId && !isSuspicious;
+
+    let review: Awaited<ReturnType<typeof this.prisma.review.create>>;
     try {
-      return await this.prisma.review.create({
+      review = await this.prisma.review.create({
         data: {
           productId: dto.productId,
           userId,
@@ -85,7 +111,7 @@ export class ReviewsService {
           rating: dto.rating,
           title: dto.title?.trim() ?? null,
           body: dto.body?.trim() ?? null,
-          status: 'PENDING',
+          status: autoApprove ? 'APPROVED' : 'PENDING',
         },
       });
     } catch (err) {
@@ -94,6 +120,12 @@ export class ReviewsService {
       }
       throw err;
     }
+
+    if (autoApprove) {
+      await this.updateProductStats(dto.productId);
+    }
+
+    return review;
   }
 
   async findEligibleOrder(userId: string, productId: string): Promise<{ orderId: string | null }> {
