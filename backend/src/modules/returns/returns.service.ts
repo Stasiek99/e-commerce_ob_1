@@ -415,11 +415,24 @@ export class ReturnsService {
     // Art. 106j VAT act: any price reduction requires a corrective invoice, regardless
     // of which internal flow triggered the refund. Mirrors OrdersService.cancelItemsByUser,
     // the only other producer of InvoiceCorrection rows.
-    if (order.invoiceNumber) {
-      this.invoiceService
-        .processCorrectiveInvoice(
-          req.orderId,
-          order.invoiceNumber,
+    void (async () => {
+      try {
+        let invoiceNumber = order.invoiceNumber;
+        if (!invoiceNumber) {
+          // Invoice may be null if PDF generation or Supabase upload failed silently at
+          // payment time. Fetch the full order (returns service only selects a partial
+          // projection) and generate the invoice before creating the corrective.
+          const fullOrder = await this.prisma.order.findUniqueOrThrow({
+            where: { id: req.orderId as string },
+            include: { items: true },
+          });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const result = await this.invoiceService.processInvoice(fullOrder as any);
+          invoiceNumber = result.invoiceNumber;
+        }
+        await this.invoiceService.processCorrectiveInvoice(
+          req.orderId as string,
+          invoiceNumber!,
           refundAmountInCents,
           'RETURN_APPROVAL',
           proratedRefundItems.map((i) => ({
@@ -428,12 +441,12 @@ export class ReturnsService {
             priceInCents: i.priceInCents,
             vatRate: i.vatRate,
           })),
-        )
-        .catch((err) => {
-          this.logger.warn('Corrective invoice generation failed', (err as Error).message);
-          Sentry.captureException(err);
-        });
-    }
+        );
+      } catch (err) {
+        this.logger.warn('Corrective invoice generation failed', (err as Error).message);
+        Sentry.captureException(err);
+      }
+    })();
 
     await this.prisma.returnRequest.update({
       where: { id },

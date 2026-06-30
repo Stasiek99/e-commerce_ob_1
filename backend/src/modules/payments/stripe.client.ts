@@ -31,6 +31,14 @@ export interface CreateCheckoutSessionInput {
   discountAmountInCents?: number;
   /** Human-readable label shown in the Stripe Checkout UI (e.g. the coupon code). */
   couponLabel?: string;
+  /**
+   * Idempotency key for the Stripe coupon creation call. Must be unique per
+   * payment attempt — callers that delete the old coupon before creating a new
+   * one (retry path) MUST pass a fresh value, otherwise Stripe returns the
+   * cached coupon ID of the now-deleted coupon and session creation fails.
+   * Defaults to `coupon-<paymentId>` when omitted (safe for first attempts).
+   */
+  couponIdempotencyKey?: string;
 }
 
 export interface RefundItemInput {
@@ -102,7 +110,7 @@ export class StripeClient {
           max_redemptions: 1,
           name: input.couponLabel ?? 'Rabat',
         },
-        { idempotencyKey: `coupon-${input.paymentId}` },
+        { idempotencyKey: input.couponIdempotencyKey ?? `coupon-${input.paymentId}` },
       );
       discounts = [{ coupon: coupon.id }];
     }

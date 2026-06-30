@@ -1148,11 +1148,19 @@ export class OrdersService implements OnModuleInit {
       'CUSTOMER',
     );
 
-    if (order.invoiceNumber) {
-      this.invoiceService
-        .processCorrectiveInvoice(
+    void (async () => {
+      try {
+        let invoiceNumber = order.invoiceNumber;
+        if (!invoiceNumber) {
+          // Invoice may be null if PDF generation or Supabase upload failed silently at
+          // payment time. Generate it now before creating the corrective so VAT Art. 106j
+          // compliance is met regardless of the original invoice's generation outcome.
+          const result = await this.invoiceService.processInvoice(order);
+          invoiceNumber = result.invoiceNumber;
+        }
+        await this.invoiceService.processCorrectiveInvoice(
           orderId,
-          order.invoiceNumber,
+          invoiceNumber,
           refundAmountInCents,
           'PARTIAL_CANCELLATION',
           proratedItems.map((i) => ({
@@ -1161,12 +1169,12 @@ export class OrdersService implements OnModuleInit {
             priceInCents: i.priceInCents,
             vatRate: i.vatRate,
           })),
-        )
-        .catch((err) => {
-          this.logger.warn('Corrective invoice generation failed', (err as Error).message);
-          Sentry.captureException(err);
-        });
-    }
+        );
+      } catch (err) {
+        this.logger.warn('Corrective invoice generation failed', (err as Error).message);
+        Sentry.captureException(err);
+      }
+    })();
 
     this.emailService
       .sendOrderCancellation({

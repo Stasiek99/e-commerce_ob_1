@@ -107,7 +107,7 @@ const STATUS_LABELS: Record<string, string> = {
         </div>
 
         <!-- ── Invoice download ───────────────────────────── -->
-        @if (canDownloadInvoice(order()!.status) || hasCorrectiveInvoice(order()!.items)) {
+        @if (canDownloadInvoice(order()!.status) || hasCorrectiveInvoice(order()!)) {
           <div class="invoice-row">
             @if (canDownloadInvoice(order()!.status)) {
               <button tuiButton appearance="outline" size="s" type="button"
@@ -117,7 +117,7 @@ const STATUS_LABELS: Record<string, string> = {
                 {{ downloadingInvoice() ? 'Generowanie…' : 'Pobierz fakturę' }}
               </button>
             }
-            @if (hasCorrectiveInvoice(order()!.items)) {
+            @if (hasCorrectiveInvoice(order()!)) {
               <button tuiButton appearance="outline" size="s" type="button"
                       [disabled]="downloadingCorrectiveInvoice()"
                       (click)="downloadCorrectiveInvoice()">
@@ -453,8 +453,8 @@ export class OrderDetailComponent implements OnInit {
     return !['PENDING_PAYMENT', 'CANCELLED', 'FRAUD_REVIEW', 'DISPUTE_HOLD'].includes(status);
   }
 
-  hasCorrectiveInvoice(items: OrderItem[]): boolean {
-    return items.some((i) => i.cancelledQuantity > 0);
+  hasCorrectiveInvoice(order: OrderDetail): boolean {
+    return !!order.invoiceUrl && order.items.some((i) => i.cancelledQuantity > 0);
   }
 
   downloadInvoice(): void {
