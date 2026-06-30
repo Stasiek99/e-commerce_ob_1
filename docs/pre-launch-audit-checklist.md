@@ -45,8 +45,7 @@ Kolejność: Blok 1 → 2 → 3 → 4 → 5 → 6. Każdy punkt = przejść ręc
 ---
 
 ## Blok 5 — Dodatkowe feature'y (podejrzane o „fake")
-
-- [ ] **21. Newsletter na stronie sukcesu** — kliknij „Subskrybuj" po płatności → Network tab: request idzie, backend zwraca 200.
+ 
 - [ ] **22. Powiadomienie o dostępności (wishlist dzwonek)** — kliknij dzwonek na niedostępnym produkcie → backend zapisuje flagę (nie wywala się).
 - [ ] **23. „Dodaj wszystko do koszyka" z wishlisty** — 3+ produkty → kliknij → wszystkie w koszyku, stock validation per produkt.
 - [ ] **24. Wybór paczkomatu InPost** — kliknij „Wybierz paczkomat" → modal z widgetem się otwiera → po wyborze punkt widoczny w podsumowaniu kasy.

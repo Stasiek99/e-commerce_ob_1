@@ -1,6 +1,6 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { from, mergeMap, toArray } from 'rxjs';
+import { from, concatMap, toArray, map, catchError, of } from 'rxjs';
 import { TuiButton, TuiIcon } from '@taiga-ui/core';
 import { WishlistService, WishlistItemData } from '../../core/services/wishlist.service';
 import { CartService } from '../../core/services/cart.service';
@@ -139,21 +139,39 @@ export class WishlistComponent {
 
     this.addingAll.set(true);
 
+    // Sequential (concatMap) so only one request holds the Redis checkout lock at a time.
+    // Per-item catchError lets the stream continue when a single item fails (e.g. race-depleted stock).
     from(inStockProducts).pipe(
-      mergeMap((product) => {
+      concatMap((product) => {
         const variant = product.variants!.find((v) => v.stock > 0)!;
-        return this.cart.addItem(variant.id, 1);
-      }, 5),
+        return this.cart.addItem(variant.id, 1).pipe(
+          map((cart) => ({ ok: true as const, cart })),
+          catchError(() => of({ ok: false as const, cart: null })),
+        );
+      }),
       toArray(),
     ).subscribe({
-      next: (carts) => {
-        this.cart.refreshFromServer(carts[carts.length - 1]);
-        this.toast.success(`Dodano ${inStockProducts.length} ${inStockProducts.length === 1 ? 'produkt' : 'produkty'} do koszyka!`);
+      next: (results) => {
+        const successes = results.filter((r) => r.ok);
+        const failures = results.filter((r) => !r.ok);
+        const lastCart = [...successes].reverse()[0]?.cart;
+
+        if (lastCart) this.cart.refreshFromServer(lastCart);
+        else this.cart.loadCart();
+
+        if (successes.length > 0) {
+          const n = successes.length;
+          this.toast.success(`Dodano ${n} ${n === 1 ? 'produkt' : 'produkty'} do koszyka!`);
+        }
+        if (failures.length > 0) {
+          const n = failures.length;
+          this.toast.error(`${n} ${n === 1 ? 'produkt nie mógł' : 'produkty nie mogły'} zostać dodane (brak w magazynie).`);
+        }
         this.addingAll.set(false);
       },
       error: () => {
         this.cart.loadCart();
-        this.toast.error('Nie udało się dodać wszystkich produktów.');
+        this.toast.error('Nie udało się dodać produktów do koszyka.');
         this.addingAll.set(false);
       },
     });
