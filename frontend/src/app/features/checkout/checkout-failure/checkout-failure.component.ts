@@ -39,6 +39,9 @@ import { SeoService } from '../../../core/services/seo.service';
             {{ cancelling() ? 'Anulowanie...' : 'Anuluj zamówienie' }}
           </button>
         </div>
+        @if (retryError()) {
+          <p class="page__error" role="alert">{{ retryError() }}</p>
+        }
         @if (cancelError()) {
           <p class="page__error" role="alert">{{ cancelError() }}</p>
         }
@@ -103,8 +106,9 @@ export class CheckoutFailureComponent implements OnInit {
 
   readonly orderId    = signal<string | null>(this.route.snapshot.queryParamMap.get('orderId'));
   readonly guestToken = signal<string | null>(this.route.snapshot.queryParamMap.get('guestToken'));
-  readonly retrying   = signal(false);
-  readonly cancelling = signal(false);
+  readonly retrying    = signal(false);
+  readonly cancelling  = signal(false);
+  readonly retryError  = signal<string | null>(null);
   readonly cancelError = signal<string | null>(null);
 
   ngOnInit(): void {
@@ -115,9 +119,16 @@ export class CheckoutFailureComponent implements OnInit {
     const id = this.orderId();
     if (!id) return;
     this.retrying.set(true);
-    this.http.post<{ paymentUrl: string }>(`${environment.apiUrl}/orders/${id}/retry-payment`, {}).subscribe({
+    this.retryError.set(null);
+    const token = this.guestToken();
+    let params = new HttpParams();
+    if (token) params = params.set('token', token);
+    this.http.post<{ paymentUrl: string }>(`${environment.apiUrl}/orders/${id}/retry-payment`, {}, { params }).subscribe({
       next: ({ paymentUrl }) => { window.location.href = paymentUrl; },
-      error: () => { this.retrying.set(false); },
+      error: (err) => {
+        this.retrying.set(false);
+        this.retryError.set(err.error?.message ?? 'Nie udało się ponowić płatności. Spróbuj ponownie.');
+      },
     });
   }
 

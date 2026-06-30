@@ -254,7 +254,13 @@ export class CheckoutSuccessComponent implements OnInit {
     if (!isPlatformBrowser(this.platformId)) return;
 
     const id = this.route.snapshot.queryParamMap.get('orderId');
-    const token = this.route.snapshot.queryParamMap.get('token');
+    const urlToken = this.route.snapshot.queryParamMap.get('token');
+    const sessionKey = id ? `guest_token_${id}` : null;
+
+    // Persist the guest token before stripping the URL so a page refresh still works.
+    if (urlToken && sessionKey) sessionStorage.setItem(sessionKey, urlToken);
+    const token = urlToken ?? (sessionKey ? sessionStorage.getItem(sessionKey) : null);
+
     this.orderId.set(id);
 
     // Strip session_id (and any other Stripe params) from the URL so the

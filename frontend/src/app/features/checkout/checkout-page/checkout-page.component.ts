@@ -9,7 +9,7 @@ import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, 
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
 import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
-import { TuiCheckbox, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { TuiCheckbox, TuiChip, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
@@ -72,7 +72,7 @@ interface AppliedCoupon {
     RouterLink,
     PricePipe,
     TuiButton, TuiIcon, TuiLabel, TuiTextfield,
-    TuiTitle, TuiCheckbox,
+    TuiTitle, TuiCheckbox, TuiChip,
     TuiStepper,
     TuiCard,
     TuiElasticContainer,
@@ -120,9 +120,9 @@ interface AppliedCoupon {
                 <h2 tuiTitle>Adres dostawy</h2>
               </header>
 
-              @if (savedAddresses().length > 0) {
+              @if (savedAddressList.length > 0) {
                 <div class="addr-picker">
-                  @for (addr of savedAddresses(); track addr.id) {
+                  @for (addr of savedAddressList; track addr.id) {
                     <button
                       type="button"
                       class="addr-pill"
@@ -203,10 +203,10 @@ interface AppliedCoupon {
                     <input tuiTextfield type="text" formControlName="city" autocomplete="address-level2" />
                   </tui-textfield>
                   @if (cityLoading()) { <p class="city-hint">Szukam miejscowości…</p> }
-                  @if (citySuggestions().length > 1) {
+                  @if (cityList.length > 1) {
                     <div class="city-suggestions">
-                      @for (city of citySuggestions(); track city) {
-                        <button type="button" class="city-chip" (click)="selectCity(city)">{{ city }}</button>
+                      @for (city of cityList; track city) {
+                        <button type="button" tuiChip size="s" (click)="selectCity(city)">{{ city }}</button>
                       }
                     </div>
                   }
@@ -265,7 +265,7 @@ interface AppliedCoupon {
               </header>
               <fieldset class="carrier-list">
                 <legend class="sr-only">Wybierz sposób dostawy</legend>
-                @for (c of carriers(); track c.code) {
+                @for (c of carrierList; track c.code) {
                   <label
                     class="carrier-option"
                     [class.carrier-option--selected]="selectedCarrier()?.code === c.code">
@@ -356,7 +356,7 @@ interface AppliedCoupon {
 
               <div class="summary-section">
                 <h3>Produkty</h3>
-                @for (item of cart.items(); track item.productVariantId) {
+                @for (item of cartItems; track item.productVariantId) {
                   <div class="order-item">
                     <span>{{ item.productName }} {{ item.variantLabel }} × {{ item.quantity }}</span>
                     <span>{{ item.priceInCents * item.quantity | price }}</span>
@@ -537,16 +537,6 @@ interface AppliedCoupon {
     .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
     .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
     .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-    .city-chip {
-      background: #f0f0f5;
-      border: 1px solid var(--color-border);
-      border-radius: 999px;
-      padding: 3px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .city-chip:hover { border-color: var(--color-primary); background: #e8e8f0; }
     .street-hint { font-size: 12px; margin-top: 4px; }
     .street-hint--checking { color: var(--color-primary); }
     .street-hint--found    { color: #2a9d4e; }
@@ -678,6 +668,9 @@ export class CheckoutPageComponent implements OnInit {
   readonly cityLoading = signal(false);
   readonly streetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
 
+  get cityList(): string[] { return this.citySuggestions(); }
+  get savedAddressList(): any[] { return this.savedAddresses(); }
+
   readonly couponExpanded = signal(false);
   readonly couponCodeInput = signal('');
   readonly couponValidating = signal(false);
@@ -718,6 +711,8 @@ export class CheckoutPageComponent implements OnInit {
   });
 
   readonly carriers = signal<Carrier[]>(CARRIERS.map((c) => ({ ...c })));
+  get carrierList(): Carrier[] { return this.carriers(); }
+  get cartItems() { return this.cart.items(); }
 
   readonly countries: readonly TuiCountryIsoCode[] = [
     'PL',

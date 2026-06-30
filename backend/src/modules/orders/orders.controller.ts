@@ -87,10 +87,16 @@ export class OrdersController {
   }
 
   @Post(':id/retry-payment')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(OptionalJwtGuard)
   @HttpCode(HttpStatus.OK)
-  retryPayment(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.ordersService.retryPayment(id, user.id);
+  retryPayment(
+    @CurrentUser() user: User | undefined,
+    @Param('id') id: string,
+    @Query('token') token: string | undefined,
+  ) {
+    if (user) return this.ordersService.retryPayment(id, user.id);
+    if (token) return this.ordersService.retryPaymentByToken(id, token);
+    throw new UnauthorizedException('Authentication or guest token required');
   }
 
   @Post(':id/cancel')

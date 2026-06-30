@@ -987,6 +987,60 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
+  async retryPaymentByToken(orderId: string, token: string): Promise<{ paymentUrl: string }> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId },
+      include: { items: true },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const secret = this.configService.get<string>('ORDER_CANCEL_SECRET', '');
+    if (!verifyOrderToken(token, orderId, order.snapshotEmail, secret)) {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
+
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new BadRequestException(
+        `Cannot retry payment for an order in status ${order.status}`,
+      );
+    }
+
+    try {
+      return await this.paymentsService.initiatePayment(orderId);
+    } catch (stripeErr) {
+      this.logger.error(
+        `Payment retry (token) failed for order ${order.orderNumber}: ${(stripeErr as Error).message} — rolling back`,
+      );
+      const deltas: Array<{ variantId: string; delta: number; newStock: number }> = [];
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          const updated = await tx.productVariant.update({
+            where: { id: item.productVariantId },
+            data: { stock: { increment: item.quantity } },
+          });
+          deltas.push({ variantId: item.productVariantId, delta: item.quantity, newStock: updated.stock });
+        }
+        await tx.order.update({ where: { id: order.id }, data: { status: OrderStatus.CANCELLED } });
+        if (order.couponId) {
+          await this.couponService.releaseForOrder(tx, order.id, order.couponId);
+        }
+        await tx.orderEvent.create({
+          data: {
+            orderId: order.id,
+            fromStatus: OrderStatus.PENDING_PAYMENT,
+            toStatus: OrderStatus.CANCELLED,
+            actor: 'SYSTEM',
+            note: `Payment retry failed: ${(stripeErr as Error).message}`,
+          },
+        });
+      });
+      this.productsService.notifyStockChangesByDelta(deltas).catch((err) =>
+        this.logger.warn('notifyStockChangesByDelta failed', err),
+      );
+      throw stripeErr;
+    }
+  }
+
   async cancelItemsByUser(
     orderId: string,
     userId: string,
