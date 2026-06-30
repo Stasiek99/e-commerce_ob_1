@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { Location } from '@angular/common';
@@ -152,9 +152,13 @@ function formatPhone(raw: string): string {
         @if (!changingEmail()) {
           <div class="info-row">
             <span class="info-label">Adres e-mail</span>
-            <button tuiButton appearance="secondary" size="s" type="button" (click)="startEmailChange()">
-              Zmień e-mail
-            </button>
+            @if (!isGoogleUser()) {
+              <button tuiButton appearance="secondary" size="s" type="button" (click)="startEmailChange()">
+                Zmień e-mail
+              </button>
+            } @else {
+              <span class="info-value info-value--muted">Zalogowany przez Google</span>
+            }
           </div>
         } @else {
           <form tuiForm [formGroup]="emailForm" (ngSubmit)="submitEmailChange()" class="security-form">
@@ -267,6 +271,18 @@ function formatPhone(raw: string): string {
               <strong>Czy na pewno chcesz usunąć konto?</strong><br>
               Wszystkie Twoje dane zostaną trwale usunięte. Zamówienia zostaną zanonimizowane zgodnie z RODO.
             </p>
+            @if (!isGoogleUser()) {
+              <tui-textfield class="delete-password-field">
+                <label tuiLabel>Potwierdź hasło</label>
+                <input
+                  tuiTextfield
+                  type="password"
+                  autocomplete="current-password"
+                  [value]="deletePassword()"
+                  (input)="deletePassword.set($any($event.target).value)"
+                />
+              </tui-textfield>
+            }
             <div class="danger-actions">
               <button
                 tuiButton
@@ -284,7 +300,7 @@ function formatPhone(raw: string): string {
                 size="s"
                 type="button"
                 class="btn-danger"
-                [disabled]="deleting()"
+                [disabled]="deleting() || (!isGoogleUser() && !deletePassword())"
                 (click)="deleteAccount()"
               >
                 {{ deleting() ? 'Usuwanie…' : 'Tak, usuń konto' }}
@@ -347,6 +363,7 @@ function formatPhone(raw: string): string {
     .danger-icon { color: var(--tui-status-negative); flex-shrink: 0; margin-top: 2px; }
     .danger-actions { display: flex; gap: 12px; }
     .btn-danger { color: var(--tui-status-negative) !important; border-color: var(--tui-status-negative) !important; }
+    .delete-password-field { display: block; width: 100%; margin-bottom: 16px; }
   `],
 })
 export class ProfileComponent {
@@ -361,6 +378,9 @@ export class ProfileComponent {
   readonly saving = signal(false);
   readonly confirmingDelete = signal(false);
   readonly deleting = signal(false);
+  readonly deletePassword = signal('');
+
+  readonly isGoogleUser = computed(() => !!this.auth.currentUser()?.googleId);
 
   readonly changingEmail = signal(false);
   readonly emailLoading = signal(false);
@@ -519,23 +539,26 @@ export class ProfileComponent {
   }
 
   startDeleteConfirm(): void {
+    this.deletePassword.set('');
     this.confirmingDelete.set(true);
   }
 
   cancelDeleteConfirm(): void {
+    this.deletePassword.set('');
     this.confirmingDelete.set(false);
   }
 
   deleteAccount(): void {
     this.deleting.set(true);
-    this.http.delete(`${environment.apiUrl}/users/me`).subscribe({
+    const body = this.isGoogleUser() ? {} : { currentPassword: this.deletePassword() };
+    this.http.delete(`${environment.apiUrl}/users/me`, { body }).subscribe({
       next: () => {
         this.auth.clearSession();
         this.router.navigate(['/']);
         this.toast.success('Konto zostało usunięte');
       },
-      error: () => {
-        this.toast.error('Błąd usuwania konta. Spróbuj ponownie.');
+      error: (err) => {
+        this.toast.error(err.error?.message ?? 'Błąd usuwania konta. Spróbuj ponownie.');
         this.deleting.set(false);
       },
     });

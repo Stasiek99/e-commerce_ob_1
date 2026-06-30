@@ -434,7 +434,7 @@ export class AddressesComponent implements OnInit {
       firstName:  ['', [Validators.required, Validators.maxLength(50), nameValidator]],
       lastName:   ['', [Validators.required, Validators.maxLength(50), nameValidator]],
       company:    [''],
-      street:     ['', [Validators.required, Validators.maxLength(100), streetValidator]],
+      street:     ['', [Validators.required, Validators.maxLength(200), streetValidator]],
       postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
       city:       ['', [Validators.required, Validators.minLength(2)]],
       phone:      ['', [Validators.required, phoneValidator]],
@@ -622,7 +622,14 @@ export class AddressesComponent implements OnInit {
     this.working.set(id);
     this.http.patch<Address>(`${environment.apiUrl}/users/me/addresses/${id}`, { isDefault: true }).subscribe({
       next: () => {
-        this.addresses.update((l) => l.map((a) => ({ ...a, isDefault: a.id === id })));
+        this.addresses.update((l) => {
+          const updated = l.map((a) => ({ ...a, isDefault: a.id === id }));
+          // Mirror backend order: default first, then by original createdAt
+          return [
+            ...updated.filter((a) => a.isDefault),
+            ...updated.filter((a) => !a.isDefault),
+          ];
+        });
         this.working.set(null);
         this.toast.success('Adres domyślny zaktualizowany');
       },

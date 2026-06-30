@@ -55,11 +55,13 @@ export class CreateAddressDto {
 export class UpdateAddressDto {
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(50)
   firstName?: string;
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(50)
   lastName?: string;
 
@@ -70,11 +72,13 @@ export class UpdateAddressDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(200)
   street?: string;
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
   city?: string;
 
@@ -90,6 +94,7 @@ export class UpdateAddressDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(20)
   phone?: string;
 

@@ -1076,7 +1076,16 @@ export class CheckoutPageComponent implements OnInit {
     if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
 
     const savedId = this.selectedSavedId();
-    const addressPayload = savedId
+    const savedAddr = savedId ? this.savedAddresses().find((a: any) => a.id === savedId) : null;
+    const formDiverged = savedAddr && (
+      savedAddr.firstName  !== addrPayload.firstName  ||
+      savedAddr.lastName   !== addrPayload.lastName   ||
+      savedAddr.street     !== addrPayload.street     ||
+      savedAddr.postalCode !== addrPayload.postalCode ||
+      savedAddr.city       !== addrPayload.city       ||
+      savedAddr.phone      !== addrPayload.phone
+    );
+    const addressPayload = (savedId && !formDiverged)
       ? { addressId: savedId }
       : { newAddress: addrPayload };
 

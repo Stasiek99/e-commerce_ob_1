@@ -17,6 +17,7 @@ interface User {
   nip?: string | null;
   isEmailVerified: boolean;
   marketingConsent?: boolean;
+  googleId?: string | null;
 }
 
 interface TokensResponse {
@@ -146,7 +147,7 @@ export class AuthService {
   }
 
   verifyEmail(token: string) {
-    return this.http.post(
+    return this.http.post<{ type: 'email_change' | 'email_verification' }>(
       `${environment.apiUrl}/auth/verify-email`,
       { token },
       { withCredentials: true },

@@ -128,9 +128,9 @@ export class AuthController {
   @Public()
   @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @Post('verify-email')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   async verifyEmail(@Body() dto: VerifyEmailDto) {
-    await this.authService.verifyEmail(dto.token);
+    return this.authService.verifyEmail(dto.token);
   }
 
   @Throttle({ default: { ttl: 3600000, limit: 3 } })  // 3 resends per hour
