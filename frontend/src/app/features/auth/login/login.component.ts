@@ -137,7 +137,7 @@ export class LoginComponent implements OnInit {
     const { email, password } = this.form.getRawValue();
     this.auth.login(email!, password!).subscribe({
       next: () => {
-        this.cart.mergeWithServer('').subscribe();
+        this.cart.mergeWithServer().subscribe();
         this.router.navigateByUrl(this.returnTo ?? '/');
       },
       error: () => {

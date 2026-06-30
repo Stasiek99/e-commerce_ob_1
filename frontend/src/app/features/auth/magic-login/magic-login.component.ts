@@ -37,7 +37,7 @@ export class MagicLoginComponent implements OnInit {
 
     this.auth.verifyMagicLink(token).subscribe({
       next: () => {
-        this.cart.mergeWithServer('').subscribe();
+        this.cart.mergeWithServer().subscribe();
         this.router.navigateByUrl('/');
       },
       error: () => {

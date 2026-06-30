@@ -9,6 +9,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
@@ -90,7 +91,9 @@ export class AuthService {
     }
 
     // Fire-and-forget — don't block registration if email fails
-    this.issueAndSendVerification(user).catch(() => {});
+    this.issueAndSendVerification(user).catch((err: unknown) => {
+      Sentry.captureException(err);
+    });
 
     return this.generateTokenPair(user);
   }

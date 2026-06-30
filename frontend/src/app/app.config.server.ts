@@ -1,6 +1,6 @@
 import { mergeApplicationConfig, ApplicationConfig, inject } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
-import { provideServerRendering } from '@angular/ssr';
+import { provideServerRendering, withRoutes, RenderMode, ServerRoute } from '@angular/ssr';
 import { WA_WINDOW } from '@ng-web-apis/common';
 import { appConfig } from './app.config';
 
@@ -15,7 +15,14 @@ import { appConfig } from './app.config';
  */
 const serverConfig: ApplicationConfig = {
   providers: [
-    provideServerRendering(),
+    provideServerRendering(
+      // Token-consuming routes must run client-side only. The tokens are
+      // single-use; an SSR pass would silently burn them before hydration.
+      withRoutes([
+        { path: 'auth/magic-login', renderMode: RenderMode.Client },
+        { path: 'auth/verify-email', renderMode: RenderMode.Client },
+      ] satisfies ServerRoute[]),
+    ),
     {
       provide: WA_WINDOW,
       useFactory: () => {
