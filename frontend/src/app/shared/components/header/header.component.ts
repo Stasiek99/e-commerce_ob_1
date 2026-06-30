@@ -18,6 +18,8 @@ interface SuggestResult {
   id: string;
   name: string;
   slug: string;
+  catalogNumber: string | null;
+  category: { name: string };
   images: Array<{ url: string }>;
   variants: Array<{ priceInCents: number; label: string }>;
 }
@@ -122,7 +124,16 @@ interface SuggestResult {
                     } @else {
                       <div class="autocomplete-img autocomplete-img--placeholder"></div>
                     }
-                    <span class="autocomplete-name">{{ item.name }}</span>
+                    <span class="autocomplete-text">
+                      <span class="autocomplete-name"
+                        >{{ item.name }}@if (item.catalogNumber) {<span class="autocomplete-catalog-no"
+                          >&nbsp;NO.&nbsp;{{ item.catalogNumber }}</span
+                        >}</span
+                      >
+                      @if (item.category?.name) {
+                        <span class="autocomplete-category">{{ item.category.name }}</span>
+                      }
+                    </span>
                     <span class="autocomplete-price">{{ item.variants[0]?.priceInCents | price }}</span>
                   </li>
                 }
@@ -313,11 +324,30 @@ interface SuggestResult {
       flex-shrink: 0;
     }
     .autocomplete-img--placeholder { background: var(--tui-background-neutral-1, #f5f5f5); }
-    .autocomplete-name {
+    .autocomplete-text {
       flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .autocomplete-name {
       font-size: 14px;
       font-weight: 500;
       color: var(--color-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .autocomplete-catalog-no {
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--color-secondary);
+      letter-spacing: 0.03em;
+    }
+    .autocomplete-category {
+      font-size: 12px;
+      color: var(--color-secondary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;

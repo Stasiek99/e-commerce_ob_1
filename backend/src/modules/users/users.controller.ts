@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -25,6 +26,7 @@ import { User } from '@prisma/client';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangeEmailDto } from './dto/change-email.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { DeleteAccountDto } from './dto/delete-account.dto';
 import { CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
 import { Throttle } from '@nestjs/throttler';
 
@@ -59,8 +61,15 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteMe(
     @CurrentUser() user: User,
+    @Body() dto: DeleteAccountDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
+    if (user.passwordHash) {
+      if (!dto.currentPassword) {
+        throw new BadRequestException('Podaj aktualne hasło aby usunąć konto');
+      }
+      await this.authService.verifyCurrentPassword(user.id, dto.currentPassword);
+    }
     await this.usersService.deleteAccount(user.id);
     res.clearCookie(REFRESH_COOKIE, { path: '/' });
   }

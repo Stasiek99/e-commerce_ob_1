@@ -300,6 +300,12 @@ model Product {
   wishlistItems WishlistItem[]
   reviews       Review[]
 
+  // categoryId has no auto-index in Postgres (only the referenced PK gets one).
+  // Without it every category-filtered list query does a full products table scan.
+  // The compound (categoryId, isActive, status) covers the common WHERE pattern.
+  @@index([categoryId, isActive, status])
+  // Covers the default/unfiltered listing ORDER BY and the "no category" path.
+  @@index([isActive, status, sortOrder])
   @@map("products")
 }
 
@@ -324,6 +330,11 @@ model ProductVariant {
   cartItems     CartItem[]
   priceHistory  ProductVariantPriceHistory[]
 
+  // productId has no auto-index in Postgres on the referencing column.
+  // Without it, fetching variants for a page of 20 products scans the entire
+  // product_variants table once per batch (N+1 avoided by Prisma's IN query,
+  // but an IN scan over the full table is still a sequential scan).
+  @@index([productId, isActive])
   @@map("product_variants")
 }
 

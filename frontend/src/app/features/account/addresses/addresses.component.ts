@@ -8,7 +8,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
 import { TuiButton, TuiLabel, TuiTextfield, TuiIcon } from '@taiga-ui/core';
 import { TuiCard, TuiForm } from '@taiga-ui/layout';
-import { TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider } from '@taiga-ui/kit';
+import { TuiChip, TuiInputPhoneInternational, tuiInputPhoneInternationalOptionsProvider } from '@taiga-ui/kit';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
 import { getCountries } from 'libphonenumber-js/min';
 import { parsePhoneNumber } from 'libphonenumber-js';
@@ -34,7 +34,7 @@ interface Address {
   standalone: true,
   imports: [
     ReactiveFormsModule,
-    TuiButton, TuiLabel, TuiTextfield, TuiIcon, TuiCard, TuiForm,
+    TuiButton, TuiChip, TuiLabel, TuiTextfield, TuiIcon, TuiCard, TuiForm,
     TuiInputPhoneInternational,
   ],
   providers: [
@@ -125,10 +125,10 @@ interface Address {
               @if (addCityLoading()) {
                 <p class="city-hint">Szukam miejscowości…</p>
               }
-              @if (addCitySuggestions().length > 1) {
+              @if (addCities.length > 1) {
                 <div class="city-suggestions">
-                  @for (city of addCitySuggestions(); track city) {
-                    <button type="button" class="city-chip" (click)="selectAddCity(city)">{{ city }}</button>
+                  @for (city of addCities; track city) {
+                    <button type="button" tuiChip size="s" (click)="selectAddCity(city)">{{ city }}</button>
                   }
                 </div>
               }
@@ -171,7 +171,7 @@ interface Address {
       }
 
       <!-- ── Address cards ─────────────────────────────── -->
-      @for (addr of addresses(); track addr.id) {
+      @for (addr of addressList; track addr.id) {
         @if (editingId() === addr.id) {
           <form tuiCardLarge tuiForm appearance="elevated" data-size="l" data-space="normal"
                 class="addr-form" [formGroup]="editForm" (ngSubmit)="submitEdit(addr.id)">
@@ -232,10 +232,10 @@ interface Address {
                 @if (editCityLoading()) {
                   <p class="city-hint">Szukam miejscowości…</p>
                 }
-                @if (editCitySuggestions().length > 1) {
+                @if (editCities.length > 1) {
                   <div class="city-suggestions">
-                    @for (city of editCitySuggestions(); track city) {
-                      <button type="button" class="city-chip" (click)="selectEditCity(city)">{{ city }}</button>
+                    @for (city of editCities; track city) {
+                      <button type="button" tuiChip size="s" (click)="selectEditCity(city)">{{ city }}</button>
                     }
                   </div>
                 }
@@ -369,16 +369,6 @@ interface Address {
     .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
     .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
     .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-    .city-chip {
-      background: var(--tui-background-neutral-1, #f0f0f5);
-      border: 1px solid var(--color-border);
-      border-radius: 999px;
-      padding: 3px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .city-chip:hover { border-color: var(--color-primary); background: var(--tui-background-neutral-2, #e8e8f0); }
 
     .confirm-box {
       padding: 16px;
@@ -421,6 +411,10 @@ export class AddressesComponent implements OnInit {
   readonly editCitySuggestions = signal<string[]>([]);
   readonly editCityLoading     = signal(false);
 
+  get addCities(): string[] { return this.addCitySuggestions(); }
+  get editCities(): string[] { return this.editCitySuggestions(); }
+  get addressList(): Address[] { return this.addresses(); }
+
   // Street existence check state (soft — never blocks submission)
   readonly addStreetStatus  = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
   readonly editStreetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
@@ -440,7 +434,7 @@ export class AddressesComponent implements OnInit {
       firstName:  ['', [Validators.required, Validators.maxLength(50), nameValidator]],
       lastName:   ['', [Validators.required, Validators.maxLength(50), nameValidator]],
       company:    [''],
-      street:     ['', [Validators.required, Validators.maxLength(100), streetValidator]],
+      street:     ['', [Validators.required, Validators.maxLength(200), streetValidator]],
       postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
       city:       ['', [Validators.required, Validators.minLength(2)]],
       phone:      ['', [Validators.required, phoneValidator]],
@@ -628,7 +622,14 @@ export class AddressesComponent implements OnInit {
     this.working.set(id);
     this.http.patch<Address>(`${environment.apiUrl}/users/me/addresses/${id}`, { isDefault: true }).subscribe({
       next: () => {
-        this.addresses.update((l) => l.map((a) => ({ ...a, isDefault: a.id === id })));
+        this.addresses.update((l) => {
+          const updated = l.map((a) => ({ ...a, isDefault: a.id === id }));
+          // Mirror backend order: default first, then by original createdAt
+          return [
+            ...updated.filter((a) => a.isDefault),
+            ...updated.filter((a) => !a.isDefault),
+          ];
+        });
         this.working.set(null);
         this.toast.success('Adres domyślny zaktualizowany');
       },

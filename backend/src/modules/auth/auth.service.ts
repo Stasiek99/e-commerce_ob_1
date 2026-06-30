@@ -9,6 +9,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/nestjs';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
@@ -90,7 +91,9 @@ export class AuthService {
     }
 
     // Fire-and-forget — don't block registration if email fails
-    this.issueAndSendVerification(user).catch(() => {});
+    this.issueAndSendVerification(user).catch((err: unknown) => {
+      Sentry.captureException(err);
+    });
 
     return this.generateTokenPair(user);
   }
@@ -375,7 +378,7 @@ export class AuthService {
     await this.revokeAccessTokensForUser(userId);
   }
 
-  async verifyEmail(rawToken: string): Promise<void> {
+  async verifyEmail(rawToken: string): Promise<{ type: 'email_change' | 'email_verification' }> {
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     const stored = await this.prisma.emailVerificationToken.findUnique({
       where: { tokenHash },
@@ -400,7 +403,7 @@ export class AuthService {
       stored.user.isEmailVerified &&
       !stored.user.pendingEmail
     ) {
-      return;
+      return { type: 'email_verification' };
     }
 
     if (stored.user.pendingEmail) {
@@ -437,6 +440,8 @@ export class AuthService {
           data: { revokedAt: new Date() },
         });
       });
+
+      return { type: 'email_change' };
     } else {
       await this.prisma.$transaction([
         this.prisma.emailVerificationToken.update({
@@ -448,6 +453,8 @@ export class AuthService {
           data: { isEmailVerified: true },
         }),
       ]);
+
+      return { type: 'email_verification' };
     }
   }
 
@@ -513,6 +520,13 @@ export class AuthService {
     ]);
 
     await this.revokeAccessTokensForUser(stored.userId);
+  }
+
+  async verifyCurrentPassword(userId: string, password: string): Promise<void> {
+    const user = await this.usersService.findById(userId);
+    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) throw new UnauthorizedException('Invalid credentials');
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {

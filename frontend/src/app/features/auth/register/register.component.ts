@@ -4,6 +4,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { TuiButton, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { AuthService } from '../../../core/services/auth.service';
+import { CartService } from '../../../core/services/cart.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { PASSWORD_RE } from '../../../shared/validators/form.validators';
 
@@ -70,6 +71,7 @@ import { PASSWORD_RE } from '../../../shared/validators/form.validators';
 })
 export class RegisterComponent {
   private readonly auth  = inject(AuthService);
+  private readonly cart  = inject(CartService);
   private readonly toast = inject(ToastService);
   private readonly router = inject(Router);
   private readonly route  = inject(ActivatedRoute);
@@ -109,7 +111,10 @@ export class RegisterComponent {
     this.loading = true;
     const v = this.form.getRawValue();
     this.auth.register(v.email!, v.password!, v.firstName ?? undefined, v.lastName ?? undefined).subscribe({
-      next: () => this.router.navigateByUrl(this.returnTo ?? '/'),
+      next: () => {
+        this.cart.mergeWithServer().subscribe({ next: () => this.cart.loadCart(), error: () => {} });
+        this.router.navigateByUrl(this.returnTo ?? '/');
+      },
       error: (err) => {
         this.toast.error(err.error?.message ?? 'Błąd rejestracji.');
         this.loading = false;

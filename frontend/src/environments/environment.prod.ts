@@ -6,6 +6,7 @@ export const environment = {
   sentryDsn: '',  // injected at build time by scripts/inject-sentry-dsn.mjs via SENTRY_DSN env var
   sentryTracesSampleRate: 0.1,
   sentryTracePropagationTargets: [/^https:\/\/backend-production-c004\.up\.railway\.app/],
+  dpdWidgetUrl: 'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
   // ─── PHASE 7 HARD GATE — fill in before first real transaction ───────────
   seller: {
     name: 'Aromaterie',

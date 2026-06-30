@@ -1,7 +1,7 @@
 import { Body, Controller, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Role, User } from '@prisma/client';
-import { IsDateString, IsString, MinLength } from 'class-validator';
+import { IsDateString, IsOptional, IsString, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,6 +20,12 @@ class SetReplacementDeliveredDto {
   deliveredAt!: string;
 }
 
+class AdminNoteDto {
+  @IsOptional()
+  @IsString()
+  adminNote?: string;
+}
+
 @Controller('returns')
 @UseGuards(JwtAuthGuard)
 export class ReturnsController {
@@ -29,6 +35,13 @@ export class ReturnsController {
   @Throttle({ default: { ttl: 60_000, limit: 5 } })
   create(@CurrentUser() user: User, @Body() dto: CreateReturnRequestDto) {
     return this.returns.create(dto, user.id);
+  }
+
+  @Patch(':id/in-review')
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMIN)
+  setInReview(@Param('id') id: string, @Body() dto: AdminNoteDto) {
+    return this.returns.setInReview(id, dto.adminNote);
   }
 
   @Patch(':id/tracking')

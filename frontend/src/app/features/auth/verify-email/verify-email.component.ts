@@ -5,7 +5,7 @@ import { TuiButton, TuiTitle } from '@taiga-ui/core';
 import { TuiCard, TuiHeader } from '@taiga-ui/layout';
 import { AuthService } from '../../../core/services/auth.service';
 
-type State = 'pending' | 'success' | 'error';
+type State = 'pending' | 'success' | 'email-changed' | 'error';
 
 @Component({
   selector: 'app-verify-email',
@@ -26,6 +26,12 @@ type State = 'pending' | 'success' | 'error';
             Adres email został potwierdzony. Możesz teraz w pełni korzystać ze swojego konta.
           </p>
           <a tuiButton [routerLink]="['/account']" class="btn-full">Przejdź do konta</a>
+        }
+        @if (state === 'email-changed') {
+          <p class="info-text">
+            Adres email został zmieniony. Zaloguj się ponownie używając nowego adresu.
+          </p>
+          <a tuiButton [routerLink]="['/auth/login']" class="btn-full">Zaloguj się</a>
         }
         @if (state === 'error') {
           <p class="info-text error-text">
@@ -64,10 +70,17 @@ export class VerifyEmailComponent implements OnInit {
     if (!token) { this.state = 'error'; return; }
 
     this.auth.verifyEmail(token).subscribe({
-      next: () => {
-        this.state = 'success';
-        // Refresh the in-memory user so the dashboard banner disappears
-        this.auth.loadCurrentUser();
+      next: (res) => {
+        if (res.type === 'email_change') {
+          // All sessions were revoked server-side; clear local state and show
+          // a re-login prompt instead of trying to reload the user.
+          this.auth.clearSession();
+          this.state = 'email-changed';
+        } else {
+          this.state = 'success';
+          // Refresh the in-memory user so the dashboard banner disappears
+          this.auth.loadCurrentUser();
+        }
       },
       error: () => { this.state = 'error'; },
     });

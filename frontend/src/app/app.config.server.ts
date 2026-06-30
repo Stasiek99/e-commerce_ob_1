@@ -1,6 +1,6 @@
 import { mergeApplicationConfig, ApplicationConfig, inject } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
-import { provideServerRendering } from '@angular/ssr';
+import { provideServerRendering, withRoutes, RenderMode, ServerRoute } from '@angular/ssr';
 import { WA_WINDOW } from '@ng-web-apis/common';
 import { appConfig } from './app.config';
 
@@ -15,7 +15,50 @@ import { appConfig } from './app.config';
  */
 const serverConfig: ApplicationConfig = {
   providers: [
-    provideServerRendering(),
+    provideServerRendering(
+      withRoutes([
+        // Token-consuming routes — single-use tokens must not be burned by SSR
+        { path: 'auth/magic-login',    renderMode: RenderMode.Client },
+        { path: 'auth/verify-email',   renderMode: RenderMode.Client },
+        { path: 'auth/callback',       renderMode: RenderMode.Client },
+        { path: 'auth/reset-password', renderMode: RenderMode.Client },
+
+        // Auth-guarded / user-specific — no SSR benefit, avoid leaking state
+        { path: 'account',             renderMode: RenderMode.Client },
+        { path: 'account/**',          renderMode: RenderMode.Client },
+        { path: 'cart',                renderMode: RenderMode.Client },
+        { path: 'checkout',            renderMode: RenderMode.Client },
+        { path: 'checkout/auth-choice', renderMode: RenderMode.Client },
+        { path: 'checkout/success',    renderMode: RenderMode.Client },
+        { path: 'checkout/failure',    renderMode: RenderMode.Client },
+        { path: 'wishlist',            renderMode: RenderMode.Client },
+        { path: 'returns',             renderMode: RenderMode.Client },
+        { path: 'orders/track',        renderMode: RenderMode.Client },
+
+        // Static informational pages — prerender at build time
+        { path: '',                    renderMode: RenderMode.Prerender },
+        { path: 'legal/terms',         renderMode: RenderMode.Prerender },
+        { path: 'legal/privacy',       renderMode: RenderMode.Prerender },
+        { path: 'legal/withdrawal',    renderMode: RenderMode.Prerender },
+        { path: 'partnership',         renderMode: RenderMode.Prerender },
+        { path: 'auth/login',          renderMode: RenderMode.Prerender },
+        { path: 'auth/register',       renderMode: RenderMode.Prerender },
+        { path: 'auth/forgot-password', renderMode: RenderMode.Prerender },
+        { path: 'auth/magic-link',     renderMode: RenderMode.Prerender },
+
+        // Product/category pages: RenderMode.Server would require an absolute
+        // API URL in the SSR Node.js context (no Vite proxy available).
+        // environment.apiUrl is '/api' (relative) in dev — native fetch rejects
+        // relative URLs, causing a TypeError → empty SSR render → browser
+        // re-fetches → 408/NG0506. Client mode until SSR API URL is wired up.
+        { path: 'products',            renderMode: RenderMode.Client },
+        { path: 'products/:slug',      renderMode: RenderMode.Client },
+        { path: 'category/:slug',      renderMode: RenderMode.Client },
+
+        // Catch-all (404 page and any future routes not listed above)
+        { path: '**',                  renderMode: RenderMode.Server },
+      ] satisfies ServerRoute[]),
+    ),
     {
       provide: WA_WINDOW,
       useFactory: () => {

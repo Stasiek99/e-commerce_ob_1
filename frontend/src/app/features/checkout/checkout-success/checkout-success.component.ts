@@ -7,7 +7,6 @@ import { timer, switchMap, takeWhile, take } from 'rxjs';
 import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
 import { environment } from '../../../../environments/environment';
 import { AnalyticsService } from '../../../core/services/analytics.service';
-import { AuthService } from '../../../core/services/auth.service';
 import { CartService } from '../../../core/services/cart.service';
 import { SeoService } from '../../../core/services/seo.service';
 
@@ -68,28 +67,6 @@ interface PaymentStatusResponse {
         <p class="page__track-hint">
           Gość? <a routerLink="/orders/track">Sprawdź status zamówienia</a> podając email i numer zamówienia.
         </p>
-
-        @if (auth.currentUser() && !auth.currentUser()!.marketingConsent && !newsletterSubscribed()) {
-          <div class="newsletter-card">
-            <p class="newsletter-card__title">Chcesz być na bieżąco?</p>
-            <p class="newsletter-card__desc">
-              Zapisz się do newslettera, aby otrzymywać informacje o nowych zapachach i ekskluzywnych promocjach.
-            </p>
-            <button
-              tuiButton
-              type="button"
-              appearance="outline"
-              size="s"
-              [disabled]="newsletterSubmitting()"
-              (click)="subscribeNewsletter()"
-            >
-              {{ newsletterSubmitting() ? 'Zapisuję…' : 'Tak, chcę newsletter' }}
-            </button>
-          </div>
-        }
-        @if (newsletterSubscribed()) {
-          <p class="newsletter-card__confirmation">✓ Zapisano do newslettera. Możesz zrezygnować w ustawieniach konta.</p>
-        }
       } @else {
         <tui-icon icon="@tui.clock" class="page__icon page__icon--pending" />
         <h1>Płatność w toku…</h1>
@@ -191,37 +168,6 @@ interface PaymentStatusResponse {
       margin: 0;
     }
     .page__track-hint a { color: var(--color-primary); font-weight: 500; text-decoration: underline; }
-
-    .newsletter-card {
-      border: 1px solid var(--color-border);
-      border-radius: var(--border-radius-md);
-      padding: 20px 24px;
-      max-width: 400px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-      margin-top: 8px;
-    }
-
-    .newsletter-card__title {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--tui-text-primary);
-      margin: 0;
-    }
-
-    .newsletter-card__desc {
-      font-size: 13px;
-      color: var(--tui-text-secondary);
-      margin: 0;
-    }
-
-    .newsletter-card__confirmation {
-      font-size: 13px;
-      color: var(--tui-status-positive);
-      margin: 0;
-    }
   `],
 })
 export class CheckoutSuccessComponent implements OnInit {
@@ -233,15 +179,12 @@ export class CheckoutSuccessComponent implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
   private readonly platformId = inject(PLATFORM_ID);
 
-  readonly auth = inject(AuthService);
   private readonly seo = inject(SeoService);
 
   readonly loading = signal(true);
   readonly paid = signal(false);
   readonly orderId = signal<string | null>(null);
   readonly orderNumber = signal<string | null>(null);
-  readonly newsletterSubmitting = signal(false);
-  readonly newsletterSubscribed = signal(false);
 
   ngOnInit(): void {
     this.seo.setRobotsTag('noindex,nofollow');
@@ -254,7 +197,13 @@ export class CheckoutSuccessComponent implements OnInit {
     if (!isPlatformBrowser(this.platformId)) return;
 
     const id = this.route.snapshot.queryParamMap.get('orderId');
-    const token = this.route.snapshot.queryParamMap.get('token');
+    const urlToken = this.route.snapshot.queryParamMap.get('token');
+    const sessionKey = id ? `guest_token_${id}` : null;
+
+    // Persist the guest token before stripping the URL so a page refresh still works.
+    if (urlToken && sessionKey) sessionStorage.setItem(sessionKey, urlToken);
+    const token = urlToken ?? (sessionKey ? sessionStorage.getItem(sessionKey) : null);
+
     this.orderId.set(id);
 
     // Strip session_id (and any other Stripe params) from the URL so the
@@ -294,17 +243,6 @@ export class CheckoutSuccessComponent implements OnInit {
       },
       error: () => this.loading.set(false),
       complete: () => this.loading.set(false),
-    });
-  }
-
-  subscribeNewsletter(): void {
-    this.newsletterSubmitting.set(true);
-    this.http.patch(`${environment.apiUrl}/users/me`, { marketingConsent: true }).subscribe({
-      next: () => {
-        this.newsletterSubscribed.set(true);
-        this.newsletterSubmitting.set(false);
-      },
-      error: () => this.newsletterSubmitting.set(false),
     });
   }
 

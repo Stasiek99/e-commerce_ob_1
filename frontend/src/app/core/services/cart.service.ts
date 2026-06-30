@@ -112,7 +112,7 @@ export class CartService {
     );
   }
 
-  mergeWithServer(userId: string) {
+  mergeWithServer() {
     return this.http.post<void>(
       `${environment.apiUrl}/cart/merge`,
       {},

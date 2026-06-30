@@ -87,9 +87,8 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     @Inject('STOCK_SSE_REDIS_SUBSCRIBER') private readonly redisSubscriber: IORedis,
   ) {}
 
-  onModuleInit() {
-    // Fire-and-forget: subscribe queues in IORedis and resolves when Redis connects.
-    // Not awaited so NestJS bootstrap never blocks on Redis availability.
+  async onModuleInit() {
+    // Fire-and-forget: Redis subscription doesn't need to block server startup.
     this.redisSubscriber.subscribe('stock:updates').catch(() => {});
     this.redisSubscriber.on('message', (_channel: string, message: string) => {
       try {
@@ -97,6 +96,14 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
         this.stockUpdates$.next(update);
       } catch {}
     });
+
+    // AWAITED intentionally — NestJS delays app.listen() until all onModuleInit
+    // hooks resolve, so this warm-up completes before the server accepts any
+    // HTTP connections. Without it, the first product request pays the cold
+    // pgbouncer→Postgres connection cost (~2s on Supabase free tier) on top of
+    // the 3–4 sequential DB queries the uncached list path already needs,
+    // pushing the total past the 8s TimeoutInterceptor threshold.
+    await this.prisma.$queryRaw`SELECT 1`.catch(() => {});
   }
 
   async onModuleDestroy() {
@@ -124,6 +131,12 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
    * so browsing a top-level category also surfaces grandchild-category products.
    */
   private async resolveCategorySlugs(slug: string): Promise<string[] | undefined> {
+    const cacheKey = `category_slugs:${slug}`;
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached) as string[];
+    } catch {}
+
     const descendants = await this.prisma.$queryRaw<Array<{ slug: string }>>`
       WITH RECURSIVE descendants AS (
         SELECT id, slug FROM categories WHERE slug = ${slug}
@@ -134,7 +147,15 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       )
       SELECT slug FROM descendants
     `;
-    return descendants.length ? descendants.map((d) => d.slug) : undefined;
+    const result = descendants.length ? descendants.map((d) => d.slug) : undefined;
+
+    try {
+      // Category tree changes rarely; 1h TTL is safe and avoids repeated recursive CTE
+      // on every cold cache miss. Invalidated by cache version bump when categories mutate.
+      if (result) await this.redis.setex(cacheKey, 3600, JSON.stringify(result));
+    } catch {}
+
+    return result;
   }
 
   private async _executeFindAll(query: FindAllQuery) {
@@ -188,6 +209,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
         SELECT p.id,
           CAST(
             CASE WHEN ${term} = ANY(lr.aliases)                           THEN 100 ELSE 0 END +
+            CASE WHEN p."catalogNumber" ILIKE '%' || ${term} || '%'       THEN  60 ELSE 0 END +
             CASE WHEN lr.brand    ILIKE '%' || ${term} || '%'             THEN  50 ELSE 0 END +
             CASE WHEN lr.name     ILIKE '%' || ${term} || '%'             THEN  40 ELSE 0 END +
             CASE WHEN p."inspiredBy" ILIKE '%' || ${term} || '%'          THEN  30 ELSE 0 END +
@@ -202,6 +224,7 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
           AND p."status" != 'DISCONTINUED'
           AND (
             ${term} = ANY(lr.aliases)
+            OR p."catalogNumber"   ILIKE '%' || ${term} || '%'
             OR lr.brand    ILIKE '%' || ${term} || '%'
             OR lr.name     ILIKE '%' || ${term} || '%'
             OR p."inspiredBy"      ILIKE '%' || ${term} || '%'
@@ -809,19 +832,24 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     } catch {}
 
     // Raw SQL — needs alias lookup (Prisma can't query lr.aliases[] via relation where)
-    // Name-prefix rows sort first; within the same bucket, sortOrder wins.
+    // Name-prefix and catalogNumber-prefix rows sort first; within the same bucket, sortOrder wins.
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
       SELECT p.id
       FROM products p
       LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
       WHERE p."isActive" = true AND p."status" != 'DISCONTINUED' AND (
-        p.name            ILIKE '%' || ${term} || '%'
-        OR lr.brand       ILIKE '%' || ${term} || '%'
-        OR ${term}        = ANY(lr.aliases)
-        OR p."inspiredBy" ILIKE '%' || ${term} || '%'
+        p.name              ILIKE '%' || ${term} || '%'
+        OR lr.brand         ILIKE '%' || ${term} || '%'
+        OR ${term}          = ANY(lr.aliases)
+        OR p."inspiredBy"   ILIKE '%' || ${term} || '%'
+        OR p."catalogNumber" ILIKE '%' || ${term} || '%'
       )
       ORDER BY
-        CASE WHEN p.name ILIKE ${term} || '%' THEN 0 ELSE 1 END,
+        CASE
+          WHEN p.name ILIKE ${term} || '%' THEN 0
+          WHEN p."catalogNumber" ILIKE ${term} || '%' THEN 0
+          ELSE 1
+        END,
         p."sortOrder" ASC
       LIMIT 6
     `;
@@ -835,6 +863,8 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
         id: true,
         name: true,
         slug: true,
+        catalogNumber: true,
+        category: { select: { name: true } },
         images: {
           orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }],
           take: 1,
@@ -957,21 +987,26 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     if (promoVariantIds.length) {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-      const earliestRows = await this.prisma.productVariantPriceHistory.findMany({
-        where: { variantId: { in: promoVariantIds }, recordedAt: { lte: thirtyDaysAgo } },
-        select: { variantId: true },
-        distinct: ['variantId'],
-      });
-      for (const r of earliestRows) verifiedVariantIds.add(r.variantId);
-
-      if (verifiedVariantIds.size) {
-        const mins = await this.prisma.productVariantPriceHistory.groupBy({
+      // Run both history queries in parallel: "verified" check and min-price scan
+      // both hit the same table with the same variantId set. Filter verified IDs
+      // in memory instead of sequentially chaining the second query on the first.
+      const [earliestRows, allMins] = await Promise.all([
+        this.prisma.productVariantPriceHistory.findMany({
+          where: { variantId: { in: promoVariantIds }, recordedAt: { lte: thirtyDaysAgo } },
+          select: { variantId: true },
+          distinct: ['variantId'],
+        }),
+        this.prisma.productVariantPriceHistory.groupBy({
           by: ['variantId'],
-          where: { variantId: { in: Array.from(verifiedVariantIds) }, recordedAt: { gte: thirtyDaysAgo } },
+          where: { variantId: { in: promoVariantIds }, recordedAt: { gte: thirtyDaysAgo } },
           _min: { priceInCents: true },
-        });
-        for (const m of mins) {
-          if (m._min.priceInCents != null) minMap.set(m.variantId, m._min.priceInCents);
+        }),
+      ]);
+
+      for (const r of earliestRows) verifiedVariantIds.add(r.variantId);
+      for (const m of allMins) {
+        if (m._min.priceInCents != null && verifiedVariantIds.has(m.variantId)) {
+          minMap.set(m.variantId, m._min.priceInCents);
         }
       }
     }
@@ -1020,6 +1055,8 @@ export interface SuggestResult {
   id: string;
   name: string;
   slug: string;
+  catalogNumber: string | null;
+  category: { name: string };
   images: Array<{ url: string }>;
   variants: Array<{ priceInCents: number; label: string }>;
 }

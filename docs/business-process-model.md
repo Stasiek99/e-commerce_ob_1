@@ -1,4 +1,4 @@
-# Business Process Model — Orders, Payments, Shipments, Returns
+﻿# Business Process Model — Orders, Payments, Shipments, Returns
 
 Foundational reference for how money and customer data actually move through this
 codebase, derived by reading the real implementation (not the intended design).
@@ -40,14 +40,14 @@ Terminal states (`CANCELLED`, `REFUNDED`) have no outgoing edges in that table.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING_PAYMENT: checkout submitted\n(OrdersService.createFromCart)
+    [*] --> PENDING_PAYMENT: checkout submitted<br/>(OrdersService.createFromCart)
 
-    PENDING_PAYMENT --> PAID: Stripe webhook\ncheckout.session.completed
-    PENDING_PAYMENT --> FRAUD_REVIEW: Stripe webhook,\nRadar risk elevated/highest\nor amount mismatch
-    PENDING_PAYMENT --> CANCELLED: customer/guest cancel,\nsession-create failure,\nor 2h orphan sweep
+    PENDING_PAYMENT --> PAID: Stripe webhook<br/>checkout.session.completed
+    PENDING_PAYMENT --> FRAUD_REVIEW: Stripe webhook,<br/>Radar risk elevated/highest<br/>or amount mismatch
+    PENDING_PAYMENT --> CANCELLED: customer/guest cancel,<br/>session-create failure,<br/>or 2h orphan sweep
 
     FRAUD_REVIEW --> PAID: admin approveFraudReview
-    FRAUD_REVIEW --> REFUNDED: admin rejectFraudReview\n(real Stripe refund)
+    FRAUD_REVIEW --> REFUNDED: admin rejectFraudReview<br/>(real Stripe refund)
     FRAUD_REVIEW --> CANCELLED: admin updateStatus
 
     PAID --> PROCESSING: admin updateStatus / bulkMarkAsShipped
@@ -55,7 +55,7 @@ stateDiagram-v2
     PROCESSING --> SHIPPED: admin updateStatus / bulkMarkAsShipped
     SHIPPED --> DELIVERED: admin updateStatus
 
-    PAID --> CANCELLED: customer self-cancel (real refund)\nor admin bulkCancel
+    PAID --> CANCELLED: customer self-cancel (real refund)<br/>or admin bulkCancel
     PROCESSING --> CANCELLED: admin bulkCancel
 
     PAID --> REFUNDED: dual path — see note
@@ -79,10 +79,10 @@ stateDiagram-v2
     DISPUTE_HOLD --> PROCESSING: dispute won, restore
     DISPUTE_HOLD --> SHIPPED: dispute won, restore
     DISPUTE_HOLD --> DELIVERED: dispute won, restore
-    DISPUTE_HOLD --> DISPUTE_LOST_REVIEW: dispute lost\n(stock NOT restored)
+    DISPUTE_HOLD --> DISPUTE_LOST_REVIEW: dispute lost<br/>(stock NOT restored)
 
     DISPUTE_LOST_REVIEW --> CANCELLED: admin: goods never delivered
-    DISPUTE_LOST_REVIEW --> REFUNDED: admin: chargeback stands\n(DB-only, see note)
+    DISPUTE_LOST_REVIEW --> REFUNDED: admin: chargeback stands<br/>(DB-only, see note)
 
     CANCELLED --> [*]
     REFUNDED --> [*]
@@ -129,12 +129,12 @@ branch that can loop back to `PENDING` on retry.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: Payment row created at\ncheckout (initiatePayment)
-    PENDING --> COMPLETED: webhook checkout.session.completed\n/ async_payment_succeeded\n(payments.service.ts:294-516)
-    PENDING --> FAILED: webhook expired/async_payment_failed\n(payments.service.ts:679-720 → 2065-2167),\nor Stripe API error during initiatePayment\n(payments.service.ts:206-226)
-    FAILED --> PENDING: customer "retry payment"\n(reuses Payment row, new Checkout Session)\n(payments.service.ts:107-182)
-    COMPLETED --> REFUNDED: refundPayment / partialRefund\n(all items) / handleRefundUpdate webhook\n(payments.service.ts:1489-1602, 1608-1766, 734-1030)
-    COMPLETED --> COMPLETED: partialRefund (not all items) —\nrefundedAmountInCents increments,\nstatus stays COMPLETED
+    [*] --> PENDING: Payment row created at<br/>checkout (initiatePayment)
+    PENDING --> COMPLETED: webhook checkout.session.completed<br/>/ async_payment_succeeded<br/>(payments.service.ts:294-516)
+    PENDING --> FAILED: webhook expired/async_payment_failed<br/>(payments.service.ts:679-720 → 2065-2167),<br/>or Stripe API error during initiatePayment<br/>(payments.service.ts:206-226)
+    FAILED --> PENDING: customer "retry payment"<br/>(reuses Payment row, new Checkout Session)<br/>(payments.service.ts:107-182)
+    COMPLETED --> REFUNDED: refundPayment / partialRefund<br/>(all items) / handleRefundUpdate webhook<br/>(payments.service.ts:1489-1602, 1608-1766, 734-1030)
+    COMPLETED --> COMPLETED: partialRefund (not all items) —<br/>refundedAmountInCents increments,<br/>status stays COMPLETED
     REFUNDED --> [*]
 ```
 
@@ -176,15 +176,15 @@ under each carrier's existing `*_MOCK_ENABLED` flag.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> LABEL_GENERATED: admin generateLabel\n(shipping.service.ts:274-295)
-    [*] --> LABEL_ERROR: carrier API/upload failure\n(shipping.service.ts:322-340)
-    LABEL_ERROR --> LABEL_GENERATED: admin retries generateLabel\n(shipping.service.ts:116-133)
-    LABEL_GENERATED --> IN_TRANSIT: carrier tracking poll\n(pollShipmentTracking, every 15 min)
-    IN_TRANSIT --> DELIVERED: carrier tracking poll —\nsets deliveredAt from the carrier's\nown signal (Art. 27 UoK clock)
-    LABEL_GENERATED --> DELIVERED: carrier tracking poll\n(skipped straight to delivered)
-    IN_TRANSIT --> FAILED: carrier tracking poll —\ntriggers admin alert email
-    IN_TRANSIT --> RETURNED: carrier tracking poll —\ntriggers admin alert email
-    LABEL_GENERATED --> DELIVERED: admin marks Order→DELIVERED\n(orders.service.ts:1312-1322) —\nno-ops if deliveredAt already set by the poll
+    [*] --> LABEL_GENERATED: admin generateLabel<br/>(shipping.service.ts:274-295)
+    [*] --> LABEL_ERROR: carrier API/upload failure<br/>(shipping.service.ts:322-340)
+    LABEL_ERROR --> LABEL_GENERATED: admin retries generateLabel<br/>(shipping.service.ts:116-133)
+    LABEL_GENERATED --> IN_TRANSIT: carrier tracking poll<br/>(pollShipmentTracking, every 15 min)
+    IN_TRANSIT --> DELIVERED: carrier tracking poll —<br/>sets deliveredAt from the carrier's<br/>own signal (Art. 27 UoK clock)
+    LABEL_GENERATED --> DELIVERED: carrier tracking poll<br/>(skipped straight to delivered)
+    IN_TRANSIT --> FAILED: carrier tracking poll —<br/>triggers admin alert email
+    IN_TRANSIT --> RETURNED: carrier tracking poll —<br/>triggers admin alert email
+    LABEL_GENERATED --> DELIVERED: admin marks Order→DELIVERED<br/>(orders.service.ts:1312-1322) —<br/>no-ops if deliveredAt already set by the poll
 
     note right of DELIVERED
       Shipment.deliveredAt is the SOLE authoritative source for the
@@ -214,14 +214,14 @@ Revisit only if a second admin joins and duplicate-review friction becomes real.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: customer POST /returns\n(ownership + order-status + sealed-goods\n+ Art.27 14-day window checks)\n(returns.service.ts:66-138)
+    [*] --> PENDING: customer POST /returns<br/>(ownership + order-status + sealed-goods<br/>+ Art.27 14-day window checks)<br/>(returns.service.ts:66-138)
 
     state "IN_REVIEW (dead — never written)" as IN_REVIEW
     PENDING --> IN_REVIEW: never happens in code
 
-    PENDING --> APPROVED: admin approve()\n(returns.service.ts:196-226) — no money moved yet
-    PENDING --> REJECTED: admin reject()\n(returns.service.ts:228-261)
-    APPROVED --> COMPLETED: admin markRefunded()\n→ payments.partialRefund() must succeed FIRST\n(returns.service.ts:285-458)
+    PENDING --> APPROVED: admin approve()<br/>(returns.service.ts:196-226) — no money moved yet
+    PENDING --> REJECTED: admin reject()<br/>(returns.service.ts:228-261)
+    APPROVED --> COMPLETED: admin markRefunded()<br/>→ payments.partialRefund() must succeed FIRST<br/>(returns.service.ts:285-458)
 
     note right of COMPLETED
       Correctly guarded: COMPLETED is only ever written
@@ -254,18 +254,18 @@ sequenceDiagram
     FE->>OS: POST /orders
     OS->>OS: Create Order (PENDING_PAYMENT)
     OS->>PS: initiatePayment(orderId)
-    PS->>Stripe: Create Checkout Session\n(idempotencyKey=checkout-{paymentId})
+    PS->>Stripe: Create Checkout Session<br/>(idempotencyKey=checkout-{paymentId})
     Stripe-->>PS: session.url
     PS-->>OS: Payment row (PENDING) + session.url
     OS-->>FE: { orderId, redirectUrl }
     FE->>C: Redirect to Stripe-hosted checkout
     C->>Stripe: Pay (card / BLIK / P24)
-    Stripe->>WH: POST /payments/webhook\n(checkout.session.completed, signed)
-    WH->>WH: verify signature on raw body +\ndedupe via ProcessedStripeEvent
+    Stripe->>WH: POST /payments/webhook<br/>(checkout.session.completed, signed)
+    WH->>WH: verify signature on raw body +<br/>dedupe via ProcessedStripeEvent
     WH->>PS: handleWebhookEvent
-    PS->>PS: markSessionPaid:\nPayment→COMPLETED, Order→PAID\n(or FRAUD_REVIEW if Radar risk elevated)
+    PS->>PS: markSessionPaid:<br/>Payment→COMPLETED, Order→PAID<br/>(or FRAUD_REVIEW if Radar risk elevated)
     PS-->>WH: 200 {received:true}
-    Note over PS: OutboxMessage queued —\nconfirmation email survives a crash\nbetween commit and dispatch
+    Note over PS: OutboxMessage queued —<br/>confirmation email survives a crash<br/>between commit and dispatch
     C->>FE: Redirect to success page
 ```
 
@@ -283,7 +283,7 @@ sequenceDiagram
 
     C->>RC: POST /returns (orderId, items, type)
     RC->>RS: create()
-    RS->>RS: validate ownership, order status,\nsealed-goods rule, Art.27 window
+    RS->>RS: validate ownership, order status,<br/>sealed-goods rule, Art.27 window
     RS-->>C: ReturnRequest (PENDING)
 
     A->>RS: approve(id)
@@ -291,16 +291,16 @@ sequenceDiagram
     RS-->>A: status=APPROVED (no money moved)
 
     A->>RS: markRefunded(id)
-    RS->>RS: guard: status===APPROVED,\ntracking# recorded, order not disputed
+    RS->>RS: guard: status===APPROVED,<br/>tracking# recorded, order not disputed
     RS->>PS: partialRefund(orderId, items, ..., 'RETURN_APPROVAL')
-    PS->>Stripe: refunds.create\n(idempotencyKey=partial-refund-{orderId}-{...})
+    PS->>Stripe: refunds.create<br/>(idempotencyKey=partial-refund-{orderId}-{...})
     Stripe-->>PS: refund confirmed
-    PS->>PS: Payment.refundedAmountInCents += amount;\nOrder→PARTIALLY_REFUNDED/REFUNDED;\nOrderEvent logged
+    PS->>PS: Payment.refundedAmountInCents += amount,<br/>Order→PARTIALLY_REFUNDED/REFUNDED,<br/>OrderEvent logged
     PS-->>RS: refundAmountInCents
     RS->>RS: status=COMPLETED
     RS->>IS: processCorrectiveInvoice (fire-and-forget)
     IS-->>RS: faktura korygująca generated
-    Note over RS,PS: If Stripe throws, exception propagates —\nReturnRequest stays APPROVED, never reaches\nCOMPLETED without a confirmed refund
+    Note over RS,PS: If Stripe throws, exception propagates —<br/>ReturnRequest stays APPROVED, never reaches<br/>COMPLETED without a confirmed refund
 ```
 
 ## 7. Sequence: dispute / chargeback
@@ -314,16 +314,16 @@ sequenceDiagram
 
     Stripe->>WH: charge.dispute.created (signed)
     WH->>PS: handleDisputeCreated
-    PS->>PS: Order→DISPUTE_HOLD\n(prior status recoverable via OrderEvent)
+    PS->>PS: Order→DISPUTE_HOLD<br/>(prior status recoverable via OrderEvent)
     Stripe->>WH: charge.dispute.closed (won|lost)
     WH->>PS: handleDisputeClosed
     alt won
         PS->>PS: Order→ restore prior status (default PAID)
     else lost
-        PS->>PS: Order→DISPUTE_LOST_REVIEW\n(stock NOT restored)
+        PS->>PS: Order→DISPUTE_LOST_REVIEW<br/>(stock NOT restored)
         Admin->>PS: updateStatus(orderId, CANCELLED|REFUNDED)
     end
-    Note over PS,Admin: refundPayment() does NOT block DISPUTE_HOLD\n(only DISPUTE_LOST_REVIEW) — see Finding A3
+    Note over PS,Admin: refundPayment() does NOT block DISPUTE_HOLD<br/>(only DISPUTE_LOST_REVIEW) — see Finding A3
 ```
 
 ---
@@ -368,7 +368,7 @@ journey
       PII snapshotted into Order at checkout: 5: System
       retentionExpiresAt scheduled: 4: System
     section Retention
-      Scheduled cleanup scrubs PII fields\npost-retention (orders-cleanup.service.ts): 4: System
+      Scheduled cleanup scrubs PII fields<br/>post-retention (orders-cleanup.service.ts): 4: System
 ```
 
 The data journey is intentionally shallow — `ConsentLog`, `Order.retentionExpiresAt`,

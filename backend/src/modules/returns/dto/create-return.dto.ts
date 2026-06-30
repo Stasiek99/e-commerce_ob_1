@@ -2,14 +2,15 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
-  IsEmail,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -43,10 +44,6 @@ export class CreateReturnRequestDto {
   @MaxLength(50)
   orderNumber: string;
 
-  @IsEmail()
-  @MaxLength(200)
-  email: string;
-
   @IsString()
   @MinLength(1)
   @MaxLength(100)
@@ -75,8 +72,11 @@ export class CreateReturnRequestDto {
   @Type(() => ReturnItemDto)
   items: ReturnItemDto[];
 
-  @IsOptional()
+  // Required for COMPLAINT — Art. 43c Ustawy o prawach konsumenta; optional for WITHDRAWAL.
+  // @ValidateIf condition = false → all validators skipped, so undefined passes for WITHDRAWAL.
+  @ValidateIf(o => o.type === ReturnType.COMPLAINT)
   @IsString()
+  @MinLength(10, { message: 'Opis wady musi mieć co najmniej 10 znaków' })
   @MaxLength(2000)
   reason?: string;
 
@@ -87,7 +87,8 @@ export class CreateReturnRequestDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(34) // IBAN max length
+  @Matches(/^[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}$/, { message: 'Nieprawidłowy format numeru IBAN' })
+  @MaxLength(34)
   bankAccount?: string;
 
   // Required to be true for WITHDRAWAL — Art. 38 pkt 5 UoK exempts opened hygiene goods.

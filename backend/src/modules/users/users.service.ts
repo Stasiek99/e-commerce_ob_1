@@ -245,6 +245,16 @@ export class UsersService {
       }
     }
 
+    // Collect products with approved reviews before deletion so we can
+    // recompute their aggregates after the cascade removes the review rows.
+    const reviewedProductIds = (
+      await this.prisma.review.findMany({
+        where: { userId, status: 'APPROVED' },
+        select: { productId: true },
+        distinct: ['productId'],
+      })
+    ).map((r) => r.productId);
+
     await this.prisma.$transaction([
       // GDPR Art. 17 — scrub PII from order snapshots; the FK is nulled by the
       // cascade below so orders remain intact for accounting/dispute purposes.
@@ -253,6 +263,7 @@ export class UsersService {
         data: {
           snapshotFirstName:  '[usunięto]',
           snapshotLastName:   '[usunięto]',
+          snapshotCompany:    '[usunięto]',
           snapshotEmail:      `deleted+${randomUUID()}@deleted.invalid`,
           snapshotPhone:      '',
           snapshotNip:        null,
@@ -279,6 +290,25 @@ export class UsersService {
       // Orders.userId is set to NULL by the schema's onDelete: SetNull rule.
       this.prisma.user.delete({ where: { id: userId } }),
     ]);
+
+    // Recompute review aggregates for affected products now that their reviews
+    // have been cascade-deleted. Runs after the transaction so the subqueries
+    // reflect the final state (deleted rows absent).
+    for (const productId of reviewedProductIds) {
+      await this.prisma.$executeRaw`
+        UPDATE products SET
+          review_count = (
+            SELECT COUNT(*) FROM reviews
+            WHERE product_id = ${productId}::uuid AND status = 'APPROVED'
+          ),
+          avg_rating = (
+            SELECT ROUND(AVG(rating)::numeric, 2)
+            FROM reviews
+            WHERE product_id = ${productId}::uuid AND status = 'APPROVED'
+          )
+        WHERE id = ${productId}::uuid
+      `;
+    }
   }
 
   async recordConsent(userId: string, analytics: boolean): Promise<void> {

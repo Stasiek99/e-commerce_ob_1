@@ -9,7 +9,7 @@ import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, 
 import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
 import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
-import { TuiCheckbox, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
+import { TuiCheckbox, TuiChip, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
 import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
 import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
 import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
@@ -72,7 +72,7 @@ interface AppliedCoupon {
     RouterLink,
     PricePipe,
     TuiButton, TuiIcon, TuiLabel, TuiTextfield,
-    TuiTitle, TuiCheckbox,
+    TuiTitle, TuiCheckbox, TuiChip,
     TuiStepper,
     TuiCard,
     TuiElasticContainer,
@@ -120,9 +120,9 @@ interface AppliedCoupon {
                 <h2 tuiTitle>Adres dostawy</h2>
               </header>
 
-              @if (savedAddresses().length > 0) {
+              @if (savedAddressList.length > 0) {
                 <div class="addr-picker">
-                  @for (addr of savedAddresses(); track addr.id) {
+                  @for (addr of savedAddressList; track addr.id) {
                     <button
                       type="button"
                       class="addr-pill"
@@ -203,10 +203,10 @@ interface AppliedCoupon {
                     <input tuiTextfield type="text" formControlName="city" autocomplete="address-level2" />
                   </tui-textfield>
                   @if (cityLoading()) { <p class="city-hint">Szukam miejscowości…</p> }
-                  @if (citySuggestions().length > 1) {
+                  @if (cityList.length > 1) {
                     <div class="city-suggestions">
-                      @for (city of citySuggestions(); track city) {
-                        <button type="button" class="city-chip" (click)="selectCity(city)">{{ city }}</button>
+                      @for (city of cityList; track city) {
+                        <button type="button" tuiChip size="s" (click)="selectCity(city)">{{ city }}</button>
                       }
                     </div>
                   }
@@ -265,7 +265,7 @@ interface AppliedCoupon {
               </header>
               <fieldset class="carrier-list">
                 <legend class="sr-only">Wybierz sposób dostawy</legend>
-                @for (c of carriers(); track c.code) {
+                @for (c of carrierList; track c.code) {
                   <label
                     class="carrier-option"
                     [class.carrier-option--selected]="selectedCarrier()?.code === c.code">
@@ -356,7 +356,7 @@ interface AppliedCoupon {
 
               <div class="summary-section">
                 <h3>Produkty</h3>
-                @for (item of cart.items(); track item.productVariantId) {
+                @for (item of cartItems; track item.productVariantId) {
                   <div class="order-item">
                     <span>{{ item.productName }} {{ item.variantLabel }} × {{ item.quantity }}</span>
                     <span>{{ item.priceInCents * item.quantity | price }}</span>
@@ -480,12 +480,25 @@ interface AppliedCoupon {
             <button type="button" tuiButton appearance="ghost" size="s" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">
               <tui-icon icon="@tui.x" />
             </button>
-            <iframe
-              class="dpd-modal-iframe"
-              [src]="dpdWidgetUrl"
-              title="Wybierz punkt DPD"
-              referrerpolicy="no-referrer"
-            ></iframe>
+            @if (dpdWidgetError()) {
+              <div class="dpd-modal-error" role="alert">
+                <p>Nie udało się załadować mapy punktów DPD.</p>
+                <p>Spróbuj ponownie lub wybierz inną metodę dostawy.</p>
+              </div>
+            } @else {
+              @if (dpdWidgetLoading()) {
+                <div class="dpd-modal-loader" aria-live="polite">Ładowanie mapy…</div>
+              }
+              <iframe
+                class="dpd-modal-iframe"
+                [src]="dpdWidgetUrl"
+                title="Wybierz punkt DPD"
+                referrerpolicy="no-referrer"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                (load)="onDpdWidgetLoad()"
+                (error)="onDpdWidgetError()"
+              ></iframe>
+            }
           </div>
         </div>
       }
@@ -537,16 +550,6 @@ interface AppliedCoupon {
     .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
     .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
     .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-    .city-chip {
-      background: #f0f0f5;
-      border: 1px solid var(--color-border);
-      border-radius: 999px;
-      padding: 3px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .city-chip:hover { border-color: var(--color-primary); background: #e8e8f0; }
     .street-hint { font-size: 12px; margin-top: 4px; }
     .street-hint--checking { color: var(--color-primary); }
     .street-hint--found    { color: #2a9d4e; }
@@ -619,6 +622,8 @@ interface AppliedCoupon {
     .dpd-modal-content { position: relative; width: min(560px, 96vw); height: min(640px, 90vh); background: #fff; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
     .dpd-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; }
     .dpd-modal-iframe { flex: 1; width: 100%; border: none; }
+    .dpd-modal-loader { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--color-secondary); }
+    .dpd-modal-error { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; font-size: 14px; color: var(--color-error); background: #fff0f0; }
 
     /* Footer nav */
     .checkout__nav { display: flex; justify-content: space-between; margin-top: 24px; }
@@ -664,8 +669,10 @@ export class CheckoutPageComponent implements OnInit {
   readonly dpdPickerTouched = signal(false);
   readonly dpdModalOpen = signal(false);
   readonly dpdWidgetUrl: SafeResourceUrl = this.sanitizer.bypassSecurityTrustResourceUrl(
-    'https://api.dpd.cz/widget/latest/index.html?lang=pl&countries=PL&hideCloseButton=true',
+    environment.dpdWidgetUrl,
   );
+  readonly dpdWidgetLoading = signal(false);
+  readonly dpdWidgetError = signal(false);
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
   private dpdOpenerEl: HTMLElement | null = null;
   private readonly checkoutIdempotencyKey = crypto.randomUUID();
@@ -677,6 +684,9 @@ export class CheckoutPageComponent implements OnInit {
   readonly citySuggestions = signal<string[]>([]);
   readonly cityLoading = signal(false);
   readonly streetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+
+  get cityList(): string[] { return this.citySuggestions(); }
+  get savedAddressList(): any[] { return this.savedAddresses(); }
 
   readonly couponExpanded = signal(false);
   readonly couponCodeInput = signal('');
@@ -718,6 +728,8 @@ export class CheckoutPageComponent implements OnInit {
   });
 
   readonly carriers = signal<Carrier[]>(CARRIERS.map((c) => ({ ...c })));
+  get carrierList(): Carrier[] { return this.carriers(); }
+  get cartItems() { return this.cart.items(); }
 
   readonly countries: readonly TuiCountryIsoCode[] = [
     'PL',
@@ -990,7 +1002,10 @@ export class CheckoutPageComponent implements OnInit {
   }
 
   openDpdPicker(): void {
+    if (!isPlatformBrowser(this.platformId)) return;
     this.dpdOpenerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    this.dpdWidgetLoading.set(true);
+    this.dpdWidgetError.set(false);
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
       if (e.origin !== 'https://api.dpd.cz') return;
@@ -1005,8 +1020,19 @@ export class CheckoutPageComponent implements OnInit {
     window.addEventListener('message', this.dpdMessageListener);
   }
 
+  onDpdWidgetLoad(): void {
+    this.dpdWidgetLoading.set(false);
+  }
+
+  onDpdWidgetError(): void {
+    this.dpdWidgetLoading.set(false);
+    this.dpdWidgetError.set(true);
+  }
+
   closeDpdModal(): void {
     this.dpdModalOpen.set(false);
+    this.dpdWidgetLoading.set(false);
+    this.dpdWidgetError.set(false);
     if (this.dpdMessageListener) {
       window.removeEventListener('message', this.dpdMessageListener);
       this.dpdMessageListener = null;
@@ -1081,7 +1107,16 @@ export class CheckoutPageComponent implements OnInit {
     if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
 
     const savedId = this.selectedSavedId();
-    const addressPayload = savedId
+    const savedAddr = savedId ? this.savedAddresses().find((a: any) => a.id === savedId) : null;
+    const formDiverged = savedAddr && (
+      savedAddr.firstName  !== addrPayload.firstName  ||
+      savedAddr.lastName   !== addrPayload.lastName   ||
+      savedAddr.street     !== addrPayload.street     ||
+      savedAddr.postalCode !== addrPayload.postalCode ||
+      savedAddr.city       !== addrPayload.city       ||
+      savedAddr.phone      !== addrPayload.phone
+    );
+    const addressPayload = (savedId && !formDiverged)
       ? { addressId: savedId }
       : { newAddress: addrPayload };
 

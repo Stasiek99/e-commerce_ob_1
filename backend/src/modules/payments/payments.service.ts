@@ -201,6 +201,7 @@ export class PaymentsService {
         ...(order.discountInCents > 0 && {
           discountAmountInCents: order.discountInCents,
           couponLabel: order.couponCode ?? undefined,
+          couponIdempotencyKey: `coupon-${randomBytes(8).toString('hex')}`,
         }),
       });
     } catch (stripeErr) {

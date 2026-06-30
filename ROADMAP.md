@@ -379,12 +379,7 @@ Everything in this phase MUST be done before the first real order.
 - **Decision needed before launch:** either (a) link the CTAs/banner to a real external Chogan registration URL, if this is genuinely meant to drive affiliate signups for a third-party brand, or (b) remove the `/partnership` route, component, and banner entirely if it's not actually this store's B2B program. Whoever owns this content should confirm which.
 - **Fix:** once decided, update `registerCta()` (and the banner's `routerLink`) to the real target, or delete the route/component/banner if (b).
 
-- ### 🟢 LOW — No newsletter signup *(not yet scheduled)*
-- No `POST /newsletter/subscribe` backend endpoint
-- No signup form in footer, homepage hero, or post-purchase flow
-- **Effect:** No email list building; lost re-engagement channel
-- **Fix (if pursued):** One-field email form in footer → `POST /newsletter/subscribe` → queued welcome email via `EmailQueueService`
-
+- [ ] **Newsletter** — `POST /newsletter/subscribe` backend endpoint (no auth required, idempotent); one-field email form in footer + homepage hero + post-purchase success page; queued welcome email via `EmailQueueService`; `marketingConsent` flag already exists on `User` — logged-in users can opt-in from the form without re-entering their email
 
 **Exit criteria:** Real domain live · Redis connected (verified via `/health`) · Emails sending from verified domain · Real products visible · Stripe live checkout works · **At least one verified DB backup exists before Stripe live mode**
 

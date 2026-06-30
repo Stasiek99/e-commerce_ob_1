@@ -1428,7 +1428,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  selectVariant(variant: any): void {
+  selectVariant(variant: ProductVariantDetail): void {
     this.selectedVariant.set(variant);
     this.quantity = 1;
   }

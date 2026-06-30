@@ -7,7 +7,9 @@ import { TuiButton, TuiIcon, TuiLabel, TuiTextfield } from '@taiga-ui/core';
 import { TuiCheckbox, TuiTextarea } from '@taiga-ui/kit';
 import { environment } from '../../../../environments/environment';
 
-const WITHDRAWAL_DEADLINE_DAYS = 14;
+// Must match backend: windowEnd = delivery + 15 UTC days at 23:59:59.999
+// (+15 so the full 14th day after delivery is always available, per Art. 27 UoK).
+const WITHDRAWAL_DEADLINE_DAYS = 15;
 
 @Component({
   selector: 'app-return-request',
@@ -114,27 +116,15 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
             <!-- ── 2. Order details ──────────────────────────────── -->
             <div class="section">
               <h2 class="section__title">Dane zamówienia</h2>
-              <div class="row-2">
-                <div>
-                  <tui-textfield>
-                    <label tuiLabel>Numer zamówienia *</label>
-                    <input tuiTextfield type="text" formControlName="orderNumber"
-                           placeholder="np. ORD-2025-001" autocomplete="off" />
-                  </tui-textfield>
-                  @if (touched('orderNumber')) {
-                    <p class="field-error" role="alert">Podaj numer zamówienia</p>
-                  }
-                </div>
-                <div>
-                  <tui-textfield>
-                    <label tuiLabel>E-mail użyty przy zamówieniu *</label>
-                    <input tuiTextfield type="email" formControlName="email"
-                           autocomplete="email" />
-                  </tui-textfield>
-                  @if (touched('email')) {
-                    <p class="field-error" role="alert">Podaj prawidłowy adres e-mail</p>
-                  }
-                </div>
+              <div>
+                <tui-textfield>
+                  <label tuiLabel>Numer zamówienia *</label>
+                  <input tuiTextfield type="text" formControlName="orderNumber"
+                         placeholder="np. ORD-2025-001" autocomplete="off" />
+                </tui-textfield>
+                @if (touched('orderNumber')) {
+                  <p class="field-error" role="alert">Podaj numer zamówienia</p>
+                }
               </div>
 
               <!-- Delivery date — establishes 14-day window (Art. 28) -->
@@ -321,6 +311,9 @@ const WITHDRAWAL_DEADLINE_DAYS = 14;
                          placeholder="PL00 0000 0000 0000 0000 0000 0000"
                          autocomplete="off" />
                 </tui-textfield>
+                @if (form.get('bankAccount')?.invalid && form.get('bankAccount')?.touched) {
+                  <p class="field-error" role="alert">Nieprawidłowy format IBAN (np. PL61109010140000071219812874)</p>
+                }
                 <p class="field-hint">
                   Jeśli płaciłeś/aś kartą lub BLIK, zwrot trafi automatycznie na
                   pierwotną metodę płatności — numer konta nie jest wtedy potrzebny.
@@ -508,7 +501,6 @@ export class ReturnRequestComponent {
   readonly form = this.fb.group({
     type: ['WITHDRAWAL', Validators.required],
     orderNumber: ['', [Validators.required, Validators.maxLength(50)]],
-    email: ['', [Validators.required, Validators.email, Validators.maxLength(200)]],
     deliveryDate: ['', Validators.required],
     firstName: ['', [Validators.required, Validators.maxLength(100)]],
     lastName: ['', [Validators.required, Validators.maxLength(100)]],
@@ -517,7 +509,8 @@ export class ReturnRequestComponent {
     sealIntact: [false],
     requestedResolution: [''],
     reason: ['', Validators.maxLength(2000)],
-    bankAccount: ['', Validators.maxLength(34)],
+    // IBAN pattern: 2 letters + 2 digits + up to 30 alphanumeric chars (spaces stripped on submit)
+    bankAccount: ['', [Validators.maxLength(34), Validators.pattern(/^([A-Z]{2}[0-9]{2}[A-Z0-9]{1,30})?$/)]],
     rodoConsent: [false, Validators.requiredTrue],
   });
 
@@ -529,6 +522,17 @@ export class ReturnRequestComponent {
     } else if (typeParam === 'complaint') {
       this.form.patchValue({ type: 'COMPLAINT' });
     }
+
+    // Reason is required for COMPLAINT (Art. 43c UoK) — add/remove validator reactively.
+    this.form.get('type')!.valueChanges.subscribe(type => {
+      const reasonCtrl = this.form.get('reason')!;
+      if (type === 'COMPLAINT') {
+        reasonCtrl.addValidators([Validators.required, Validators.minLength(10)]);
+      } else {
+        reasonCtrl.removeValidators([Validators.required, Validators.minLength(10)]);
+      }
+      reasonCtrl.updateValueAndValidity();
+    });
   }
 
   // ── Deadline calculation ──────────────────────────────────────────────────
@@ -537,7 +541,8 @@ export class ReturnRequestComponent {
     const d = this.form.get('deliveryDate')?.value;
     if (!d) return null;
     const dt = new Date(d);
-    dt.setDate(dt.getDate() + WITHDRAWAL_DEADLINE_DAYS);
+    dt.setUTCDate(dt.getUTCDate() + WITHDRAWAL_DEADLINE_DAYS);
+    dt.setUTCHours(23, 59, 59, 999);
     return dt;
   });
 
@@ -609,10 +614,10 @@ export class ReturnRequestComponent {
     this.serverError.set(null);
 
     const val = this.form.getRawValue();
+    const rawIban = val.bankAccount?.trim().replace(/\s+/g, '').toUpperCase() || undefined;
     const payload = {
       type: val.type,
       orderNumber: val.orderNumber!.trim(),
-      email: val.email!.trim(),
       deliveryDate: val.deliveryDate || undefined,
       firstName: val.firstName!.trim(),
       lastName: val.lastName!.trim(),
@@ -623,7 +628,7 @@ export class ReturnRequestComponent {
       })),
       reason: val.reason?.trim() || undefined,
       requestedResolution: val.requestedResolution || undefined,
-      bankAccount: val.bankAccount?.trim() || undefined,
+      bankAccount: rawIban,
       ...(val.type === 'WITHDRAWAL' ? { sealedOnReturn: val.sealIntact === true } : {}),
     };
 

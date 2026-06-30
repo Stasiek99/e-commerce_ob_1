@@ -81,24 +81,23 @@ describe('OrderDetailComponent — corrective invoice download', () => {
   describe('hasCorrectiveInvoice', () => {
     it('returns false when no item has a cancelledQuantity above 0', () => {
       const { component } = setup();
-      const items = [
-        { id: '1', snapshotName: 'A', snapshotSku: 'A', snapshotPrice: 100, quantity: 2, cancelledQuantity: 0, cancelledDiscountInCents: 0, productVariantId: 'pv-1' },
-      ];
-      expect(component.hasCorrectiveInvoice(items)).toBe(false);
+      expect(component.hasCorrectiveInvoice(makeOrder([{ cancelledQuantity: 0 }]))).toBe(false);
     });
 
-    it('returns true when at least one item has cancelledQuantity > 0', () => {
+    it('returns true when at least one item has cancelledQuantity > 0 and invoiceUrl is set', () => {
       const { component } = setup();
-      const items = [
-        { id: '1', snapshotName: 'A', snapshotSku: 'A', snapshotPrice: 100, quantity: 2, cancelledQuantity: 0, cancelledDiscountInCents: 0, productVariantId: 'pv-1' },
-        { id: '2', snapshotName: 'B', snapshotSku: 'B', snapshotPrice: 100, quantity: 2, cancelledQuantity: 1, cancelledDiscountInCents: 0, productVariantId: 'pv-2' },
-      ];
-      expect(component.hasCorrectiveInvoice(items)).toBe(true);
+      const order = { ...makeOrder([{ cancelledQuantity: 0 }, { cancelledQuantity: 1 }]), invoiceUrl: 'https://cdn.example.com/invoice.pdf' };
+      expect(component.hasCorrectiveInvoice(order)).toBe(true);
+    });
+
+    it('returns false when items are cancelled but invoiceUrl is null', () => {
+      const { component } = setup();
+      expect(component.hasCorrectiveInvoice(makeOrder([{ cancelledQuantity: 1 }]))).toBe(false);
     });
 
     it('returns false for an order with no items', () => {
       const { component } = setup();
-      expect(component.hasCorrectiveInvoice([])).toBe(false);
+      expect(component.hasCorrectiveInvoice(makeOrder([]))).toBe(false);
     });
   });
 
@@ -175,11 +174,11 @@ describe('OrderDetailComponent — corrective invoice download', () => {
   // ─── Template — button visibility ────────────────────────────────────────
 
   describe('template — corrective invoice button visibility', () => {
-    it('renders the corrective invoice button when an item was partially cancelled', () => {
+    it('renders the corrective invoice button when an item was partially cancelled and invoice exists', () => {
       const { fixture, httpMock } = setup();
 
       fixture.detectChanges();
-      httpMock.expectOne(`${API}/orders/${ORDER_ID}`).flush(makeOrder([{ cancelledQuantity: 1 }]));
+      httpMock.expectOne(`${API}/orders/${ORDER_ID}`).flush({ ...makeOrder([{ cancelledQuantity: 1 }]), invoiceUrl: 'https://cdn.example.com/invoice.pdf' });
       fixture.detectChanges();
       httpMock.verify();
 
@@ -201,11 +200,14 @@ describe('OrderDetailComponent — corrective invoice download', () => {
       expect(labels.some((t) => t.includes('Pobierz korektę'))).toBe(false);
     });
 
-    it('renders the corrective invoice button even for a CANCELLED order with a partially cancelled item history', () => {
+    it('renders the corrective invoice button for a CANCELLED order that has both an invoice and a partially cancelled item', () => {
       const { fixture, httpMock } = setup();
 
       fixture.detectChanges();
-      httpMock.expectOne(`${API}/orders/${ORDER_ID}`).flush(makeOrder([{ cancelledQuantity: 1 }], 'CANCELLED'));
+      httpMock.expectOne(`${API}/orders/${ORDER_ID}`).flush({
+        ...makeOrder([{ cancelledQuantity: 1 }], 'CANCELLED'),
+        invoiceUrl: 'https://cdn.example.com/invoice.pdf',
+      });
       fixture.detectChanges();
       httpMock.verify();
 
