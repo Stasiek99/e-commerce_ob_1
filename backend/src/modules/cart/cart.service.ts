@@ -211,7 +211,7 @@ export class CartService {
 
       for (const item of guestItems) {
         const variant = await tx.productVariant.findUnique({
-          where: { id: item.productVariantId },
+          where: { id: item.productVariantId, isActive: true },
           select: { stock: true },
         });
         const availableStock = variant?.stock ?? 0;

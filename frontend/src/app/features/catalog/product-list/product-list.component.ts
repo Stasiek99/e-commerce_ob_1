@@ -205,7 +205,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
         </div>
       }
 
-      @if (activeChips().length > 0 || appliedInStock()) {
+      @if (activeChips().length > 0 || appliedInStock() || appliedMinPrice() !== null || appliedMaxPrice() !== null) {
         <div class="filter-chips">
           @for (chip of activeChips(); track chip.key + chip.value) {
             <span tuiChip size="s" appearance="outline">
@@ -228,6 +228,18 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
                 tuiIconButton
                 type="button"
                 (click)="removeInStock()"
+              >Usuń</button>
+            </span>
+          }
+          @if (appliedMinPrice() !== null || appliedMaxPrice() !== null) {
+            <span tuiChip size="s">
+              {{ appliedMinPrice() !== null ? appliedMinPrice() : '0' }} – {{ appliedMaxPrice() !== null ? appliedMaxPrice() : '∞' }} PLN
+              <button
+                iconStart="@tui.x"
+                size="s"
+                tuiIconButton
+                type="button"
+                (click)="removePriceFilter()"
               >Usuń</button>
             </span>
           }
@@ -298,6 +310,31 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
             (ngModelChange)="stagedInStock.set($event)"
           />
         </label>
+
+        <div class="filter-price">
+          <span class="filter-price__label">Cena (PLN)</span>
+          <div class="filter-price__inputs">
+            <input
+              type="number"
+              placeholder="Od"
+              [ngModel]="stagedMinPrice()"
+              [ngModelOptions]="{ standalone: true }"
+              (ngModelChange)="stagedMinPrice.set($event > 0 ? +$event : null)"
+              class="filter-price__input"
+              min="1"
+            />
+            <span class="filter-price__sep">–</span>
+            <input
+              type="number"
+              placeholder="Do"
+              [ngModel]="stagedMaxPrice()"
+              [ngModelOptions]="{ standalone: true }"
+              (ngModelChange)="stagedMaxPrice.set($event > 0 ? +$event : null)"
+              class="filter-price__input"
+              min="1"
+            />
+          </div>
+        </div>
 
         <tui-accordion>
           @for (group of filterGroups(); track group.key) {
@@ -460,6 +497,39 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
     }
     .filter-instock span { font-size: 14px; color: var(--color-primary); }
 
+    .filter-price {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .filter-price__label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-primary);
+      margin-bottom: 12px;
+    }
+    .filter-price__inputs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .filter-price__input {
+      flex: 1;
+      min-width: 0;
+      padding: 8px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      font-size: 14px;
+      color: var(--color-primary);
+      background: var(--color-surface);
+      appearance: textfield;
+      -moz-appearance: textfield;
+    }
+    .filter-price__input::-webkit-outer-spin-button,
+    .filter-price__input::-webkit-inner-spin-button { -webkit-appearance: none; }
+    .filter-price__input:focus { outline: none; border-color: var(--color-accent); }
+    .filter-price__sep { font-size: 14px; color: var(--color-secondary); flex-shrink: 0; }
+
     .filter-group-content {
       display: flex;
       flex-direction: column;
@@ -565,6 +635,12 @@ export class ProductListComponent implements OnInit {
   readonly stagedInStock = signal(false);
   readonly appliedInStock = signal(false);
 
+  // Price range (PLN) — staged while drawer is open, applied on confirm
+  readonly stagedMinPrice = signal<number | null>(null);
+  readonly stagedMaxPrice = signal<number | null>(null);
+  readonly appliedMinPrice = signal<number | null>(null);
+  readonly appliedMaxPrice = signal<number | null>(null);
+
   readonly sortLabel = computed(
     () => SORT_OPTIONS.find(o => o.value === this.sortBy())?.label ?? 'Sortuj',
   );
@@ -584,7 +660,9 @@ export class ProductListComponent implements OnInit {
   ]);
 
   readonly activeFilterCount = computed(() =>
-    Object.values(this.appliedFilters()).reduce((sum, arr) => sum + arr.length, 0),
+    Object.values(this.appliedFilters()).reduce((sum, arr) => sum + arr.length, 0)
+    + (this.appliedInStock() ? 1 : 0)
+    + (this.appliedMinPrice() !== null || this.appliedMaxPrice() !== null ? 1 : 0),
   );
 
   readonly activeChips = computed(() => {
@@ -605,6 +683,10 @@ export class ProductListComponent implements OnInit {
         const page = Math.max(1, Math.min(50, parseInt(qpm.get('page') ?? '1', 10)));
         const inStock = qpm.get('inStock') === 'true';
         const featured = qpm.get('featured') === 'true';
+        const minPriceRaw = qpm.get('minPrice');
+        const maxPriceRaw = qpm.get('maxPrice');
+        const minPrice = minPriceRaw !== null && minPriceRaw !== '' ? Number(minPriceRaw) : null;
+        const maxPrice = maxPriceRaw !== null && maxPriceRaw !== '' ? Number(maxPriceRaw) : null;
         const gender = qpm.getAll('gender');
         const scentFamily = qpm.getAll('scentFamily');
         const line = qpm.getAll('line');
@@ -616,6 +698,8 @@ export class ProductListComponent implements OnInit {
         this.sortBy.set(sort);
         this.pageIndex.set(page - 1);
         this.appliedInStock.set(inStock);
+        this.appliedMinPrice.set(minPrice !== null && !isNaN(minPrice) && minPrice > 0 ? minPrice : null);
+        this.appliedMaxPrice.set(maxPrice !== null && !isNaN(maxPrice) && maxPrice > 0 ? maxPrice : null);
         this.featuredMode.set(featured);
         const filters = emptyFilters();
         if (gender.length) filters['gender'] = gender;
@@ -626,7 +710,8 @@ export class ProductListComponent implements OnInit {
 
         const hasFilters = q.length > 0 || inStock || page > 1 ||
           gender.length > 0 || scentFamily.length > 0 ||
-          line.length > 0 || volume.length > 0 || sort !== 'relevance';
+          line.length > 0 || volume.length > 0 || sort !== 'relevance' ||
+          minPrice !== null || maxPrice !== null;
         this.updateSeo(slug, featured, hasFilters);
         this.loadFacets(slug);
         this.loading.set(true);
@@ -645,6 +730,10 @@ export class ProductListComponent implements OnInit {
           if (!isNaN(ml)) apiParams.append('volumes', String(ml));
         });
         if (inStock) apiParams.set('inStock', 'true');
+        if (minPrice !== null && !isNaN(minPrice) && minPrice > 0)
+          apiParams.set('minPrice', String(Math.round(minPrice * 100)));
+        if (maxPrice !== null && !isNaN(maxPrice) && maxPrice > 0)
+          apiParams.set('maxPrice', String(Math.round(maxPrice * 100)));
         if (sort !== 'relevance') apiParams.set('sortBy', sort);
 
         return this.http
@@ -668,6 +757,8 @@ export class ProductListComponent implements OnInit {
       ),
     );
     this.stagedInStock.set(this.appliedInStock());
+    this.stagedMinPrice.set(this.appliedMinPrice());
+    this.stagedMaxPrice.set(this.appliedMaxPrice());
     this.drawerOpen.set(true);
   }
 
@@ -685,6 +776,8 @@ export class ProductListComponent implements OnInit {
       line: f['line']?.length ? f['line'] : null,
       volume: f['volume']?.length ? f['volume'] : null,
       inStock: this.stagedInStock() ? 'true' : null,
+      minPrice: this.stagedMinPrice() !== null ? String(this.stagedMinPrice()) : null,
+      maxPrice: this.stagedMaxPrice() !== null ? String(this.stagedMaxPrice()) : null,
     });
   }
 
@@ -698,7 +791,11 @@ export class ProductListComponent implements OnInit {
   }
 
   clearAllFilters(): void {
-    this.navigate({ gender: null, scentFamily: null, line: null, volume: null, inStock: null, page: null });
+    this.navigate({ gender: null, scentFamily: null, line: null, volume: null, inStock: null, minPrice: null, maxPrice: null, page: null });
+  }
+
+  removePriceFilter(): void {
+    this.navigate({ minPrice: null, maxPrice: null, page: null });
   }
 
   clearSearch(): void {
