@@ -4,6 +4,7 @@ import {
   isAdminAuthenticated,
   regenerateSessionOnLogin,
   isGenerateLabelVisible,
+  isFraudReviewActionVisible,
   REVIEW_EDIT_PROPERTIES,
   EDIT_LOCKED,
 } from '../admin.setup';
@@ -200,6 +201,19 @@ describe('isGenerateLabelVisible', () => {
   it('returns true when status is undefined', () => {
     expect(isGenerateLabelVisible(undefined)).toBe(true);
   });
+});
+
+describe('isFraudReviewActionVisible', () => {
+  it('returns true only for FRAUD_REVIEW, matching the only status OrdersService.approve/rejectFraudReview accept', () => {
+    expect(isFraudReviewActionVisible('FRAUD_REVIEW')).toBe(true);
+  });
+
+  it.each(['PENDING_PAYMENT', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'REFUNDED', undefined])(
+    'returns false for %s, since approveFraudReview/rejectFraudReview would throw BadRequestException',
+    (status) => {
+      expect(isFraudReviewActionVisible(status)).toBe(false);
+    },
+  );
 });
 
 describe('REVIEW_EDIT_PROPERTIES', () => {
