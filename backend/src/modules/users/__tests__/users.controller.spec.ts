@@ -46,6 +46,7 @@ describe('UsersController', () => {
           provide: AuthService,
           useValue: {
             requestEmailChange: jest.fn(),
+            verifyCurrentPassword: jest.fn(),
           },
         },
       ],
@@ -123,38 +124,44 @@ describe('UsersController', () => {
       return { clearCookie: jest.fn() } as any;
     }
 
+    const dto = { currentPassword: 'correct-horse' } as any;
+
     it('delegates to UsersService.deleteAccount with the authenticated user id', async () => {
+      authService.verifyCurrentPassword.mockResolvedValue(undefined);
       usersService.deleteAccount.mockResolvedValue(undefined);
 
-      await controller.deleteMe(mockUser as any, makeMockResponse());
+      await controller.deleteMe(mockUser as any, dto, makeMockResponse());
 
       expect(usersService.deleteAccount).toHaveBeenCalledTimes(1);
       expect(usersService.deleteAccount).toHaveBeenCalledWith('user-1');
     });
 
     it('clears the refresh-token cookie after deletion', async () => {
+      authService.verifyCurrentPassword.mockResolvedValue(undefined);
       usersService.deleteAccount.mockResolvedValue(undefined);
       const res = makeMockResponse();
 
-      await controller.deleteMe(mockUser as any, res);
+      await controller.deleteMe(mockUser as any, dto, res);
 
       expect(res.clearCookie).toHaveBeenCalledWith(REFRESH_COOKIE, { path: '/' });
     });
 
     it('clears cookie even when order anonymisation produced zero updates', async () => {
+      authService.verifyCurrentPassword.mockResolvedValue(undefined);
       usersService.deleteAccount.mockResolvedValue(undefined);
       const res = makeMockResponse();
 
-      await controller.deleteMe(mockUser as any, res);
+      await controller.deleteMe(mockUser as any, dto, res);
 
       expect(res.clearCookie).toHaveBeenCalledTimes(1);
     });
 
     it('propagates errors from UsersService without touching the cookie', async () => {
+      authService.verifyCurrentPassword.mockResolvedValue(undefined);
       usersService.deleteAccount.mockRejectedValue(new Error('DB failure'));
       const res = makeMockResponse();
 
-      await expect(controller.deleteMe(mockUser as any, res)).rejects.toThrow('DB failure');
+      await expect(controller.deleteMe(mockUser as any, dto, res)).rejects.toThrow('DB failure');
       expect(res.clearCookie).not.toHaveBeenCalled();
     });
   });

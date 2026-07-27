@@ -162,6 +162,7 @@ describe('UsersService', () => {
       // New: findUnique is called before the transaction to get the email
       // for matching ReturnRequest records (no FK to User by design).
       prisma.user.findUnique.mockResolvedValue({ email: 'jan@example.com' });
+      prisma.review.findMany.mockResolvedValue([]);
       prisma.$transaction.mockResolvedValue([{ count: 2 }, { count: 1 }, mockUser]);
       prisma.order.updateMany.mockReturnValue({});
       prisma.returnRequest.updateMany.mockReturnValue({});
