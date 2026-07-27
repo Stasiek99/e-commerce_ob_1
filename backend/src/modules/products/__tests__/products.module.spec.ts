@@ -41,7 +41,7 @@ describe('ProductsModule — Redis DI wiring', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProductsService,
-        { provide: PrismaService, useValue: {} },
+        { provide: PrismaService, useValue: { $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]) } },
         { provide: EmailQueueService, useValue: {} },
         { provide: StorageService, useValue: {} },
         {

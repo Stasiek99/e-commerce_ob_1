@@ -987,26 +987,27 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     if (promoVariantIds.length) {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-      // Run both history queries in parallel: "verified" check and min-price scan
-      // both hit the same table with the same variantId set. Filter verified IDs
-      // in memory instead of sequentially chaining the second query on the first.
-      const [earliestRows, allMins] = await Promise.all([
-        this.prisma.productVariantPriceHistory.findMany({
-          where: { variantId: { in: promoVariantIds }, recordedAt: { lte: thirtyDaysAgo } },
-          select: { variantId: true },
-          distinct: ['variantId'],
-        }),
-        this.prisma.productVariantPriceHistory.groupBy({
-          by: ['variantId'],
-          where: { variantId: { in: promoVariantIds }, recordedAt: { gte: thirtyDaysAgo } },
-          _min: { priceInCents: true },
-        }),
-      ]);
-
+      // Find which variants actually have 30-day-old history first — only those
+      // are eligible for a displayed "lowest price" promo. Skip the min-price
+      // scan entirely when nothing qualifies, instead of always paying for both
+      // queries.
+      const earliestRows = await this.prisma.productVariantPriceHistory.findMany({
+        where: { variantId: { in: promoVariantIds }, recordedAt: { lte: thirtyDaysAgo } },
+        select: { variantId: true },
+        distinct: ['variantId'],
+      });
       for (const r of earliestRows) verifiedVariantIds.add(r.variantId);
-      for (const m of allMins) {
-        if (m._min.priceInCents != null && verifiedVariantIds.has(m.variantId)) {
-          minMap.set(m.variantId, m._min.priceInCents);
+
+      if (verifiedVariantIds.size) {
+        const allMins = await this.prisma.productVariantPriceHistory.groupBy({
+          by: ['variantId'],
+          where: { variantId: { in: [...verifiedVariantIds] }, recordedAt: { gte: thirtyDaysAgo } },
+          _min: { priceInCents: true },
+        });
+        for (const m of allMins) {
+          if (m._min.priceInCents != null) {
+            minMap.set(m.variantId, m._min.priceInCents);
+          }
         }
       }
     }
