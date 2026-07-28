@@ -166,6 +166,39 @@ describe('ssrSecurityHeaders middleware', () => {
     expect(csp).toContain('https://backend-production-c004.up.railway.app');
   });
 
+  it('CSP connect-src includes the Sentry EU ingest endpoint so error reports are not blocked', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const connectSrc = csp.split(';').find((d) => d.trim().startsWith('connect-src')) ?? '';
+    expect(connectSrc).toContain('https://*.ingest.de.sentry.io');
+  });
+
+  it('CSP style-src includes the InPost GeoWidget origin so its stylesheet is not blocked', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const styleSrc = csp.split(';').find((d) => d.trim().startsWith('style-src')) ?? '';
+    expect(styleSrc).toContain('https://geowidget.easypack24.net');
+  });
+
+  it('CSP scopes the inline-event-handler carve-out to script-src-attr, leaving script-src-elem locked to nonce/hash/allowlist', () => {
+    const res = makeResMock();
+
+    ssrSecurityHeaders(makeReq() as Request, res as unknown as Response, jest.fn());
+
+    const csp: string = res.setHeader.mock.calls.find(([key]) => key === 'Content-Security-Policy')[1];
+    const scriptSrcAttr = csp.split(';').find((d) => d.trim().startsWith('script-src-attr')) ?? '';
+    const scriptSrc = csp.split(';').find((d) => d.trim().startsWith('script-src') && !d.trim().startsWith('script-src-attr')) ?? '';
+
+    expect(scriptSrcAttr).toContain("'unsafe-inline'");
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+  });
+
   it('CSP frame-src includes the DPD pickup widget origin so the iframe loads on checkout', () => {
     const res = makeResMock();
 

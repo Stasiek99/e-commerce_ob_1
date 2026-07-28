@@ -22,9 +22,17 @@ export function buildCsp(nonce: string): string {
   return (
     "default-src 'self'; " +
     `script-src 'self' 'nonce-${nonce}' ${EVENT_REPLAY_SCRIPT_HASHES} https://www.googletagmanager.com https://geowidget.easypack24.net https://challenges.cloudflare.com; ` +
+    // The InPost GeoWidget SDK renders its own picker UI with inline onclick/onload
+    // attributes that it generates dynamically at runtime — content we don't control
+    // and can't hash (CSP hashes never cover event-handler attributes; that's what the
+    // 'unsafe-hashes' carve-out is for, and it doesn't help here since the markup isn't
+    // static either). script-src-attr is scoped to attribute-based handlers only —
+    // script-src-elem (actual <script> tag injection) stays locked to the nonce +
+    // explicit host allowlist above.
+    "script-src-attr 'unsafe-inline'; " +
     "img-src 'self' https: data:; " +
-    "style-src 'self' 'unsafe-inline'; " +
-    "connect-src 'self' https://backend-production-c004.up.railway.app https://www.google-analytics.com https://analytics.google.com https://geowidget.easypack24.net https://challenges.cloudflare.com; " +
+    "style-src 'self' 'unsafe-inline' https://geowidget.easypack24.net; " +
+    "connect-src 'self' https://backend-production-c004.up.railway.app https://www.google-analytics.com https://analytics.google.com https://geowidget.easypack24.net https://challenges.cloudflare.com https://*.ingest.de.sentry.io; " +
     "frame-src https://challenges.cloudflare.com https://www.googletagmanager.com https://api.dpd.cz; " +
     "frame-ancestors 'none'; " +
     "object-src 'none'; " +
