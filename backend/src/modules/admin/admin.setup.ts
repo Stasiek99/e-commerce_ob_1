@@ -266,6 +266,14 @@ export function isGenerateLabelVisible(status: string | undefined): boolean {
   return !['PENDING_PAYMENT', 'CANCELLED', 'REFUNDED', 'DELIVERED', 'SHIPPED'].includes(status as string);
 }
 
+/** Exported for unit testing. approveFraudReview/rejectFraudReview only accept an
+ *  order that is currently FRAUD_REVIEW (OrdersService throws BadRequestException
+ *  otherwise), so the buttons are hidden everywhere else instead of surfacing a
+ *  guaranteed-to-fail action. */
+export function isFraudReviewActionVisible(status: string | undefined): boolean {
+  return status === 'FRAUD_REVIEW';
+}
+
 /** Exported for unit testing. Whitelists the Review resource's plain-Edit fields so
  *  status/rating/productId can't be changed outside the approve/reject actions, which
  *  are the only paths that call updateReviewStats(). */
@@ -648,6 +656,62 @@ export async function setupAdmin(
                   return {
                     record: record.toJSON(),
                     notice: { message: `Błąd zwrotu: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
+            approveFraudReview: {
+              actionType: 'record',
+              icon: 'ShieldCheck',
+              label: 'Zatwierdź zamówienie (fałszywy alarm Radar)',
+              // Only endpoint AdminJS previously had no button for — approve/reject lived
+              // behind POST /orders/admin/:id/fraud-review/{approve,reject}, guarded by
+              // JwtAuthGuard+Role.ADMIN on a customer-account JWT, not the AdminJS session.
+              // An admin authenticated only in this panel had no way to clear the hold.
+              isVisible: (context: any) => isFraudReviewActionVisible(context.record?.params?.status),
+              handler: async (_request: any, _response: any, context: any) => {
+                const { record } = context;
+                const orderId = record.params.id as string;
+                try {
+                  await ordersService.approveFraudReview(orderId);
+                  await logAdminAction(prisma, 'approveFraudReview', 'Order', orderId, context.currentAdmin?.email ?? adminEmail);
+                  return {
+                    record: { ...record.toJSON(), params: { ...record.params, status: 'PAID' } },
+                    notice: {
+                      message: 'Zamówienie zatwierdzone — status → PAID.',
+                      type: 'success',
+                    },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd zatwierdzania: ${(err as Error).message}`, type: 'error' },
+                  };
+                }
+              },
+            },
+            rejectFraudReview: {
+              actionType: 'record',
+              icon: 'ShieldAlert',
+              label: 'Odrzuć — zwrot środków (potwierdzone oszustwo)',
+              isVisible: (context: any) => isFraudReviewActionVisible(context.record?.params?.status),
+              handler: async (_request: any, _response: any, context: any) => {
+                const { record } = context;
+                const orderId = record.params.id as string;
+                try {
+                  await ordersService.rejectFraudReview(orderId);
+                  await logAdminAction(prisma, 'rejectFraudReview', 'Order', orderId, context.currentAdmin?.email ?? adminEmail);
+                  return {
+                    record: { ...record.toJSON(), params: { ...record.params, status: 'REFUNDED' } },
+                    notice: {
+                      message: 'Zamówienie odrzucone — zwrot środków zainicjowany, status → REFUNDED.',
+                      type: 'success',
+                    },
+                  };
+                } catch (err) {
+                  return {
+                    record: record.toJSON(),
+                    notice: { message: `Błąd odrzucania: ${(err as Error).message}`, type: 'error' },
                   };
                 }
               },

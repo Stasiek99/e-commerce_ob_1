@@ -1247,7 +1247,7 @@ describe('AuthService', () => {
         prisma.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'new@example.com' });
         prisma.emailVerificationToken.updateMany.mockResolvedValue({ count: 1 });
 
-        await expect(service.verifyEmail('valid-change-token')).resolves.toBeUndefined();
+        await expect(service.verifyEmail('valid-change-token')).resolves.toEqual({ type: 'email_change' });
       });
 
       // ── race condition: a newer requestEmailChange() invalidated this token ──

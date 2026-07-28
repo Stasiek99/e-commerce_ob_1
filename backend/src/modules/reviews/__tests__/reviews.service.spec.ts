@@ -78,10 +78,10 @@ describe('ReviewsService', () => {
       prisma.user.findUnique.mockResolvedValue(VERIFIED_USER);
     });
 
-    it('creates review with PENDING status when order is DELIVERED', async () => {
+    it('creates review with APPROVED status when order is a verified, non-suspicious DELIVERED purchase', async () => {
       prisma.order.findFirst.mockResolvedValue(validOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
-      prisma.review.create.mockResolvedValue(makeReview({ status: 'PENDING', orderId: 'order-1' }));
+      prisma.review.create.mockResolvedValue(makeReview({ status: 'APPROVED', orderId: 'order-1' }));
 
       await service.create('user-1', dto);
 
@@ -91,7 +91,7 @@ describe('ReviewsService', () => {
             productId: 'product-1',
             userId: 'user-1',
             orderId: 'order-1',
-            status: 'PENDING',
+            status: 'APPROVED',
           }),
         }),
       );
@@ -611,32 +611,49 @@ describe('ReviewsService', () => {
   });
 
   // ─── create — unverified review (no orderId) ─────────────────────────────
-  // Invariant: when orderId is absent the order lookup must be skipped and the
-  // review must be created with orderId=null (unverified purchase path).
+  // Invariant: when orderId is omitted from the request, the service must not
+  // trust the client's omission to skip verification. Instead it looks up a
+  // DELIVERED order for that user/product itself and uses that order's id, or
+  // throws ForbiddenException when no such order exists.
 
   describe('create — unverified review (no orderId)', () => {
     const dto = { productId: 'product-1', rating: 4 };
+    const serverVerifiedOrder = { id: 'order-verified' };
 
     beforeEach(() => {
       prisma.user.findUnique.mockResolvedValue(VERIFIED_USER);
+      prisma.order.findFirst.mockResolvedValue(serverVerifiedOrder);
       prisma.product.findUnique.mockResolvedValue({ id: 'product-1', isActive: true });
-      prisma.review.create.mockResolvedValue(makeReview({ orderId: null }));
+      prisma.review.create.mockResolvedValue(makeReview({ orderId: 'order-verified' }));
     });
 
-    it('creates review with orderId=null when no orderId is provided', async () => {
+    it('creates review with the server-verified orderId when no orderId is provided in the request', async () => {
       await service.create('user-1', dto);
 
       expect(prisma.review.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ orderId: null }),
+          data: expect.objectContaining({ orderId: 'order-verified' }),
         }),
       );
     });
 
-    it('does not call order.findFirst when orderId is absent', async () => {
+    it('calls order.findFirst to verify a DELIVERED purchase when orderId is omitted', async () => {
       await service.create('user-1', dto);
 
-      expect(prisma.order.findFirst).not.toHaveBeenCalled();
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            userId: 'user-1',
+            status: OrderStatus.DELIVERED,
+          }),
+        }),
+      );
+    });
+
+    it('throws ForbiddenException when no delivered order exists for the product', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(ForbiddenException);
     });
 
     it('still validates product exists on the unverified path', async () => {

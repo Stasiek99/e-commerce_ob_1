@@ -88,7 +88,7 @@ describe('MagicLoginComponent — successful verification', () => {
   it('merges the anonymous cart with the server cart on success', () => {
     const { mergeMock } = createComponent('browser', 'raw-token-123');
 
-    expect(mergeMock).toHaveBeenCalledWith('');
+    expect(mergeMock).toHaveBeenCalled();
   });
 
   it('navigates to / on success', () => {

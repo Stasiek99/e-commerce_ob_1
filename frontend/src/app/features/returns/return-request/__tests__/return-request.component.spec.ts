@@ -49,7 +49,7 @@ function fillValidWithdrawal(c: ReturnRequestComponent) {
   c.form.patchValue({
     type: 'WITHDRAWAL',
     orderNumber: 'ORD-2026-001',
-    deliveryDate: '2026-05-15', // deadline = 2026-05-30, 7 days left → 'ok'
+    deliveryDate: '2026-05-15', // deadline = 2026-05-30 23:59:59 (delivery +15d, day-end), 9 days left → 'ok'
     firstName: 'Jan',
     lastName: 'Kowalski',
     sealIntact: true,
@@ -107,18 +107,18 @@ describe('ReturnRequestComponent', () => {
       expect(component.deadlineDate()).toBeNull();
     });
 
-    it('adds exactly 14 days to the delivery date', () => {
+    it('adds 15 days to the delivery date (covers the full 14-day Art. 27 window, day-end)', () => {
       const { component } = setup();
       component.form.get('deliveryDate')!.setValue('2026-05-01');
       const result = component.deadlineDate();
       expect(result).toBeInstanceOf(Date);
-      expect(result!.toISOString().split('T')[0]).toBe('2026-05-15');
+      expect(result!.toISOString().split('T')[0]).toBe('2026-05-16');
     });
 
     it('handles month boundaries correctly', () => {
       const { component } = setup();
       component.form.get('deliveryDate')!.setValue('2026-01-25');
-      expect(component.deadlineDate()!.toISOString().split('T')[0]).toBe('2026-02-08');
+      expect(component.deadlineDate()!.toISOString().split('T')[0]).toBe('2026-02-09');
     });
   });
 
@@ -131,7 +131,7 @@ describe('ReturnRequestComponent', () => {
     it('returns "ok" when more than 3 days remain', () => {
       jest.spyOn(Date, 'now').mockReturnValue(TODAY_MS);
       const { component } = setup();
-      // 2026-05-15 + 14d = 2026-05-29, today = 2026-05-22 → 7 days left
+      // 2026-05-15 + 15d (day-end) = 2026-05-30 23:59:59, today = 2026-05-22 → 9 days left
       component.form.get('deliveryDate')!.setValue('2026-05-15');
       expect(component.deadlineStatus()).toBe('ok');
     });
@@ -139,15 +139,15 @@ describe('ReturnRequestComponent', () => {
     it('returns "urgent" when 1-3 days remain', () => {
       jest.spyOn(Date, 'now').mockReturnValue(TODAY_MS);
       const { component } = setup();
-      // 2026-05-10 + 14d = 2026-05-24, today = 2026-05-22 → 2 days left
-      component.form.get('deliveryDate')!.setValue('2026-05-10');
+      // 2026-05-09 + 15d (day-end) = 2026-05-24 23:59:59, today = 2026-05-22 → 3 days left
+      component.form.get('deliveryDate')!.setValue('2026-05-09');
       expect(component.deadlineStatus()).toBe('urgent');
     });
 
     it('returns "expired" when deadline has passed', () => {
       jest.spyOn(Date, 'now').mockReturnValue(TODAY_MS);
       const { component } = setup();
-      // 2026-05-01 + 14d = 2026-05-15, today = 2026-05-22 → -7 days
+      // 2026-05-01 + 15d (day-end) = 2026-05-16 23:59:59, today = 2026-05-22 → already past
       component.form.get('deliveryDate')!.setValue('2026-05-01');
       expect(component.deadlineStatus()).toBe('expired');
     });
@@ -163,7 +163,7 @@ describe('ReturnRequestComponent', () => {
       jest.spyOn(Date, 'now').mockReturnValue(TODAY_MS);
       const { component } = setup();
       component.form.get('deliveryDate')!.setValue('2026-05-15');
-      expect(component.daysLeft()).toBe(7);
+      expect(component.daysLeft()).toBe(9);
     });
   });
 
@@ -311,7 +311,6 @@ describe('ReturnRequestComponent', () => {
       expect(req.request.body).toMatchObject({
         type: 'WITHDRAWAL',
         orderNumber: 'ORD-2026-001',
-        email: 'jan@example.com',
         deliveryDate: '2026-05-15',
         firstName: 'Jan',
         lastName: 'Kowalski',
@@ -375,7 +374,7 @@ describe('ReturnRequestComponent', () => {
       expect(req.request.body).toMatchObject({
         type: 'COMPLAINT',
         requestedResolution: 'REFUND',
-        reason: 'Produkt jest wadliwy',
+        reason: 'Produkt jest wadliwy i niezgodny z opisem',
       });
       req.flush({ id: 'RET-002' });
       httpMock.verify();

@@ -56,7 +56,7 @@ describe('VerifyEmailComponent — token-consumption SSR guard', () => {
   // ── browser platform ───────────────────────────────────────────────────────
 
   it('calls auth.verifyEmail() exactly once with the query-param token in the browser', () => {
-    const mockAuth = { verifyEmail: jest.fn().mockReturnValue(of(undefined)), loadCurrentUser: jest.fn() };
+    const mockAuth = { verifyEmail: jest.fn().mockReturnValue(of({ type: 'email_verification' })), loadCurrentUser: jest.fn() };
 
     createComponent('browser', { token: 'abc123' }, mockAuth);
 
@@ -65,7 +65,7 @@ describe('VerifyEmailComponent — token-consumption SSR guard', () => {
   });
 
   it('sets state to success and refreshes the current user when verification succeeds in the browser', () => {
-    const mockAuth = { verifyEmail: jest.fn().mockReturnValue(of(undefined)), loadCurrentUser: jest.fn() };
+    const mockAuth = { verifyEmail: jest.fn().mockReturnValue(of({ type: 'email_verification' })), loadCurrentUser: jest.fn() };
 
     const { component } = createComponent('browser', { token: 'abc123' }, mockAuth);
 
