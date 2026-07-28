@@ -47,6 +47,7 @@ function setup() {
 
   const fixture = TestBed.createComponent(CheckoutPageComponent);
   const component = fixture.componentInstance;
+  fixture.detectChanges();
 
   return { component, fixture };
 }

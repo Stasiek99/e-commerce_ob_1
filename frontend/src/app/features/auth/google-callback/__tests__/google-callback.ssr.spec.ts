@@ -13,6 +13,11 @@ import { PLATFORM_ID } from '@angular/core';
 import { of, throwError } from 'rxjs';
 import { GoogleCallbackComponent } from '../google-callback.component';
 import { AuthService } from '../../../../core/services/auth.service';
+import { CartService } from '../../../../core/services/cart.service';
+
+function mockCart() {
+  return { mergeWithServer: jest.fn().mockReturnValue(of({})), loadCart: jest.fn() };
+}
 
 function createComponent(platformId: string, exchangeMock: jest.Mock) {
   TestBed.configureTestingModule({
@@ -20,6 +25,7 @@ function createComponent(platformId: string, exchangeMock: jest.Mock) {
     providers: [
       { provide: PLATFORM_ID, useValue: platformId },
       { provide: AuthService, useValue: { exchangeOAuthToken: exchangeMock } },
+      { provide: CartService, useValue: mockCart() },
       { provide: Router, useValue: { navigate: jest.fn(), navigateByUrl: jest.fn() } },
     ],
   });
@@ -42,6 +48,7 @@ function createComponentWithReturnTo(returnTo: string | null, router: { navigate
     providers: [
       { provide: PLATFORM_ID, useValue: 'browser' },
       { provide: AuthService, useValue: { exchangeOAuthToken: exchangeMock } },
+      { provide: CartService, useValue: mockCart() },
       { provide: Router, useValue: router },
     ],
   });
@@ -149,6 +156,7 @@ describe('GoogleCallbackComponent — SSR platform guard', () => {
       providers: [
         { provide: PLATFORM_ID, useValue: 'browser' },
         { provide: AuthService, useValue: { exchangeOAuthToken: exchangeMock } },
+        { provide: CartService, useValue: mockCart() },
         { provide: Router, useValue: router },
       ],
     });
@@ -179,6 +187,7 @@ describe('GoogleCallbackComponent — no dead CSRF state mechanism', () => {
       providers: [
         { provide: PLATFORM_ID, useValue: 'browser' },
         { provide: AuthService, useValue: { exchangeOAuthToken: exchangeMock } },
+        { provide: CartService, useValue: mockCart() },
         { provide: Router, useValue: router },
       ],
     });

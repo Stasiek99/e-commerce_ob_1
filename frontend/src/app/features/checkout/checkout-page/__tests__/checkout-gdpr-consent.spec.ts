@@ -151,7 +151,7 @@ describe('CheckoutPageComponent — GDPR consent separation', () => {
       component.index = 2;
       fixture.detectChanges();
 
-      const checkboxes = fixture.debugElement.queryAll(By.css('.consent-checkbox'));
+      const checkboxes = fixture.debugElement.queryAll(By.css('.consent-label'));
       // Only the mandatory T&C checkbox should be present, not the former marketing/review checkbox
       const labels = fixture.debugElement.queryAll(By.css('.consent-label'));
       const labelTexts = labels.map((l) => l.nativeElement.textContent as string);

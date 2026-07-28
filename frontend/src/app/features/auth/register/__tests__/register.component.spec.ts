@@ -4,10 +4,12 @@ import { ActivatedRoute, provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { RegisterComponent } from '../register.component';
 import { AuthService } from '../../../../core/services/auth.service';
+import { CartService } from '../../../../core/services/cart.service';
 import { ToastService } from '../../../../core/services/toast.service';
 
 function setup(returnToParam: string | undefined = undefined) {
   const mockAuth  = { register: jest.fn() };
+  const mockCart  = { mergeWithServer: jest.fn().mockReturnValue(of({})), loadCart: jest.fn() };
   const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
 
   TestBed.configureTestingModule({
@@ -15,6 +17,7 @@ function setup(returnToParam: string | undefined = undefined) {
     providers: [
       provideRouter([]),
       { provide: AuthService,  useValue: mockAuth },
+      { provide: CartService,  useValue: mockCart },
       { provide: ToastService, useValue: mockToast },
       { provide: ActivatedRoute, useValue: { snapshot: { queryParams: returnToParam !== undefined ? { returnTo: returnToParam } : {} } } },
     ],
