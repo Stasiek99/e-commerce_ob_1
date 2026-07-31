@@ -231,13 +231,17 @@ import { TuiButton } from '@taiga-ui/core';
 
     .expand-hint {
       position: absolute;
-      bottom: 44px;
+      /* Anchored to the top of the stage, not the bottom: the cookie banner is
+         fixed to the bottom of the viewport and covered the hint entirely on
+         first load, which is exactly when the "scroll to reveal" affordance
+         matters most. */
+      top: 32px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 20;
-      /* The hint sits below the hero media, over .expand-wrap's #dad4cc beige —
-         never over the image — so white text scored 1.31:1. This is
-         $color-primary at 72%: still a quiet hint, but 6.3:1 against #dad4cc. */
+      /* Sits over .expand-wrap's #dad4cc beige, above the media — never over
+         the image — so white text scored 1.31:1. This is $color-primary at
+         72%: still a quiet hint, but 6.3:1 against #dad4cc. */
       color: rgba(26, 26, 26, 0.72);
       font-size: 11px;
       font-weight: 600;
