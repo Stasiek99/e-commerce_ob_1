@@ -23,8 +23,12 @@ import { AuthService } from '../../../core/services/auth.service';
 import { ToastService } from '../../../core/services/toast.service';
 import { AnalyticsService } from '../../../core/services/analytics.service';
 import { TurnstileService } from '../../../core/services/turnstile.service';
+import { ScriptLoaderService } from '../../../core/services/script-loader.service';
 import { PricePipe } from '../../../shared/pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
+
+const GEOWIDGET_CSS_URL = 'https://geowidget.easypack24.net/css/easypack.css';
+const GEOWIDGET_SDK_URL = 'https://geowidget.easypack24.net/js/sdk-for-javascript.js';
 
 declare const easyPack: {
   init: (config: Record<string, unknown>) => void;
@@ -650,6 +654,7 @@ export class CheckoutPageComponent implements OnInit {
   readonly auth = inject(AuthService);
   private readonly analytics = inject(AnalyticsService);
   private readonly turnstile = inject(TurnstileService);
+  private readonly scriptLoader = inject(ScriptLoaderService);
 
   index = 0;
   direction = 0;
@@ -1041,8 +1046,18 @@ export class CheckoutPageComponent implements OnInit {
     this.dpdOpenerEl = null;
   }
 
-  openLockerPicker(): void {
+  async openLockerPicker(): Promise<void> {
     if (!isPlatformBrowser(this.platformId)) return;
+
+    // The GeoWidget stylesheet used to be a render-blocking <link> in
+    // index.html and its SDK a 141KB deferred script — on every route, for a
+    // picker only reachable from this button. Both are fetched here instead,
+    // on the click that actually needs them.
+    await Promise.all([
+      this.scriptLoader.loadStylesheet(GEOWIDGET_CSS_URL),
+      this.scriptLoader.loadScript(GEOWIDGET_SDK_URL),
+    ]).catch(() => undefined);
+
     if (typeof easyPack === 'undefined') {
       this.toast.error('Nie udało się załadować mapy paczkomatów. Odśwież stronę.');
       return;
