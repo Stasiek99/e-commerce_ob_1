@@ -39,7 +39,7 @@ import { TuiButton } from '@taiga-ui/core';
                   type="button"
                   [style.opacity]="hintOpacity"
                   (click)="expandHero()"
-                  aria-label="Odkryj kolekcję — kliknij lub naciśnij Enter">
+                  aria-label="Przewijaj, aby odkryć — kliknij lub naciśnij Enter, aby rozwinąć kolekcję">
             Przewijaj, aby odkryć
           </button>
         }
@@ -235,7 +235,10 @@ import { TuiButton } from '@taiga-ui/core';
       left: 50%;
       transform: translateX(-50%);
       z-index: 20;
-      color: rgba(255, 255, 255, 0.7);
+      /* The hint sits below the hero media, over .expand-wrap's #dad4cc beige —
+         never over the image — so white text scored 1.31:1. This is
+         $color-primary at 72%: still a quiet hint, but 6.3:1 against #dad4cc. */
+      color: rgba(26, 26, 26, 0.72);
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.14em;
@@ -251,7 +254,7 @@ import { TuiButton } from '@taiga-ui/core';
     }
     button.expand-hint:focus-visible {
       opacity: 1 !important;
-      outline: 2px solid rgba(255, 255, 255, 0.7);
+      outline: 2px solid rgba(26, 26, 26, 0.72);
       outline-offset: 6px;
       border-radius: 2px;
     }
