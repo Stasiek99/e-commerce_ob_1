@@ -1,6 +1,7 @@
 import { APP_BASE_HREF } from '@angular/common';
 import { CSP_NONCE } from '@angular/core';
 import { CommonEngine } from '@angular/ssr/node';
+import compression from 'compression';
 import express from 'express';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -46,6 +47,12 @@ export function app(opts: AppOptions = {}): express.Express {
 
   server.set('view engine', 'html');
   server.set('views', browserDistFolder);
+
+  // gzip every text response — SSR HTML, JS bundles, CSS. Vercel's edge does
+  // this for us in production, but the Express server is what runs locally,
+  // in `serve:ssr:frontend`, and on any non-Vercel host; without it the same
+  // build ships ~1.1MB of uncompressed text instead of ~250KB.
+  server.use(compression());
 
   server.use(ssrCacheHeaders);
   server.use(ssrSecurityHeaders);
