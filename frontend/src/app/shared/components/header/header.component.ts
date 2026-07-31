@@ -48,7 +48,8 @@ interface SuggestResult {
         <!-- LEFT: logo + nav -->
         <div class="header__left">
           <a routerLink="/" class="header__logo" (click)="closeMobileMenu()">
-            <img src="assets/images/logo_full.png" alt="Aromaterie" class="header__logo-img" />
+            <img src="assets/images/logo_full.webp" alt="Aromaterie" class="header__logo-img"
+                 width="382" height="180" />
           </a>
           <nav class="header__nav" aria-label="Nawigacja główna">
             <button
@@ -164,9 +165,13 @@ interface SuggestResult {
             <span aria-hidden="true">Koszyk</span>
           </a>
 
-          <a [routerLink]="auth.isAuthenticated() ? '/account' : '/auth/login'" class="header__action-link" (click)="closeMobileMenu()">
-            <tui-icon icon="@tui.user" />
-            <span>Konto</span>
+          <!-- Below 1000px the <span> is display:none, so without this label the
+               link is icon-only and has no accessible name at all. The visible
+               word stays a prefix of the label to satisfy WCAG 2.5.3. -->
+          <a [routerLink]="auth.isAuthenticated() ? '/account' : '/auth/login'" class="header__action-link" (click)="closeMobileMenu()"
+             [attr.aria-label]="auth.isAuthenticated() ? 'Konto — moje konto' : 'Konto — zaloguj się'">
+            <tui-icon icon="@tui.user" aria-hidden="true" />
+            <span aria-hidden="true">Konto</span>
           </a>
 
           <!-- Hamburger — mobile only -->

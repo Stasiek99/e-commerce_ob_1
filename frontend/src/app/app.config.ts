@@ -34,7 +34,7 @@ import {
 } from '@angular/common/http';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { NG_EVENT_PLUGINS } from '@taiga-ui/event-plugins';
-import * as Sentry from '@sentry/angular';
+import { LazySentryErrorHandler, scheduleSentryLoad } from './core/sentry';
 import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
@@ -74,10 +74,12 @@ export function bridgeGuardRedirectsToHttp(): void {
 
 const sentryProviders = environment.sentryDsn
   ? [
-      { provide: ErrorHandler, useValue: Sentry.createErrorHandler() },
-      { provide: Sentry.TraceService, deps: [Router] },
+      // Buffers until the SDK chunk arrives, then replays — see core/sentry.ts.
+      { provide: ErrorHandler, useClass: LazySentryErrorHandler },
       provideAppInitializer(() => {
-        inject(Sentry.TraceService);
+        if (!isPlatformBrowser(inject(PLATFORM_ID))) return;
+        // Deliberately not awaited: fetching the SDK must not delay bootstrap.
+        scheduleSentryLoad(inject(Router));
       }),
     ]
   : [];

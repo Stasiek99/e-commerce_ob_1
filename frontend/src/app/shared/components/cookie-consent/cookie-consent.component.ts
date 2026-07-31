@@ -18,10 +18,13 @@ import { ConsentService } from '../../../core/services/consent.service';
           </p>
 
           <div class="banner__actions">
-            <button tuiButton appearance="primary" type="button" class="btn-accept" (click)="acceptAll()">
+            <button tuiButton appearance="primary" size="m" type="button" class="btn-accept" (click)="acceptAll()">
               Akceptuj wszystkie
             </button>
-            <button tuiButton appearance="flat" type="button" class="btn-reject" (click)="rejectNonEssential()">
+            <!-- outline, not flat: as a flat button this rendered as bare text
+                 and read as a caption rather than a control. Under GDPR the
+                 reject path has to be as easy to find as the accept one. -->
+            <button tuiButton appearance="outline" size="m" type="button" class="btn-reject" (click)="rejectNonEssential()">
               Tylko niezbędne
             </button>
           </div>
@@ -47,13 +50,18 @@ import { ConsentService } from '../../../core/services/consent.service';
       margin: 0 auto;
       display: flex;
       align-items: center;
-      gap: 32px;
+      justify-content: center;
+      gap: 16px 32px;
       flex-wrap: wrap;
+      text-align: center;
     }
 
     .banner__text {
-      flex: 1;
+      /* Sized to its content rather than flex: 1, so the text and the buttons
+         stay centred as a group instead of being pushed to opposite edges. */
+      flex: 0 1 auto;
       min-width: 260px;
+      max-width: 640px;
       font-size: 13px;
       line-height: 1.6;
       margin: 0;
@@ -66,19 +74,35 @@ import { ConsentService } from '../../../core/services/consent.service';
       white-space: nowrap;
     }
 
+    /* Side by side rather than stacked: on mobile the banner is fixed to the
+       bottom and one button per row made it tall enough to bury the hero's
+       "Przewijaj, aby odkryć" hint. */
     .banner__actions {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       align-items: center;
-      gap: 10px;
+      justify-content: center;
+      gap: 12px;
       flex-shrink: 0;
     }
 
-    .btn-accept { width: 100%; }
+    /* Once the text has wrapped onto its own row the actions get the full
+       width, so let the two buttons share it evenly. */
+    @media (max-width: 767px) {
+      .banner__actions { width: 100%; }
+      .banner__actions > * { flex: 1 1 0; }
+    }
 
-    /* Flat button text is dark by default — override for the dark banner */
-    .btn-reject { color: rgba(255, 255, 255, 0.70); font-size: 12px; }
-    .btn-reject:hover { color: rgba(255, 255, 255, 0.90); }
+    /* Taiga's outline appearance assumes a light surface — recolour the border
+       and label for the dark banner. */
+    .btn-reject {
+      color: rgba(255, 255, 255, 0.88);
+      border-color: rgba(255, 255, 255, 0.45);
+    }
+    .btn-reject:hover {
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.75);
+    }
   `],
 })
 export class CookieConsentComponent {

@@ -70,6 +70,11 @@
                 { "type": "anyComponentStyle", "maximumWarning": "12kB", "maximumError": "16kB" }
               ],
               "outputHashing": "all",
+              "optimization": {
+                "scripts": true,
+                "fonts": true,
+                "styles": { "minify": true, "inlineCritical": false }
+              },
               "sourceMap": { "scripts": true, "styles": false, "hidden": true },
               "fileReplacements": [
                 {

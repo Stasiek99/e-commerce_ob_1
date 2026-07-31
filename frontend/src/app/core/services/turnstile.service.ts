@@ -1,6 +1,9 @@
 import { Injectable, PLATFORM_ID, inject } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { environment } from '../../../environments/environment';
+import { ScriptLoaderService } from './script-loader.service';
+
+const TURNSTILE_API_URL = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 
 interface TurnstileApi {
   render(
@@ -25,27 +28,33 @@ declare global {
 @Injectable({ providedIn: 'root' })
 export class TurnstileService {
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly scriptLoader = inject(ScriptLoaderService);
   private readonly siteKey = environment.turnstileSiteKey;
   private container: HTMLDivElement | null = null;
   private widgetId: string | null = null;
 
-  getToken(): Promise<string> {
+  async getToken(): Promise<string> {
     if (!isPlatformBrowser(this.platformId)) {
-      return Promise.resolve(''); // SSR — challenges cannot run server-side
+      return ''; // SSR — challenges cannot run server-side
     }
     if (!this.siteKey) {
       if (environment.production) {
-        return Promise.reject(
-          new Error(
-            '[Turnstile] TURNSTILE_SITE_KEY is not set for production. ' +
-            'Set it in Vercel environment variables and trigger a redeploy.',
-          ),
+        throw new Error(
+          '[Turnstile] TURNSTILE_SITE_KEY is not set for production. ' +
+          'Set it in Vercel environment variables and trigger a redeploy.',
         );
       }
-      return Promise.resolve(''); // dev bypass
+      return ''; // dev bypass
+    }
+
+    // Loaded here rather than from index.html: the challenge script is only
+    // needed by the handful of forms that submit a token, so keeping it off
+    // every page load removes ~60KB of third-party JS from the critical path.
+    if (!window.turnstile) {
+      await this.scriptLoader.loadScript(TURNSTILE_API_URL).catch(() => undefined);
     }
     const api = window.turnstile;
-    if (!api) return Promise.resolve('');
+    if (!api) return '';
 
     return new Promise<string>((resolve) => {
       if (!this.container) {

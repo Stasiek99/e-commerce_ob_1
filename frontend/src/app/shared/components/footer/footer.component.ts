@@ -10,7 +10,8 @@ import { environment } from '../../../../environments/environment';
     <footer class="footer">
       <div class="footer__inner">
         <div class="footer__brand">
-          <img src="assets/images/logo_full_white.png" alt="Aromaterie" class="footer__logo-img" />
+          <img src="assets/images/logo_full_white.webp" alt="Aromaterie" class="footer__logo-img"
+               width="636" height="300" loading="lazy" decoding="async" />
           <p>Wysokiej jakości perfumy i zapachy do domu.</p>
         </div>
         <nav class="footer__nav" aria-label="Nawigacja sklepu">

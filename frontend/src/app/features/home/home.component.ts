@@ -28,7 +28,9 @@ import { TuiButton } from '@taiga-ui/core';
              [style.height.px]="mediaHeight">
           <img class="expand-media__img"
                src="/assets/images/chogan_cover_3.webp"
-               alt="Perfumy Chogan" />
+               alt="Perfumy Chogan"
+               width="1024" height="577"
+               fetchpriority="high" decoding="sync" />
           <div class="expand-media__overlay" [style.opacity]="overlayOpacity"></div>
         </div>
 
@@ -37,7 +39,7 @@ import { TuiButton } from '@taiga-ui/core';
                   type="button"
                   [style.opacity]="hintOpacity"
                   (click)="expandHero()"
-                  aria-label="Odkryj kolekcję — kliknij lub naciśnij Enter">
+                  aria-label="Przewijaj, aby odkryć — kliknij lub naciśnij Enter, aby rozwinąć kolekcję">
             Przewijaj, aby odkryć
           </button>
         }
@@ -85,7 +87,7 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="showcase__media">
           <img class="showcase__image"
             src="https://cdn.chogangroupspa.com/images/prodotti/big/PR16869083910.jpeg"
-            alt="Dyfuzor zapachowy" loading="lazy" />
+            alt="Dyfuzor zapachowy" loading="lazy" decoding="async" width="1080" height="1080" />
         </div>
         <div class="showcase__content">
           <span class="showcase__eyebrow">Dom, który pachnie</span>
@@ -106,7 +108,7 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="showcase__media">
           <img class="showcase__image"
             src="https://cdn.chogangroupspa.com/images/prodotti/big/PR17074885170.jpg"
-            alt="Żel pod prysznic" loading="lazy" />
+            alt="Żel pod prysznic" loading="lazy" decoding="async" width="1080" height="1080" />
         </div>
       </section>
 
@@ -116,8 +118,8 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="category-card category-card--a">
           <div class="category-card__media">
             <img class="category-card__image"
-              src="/assets/images/perfum_luxury_blue.jpg"
-              alt="Bestsellery Luxury" loading="lazy" />
+              src="/assets/images/perfum_luxury_blue.webp"
+              alt="Bestsellery Luxury" loading="lazy" decoding="async" width="800" height="800" />
           </div>
           <div class="category-card__content">
             <span class="category-card__eyebrow">Odkryj</span>
@@ -131,7 +133,7 @@ import { TuiButton } from '@taiga-ui/core';
           <div class="category-card__media">
             <img class="category-card__image"
               src="/assets/images/perfum_luxury_white.webp"
-              alt="Prezenty Luxury" loading="lazy" />
+              alt="Prezenty Luxury" loading="lazy" decoding="async" width="1080" height="1080" />
           </div>
           <div class="category-card__content">
             <span class="category-card__eyebrow">Prezenty</span>
@@ -229,11 +231,18 @@ import { TuiButton } from '@taiga-ui/core';
 
     .expand-hint {
       position: absolute;
-      bottom: 44px;
+      /* Anchored to the top of the stage, not the bottom: the cookie banner is
+         fixed to the bottom of the viewport and covered the hint entirely on
+         first load, which is exactly when the "scroll to reveal" affordance
+         matters most. */
+      top: 32px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 20;
-      color: rgba(255, 255, 255, 0.7);
+      /* Sits over .expand-wrap's #dad4cc beige, above the media — never over
+         the image — so white text scored 1.31:1. This is $color-primary at
+         72%: still a quiet hint, but 6.3:1 against #dad4cc. */
+      color: rgba(26, 26, 26, 0.72);
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.14em;
@@ -249,7 +258,7 @@ import { TuiButton } from '@taiga-ui/core';
     }
     button.expand-hint:focus-visible {
       opacity: 1 !important;
-      outline: 2px solid rgba(255, 255, 255, 0.7);
+      outline: 2px solid rgba(26, 26, 26, 0.72);
       outline-offset: 6px;
       border-radius: 2px;
     }

@@ -50,14 +50,22 @@ describe('CookieConsentComponent', () => {
 
   // ── WCAG 1.4.3 — contrast ─────────────────────────────────────────────────
 
-  describe('WCAG 1.4.3 — btn-minimal contrast', () => {
-    it('btn-minimal color is rgba(255,255,255,0.70) — raised from failing 0.42 (≈3.9:1)', () => {
+  describe('WCAG 1.4.3 — reject-button contrast', () => {
+    // Guards the intent rather than one literal colour: the reject label
+    // originally shipped at rgba(255,255,255,0.42) (≈3.9:1 on #1a1a1a), which
+    // fails 1.4.3. Anything at or above 0.70 alpha clears 4.5:1, so the rule
+    // survives restyling as long as the contrast does.
+    const MIN_ALPHA = 0.7;
+
+    it('keeps the reject label at or above the alpha that clears 4.5:1 on the dark banner', () => {
       const src = fs.readFileSync(
         path.resolve(__dirname, 'cookie-consent.component.ts'),
         'utf8',
       );
-      expect(src).toContain('rgba(255, 255, 255, 0.70)');
-      expect(src).not.toContain('rgba(255, 255, 255, 0.42)');
+      const rule = /\.btn-reject\s*\{[^}]*?color:\s*rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/.exec(src);
+
+      expect(rule).not.toBeNull();
+      expect(Number(rule![1])).toBeGreaterThanOrEqual(MIN_ALPHA);
     });
   });
 

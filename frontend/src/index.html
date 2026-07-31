@@ -11,12 +11,18 @@
   <link rel="icon" type="image/jpeg" href="assets/images/logo_square.jpg" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/images/logo_square.jpg" />
-  <link rel="preconnect" href="https://geowidget.easypack24.net" />
-  <link rel="preconnect" href="https://challenges.cloudflare.com" />
+  <!--
+    The InPost GeoWidget (stylesheet + SDK) and Cloudflare Turnstile are loaded
+    on demand by ScriptLoaderService — the GeoWidget from the checkout page's
+    "Wybierz paczkomat" click, Turnstile from TurnstileService.getToken().
+    They used to live here, which put a render-blocking third-party stylesheet
+    and ~200KB of third-party JS on the critical path of every route.
+    `dns-prefetch` (not `preconnect`) keeps the DNS lookup warm without holding
+    open a TCP+TLS connection most visitors never use.
+  -->
+  <link rel="dns-prefetch" href="https://geowidget.easypack24.net" />
+  <link rel="dns-prefetch" href="https://challenges.cloudflare.com" />
   <link rel="preconnect" href="https://www.googletagmanager.com" />
-  <link rel="stylesheet" href="https://geowidget.easypack24.net/css/easypack.css" />
-  <script defer src="https://geowidget.easypack24.net/js/sdk-for-javascript.js"></script>
-  <script defer src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
 </head>
 
 <body>
