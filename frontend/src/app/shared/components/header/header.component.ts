@@ -48,7 +48,8 @@ interface SuggestResult {
         <!-- LEFT: logo + nav -->
         <div class="header__left">
           <a routerLink="/" class="header__logo" (click)="closeMobileMenu()">
-            <img src="assets/images/logo_full.png" alt="Aromaterie" class="header__logo-img" />
+            <img src="assets/images/logo_full.webp" alt="Aromaterie" class="header__logo-img"
+                 width="382" height="180" />
           </a>
           <nav class="header__nav" aria-label="Nawigacja główna">
             <button

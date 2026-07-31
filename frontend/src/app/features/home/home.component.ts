@@ -28,7 +28,9 @@ import { TuiButton } from '@taiga-ui/core';
              [style.height.px]="mediaHeight">
           <img class="expand-media__img"
                src="/assets/images/chogan_cover_3.webp"
-               alt="Perfumy Chogan" />
+               alt="Perfumy Chogan"
+               width="1024" height="577"
+               fetchpriority="high" decoding="sync" />
           <div class="expand-media__overlay" [style.opacity]="overlayOpacity"></div>
         </div>
 
@@ -85,7 +87,7 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="showcase__media">
           <img class="showcase__image"
             src="https://cdn.chogangroupspa.com/images/prodotti/big/PR16869083910.jpeg"
-            alt="Dyfuzor zapachowy" loading="lazy" />
+            alt="Dyfuzor zapachowy" loading="lazy" decoding="async" width="1080" height="1080" />
         </div>
         <div class="showcase__content">
           <span class="showcase__eyebrow">Dom, który pachnie</span>
@@ -106,7 +108,7 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="showcase__media">
           <img class="showcase__image"
             src="https://cdn.chogangroupspa.com/images/prodotti/big/PR17074885170.jpg"
-            alt="Żel pod prysznic" loading="lazy" />
+            alt="Żel pod prysznic" loading="lazy" decoding="async" width="1080" height="1080" />
         </div>
       </section>
 
@@ -116,8 +118,8 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="category-card category-card--a">
           <div class="category-card__media">
             <img class="category-card__image"
-              src="/assets/images/perfum_luxury_blue.jpg"
-              alt="Bestsellery Luxury" loading="lazy" />
+              src="/assets/images/perfum_luxury_blue.webp"
+              alt="Bestsellery Luxury" loading="lazy" decoding="async" width="800" height="800" />
           </div>
           <div class="category-card__content">
             <span class="category-card__eyebrow">Odkryj</span>
@@ -131,7 +133,7 @@ import { TuiButton } from '@taiga-ui/core';
           <div class="category-card__media">
             <img class="category-card__image"
               src="/assets/images/perfum_luxury_white.webp"
-              alt="Prezenty Luxury" loading="lazy" />
+              alt="Prezenty Luxury" loading="lazy" decoding="async" width="1080" height="1080" />
           </div>
           <div class="category-card__content">
             <span class="category-card__eyebrow">Prezenty</span>
