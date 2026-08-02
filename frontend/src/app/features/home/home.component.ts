@@ -52,31 +52,31 @@ import { TuiButton } from '@taiga-ui/core';
       <!-- FOR HER + FOR HIM side by side -->
       <div class="feature-duo">
 
-        <section class="feature feature--women">
-          <div class="feature__content">
-            <span class="feature__eyebrow">Kolekcja Dla Niej</span>
-            <h2 class="feature__title">Elegancja<br>zamknięta we flakonie.</h2>
-            <p class="feature__subtitle">Delikatne, zmysłowe i niezapomniane. Odkryj zapachy, które podkreślą Twoją wyjątkowość.</p>
-            <a routerLink="/category/perfume" [queryParams]="{gender: ['Kobieta', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Przeglądaj</a>
-          </div>
-          <div class="feature__media">
-            <img class="feature__image"
+        <section class="category-card category-card--women">
+          <div class="category-card__media">
+            <img class="category-card__image"
               src="https://cdn.chogangroupspa.com/images/prodotti/big/PR17629397610donna70ml.jpg"
               alt="Perfumy Dla Niej 70ml" loading="lazy" width="320" height="420" />
           </div>
+          <div class="category-card__content">
+            <span class="category-card__eyebrow">Kolekcja Dla Niej</span>
+            <h2 class="category-card__title">Elegancja<br>zamknięta we flakonie.</h2>
+            <p class="category-card__sub">Delikatne, zmysłowe i niezapomniane. Odkryj zapachy, które podkreślą Twoją wyjątkowość.</p>
+            <a routerLink="/category/perfume" [queryParams]="{gender: ['Kobieta', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Przeglądaj</a>
+          </div>
         </section>
 
-        <section class="feature feature--men">
-          <div class="feature__content">
-            <span class="feature__eyebrow">Kolekcja Dla Niego</span>
-            <h2 class="feature__title">Charakter<br>bez kompromisów.</h2>
-            <p class="feature__subtitle">Intensywne, wyraziste, zapadające w pamięć. Zapachy dla mężczyzny, który wie, czego chce.</p>
-            <a routerLink="/category/perfume" [queryParams]="{gender: ['Mężczyzna', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Odkryj kolekcję</a>
-          </div>
-          <div class="feature__media">
-            <img class="feature__image"
+        <section class="category-card category-card--men">
+          <div class="category-card__media">
+            <img class="category-card__image"
               src="https://cdn.chogangroupspa.com/images/prodotti/big/PR17627884550uomo70ml.jpg"
               alt="Perfumy Dla Niego 70ml" loading="lazy" width="320" height="420" />
+          </div>
+          <div class="category-card__content">
+            <span class="category-card__eyebrow">Kolekcja Dla Niego</span>
+            <h2 class="category-card__title">Charakter<br>bez kompromisów.</h2>
+            <p class="category-card__sub">Intensywne, wyraziste, zapadające w pamięć. Zapachy dla mężczyzny, który wie, czego chce.</p>
+            <a routerLink="/category/perfume" [queryParams]="{gender: ['Mężczyzna', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Odkryj kolekcję</a>
           </div>
         </section>
 
@@ -315,70 +315,17 @@ import { TuiButton } from '@taiga-ui/core';
     }
 
     /* ── FEATURE SECTIONS ──────────────────────────────────────────────── */
+    /* The "Dla Niej"/"Dla Niego" duo reuses .category-card wholesale (same
+       media+content block, same 72vh/centering/gutter shape) — it used to be
+       a hand-rolled twin with its own type scale and min-heights, which is
+       exactly why its content sat at a different depth inside the box than
+       .category-card's despite identical outer padding: two components,
+       two independently-tuned content stacks, centered in the same fixed
+       height. One component removes the drift by construction. */
     .feature-duo {
       display: grid;
       grid-template-columns: 1fr 1fr;
     }
-    .feature {
-      height: 72vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 20px;
-      padding: 40px;
-      text-align: center;
-      overflow: hidden;
-    }
-    .feature--women { background: #f9f5f0; padding-left: var(--gutter); }
-    .feature--men   { background: #f2f2f4; padding-right: var(--gutter); }
-
-    .feature__media {
-      flex: 0 0 32vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      order: -1;
-    }
-    .feature__content {
-      flex-shrink: 0;
-      width: 100%;
-    }
-    .feature__eyebrow {
-      display: block;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      margin-bottom: 14px;
-      color: var(--color-accent-text);
-    }
-    .feature__title {
-      font-size: clamp(22px, 2.4vw, 38px);
-      font-weight: 700;
-      line-height: 1.08;
-      letter-spacing: -0.03em;
-      color: #1a1a1a;
-      margin: 0 0 18px;
-    }
-    .feature__subtitle {
-      font-size: clamp(13px, 1.3vw, 15px);
-      color: #6b6b6b;
-      line-height: 1.65;
-      margin: 0 auto 32px;
-      max-width: 32ch;
-    }
-    .feature__image {
-      max-height: 32vh;
-      max-width: 100%;
-      width: auto;
-      object-fit: contain;
-      mix-blend-mode: multiply;
-      filter: drop-shadow(0 28px 44px rgba(0, 0, 0, 0.1));
-      transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    }
-    .feature__image:hover { transform: translateY(-10px); }
 
     /* ── SHOWCASE SECTIONS ─────────────────────────────────────────────── */
     .showcase {
@@ -402,7 +349,11 @@ import { TuiButton } from '@taiga-ui/core';
       overflow: hidden;
     }
     .showcase__image {
-      max-height: 55vh;
+      /* 60vh (not 55vh) is what puts the image's top edge the same ~56px from
+         the section edge as .category-card--c's bottle — at 55vh the extra
+         centering slack inside the 72vh row left a ~76px gap, noticeably
+         airier than the two-up cards below it. */
+      max-height: 60vh;
       max-width: 100%;
       width: auto;
       object-fit: contain;
@@ -475,8 +426,14 @@ import { TuiButton } from '@taiga-ui/core';
       text-align: center;
       overflow: hidden;
     }
+    /* Same rule for both grids — a card grid is a card grid regardless of
+       whether it holds the "Dla Niej/Dla Niego" duo or the bestseller pair. */
+    .feature-duo > :first-child,
     .highlight-grid > :first-child { padding-left:  var(--gutter); }
+    .feature-duo > :last-child,
     .highlight-grid > :last-child  { padding-right: var(--gutter); }
+    .category-card--women { background: #f9f5f0; }
+    .category-card--men   { background: #f2f2f4; }
     .category-card--a { background: #fafafa; }
     .category-card--b { background: #f7f2ec; }
     .category-card--c { background: #f0ece6; }
@@ -523,7 +480,12 @@ import { TuiButton } from '@taiga-ui/core';
       line-height: 1.55;
       color: #6b6b6b;
       margin: 0 auto 22px;
-      max-width: 28ch;
+      /* 40ch is where the longest copy on the page (the "Dla Niej"/"Dla Niego"
+         blurbs) settles at the same 2-line height as the shorter bestseller/gift
+         copy — below it they wrap to 3-4 lines and every card's content stack
+         (and the top/bottom breathing room around it, since the block is
+         vertically centered in a fixed-height row) stops matching. */
+      max-width: 40ch;
       min-height: 3.1em;
     }
 
@@ -546,7 +508,6 @@ import { TuiButton } from '@taiga-ui/core';
       .highlight-grid,
       .category-grid { grid-template-columns: 1fr; }
 
-      .feature,
       .showcase,
       .category-card {
         display: flex;
@@ -560,7 +521,6 @@ import { TuiButton } from '@taiga-ui/core';
         text-align: center;
       }
 
-      .feature__media,
       .showcase__media,
       .category-card__media {
         order: -1;
@@ -578,7 +538,6 @@ import { TuiButton } from '@taiga-ui/core';
       .showcase--gels      .showcase__media,
       .showcase--finder    .showcase__media { padding: 0; }
 
-      .feature__image,
       .showcase__image,
       .category-card__image {
         height: 100%;
@@ -588,7 +547,6 @@ import { TuiButton } from '@taiga-ui/core';
         object-fit: contain;
       }
 
-      .feature__content,
       .showcase__content,
       .category-card__content {
         order: 0;
@@ -606,7 +564,6 @@ import { TuiButton } from '@taiga-ui/core';
         padding: 0;
       }
 
-      .feature__subtitle,
       .showcase__subtitle,
       .category-card__sub { margin-left: auto; margin-right: auto; }
 
@@ -625,7 +582,6 @@ import { TuiButton } from '@taiga-ui/core';
     @media (prefers-reduced-motion: reduce) {
       .expand-media__overlay,
       .expand-content,
-      .feature__image,
       .showcase__image,
       .category-card__image {
         transition: none !important;
