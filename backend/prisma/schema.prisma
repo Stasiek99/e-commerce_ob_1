@@ -277,7 +277,7 @@ model Product {
   // Deduplicated, normalized form of `notes` — same normalizer as searchText, so
   // a note picked in the fragrance finder and one typed into the search bar
   // reduce to the same key. Also trigger-maintained; do not write from code.
-  notesNormalized     String[]
+  notesNormalized     String[] @default([])
   luxuryReferenceId   Int?
   luxuryReference     LuxuryReference? @relation(fields: [luxuryReferenceId], references: [id], onDelete: SetNull)
   sortOrder        Int      @default(0)

@@ -342,9 +342,6 @@ import { TuiButton } from '@taiga-ui/core';
       order: -1;
     }
     .feature__content {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
       flex-shrink: 0;
       width: 100%;
     }
@@ -369,7 +366,7 @@ import { TuiButton } from '@taiga-ui/core';
       font-size: clamp(13px, 1.3vw, 15px);
       color: #6b6b6b;
       line-height: 1.65;
-      margin: 0 0 32px;
+      margin: 0 auto 32px;
       max-width: 32ch;
     }
     .feature__image {
