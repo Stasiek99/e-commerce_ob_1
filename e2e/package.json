@@ -6,11 +6,14 @@
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "install:browsers": "playwright install --with-deps chromium",
-    "scrape": "ts-node --project tsconfig.json scrape-chogan.ts"
+    "scrape": "ts-node --project tsconfig.json scrape-chogan.ts",
+    "audit:ui": "node visual/audit.mjs",
+    "audit:home": "node visual/home-sections.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
-    "ts-node": "^10.9.2",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "axe-core": "^4.12.1",
+    "ts-node": "^10.9.2"
   }
 }

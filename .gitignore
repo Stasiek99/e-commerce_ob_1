@@ -43,3 +43,7 @@ frontend/prerender-routes.txt
 
 # Test coverage reports
 coverage/
+
+# Responsive audit output (screenshots + findings) — regenerated on demand,
+# see e2e/visual/README.md
+e2e/visual/shots/

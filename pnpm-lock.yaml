@@ -313,6 +313,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
+      axe-core:
+        specifier: ^4.12.1
+        version: 4.12.1
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@22.19.17)(typescript@5.9.3)
@@ -5221,6 +5224,10 @@ packages:
     hasBin: true
     peerDependencies:
       postcss: ^8.5.18
+
+  axe-core@4.12.1:
+    resolution: {integrity: sha512-s7iGf5GaVMxEG0ENN9x+xTr7GFZCb1ZP/1uATUpCEK2X78nDB3RwbtFCo9pGAf9ru+VwoQ464DkaLEeRM08wJA==}
+    engines: {node: '>=4'}
 
   axios@1.18.1:
     resolution: {integrity: sha512-3nTvFlvpn9Zu/RkHUqtc7/+al4UpRW5az71ap5zccp6e8RAYEzhMTecX8Dz1wWDYrPpUoB1HAQEGEAEvUr7S9g==}
@@ -15644,6 +15651,8 @@ snapshots:
       picocolors: 1.1.1
       postcss: 8.5.22
       postcss-value-parser: 4.2.0
+
+  axe-core@4.12.1: {}
 
   axios@1.18.1:
     dependencies:
