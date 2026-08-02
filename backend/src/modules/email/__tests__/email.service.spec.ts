@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import * as Sentry from '@sentry/nestjs';
 import { EmailService } from '../email.service';
 
 const mockSend = jest.fn();

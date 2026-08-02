@@ -1,5 +1,7 @@
-// Sentry instrumentation must load before any other module.
-// eslint-disable-next-line import/order
+// Sentry instrumentation must load before any other module — keep this import
+// first. (It used to carry an `eslint-disable import/order` directive, but that
+// plugin is not part of the flat config, and naming an unknown rule in a disable
+// comment is itself an ESLint error.)
 import './instrument';
 
 import * as crypto from 'crypto';

@@ -12,7 +12,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PaymentStatus } from '@prisma/client';
 import type { Stripe } from 'stripe/cjs/stripe.core';
-import * as Sentry from '@sentry/nestjs';
 import { PaymentsService } from '../payments.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StripeClient } from '../stripe.client';
@@ -61,7 +60,6 @@ describe('PaymentsService — orphaned coupon cleanup on payment retry', () => {
   let service: PaymentsService;
   let prisma: any;
   let stripeClient: jest.Mocked<StripeClient>;
-  let redis: any;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -159,7 +157,6 @@ describe('PaymentsService — orphaned coupon cleanup on payment retry', () => {
     service = module.get(PaymentsService);
     prisma = module.get(PrismaService);
     stripeClient = module.get(StripeClient);
-    redis = module.get('REDIS_CLIENT');
   });
 
   afterEach(() => jest.clearAllMocks());
