@@ -246,7 +246,7 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         transition: color 0.15s, border-color 0.15s, background 0.15s;
       }
       .finder__mode tui-icon { font-size: 18px; }
-      .finder__mode:hover { color: var(--color-primary); border-color: var(--color-accent); }
+      .finder__mode:hover { color: var(--color-primary); border-color: var(--color-accent-text); }
       .finder__mode.is-active {
         color: var(--color-surface);
         background: var(--color-primary);
@@ -276,16 +276,19 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         background: transparent;
         color: var(--color-primary);
         border-radius: 999px;
-        padding: 7px 14px;
+        /* 7px padding left the chips 36px tall. These are the finder's primary
+           control on a phone, and a shopper taps a dozen of them in a row. */
+        padding: 11px 16px;
+        min-height: 44px;
         font: inherit;
         font-size: 13px;
         cursor: pointer;
         transition: color 0.15s, border-color 0.15s, background 0.15s;
       }
-      .finder__chip:hover { border-color: var(--color-accent); }
+      .finder__chip:hover { border-color: var(--color-accent-text); }
       .finder__chip.is-active {
         background: var(--color-accent);
-        border-color: var(--color-accent);
+        border-color: var(--color-accent-text);
         color: #fff;
       }
       .finder__chip:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
@@ -302,7 +305,7 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         text-decoration: underline;
         cursor: pointer;
       }
-      .finder__clear:hover { color: var(--color-accent); }
+      .finder__clear:hover { color: var(--color-accent-text); }
 
       /* flex-start, not center: the projected aside must sit level with the TOP
          of the query area, so it lines up with the search field rather than

@@ -34,7 +34,10 @@ import { environment } from '../environments/environment';
       position: absolute;
       top: -100%;
       left: 0;
-      padding: 8px 16px;
+      padding: 12px 16px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
       background: #fff;
       color: #000;
       font-weight: 600;
@@ -49,7 +52,7 @@ import { environment } from '../environments/environment';
     }
 
     main {
-      min-height: calc(100vh - 64px - 120px);
+      min-height: calc(100vh - var(--header-height) - 120px);
       max-width: var(--max-width);
       margin: 0 auto;
       padding: 0 24px;

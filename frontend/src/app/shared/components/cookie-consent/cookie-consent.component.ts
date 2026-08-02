@@ -89,8 +89,12 @@ import { ConsentService } from '../../../core/services/consent.service';
     /* Once the text has wrapped onto its own row the actions get the full
        width, so let the two buttons share it evenly. */
     @media (max-width: 767px) {
-      .banner__actions { width: 100%; }
-      .banner__actions > * { flex: 1 1 0; }
+      .banner__actions { width: 100%; flex-wrap: wrap; }
+      /* A basis of 0 ignored the labels' intrinsic width, so at 360px
+         "Akceptuj wszystkie" needed 166px inside a 158px button and was
+         clipped. An auto basis starts at the content width; the buttons still
+         share the row evenly whenever it fits. */
+      .banner__actions > * { flex: 1 1 auto; }
     }
 
     /* Taiga's outline appearance assumes a light surface — recolour the border

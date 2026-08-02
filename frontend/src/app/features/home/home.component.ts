@@ -183,6 +183,8 @@ import { TuiButton } from '@taiga-ui/core';
     :host {
       display: block;
       --gutter: max(24px, calc((100vw - 1280px) / 2 + 24px));
+      /* Breathing room around the hero image, applied to all four sides. */
+      --hero-inset: clamp(12px, 2.5vw, 24px);
     }
 
     /* ── SCROLL EXPAND HERO (full-bleed) ───────────────────────────────── */
@@ -222,7 +224,11 @@ import { TuiButton } from '@taiga-ui/core';
     }
     .expand-title__word {
       display: block;
-      font-size: clamp(42px, 7vw, 100px);
+      /* The 42px floor made "który mówi wszystko." 886px wide inside a 360px
+         viewport — silently cut off by .expand-wrap's overflow-x, so the page's
+         opening sentence was unreadable on a phone. The words stay nowrap
+         because the reveal slides them apart horizontally. */
+      font-size: clamp(26px, 7vw, 100px);
       font-weight: 700;
       line-height: 1.05;
       letter-spacing: -0.03em;
@@ -239,8 +245,13 @@ import { TuiButton } from '@taiga-ui/core';
       border-radius: 20px;
       overflow: hidden;
       box-shadow: 0 0 120px rgba(0, 0, 0, 0.6);
-      max-width: 95vw;
-      max-height: 85dvh;
+      /* Both axes inset by the same amount so the hero is framed evenly.
+         The old pair (95vw / 85dvh) was only symmetric by coincidence: 85dvh
+         happens to equal the stage height once --chrome-height is subtracted on
+         a short viewport, so the image butted straight against the header and
+         the section below while keeping visible side margins. */
+      max-width: calc(100vw - 2 * var(--hero-inset));
+      max-height: calc(100dvh - var(--chrome-height) - 2 * var(--hero-inset));
     }
     .expand-media__img {
       width: 100%;
@@ -344,7 +355,7 @@ import { TuiButton } from '@taiga-ui/core';
       letter-spacing: 0.1em;
       text-transform: uppercase;
       margin-bottom: 14px;
-      color: #c9a96e;
+      color: var(--color-accent-text);
     }
     .feature__title {
       font-size: clamp(22px, 2.4vw, 38px);
@@ -427,7 +438,7 @@ import { TuiButton } from '@taiga-ui/core';
       letter-spacing: 0.1em;
       text-transform: uppercase;
       margin-bottom: 16px;
-      color: #c9a96e;
+      color: var(--color-accent-text);
     }
     .showcase__title {
       font-size: clamp(22px, 2.4vw, 38px);
@@ -499,7 +510,7 @@ import { TuiButton } from '@taiga-ui/core';
       letter-spacing: 0.1em;
       text-transform: uppercase;
       margin-bottom: 10px;
-      color: #c9a96e;
+      color: var(--color-accent-text);
     }
     .category-card__title {
       font-size: clamp(22px, 3vw, 38px);
@@ -520,35 +531,97 @@ import { TuiButton } from '@taiga-ui/core';
     }
 
     /* ── RESPONSIVE ────────────────────────────────────────────────────── */
+    /* Stacked, every section collapses to ONE shape: bottle on top in a
+       fixed-height box, copy centered underneath. The three block types used to
+       stack differently — features and cards centered, diffusers left-aligned,
+       finder and gels right-aligned with the copy pulled above the bottle by an
+       order:-1 — which read as four unrelated layouts scrolling past. The
+       shared media height is what makes the bottles match: the vh-based caps
+       they each carried rendered the showcase shots at roughly twice the size
+       of the feature ones on the same screen. */
     @media (max-width: 900px) {
-      .feature-duo    { grid-template-columns: 1fr; }
-      .feature        { height: auto; min-height: 56vh; }
-      .feature--women { padding-left: var(--gutter); padding-right: var(--gutter); }
-      .feature--men   { padding-left: var(--gutter); padding-right: var(--gutter); }
-      .showcase       { grid-template-columns: 1fr; height: auto; min-height: auto; }
-      /* Copy above bottle once stacked — the gels-hand variants put content
-         second in the DOM, which would otherwise read image-first on mobile. */
-      .showcase--gels   .showcase__content { order: -1; }
-      .showcase--finder .showcase__content { order: -1; }
-      .showcase__content { padding: 56px var(--gutter) 40px; }
-      .showcase--gels      .showcase__content { padding-left:  var(--gutter); }
-      .showcase--finder    .showcase__content { padding-left:  var(--gutter); }
-      .showcase--diffusers .showcase__content { padding-right: var(--gutter); }
-      .showcase__media   { padding: 0 var(--gutter) 56px; }
-      .highlight-grid { grid-template-columns: 1fr; }
-      .category-grid  { grid-template-columns: 1fr; }
-      .category-card  { height: auto; min-height: 60vh; }
-      .highlight-grid > :first-child { padding-left: var(--gutter); padding-right: var(--gutter); }
-      .highlight-grid > :last-child  { padding-left: var(--gutter); padding-right: var(--gutter); }
+      :host {
+        --product-media-h: clamp(200px, 60vw, 280px);
+        --section-pad-y: 48px;
+      }
+
+      .feature-duo,
+      .highlight-grid,
+      .category-grid { grid-template-columns: 1fr; }
+
+      .feature,
+      .showcase,
+      .category-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        height: auto;
+        min-height: 0;
+        gap: 28px;
+        padding: var(--section-pad-y) var(--gutter);
+        text-align: center;
+      }
+
+      .feature__media,
+      .showcase__media,
+      .category-card__media {
+        order: -1;
+        flex: none;
+        width: 100%;
+        height: var(--product-media-h);
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Variant paddings are two-class selectors, so they outrank the grouped
+         rule above and have to be cleared by name. */
+      .showcase--diffusers .showcase__media,
+      .showcase--gels      .showcase__media,
+      .showcase--finder    .showcase__media { padding: 0; }
+
+      .feature__image,
+      .showcase__image,
+      .category-card__image {
+        height: 100%;
+        width: auto;
+        max-width: 100%;
+        max-height: none;
+        object-fit: contain;
+      }
+
+      .feature__content,
+      .showcase__content,
+      .category-card__content {
+        order: 0;
+        align-items: center;
+        text-align: center;
+        padding: 0;
+        width: 100%;
+      }
+      .showcase--diffusers .showcase__content,
+      .showcase--gels      .showcase__content,
+      .showcase--finder    .showcase__content {
+        order: 0;
+        align-items: center;
+        text-align: center;
+        padding: 0;
+      }
+
+      .feature__subtitle,
+      .showcase__subtitle,
+      .category-card__sub { margin-left: auto; margin-right: auto; }
+
+      /* These minimums exist only to keep two side-by-side cards' buttons on a
+         shared baseline. Stacked there is nothing to align against, so they are
+         just dead vertical space. */
+      .category-card__title,
+      .category-card__sub { min-height: 0; }
     }
+
     @media (max-width: 600px) {
-      .feature        { height: auto; padding: 40px var(--gutter); }
-      .feature--women,
-      .feature--men   { padding-left: var(--gutter); padding-right: var(--gutter); }
-      .feature__image { max-height: 28vh; }
-      .showcase__content { padding: 40px var(--gutter) 32px; }
-      .showcase__media   { padding: 0 var(--gutter) 40px; }
-      .category-card { min-height: 50vh; padding: 40px var(--gutter) 0; }
+      :host { --section-pad-y: 36px; }
     }
 
     /* ── REDUCED MOTION ────────────────────────────────────────────────── */

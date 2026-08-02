@@ -716,7 +716,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     /* Info */
     .detail__brand {
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
-      color: var(--color-accent); margin: 0 0 6px; font-weight: 600;
+      color: var(--color-accent-text); margin: 0 0 6px; font-weight: 600;
     }
     .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.35; }
     .detail__catalog-no { font-size: 0.72em; font-weight: 500; color: var(--color-secondary); letter-spacing: 0.03em; white-space: nowrap; }
@@ -802,7 +802,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .detail__pyramid-row:last-child { border-bottom: none; }
     .detail__pyramid-label {
-      flex-shrink: 0; font-weight: 600; color: var(--color-accent);
+      flex-shrink: 0; font-weight: 600; color: var(--color-accent-text);
       font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
       min-width: 52px;
     }
@@ -883,7 +883,7 @@ const CATEGORY_LABELS: Record<string, string> = {
       text-decoration: none;
       transition: color 0.15s;
     }
-    .detail__sds-link:hover { color: var(--color-accent); text-decoration: underline; }
+    .detail__sds-link:hover { color: var(--color-accent-text); text-decoration: underline; }
     .detail__sds-link tui-icon { font-size: 16px; flex-shrink: 0; }
 
     /* Meta */
@@ -989,7 +989,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .review-card__reply-label {
       font-size: 12px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.06em; color: var(--color-accent); display: block; margin-bottom: 4px;
+      letter-spacing: 0.06em; color: var(--color-accent-text); display: block; margin-bottom: 4px;
     }
     .review-card__reply-body { font-size: 13px; color: var(--color-secondary); margin: 0; line-height: 1.5; }
     .review-card__helpful {
@@ -1036,7 +1036,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .related__link {
       font-size: 13px;
-      color: var(--color-accent);
+      color: var(--color-accent-text);
       text-decoration: underline;
       white-space: nowrap;
     }

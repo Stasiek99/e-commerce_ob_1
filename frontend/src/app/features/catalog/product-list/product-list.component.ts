@@ -420,7 +420,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       justify-content: space-between;
       margin-bottom: 28px;
     }
-    .sort-btn { font-size: 14px; }
+    .sort-btn { font-size: 14px; min-height: 44px; }
 
     .filter-count {
       display: inline-flex;
@@ -450,7 +450,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       font-size: 14px;
       color: var(--color-secondary);
     }
-    .search-indicator tui-icon { color: var(--color-accent); font-size: 15px; flex-shrink: 0; }
+    .search-indicator tui-icon { color: var(--color-accent-text); font-size: 15px; flex-shrink: 0; }
     .search-indicator strong { color: var(--color-primary); font-weight: 600; }
     .search-indicator button { margin-left: auto; }
 
@@ -575,7 +575,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
     }
     .filter-price__input::-webkit-outer-spin-button,
     .filter-price__input::-webkit-inner-spin-button { -webkit-appearance: none; }
-    .filter-price__input:focus { outline: none; border-color: var(--color-accent); }
+    .filter-price__input:focus { outline: none; border-color: var(--color-accent-text); }
     .filter-price__sep { font-size: 14px; color: var(--color-secondary); flex-shrink: 0; }
 
     .filter-group-content {

@@ -84,7 +84,7 @@ interface SuggestResult {
         <div class="header__search">
           <div class="header__search-container">
             <form class="header__search-form" (submit)="onSearch($event)">
-              <tui-textfield iconStart="@tui.search" class="header__search-field" tuiTextfieldSize="s">
+              <tui-textfield iconStart="@tui.search" class="header__search-field" tuiTextfieldSize="m">
                 <input
                   [formControl]="searchControl"
                   placeholder="Szukaj produktów…"
@@ -100,12 +100,12 @@ interface SuggestResult {
                   (keydown)="onKeydown($event)"
                 />
               </tui-textfield>
-              <button size="s" tuiButton type="submit" appearance="primary" class="header__search-btn">Szukaj</button>
+              <button size="m" tuiButton type="submit" appearance="primary" class="header__search-btn">Szukaj</button>
               <!-- Escape hatch for the shopper who cannot name what they want.
                    Sits next to the search box because that is exactly where they
                    give up. -->
               <button
-                size="s"
+                size="m"
                 tuiButton
                 type="button"
                 appearance="flat"
@@ -164,21 +164,25 @@ interface SuggestResult {
         <div class="header__actions">
           <a routerLink="/wishlist" class="header__action-link header__action-link--wishlist" (click)="closeMobileMenu()"
              [attr.aria-label]="wishlist.count() > 0 ? 'Ulubione (' + wishlist.count() + ' produktów)' : 'Ulubione'">
-            <tui-icon icon="@tui.heart" aria-hidden="true" />
-            @defer (on immediate) {
-              @if (wishlist.count() > 0) {
-                <span class="header__wishlist-badge" aria-hidden="true">{{ wishlist.count() }}</span>
+            <span class="header__action-icon">
+              <tui-icon icon="@tui.heart" aria-hidden="true" />
+              @defer (on immediate) {
+                @if (wishlist.count() > 0) {
+                  <span class="header__wishlist-badge" aria-hidden="true">{{ wishlist.count() }}</span>
+                }
               }
-            }
+            </span>
             <span aria-hidden="true">Ulubione</span>
           </a>
 
           <a routerLink="/cart" class="header__action-link header__action-link--cart" (click)="closeMobileMenu()"
              [attr.aria-label]="cartService.itemCount() > 0 ? 'Koszyk (' + cartService.itemCount() + ' produktów)' : 'Koszyk'">
-            <tui-icon icon="@tui.shopping-cart" aria-hidden="true" />
-            @if (cartService.itemCount() > 0) {
-              <span class="header__cart-badge" aria-hidden="true">{{ cartService.itemCount() }}</span>
-            }
+            <span class="header__action-icon">
+              <tui-icon icon="@tui.shopping-cart" aria-hidden="true" />
+              @if (cartService.itemCount() > 0) {
+                <span class="header__cart-badge" aria-hidden="true">{{ cartService.itemCount() }}</span>
+              }
+            </span>
             <span aria-hidden="true">Koszyk</span>
           </a>
 
@@ -187,7 +191,9 @@ interface SuggestResult {
                word stays a prefix of the label to satisfy WCAG 2.5.3. -->
           <a [routerLink]="auth.isAuthenticated() ? '/account' : '/auth/login'" class="header__action-link" (click)="closeMobileMenu()"
              [attr.aria-label]="auth.isAuthenticated() ? 'Konto — moje konto' : 'Konto — zaloguj się'">
-            <tui-icon icon="@tui.user" aria-hidden="true" />
+            <span class="header__action-icon">
+              <tui-icon icon="@tui.user" aria-hidden="true" />
+            </span>
             <span aria-hidden="true">Konto</span>
           </a>
 
@@ -249,7 +255,10 @@ interface SuggestResult {
       max-width: var(--max-width, 1280px);
       margin: 0 auto;
       padding: 0 24px;
-      height: 64px;
+      /* Token, not a literal: --chrome-height is derived from it and the home
+         hero sizes itself against that, so a hardcoded value here would desync
+         the two. */
+      height: var(--header-height);
       display: grid;
       grid-template-columns: auto 1fr auto;
       align-items: center;
@@ -267,7 +276,18 @@ interface SuggestResult {
       align-items: center;
       line-height: 1;
     }
-    .header__logo-img { height: 60px; width: auto; display: block; margin-top: 10px; }
+    .header__logo-img {
+      height: 66px;
+      width: auto;
+      display: block;
+      /* The asset carries roughly half its canvas as padding, and the mark sits
+         above the canvas centre, so it needs nudging down to look centred.
+         transform rather than the margin-top this replaces: a margin adds to
+         the header row's height, which is exactly what pushed the row past the
+         header box and left the search field 13px from the top but 7px from
+         the bottom. */
+      transform: translateY(5px);
+    }
     .header__nav { display: flex; gap: 20px; }
 
     .header__nav-link {
@@ -278,14 +298,22 @@ interface SuggestResult {
       padding: 0;
       cursor: pointer;
       color: var(--color-primary);
-      font-size: 13px;
+      /* One step under the 16px search row: the nav reads as navigation next to
+         the primary action rather than competing with it, but no longer as the
+         13px fine print it was. */
+      font-size: 15px;
       font-weight: 400;
       font-family: var(--tui-font-text), sans-serif;
       transition: color 0.15s;
       white-space: nowrap;
+      /* 17px tall as bare text; the nav sits in a 64px header so there is room
+         to make the row itself the target. */
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
     }
     .header__nav-link:hover,
-    .header__nav-link.active { color: var(--color-accent); }
+    .header__nav-link.active { color: var(--color-accent-text); }
     .header__nav-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; border-radius: 3px; }
 
     .header__dropdown-divider { border: none; border-top: 1px solid var(--color-border); margin: 4px 0; }
@@ -304,7 +332,15 @@ interface SuggestResult {
       gap: 8px;
       width: 100%;
     }
+    /* The search row runs at Taiga's size="m" (44px) rather than "s" (32px):
+       the field and its two buttons then share one height natively, instead of
+       a 32px input sitting next to a CSS-stretched button. 44px is also the tap
+       target floor, and it still clears the 64px header. */
     .header__search-field { flex: 1; min-width: 0; }
+    /* Taiga's size="m" button labels render at 16px; the textfield inside the
+       same row stayed at 13px, so the query the shopper types was visibly
+       smaller than the button telling them to submit it. */
+    .header__search-field input { font-size: 16px; }
     .header__search-btn { flex-shrink: 0; }
     .header__finder-btn { flex-shrink: 0; white-space: nowrap; }
     /* Below 1200px the search row runs out of room before the button does any
@@ -386,7 +422,7 @@ interface SuggestResult {
     .autocomplete-price {
       font-size: 13px;
       font-weight: 600;
-      color: var(--color-accent);
+      color: var(--color-accent-text);
       white-space: nowrap;
       flex-shrink: 0;
     }
@@ -396,18 +432,34 @@ interface SuggestResult {
     .header__action-link {
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
-      font-size: 13px;
+      font-size: 15px;
       color: var(--color-primary);
       white-space: nowrap;
       transition: color 0.15s;
       position: relative;
+      /* The icons render at 20px; without this the whole hit area was 20x20 —
+         under half of the 44x44 that Apple HIG and Material both call for, and
+         under even the 24x24 WCAG 2.5.8 floor. Padding-free so the icon keeps
+         its size and only the target grows around it. */
+      min-width: 44px;
+      min-height: 44px;
     }
-    .header__action-link:hover { color: var(--color-accent); }
+    .header__action-link:hover { color: var(--color-accent-text); }
     .header__action-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; border-radius: 3px; }
     .header__action-link tui-icon { font-size: 20px; }
     .header__action-link--cart,
     .header__action-link--wishlist { position: relative; }
+    /* Badges anchor to this, not to the link: once the link grew to 44x44 (and
+       on desktop it also carries a text label) a link-relative badge floated
+       off into the corner instead of sitting on the icon. */
+    .header__action-icon {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
     .header__wishlist-badge,
     .header__cart-badge {
       position: absolute;
@@ -436,17 +488,19 @@ interface SuggestResult {
       cursor: pointer;
       color: var(--color-primary);
       padding: 4px;
+      min-width: 44px;
+      min-height: 44px;
       border-radius: var(--border-radius-sm);
       transition: color 0.15s;
     }
     .header__hamburger tui-icon { font-size: 22px; }
-    .header__hamburger:hover { color: var(--color-accent); }
+    .header__hamburger:hover { color: var(--color-accent-text); }
 
     /* ── Mobile nav panel ───────────────────── */
     .mobile-nav {
       background: rgba(0, 0, 0, 0.35);
       position: fixed;
-      inset: 64px 0 0 0;
+      inset: var(--header-height) 0 0 0;
       z-index: 99;
     }
     .mobile-nav__links {
@@ -467,8 +521,8 @@ interface SuggestResult {
       transition: color 0.15s;
     }
     .mobile-nav__link:last-of-type { border-bottom: none; }
-    .mobile-nav__link:hover { color: var(--color-accent); }
-    .mobile-nav__link--finder { color: var(--color-accent); font-weight: 600; }
+    .mobile-nav__link:hover { color: var(--color-accent-text); }
+    .mobile-nav__link--finder { color: var(--color-accent-text); font-weight: 600; }
     .mobile-nav__divider { border: none; border-top: 1px solid var(--color-border); margin: 8px 0; }
     .mobile-nav__search {
       display: flex;
@@ -488,6 +542,9 @@ interface SuggestResult {
     @media (max-width: 768px) {
       .header__search { display: none; }
       .header__inner { grid-template-columns: auto auto; justify-content: space-between; gap: 0; }
+      /* Four 44px targets plus the logo is all a 360px viewport holds, so the
+         gap goes to zero here. The targets are their own separation. */
+      .header__actions { gap: 0; }
     }
   `],
 })
