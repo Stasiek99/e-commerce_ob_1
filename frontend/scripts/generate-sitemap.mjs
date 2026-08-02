@@ -36,6 +36,7 @@ const FETCH_RETRY_BASE_MS = 1000;
 const STATIC_ROUTES = [
   { path: '', priority: '1.0', changefreq: 'weekly' },
   { path: '/products', priority: '0.9', changefreq: 'daily' },
+  { path: '/dobierz-zapach', priority: '0.8', changefreq: 'monthly' },
   { path: '/legal/terms', priority: '0.3', changefreq: 'yearly' },
   { path: '/legal/privacy', priority: '0.3', changefreq: 'yearly' },
   { path: '/legal/withdrawal', priority: '0.3', changefreq: 'yearly' },
@@ -43,6 +44,7 @@ const STATIC_ROUTES = [
 
 const STATIC_PRERENDER_ROUTES = [
   '/',
+  '/dobierz-zapach',
   '/legal/terms',
   '/legal/privacy',
   '/legal/withdrawal',

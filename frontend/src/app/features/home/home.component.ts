@@ -70,7 +70,7 @@ import { TuiButton } from '@taiga-ui/core';
           <div class="feature__content">
             <span class="feature__eyebrow">Kolekcja Dla Niego</span>
             <h2 class="feature__title">Charakter<br>bez kompromisów.</h2>
-            <p class="feature__subtitle">Intensywne, wyraziste, niezapomniane. Zapachy dla mężczyzny, który wie, czego chce.</p>
+            <p class="feature__subtitle">Intensywne, wyraziste, zapadające w pamięć. Zapachy dla mężczyzny, który wie, czego chce.</p>
             <a routerLink="/category/perfume" [queryParams]="{gender: ['Mężczyzna', 'Unisex']}" tuiButton appearance="outline" size="m" type="button">Odkryj kolekcję</a>
           </div>
           <div class="feature__media">
@@ -81,6 +81,32 @@ import { TuiButton } from '@taiga-ui/core';
         </section>
 
       </div>
+
+      <!-- FRAGRANCE FINDER.
+           Reuses the .showcase block wholesale (same content/media grid, same
+           type scale, same hover on the bottle) rather than restating those
+           rules — a copied set would drift the first time the showcases are
+           retouched. Only the background and the gels-style content/media
+           padding are variant-specific.
+
+           Sits right after the two collection blocks: a visitor who did not
+           recognise themselves in "dla niej"/"dla niego" is exactly the one who
+           needs the picker, and our product names ("Aqua Soul") tell them
+           nothing on their own. Links to the dedicated page instead of embedding
+           the widget — the home route is prerendered and must stay light. -->
+      <section class="showcase showcase--finder">
+        <div class="showcase__content">
+          <span class="showcase__eyebrow">Nie wiesz, co wybrać?</span>
+          <h2 class="showcase__title">Dobierzemy zapach<br>za Ciebie.</h2>
+          <p class="showcase__subtitle">Wpisz nazwę perfum, które znasz — znajdziemy coś o podobnym charakterze. Albo zaznacz nuty, które lubisz, a my dopasujemy resztę.</p>
+          <a routerLink="/dobierz-zapach" tuiButton appearance="outline" size="m" type="button">Dobierz zapach</a>
+        </div>
+        <div class="showcase__media">
+          <img class="showcase__image"
+            src="/assets/images/perfum_luxury_white.webp"
+            alt="Prezenty Luxury" loading="lazy" decoding="async" width="1080" height="1080" />
+        </div>
+      </section>
 
       <!-- DIFFUSERS showcase -->
       <section class="showcase showcase--diffusers">
@@ -132,8 +158,8 @@ import { TuiButton } from '@taiga-ui/core';
         <div class="category-card category-card--c">
           <div class="category-card__media">
             <img class="category-card__image"
-              src="/assets/images/perfum_luxury_white.webp"
-              alt="Prezenty Luxury" loading="lazy" decoding="async" width="1080" height="1080" />
+              src="https://cdn.chogangroupspa.com/images/prodotti/big/PR17633888000PR16982200610.jpg"
+              alt="Flakon perfum Olfazeta Luxury" loading="lazy" decoding="async" width="1080" height="1080" />
           </div>
           <div class="category-card__content">
             <span class="category-card__eyebrow">Prezenty</span>
@@ -355,6 +381,10 @@ import { TuiButton } from '@taiga-ui/core';
     }
     .showcase--diffusers { background: #eef2ee; }
     .showcase--gels      { background: #eff4f8; }
+    /* Own pastel rather than reusing the gels blue: this section sits directly
+       under the cream/grey collection duo, and repeating a neighbour's tint
+       would blur the boundary between two unrelated blocks. */
+    .showcase--finder    { background: #f1edf4; }
 
     .showcase__media {
       display: flex;
@@ -385,6 +415,10 @@ import { TuiButton } from '@taiga-ui/core';
     .showcase--diffusers .showcase__content { padding-right: calc(var(--gutter) + 40px); }
     .showcase--gels      .showcase__content { padding-left:  calc(var(--gutter) + 40px); align-items: flex-end; text-align: right; }
     .showcase--gels      .showcase__media   { padding-right: var(--gutter); }
+    /* Same hand as the gels block: copy column left, bottle right. Alternates
+       against the diffusers section that follows it. */
+    .showcase--finder    .showcase__content { padding-left:  calc(var(--gutter) + 40px); align-items: flex-end; text-align: right; }
+    .showcase--finder    .showcase__media   { padding-right: var(--gutter); }
 
     .showcase__eyebrow {
       display: block;
@@ -492,9 +526,13 @@ import { TuiButton } from '@taiga-ui/core';
       .feature--women { padding-left: var(--gutter); padding-right: var(--gutter); }
       .feature--men   { padding-left: var(--gutter); padding-right: var(--gutter); }
       .showcase       { grid-template-columns: 1fr; height: auto; min-height: auto; }
-      .showcase--gels .showcase__content { order: -1; }
+      /* Copy above bottle once stacked — the gels-hand variants put content
+         second in the DOM, which would otherwise read image-first on mobile. */
+      .showcase--gels   .showcase__content { order: -1; }
+      .showcase--finder .showcase__content { order: -1; }
       .showcase__content { padding: 56px var(--gutter) 40px; }
       .showcase--gels      .showcase__content { padding-left:  var(--gutter); }
+      .showcase--finder    .showcase__content { padding-left:  var(--gutter); }
       .showcase--diffusers .showcase__content { padding-right: var(--gutter); }
       .showcase__media   { padding: 0 var(--gutter) 56px; }
       .highlight-grid { grid-template-columns: 1fr; }

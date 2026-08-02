@@ -38,6 +38,15 @@ export const routes: Routes = [
       ),
   },
   {
+    // Polish slug on purpose: this route's job is to rank for "dobór zapachu"
+    // style queries, and the URL is part of that signal.
+    path: 'dobierz-zapach',
+    title: 'Dobierz zapach',
+    data: { preload: true },
+    loadComponent: () =>
+      import('./features/finder/finder-page.component').then((m) => m.FinderPageComponent),
+  },
+  {
     path: 'cart',
     title: 'Koszyk',
     data: { preload: true },

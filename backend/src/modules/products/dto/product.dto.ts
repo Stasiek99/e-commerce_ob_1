@@ -291,6 +291,48 @@ export class ProductQueryDto {
   maxPrice?: number;
 }
 
+/**
+ * Query for the fragrance finder's note matching.
+ *
+ * `notes` are normalized keys as handed out by `GET /products/finder/notes` —
+ * the client must not invent them, and anything unrecognized simply fails to
+ * overlap, so no validation against the live vocabulary is needed here.
+ */
+export class FinderMatchQueryDto {
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  @Transform(({ value }) => {
+    const raw = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+    return raw.map((v: string) => String(v).trim()).filter(Boolean);
+  })
+  notes!: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsString({ each: true })
+  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : undefined))
+  gender?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  category?: string;
+
+  /** Product id to keep out of the results — the one currently being viewed. */
+  @IsOptional()
+  @IsUUID()
+  exclude?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(48)
+  limit?: number;
+}
+
 export class CreateVariantDto {
   @IsString()
   @IsNotEmpty()

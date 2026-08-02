@@ -7,6 +7,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EmailQueueService } from '../email/email-queue.service';
 import { StorageService } from '../storage/storage.service';
 import { OrderStatus, Prisma, ProductStatus } from '@prisma/client';
+import {
+  FUZZY_MIN_TOKEN_LENGTH,
+  ParsedSearchQuery,
+  normalizeSearchText,
+  parseSearchQuery,
+} from './search/search-query.util';
 
 // Explicit select — inspiredBy and luxuryReferenceId are intentionally excluded
 // from public API responses to avoid leaking the inspiration mapping table.
@@ -43,6 +49,25 @@ const PRODUCT_SELECT = {
   images: { orderBy: [{ isPrimary: 'desc' as const }, { sortOrder: 'asc' as const }] },
   category: { select: { id: true, name: true, slug: true } },
 };
+
+// Autocomplete dropdown size. Kept small on purpose: the list is rendered inside
+// the header and every row costs an image request.
+const SUGGEST_LIMIT = 6;
+
+// How many olfactory notes the fragrance finder offers. The catalog holds ~255
+// distinct notes; the top 24 cover ~60% of all occurrences, which is the point
+// where the picker still fits on a phone screen without scrolling into a wall of
+// chips nobody reads.
+const FINDER_NOTE_VOCABULARY_SIZE = 24;
+
+export interface FinderNote {
+  /** Normalized key — what POST/GET match expects. */
+  key: string;
+  /** Most common raw spelling, for display ("Jaśmin"). */
+  label: string;
+  /** Number of products carrying the note; drives the ordering. */
+  count: number;
+}
 
 // Shape required by ProductsService.notifyStockChange — every site outside this
 // service that mutates ProductVariant.stock (orders/payments checkout decrements,
@@ -195,47 +220,16 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
       ...(hasVariantFilter ? { variants: { some: variantWhere } } : {}),
     };
 
-    // ── Full-text + inspiration search ────────────────────────────────────────
-    // Level 1 — exact alias match:  'YSL' = ANY(lr.aliases)
-    // Level 2 — brand/name ILIKE:   lr.brand ILIKE '%Xerjoff%'
-    // Level 3 — inspiredBy ILIKE:   p."inspiredBy" ILIKE '%Sauvage%'
-    // Level 4 — product name ILIKE: p.name ILIKE '%Chlorophyll%'
-    // Level 5 — trigram fallback:   'Xerjoffe' <% p."inspiredBy"  (typo tolerance)
-    // Within the same rank bucket: sortOrder asc, then Millesime before Luxury.
+    // ── Typo- and abbreviation-tolerant search ────────────────────────────────
+    // See rankedSearchIds() for the matching and ranking model.
     if (query.search) {
-      const term = query.search;
+      const parsed = parseSearchQuery(query.search);
 
-      const ranked = await this.prisma.$queryRaw<Array<{ id: string; rank: number }>>`
-        SELECT p.id,
-          CAST(
-            CASE WHEN ${term} = ANY(lr.aliases)                           THEN 100 ELSE 0 END +
-            CASE WHEN p."catalogNumber" ILIKE '%' || ${term} || '%'       THEN  60 ELSE 0 END +
-            CASE WHEN lr.brand    ILIKE '%' || ${term} || '%'             THEN  50 ELSE 0 END +
-            CASE WHEN lr.name     ILIKE '%' || ${term} || '%'             THEN  40 ELSE 0 END +
-            CASE WHEN p."inspiredBy" ILIKE '%' || ${term} || '%'          THEN  30 ELSE 0 END +
-            CASE WHEN p.name      ILIKE '%' || ${term} || '%'             THEN  20 ELSE 0 END +
-            CASE WHEN p."shortDescription" ILIKE '%' || ${term} || '%'    THEN  10 ELSE 0 END +
-            CASE WHEN ${term} <% COALESCE(p."inspiredBy", '')             THEN   5 ELSE 0 END +
-            CASE WHEN ${term} <% p.name                                   THEN   3 ELSE 0 END
-          AS INTEGER) AS rank
-        FROM products p
-        LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
-        WHERE p."isActive" = true
-          AND p."status" != 'DISCONTINUED'
-          AND (
-            ${term} = ANY(lr.aliases)
-            OR p."catalogNumber"   ILIKE '%' || ${term} || '%'
-            OR lr.brand    ILIKE '%' || ${term} || '%'
-            OR lr.name     ILIKE '%' || ${term} || '%'
-            OR p."inspiredBy"      ILIKE '%' || ${term} || '%'
-            OR p.name              ILIKE '%' || ${term} || '%'
-            OR p."shortDescription" ILIKE '%' || ${term} || '%'
-            OR ${term} <% COALESCE(p."inspiredBy", '')
-            OR ${term} <% p.name
-          )
-        ORDER BY rank DESC
-        LIMIT 500
-      `;
+      if (!parsed.isUsable) {
+        return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+      }
+
+      const ranked = await this.rankedSearchIds(parsed, 500);
 
       if (!ranked.length) {
         return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
@@ -426,6 +420,187 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     )];
 
     const result = { scentFamilies, genders };
+    try {
+      await this.redis.setex(key, 600, JSON.stringify(result));
+    } catch {}
+    return result;
+  }
+
+  /**
+   * Note vocabulary for the fragrance finder, most common first.
+   *
+   * Derived from the catalog rather than hardcoded, so it can never drift out of
+   * sync with what is actually purchasable. Each entry carries both the
+   * normalized key (what the match endpoint expects) and a display label — the
+   * most frequently used raw spelling, since `notes` stores capitalized, accented
+   * strings as printed on the data sheet ("Jaśmin", not "jasmin").
+   *
+   * The catalog has ~255 distinct notes with a long tail; showing all of them
+   * would be a worse UI than showing none. The default cut keeps the head of the
+   * distribution, which covers roughly 60% of all note occurrences.
+   */
+  async getFinderNotes(limit = FINDER_NOTE_VOCABULARY_SIZE): Promise<FinderNote[]> {
+    const take = Math.min(Math.max(limit, 1), 60);
+    const version = await this.getCacheVersion();
+    const key = `finder_notes:v${version}:${take}`;
+    try {
+      const cached = await this.redis.get(key);
+      if (cached) return JSON.parse(cached) as FinderNote[];
+    } catch {}
+
+    const rows = await this.prisma.$queryRaw<Array<{ key: string; label: string; count: bigint }>>`
+      SELECT norm AS key,
+             (array_agg(raw ORDER BY c DESC, raw ASC))[1] AS label,
+             SUM(c) AS count
+      FROM (
+        SELECT normalize_search_text(n) AS norm, btrim(n) AS raw, COUNT(*) AS c
+        FROM products p, unnest(p.notes) AS n
+        WHERE p."isActive" = true
+          AND p."status" IN ('ACTIVE', 'OUT_OF_STOCK')
+          AND normalize_search_text(n) <> ''
+        GROUP BY 1, 2
+      ) t
+      GROUP BY norm
+      ORDER BY count DESC, norm ASC
+      LIMIT ${take}
+    `;
+
+    const result: FinderNote[] = rows.map((r) => ({
+      key: r.key,
+      label: r.label,
+      count: Number(r.count),
+    }));
+
+    try {
+      await this.redis.setex(key, 3600, JSON.stringify(result));
+    } catch {}
+    return result;
+  }
+
+  /**
+   * Ranks products by how well their olfactory pyramid covers the notes the
+   * shopper picked.
+   *
+   * Scoring is recall-dominant: `recall * 100 + precision * 20`, where recall is
+   * the share of WANTED notes the product covers and precision is the share of
+   * the PRODUCT's notes that were wanted. Recall decides the ordering — a shopper
+   * who picks "wanilia + tonka" wants both, and a product carrying both must beat
+   * one carrying only vanilla. Precision is the tie-break that stops a 20-note
+   * pyramid from outranking a focused one purely by surface area.
+   *
+   * The `&&` overlap prefilter runs against the GIN-indexed `notesNormalized`
+   * column, so the scored candidate set is only products sharing at least one
+   * selected note — never the whole catalog.
+   */
+  async matchByNotes(query: {
+    notes: string[];
+    gender?: string[];
+    category?: string;
+    exclude?: string;
+    limit?: number;
+  }): Promise<{ data: unknown[]; meta: { total: number; limit: number } }> {
+    // Normalized with the SAME normalizer that built `notesNormalized`, so the
+    // endpoint accepts either the keys handed out by /products/finder/notes or
+    // raw display strings straight off a product ("Drzewo sandałowe"). The
+    // product page relies on the latter to ask for "more like this".
+    const wanted = [...new Set(query.notes.map(normalizeSearchText).filter(Boolean))];
+    const limit = Math.min(query.limit ?? 12, 48);
+
+    if (!wanted.length) return { data: [], meta: { total: 0, limit } };
+
+    const version = await this.getCacheVersion();
+    const key = `finder_match:v${version}:${createHash('sha256')
+      .update(JSON.stringify({ w: [...wanted].sort(), g: query.gender?.slice().sort(), c: query.category, x: query.exclude, limit }))
+      .digest('hex')
+      .slice(0, 16)}`;
+    try {
+      const cached = await this.redis.get(key);
+      if (cached) return JSON.parse(cached);
+    } catch {}
+
+    const categorySlugs = query.category ? await this.resolveCategorySlugs(query.category) : undefined;
+
+    // Gender and category are filtered INSIDE the ranking query, not afterwards.
+    // Filtering a LIMITed result set would silently return fewer rows than asked
+    // for — or none at all, as "wanilia + dyfuzory" did, because every diffuser
+    // sat below the globally top-scoring perfumes that the LIMIT had already
+    // taken.
+    const filters: Prisma.Sql[] = [];
+    if (query.gender?.length) {
+      filters.push(Prisma.sql`AND p.gender = ANY(${query.gender}::text[])`);
+    }
+    if (categorySlugs?.length) {
+      filters.push(Prisma.sql`AND c.slug = ANY(${categorySlugs}::text[])`);
+    }
+    if (query.exclude) {
+      // Excluded before the LIMIT — the product being viewed is by definition a
+      // perfect note match for itself and would otherwise take the top slot.
+      filters.push(Prisma.sql`AND p.id <> ${query.exclude}`);
+    }
+
+    // Repeated rather than aliased because Postgres cannot reference a
+    // SELECT-list alias from a sibling expression. The candidate set is already
+    // narrowed by the GIN overlap prefilter, so this evaluates over a handful of
+    // rows, not the catalog. Only the SIZE of the intersection is needed here —
+    // the human-readable matched notes are derived after hydration, from each
+    // product's own `notes`, so the shopper sees "Drzewo sandałowe" and not the
+    // normalized key.
+    const matchCount = Prisma.sql`
+      cardinality(ARRAY(SELECT unnest(p."notesNormalized") INTERSECT SELECT unnest(${wanted}::text[])))::float`;
+
+    const ranked = await this.prisma.$queryRaw<Array<{ id: string; score: number }>>(Prisma.sql`
+      SELECT id, score FROM (
+        SELECT p.id,
+               (
+                 ${matchCount} / ${wanted.length}::float * 100
+                 + ${matchCount} / NULLIF(cardinality(p."notesNormalized"), 0)::float * 20
+               ) AS score
+        FROM products p
+        JOIN categories c ON c.id = p."categoryId"
+        WHERE p."isActive" = true
+          AND p."status" IN ('ACTIVE', 'OUT_OF_STOCK')
+          AND p."notesNormalized" && ${wanted}::text[]
+          ${filters.length ? Prisma.join(filters, ' ') : Prisma.empty}
+      ) scored
+      WHERE score IS NOT NULL
+      ORDER BY score DESC, id ASC
+      LIMIT ${limit}
+    `);
+
+    if (!ranked.length) return { data: [], meta: { total: 0, limit } };
+
+    const ids = ranked.map((r) => r.id);
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: PRODUCT_SELECT,
+    });
+
+    const order = new Map(ids.map((id, i) => [id, i]));
+    products.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+
+    const enriched = await this.attachOmnibusData(products);
+    const wantedSet = new Set(wanted);
+
+    // matchedNotes drives the "wspólne nuty" line in the result card — showing
+    // WHY a product was suggested is what makes the picker trustworthy.
+    //
+    // Derived from the product's own `notes` rather than from the SQL
+    // intersection, so the shopper sees the display spelling ("Drzewo sandałowe")
+    // instead of the normalized key ("drzewo sandalowe"). Deduplicated because a
+    // note can legitimately appear twice in one pyramid (heart and base).
+    const data = enriched.map((product) => {
+      const seen = new Set<string>();
+      const matchedNotes: string[] = [];
+      for (const note of (product as { notes?: string[] }).notes ?? []) {
+        const key = normalizeSearchText(note);
+        if (!wantedSet.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        matchedNotes.push(note.trim());
+      }
+      return { ...product, matchedNotes };
+    });
+
+    const result = { data, meta: { total: data.length, limit } };
     try {
       await this.redis.setex(key, 600, JSON.stringify(result));
     } catch {}
@@ -821,38 +996,122 @@ export class ProductsService implements OnModuleInit, OnModuleDestroy {
     return image;
   }
 
+  /**
+   * Shared matcher for `findAll({ search })` and `suggest()` — returns product ids
+   * ordered by relevance, most relevant first.
+   *
+   * Matching runs against `products."searchText"`, a normalized haystack kept in
+   * sync by a DB trigger (see the 20260801120000_product_search_text migration).
+   * Because both sides of every comparison are normalized the same way, this is
+   * case-, accent- and punctuation-insensitive by construction: "lancome" finds
+   * "Lancôme", "d&g" and "DG" both find "Dolce & Gabbana".
+   *
+   * Recall model — every token must match, in any order:
+   *   - substring hit  `"searchText" LIKE '%dolce%'`   (index: gin_trgm_ops)
+   *   - trigram hit    `'dolcce' <% "searchText"`      (index: gin_trgm_ops)
+   * The trigram fallback is applied only to tokens of at least
+   * FUZZY_MIN_TOKEN_LENGTH characters — word similarity on a 2–3 character token
+   * matches almost the whole catalog.
+   *
+   * If the AND pass finds nothing, a second pass runs the same predicates with OR
+   * plus a coverage floor: at least half the tokens (rounded up) must still match.
+   * That keeps "tom frod" useful — "tom" alone carries it — while stopping a query
+   * like "zapach do samochodu" from returning every product whose text happens to
+   * contain the two-letter token "do". Without the floor the relaxed pass degrades
+   * into "return the catalog", which is worse for the shopper than an honest miss.
+   *
+   * Ranking is a weighted sum: field-level phrase hits (catalog number > alias >
+   * brand > reference name > inspiredBy > product name) dominate, token coverage
+   * breaks ties between partial matches, and trigram word similarity provides a
+   * final continuous tie-break so near-misses order sensibly among themselves.
+   */
+  private async rankedSearchIds(
+    parsed: ParsedSearchQuery,
+    take: number,
+  ): Promise<Array<{ id: string; rank: number }>> {
+    const { phrase, rawPhrase, tokens } = parsed;
+
+    const tokenPredicate = (token: string) =>
+      token.length >= FUZZY_MIN_TOKEN_LENGTH
+        ? Prisma.sql`(p."searchText" LIKE ${`%${token}%`} OR ${token} <% p."searchText")`
+        : Prisma.sql`(p."searchText" LIKE ${`%${token}%`})`;
+
+    const predicates = tokens.map(tokenPredicate);
+
+    // Every token contributes an equal coverage bonus, so a row matching 3 of 4
+    // tokens always outranks one matching 2 — this is what orders the OR pass.
+    const coverage = Prisma.join(
+      tokens.map((token) => Prisma.sql`CASE WHEN p."searchText" LIKE ${`%${token}%`} THEN 8 ELSE 0 END`),
+      ' + ',
+    );
+
+    const rank = Prisma.sql`CAST(
+      CASE WHEN normalize_search_text(p."catalogNumber") = ${phrase}                      THEN 140 ELSE 0 END
+    + CASE WHEN normalize_search_text(p."catalogNumber") LIKE ${`${phrase}%`}             THEN  70 ELSE 0 END
+    + CASE WHEN EXISTS (
+        SELECT 1 FROM unnest(lr.aliases) alias
+         WHERE normalize_search_text(alias) IN (${phrase}, ${rawPhrase})
+      )                                                                                   THEN 100 ELSE 0 END
+    + CASE WHEN normalize_search_text(lr.brand)     LIKE ${`%${phrase}%`}                 THEN  55 ELSE 0 END
+    + CASE WHEN normalize_search_text(lr.name)      LIKE ${`%${phrase}%`}                 THEN  45 ELSE 0 END
+    + CASE WHEN normalize_search_text(p."inspiredBy") LIKE ${`%${phrase}%`}               THEN  35 ELSE 0 END
+    + CASE WHEN normalize_search_text(p.name)       LIKE ${`${phrase}%`}                  THEN  30 ELSE 0 END
+    + CASE WHEN normalize_search_text(p.name)       LIKE ${`%${phrase}%`}                 THEN  20 ELSE 0 END
+    + CASE WHEN p."searchText" LIKE ${`%${phrase}%`}                                      THEN  12 ELSE 0 END
+    + ${coverage}
+    + ROUND(30 * word_similarity(${phrase}, p."searchText"))
+    AS INTEGER)`;
+
+    const run = (match: Prisma.Sql) =>
+      this.prisma.$queryRaw<Array<{ id: string; rank: number }>>(Prisma.sql`
+        SELECT p.id, ${rank} AS rank
+        FROM products p
+        LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
+        WHERE p."isActive" = true
+          AND p."status" != 'DISCONTINUED'
+          AND (${match})
+        ORDER BY rank DESC, p."sortOrder" ASC, p.id ASC
+        LIMIT ${take}
+      `);
+
+    const strict = await run(Prisma.join(predicates, ' AND '));
+    if (strict.length || tokens.length < 2) {
+      return strict.map((row) => ({ id: row.id, rank: Number(row.rank) }));
+    }
+
+    // Counts tokens matched by EITHER predicate branch, so a purely fuzzy hit
+    // ("dolcce") still counts toward the floor even though it contributes no
+    // substring coverage to the rank.
+    const matchedTokenCount = Prisma.join(
+      predicates.map((predicate) => Prisma.sql`CASE WHEN ${predicate} THEN 1 ELSE 0 END`),
+      ' + ',
+    );
+    const minMatchedTokens = Math.ceil(tokens.length / 2);
+
+    // The OR stays in front of the floor on purpose: it is the index-driven part
+    // the planner can turn into bitmap scans, while the arithmetic floor is a
+    // post-filter over that candidate set.
+    const relaxed = await run(Prisma.sql`
+      (${Prisma.join(predicates, ' OR ')})
+      AND (${matchedTokenCount}) >= ${minMatchedTokens}
+    `);
+    return relaxed.map((row) => ({ id: row.id, rank: Number(row.rank) }));
+  }
+
   async suggest(q: string): Promise<SuggestResult[]> {
-    const term = q.trim();
+    const parsed = parseSearchQuery(q);
+    if (!parsed.isUsable) return [];
 
     const version = await this.getCacheVersion();
-    const cacheKey = `suggest:v${version}:${term.toLowerCase()}`;
+    // Keyed on the normalized+expanded phrase rather than the raw input, so
+    // "D&G", "d & g" and "dg" all share one cache entry.
+    const cacheKey = `suggest:v${version}:${parsed.phrase}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) return JSON.parse(cached) as SuggestResult[];
     } catch {}
 
-    // Raw SQL — needs alias lookup (Prisma can't query lr.aliases[] via relation where)
-    // Name-prefix and catalogNumber-prefix rows sort first; within the same bucket, sortOrder wins.
-    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
-      SELECT p.id
-      FROM products p
-      LEFT JOIN luxury_references lr ON lr.id = p."luxuryReferenceId"
-      WHERE p."isActive" = true AND p."status" != 'DISCONTINUED' AND (
-        p.name              ILIKE '%' || ${term} || '%'
-        OR lr.brand         ILIKE '%' || ${term} || '%'
-        OR ${term}          = ANY(lr.aliases)
-        OR p."inspiredBy"   ILIKE '%' || ${term} || '%'
-        OR p."catalogNumber" ILIKE '%' || ${term} || '%'
-      )
-      ORDER BY
-        CASE
-          WHEN p.name ILIKE ${term} || '%' THEN 0
-          WHEN p."catalogNumber" ILIKE ${term} || '%' THEN 0
-          ELSE 1
-        END,
-        p."sortOrder" ASC
-      LIMIT 6
-    `;
+    const rows = await this.rankedSearchIds(parsed, SUGGEST_LIMIT);
 
     if (!rows.length) return [];
 

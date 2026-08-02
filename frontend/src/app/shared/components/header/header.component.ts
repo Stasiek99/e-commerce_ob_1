@@ -1,11 +1,12 @@
 import { Component, DestroyRef, ElementRef, OnInit, inject, signal } from '@angular/core';
 import { CdkTrapFocus } from '@angular/cdk/a11y';
-import { RouterLink, Router } from '@angular/router';
+import { RouterLink, Router, ActivatedRoute } from '@angular/router';
 import { ReactiveFormsModule, FormControl } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { debounceTime, distinctUntilChanged, switchMap, catchError, of } from 'rxjs';
+import { debounceTime, distinctUntilChanged, map } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { TuiButton, TuiIcon, TuiTextfield, TuiDropdown, TuiDropdownHover, TuiDataList } from '@taiga-ui/core';
+import { TuiButton, TuiIcon, TuiTextfield, TuiDropdown, TuiDropdownHover, TuiDataList, TuiDialogService } from '@taiga-ui/core';
+import { PolymorpheusComponent } from '@taiga-ui/polymorpheus';
 import { TuiChevron } from '@taiga-ui/kit';
 import { TuiList } from '@taiga-ui/layout';
 import { CartService } from '../../../core/services/cart.service';
@@ -13,6 +14,8 @@ import { AuthService } from '../../../core/services/auth.service';
 import { WishlistService } from '../../../core/services/wishlist.service';
 import { PricePipe } from '../../pipes/price.pipe';
 import { environment } from '../../../../environments/environment';
+import { SEARCH_DEBOUNCE_MS, SEARCH_MIN_LENGTH } from '../../../core/constants/search.constants';
+import { createTextSearchStream } from '../../../core/utils/search-stream';
 
 interface SuggestResult {
   id: string;
@@ -80,7 +83,7 @@ interface SuggestResult {
         <!-- CENTER: search (hidden on mobile, lives in mobile menu instead) -->
         <div class="header__search">
           <div class="header__search-container">
-            <form class="header__search-form" (submit)="onSearch()">
+            <form class="header__search-form" (submit)="onSearch($event)">
               <tui-textfield iconStart="@tui.search" class="header__search-field" tuiTextfieldSize="s">
                 <input
                   [formControl]="searchControl"
@@ -98,6 +101,20 @@ interface SuggestResult {
                 />
               </tui-textfield>
               <button size="s" tuiButton type="submit" appearance="primary" class="header__search-btn">Szukaj</button>
+              <!-- Escape hatch for the shopper who cannot name what they want.
+                   Sits next to the search box because that is exactly where they
+                   give up. -->
+              <button
+                size="s"
+                tuiButton
+                type="button"
+                appearance="flat"
+                iconStart="@tui.sparkles"
+                class="header__finder-btn"
+                (click)="openFinder()"
+              >
+                Dobierz
+              </button>
             </form>
 
             @if (showAutocomplete && autocomplete().length > 0) {
@@ -205,8 +222,11 @@ interface SuggestResult {
             <a routerLink="/category/perfume" class="mobile-nav__link" (click)="closeMobileMenu()">Perfumy</a>
             <a routerLink="/category/diffusers" class="mobile-nav__link" (click)="closeMobileMenu()">Dyfuzory</a>
             <a routerLink="/category/gels" class="mobile-nav__link" (click)="closeMobileMenu()">Żele pod prysznic</a>
+            <a routerLink="/dobierz-zapach" class="mobile-nav__link mobile-nav__link--finder" (click)="closeMobileMenu()">
+              Dobierz zapach
+            </a>
             <hr class="mobile-nav__divider" />
-            <form class="mobile-nav__search" (submit)="onMobileSearch()">
+            <form class="mobile-nav__search" (submit)="onMobileSearch($event)">
               <tui-textfield iconStart="@tui.search" tuiTextfieldSize="s" class="mobile-nav__search-field">
                 <input [formControl]="searchControl" placeholder="Szukaj produktów…" aria-label="Szukaj produktów" tuiTextfield />
               </tui-textfield>
@@ -286,6 +306,12 @@ interface SuggestResult {
     }
     .header__search-field { flex: 1; min-width: 0; }
     .header__search-btn { flex-shrink: 0; }
+    .header__finder-btn { flex-shrink: 0; white-space: nowrap; }
+    /* Below 1200px the search row runs out of room before the button does any
+       good — the mobile menu carries a "Dobierz zapach" link instead. */
+    @media (max-width: 1200px) {
+      .header__finder-btn { display: none; }
+    }
 
     /* ── Autocomplete dropdown ──────────────── */
     /* tuiList adds margin-inline-start and li::before bullets — reset both */
@@ -442,6 +468,7 @@ interface SuggestResult {
     }
     .mobile-nav__link:last-of-type { border-bottom: none; }
     .mobile-nav__link:hover { color: var(--color-accent); }
+    .mobile-nav__link--finder { color: var(--color-accent); font-weight: 600; }
     .mobile-nav__divider { border: none; border-top: 1px solid var(--color-border); margin: 8px 0; }
     .mobile-nav__search {
       display: flex;
@@ -472,52 +499,87 @@ export class HeaderComponent implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly destroyRef = inject(DestroyRef);
   private readonly elRef = inject(ElementRef);
+  private readonly dialogs = inject(TuiDialogService);
+  private readonly route = inject(ActivatedRoute);
 
   dropdownOpen = false;
   mobileMenuOpen = false;
   showAutocomplete = false;
   private hamburgerEl: HTMLElement | null = null;
 
-  readonly autocomplete = signal<SuggestResult[]>([]);
   readonly activeIndex = signal(-1);
 
   readonly searchControl = new FormControl<string>('');
 
-  ngOnInit(): void {
-    // Autocomplete pipeline — 250ms, hits cached suggest endpoint
-    this.searchControl.valueChanges.pipe(
-      debounceTime(250),
-      distinctUntilChanged(),
-      switchMap(q => {
-        const term = q?.trim() ?? '';
-        if (term.length < 2) {
-          this.autocomplete.set([]);
-          return of([]);
-        }
-        return this.http
-          .get<SuggestResult[]>(`${environment.apiUrl}/products/suggest`, { params: { q: term } })
-          .pipe(catchError(() => of([])));
+  /**
+   * Dropdown suggestions. Uses `/products/suggest` rather than the finder's
+   * `/products?search=` on purpose: this list needs six trimmed rows, not full
+   * product payloads with variants and stock. Only the pipeline is shared.
+   */
+  private readonly suggestStream = createTextSearchStream<SuggestResult>({
+    fetch: (term) =>
+      this.http.get<SuggestResult[]>(`${environment.apiUrl}/products/suggest`, {
+        params: { q: term },
       }),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe(results => {
-      this.autocomplete.set(results);
-      this.activeIndex.set(-1);
-    });
+    destroyRef: this.destroyRef,
+    minLength: SEARCH_MIN_LENGTH,
+  });
 
-    // Search-as-you-type pipeline — 400ms, updates catalog URL only when already on /products
+  /** Read directly off the stream — no local copy to keep in sync. */
+  readonly autocomplete = this.suggestStream.results;
+
+  ngOnInit(): void {
+    // Autocomplete runs on the shared search stream (core/utils/search-stream.ts),
+    // the same pipeline as the fragrance finder: debounce → trim → distinct →
+    // switchMap. The keyboard cursor resets on keystroke rather than on arrival
+    // of results, so it can never point past the end of a list that shrank.
+    this.searchControl.valueChanges
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((value) => {
+        this.activeIndex.set(-1);
+        this.suggestStream.search(value ?? '');
+      });
+
+    // Search-as-you-type — updates the catalog URL only when already on
+    // /products. Deliberately one tick slower than the autocomplete: this one
+    // triggers a full ranked catalog query plus a route navigation, so it should
+    // settle after the dropdown has, not race it. Kept as its own pipeline
+    // because it produces a navigation, not a result set.
     this.searchControl.valueChanges.pipe(
-      debounceTime(400),
+      map(value => value?.trim() ?? ''),
+      debounceTime(SEARCH_DEBOUNCE_MS + 150),
       distinctUntilChanged(),
       takeUntilDestroyed(this.destroyRef),
-    ).subscribe(q => {
+    ).subscribe(term => {
       const currentPath = this.router.url.split('?')[0];
       if (currentPath !== '/products') return;
-      const term = q?.trim() ?? '';
       this.router.navigate(['/products'], {
         queryParams: { q: term || null },
         queryParamsHandling: 'merge',
         replaceUrl: true,
       });
+    });
+
+    // Keep the box in sync with ?q= in the URL.
+    //
+    // Without this the header goes blank whenever the catalog is reached by any
+    // route that is not "type into this box": a shared link, a reload, browser
+    // back, or clicking "Zobacz wszystkie wyniki" in the finder. The page then
+    // shows "Wyniki dla: dg" above an empty search bar, and the shopper has no
+    // way to refine the query they can plainly see is active.
+    //
+    // emitEvent: false is what stops this from looping — the pipelines above
+    // navigate on input, and re-emitting here would feed that navigation back in.
+    this.route.queryParamMap.pipe(
+      map(params => params.get('q') ?? ''),
+      distinctUntilChanged(),
+      takeUntilDestroyed(this.destroyRef),
+    ).subscribe(q => {
+      const onCatalog = this.router.url.split('?')[0] === '/products';
+      const next = onCatalog ? q : '';
+      if ((this.searchControl.value ?? '') !== next) {
+        this.searchControl.setValue(next, { emitEvent: false });
+      }
     });
   }
 
@@ -590,24 +652,55 @@ export class HeaderComponent implements OnInit {
 
   selectSuggestion(item: SuggestResult): void {
     this.showAutocomplete = false;
-    this.autocomplete.set([]);
+    this.suggestStream.reset();
     this.activeIndex.set(-1);
+    // Navigating to a product page, not the catalog — the query-param sync will
+    // see no ?q= and blank the box, so clearing it here would be redundant.
     this.searchControl.setValue('', { emitEvent: false });
     this.closeMobileMenu();
     this.router.navigate(['/products', item.slug]);
   }
 
-  onSearch(): void {
+  /**
+   * Opens the picker in a dialog rather than navigating, so the shopper does not
+   * lose the page they were on. The component is loaded lazily — it pulls in the
+   * note vocabulary and the product card, and most sessions never open it, so it
+   * must not sit in the header's initial bundle.
+   */
+  openFinder(): void {
+    import('../fragrance-finder/fragrance-finder.component').then(({ FragranceFinderComponent }) => {
+      this.dialogs
+        .open(new PolymorpheusComponent(FragranceFinderComponent), {
+          label: 'Dobierz zapach',
+          size: 'l',
+        })
+        .subscribe();
+    });
+  }
+
+  /**
+   * `event.preventDefault()` is load-bearing, not defensive.
+   *
+   * Angular's `(submit)` binding does not suppress the browser's native form
+   * submission. Without this, pressing Enter (or the Szukaj button) fired a real
+   * GET to the current URL, which reloaded the page and threw away the
+   * `router.navigate` below — the address bar flashed `/products?q=…` and then
+   * snapped back to whatever page the shopper was on.
+   */
+  onSearch(event?: Event): void {
+    event?.preventDefault();
     const q = this.searchControl.value?.trim();
     this.showAutocomplete = false;
-    this.autocomplete.set([]);
+    this.suggestStream.reset();
     if (!q) return;
-    this.searchControl.setValue('', { emitEvent: false });
+    // The box is intentionally NOT cleared: the query-param sync in ngOnInit
+    // keeps it showing the active search, so the shopper can refine it on the
+    // results page instead of retyping from scratch.
     this.router.navigate(['/products'], { queryParams: { q } });
   }
 
-  onMobileSearch(): void {
-    this.onSearch();
+  onMobileSearch(event?: Event): void {
+    this.onSearch(event);
     this.closeMobileMenu();
   }
 

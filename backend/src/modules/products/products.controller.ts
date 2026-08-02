@@ -32,6 +32,7 @@ import {
   UpdateProductDto,
   ProductQueryDto,
   CreateVariantDto,
+  FinderMatchQueryDto,
   UpdateVariantDto,
   UpdateVariantStockDto,
 } from './dto/product.dto';
@@ -73,6 +74,24 @@ export class ProductsController {
   suggest(@Query('q') q: string) {
     if (!q || q.trim().length < 2 || q.trim().length > 100) return [];
     return this.productsService.suggest(q);
+  }
+
+  // ── Fragrance finder ───────────────────────────────────────────────────────
+  // Both routes are declared before the `:slug` handler further down; Nest
+  // matches in declaration order, so a literal segment registered after a
+  // parameterized one would be shadowed by it.
+
+  @Public()
+  @Get('finder/notes')
+  getFinderNotes() {
+    return this.productsService.getFinderNotes();
+  }
+
+  @Public()
+  @Throttle({ burst: { ttl: 10_000, limit: 15 }, sustained: { ttl: 60_000, limit: 60 } })
+  @Get('finder/match')
+  matchByNotes(@Query() query: FinderMatchQueryDto) {
+    return this.productsService.matchByNotes(query);
   }
 
   @Public()

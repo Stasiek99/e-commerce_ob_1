@@ -1,0 +1,14 @@
+-- Refresh planner statistics for products."searchText".
+--
+-- The two preceding migrations each rewrote every row of `products` in a bulk
+-- UPDATE. Autovacuum eventually re-analyzes, but until it does the planner has no
+-- statistics for the new column and falls back to a Seq Scan even though
+-- products_search_text_trgm_idx is available — verified on the dev database,
+-- where the same query flipped from Seq Scan to Bitmap Index Scan the moment
+-- ANALYZE ran.
+--
+-- On a catalog of a few hundred products the difference is fractions of a
+-- millisecond, but the search path runs uncached on every keystroke of the
+-- autocomplete, and the gap widens linearly with catalog size. ANALYZE is
+-- transaction-safe (unlike VACUUM), so it is fine inside a Prisma migration.
+ANALYZE "products";
