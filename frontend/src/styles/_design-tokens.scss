@@ -14,7 +14,14 @@ $spacing-2xl: 3rem;     // 48px
 $color-primary: #1a1a1a;      // Deep black
 $color-surface: #ffffff;       // White
 $color-secondary: #6b6b6b;    // Neutral gray
-$color-accent: #c9a96e;       // Warm gold
+$color-accent: #c9a96e;       // Warm gold — decorative use and dark surfaces
+// Text-safe variant of the gold. The brand tone scores 1.90:1 on the pale
+// section backgrounds, so every gold label on the site failed WCAG 1.4.3 —
+// one rule accounting for every contrast violation axe reports. This one holds
+// 4.86:1 against the darkest of those backgrounds (#f0ece6). Use it whenever
+// the gold is TEXT on a light surface; keep $color-accent for borders, fills
+// and anything sitting on the dark footer or cookie banner.
+$color-accent-text: #7d6234;
 $color-border: #e5e5e5;        // Light gray
 $color-error: #e63946;         // Red
 $color-success: #2a9d8f;       // Teal
@@ -69,13 +76,19 @@ $color-status-shipped-text: #1e40af;
   --color-surface: #{$color-surface};
   --color-secondary: #{$color-secondary};
   --color-accent: #{$color-accent};
+  --color-accent-text: #{$color-accent-text};
   --color-border: #{$color-border};
   --color-error: #{$color-error};
   --color-success: #{$color-success};
 
   --max-width: 1280px;
   --banner-height: 44px;
-  --header-height: 64px;
+  // 72px, not 64: the logo block is 60px tall plus a 10px optical offset, so
+  // the header row needed 70px of content in a 64px box. The row overflowed,
+  // which is why the 44px search field sat 13px from the top but only 7px from
+  // the bottom. 72px clears the logo and leaves the search row an even 14px on
+  // both sides.
+  --header-height: 72px;
   --chrome-height: calc(var(--banner-height) + var(--header-height));
 
   --font-family-base: #{$font-family-base};

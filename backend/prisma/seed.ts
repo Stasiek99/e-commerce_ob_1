@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as fs from 'fs';
 import * as path from 'path';
+import { BRAND_ABBREVIATIONS } from '../src/modules/products/search/brand-aliases';
 
 const prisma = new PrismaClient();
 const BCRYPT_ROUNDS = 12;
@@ -73,18 +74,11 @@ const LINE_MAP: Partial<Record<RawProduct['category'], string>> = {
 
 // ─── Luxury reference helpers ────────────────────────────────────────────────
 
-const BRAND_ABBREVS: [string, string[]][] = [
-  ['Yves Saint Laurent', ['YSL', 'Y.S.L.']],
-  ['Jean Paul Gaultier', ['JPG']],
-  ['Maison Francis Kurkdjian', ['MFK']],
-  ['Thierry Mugler', ['Mugler']],
-  ['Giorgio Armani', ['Armani']],
-  ['Dolce & Gabbana', ['D&G', 'Dolce Gabbana']],
-  ['Hugo Boss', ['Boss']],
-  ['Calvin Klein', ['CK']],
-  ['Carolina Herrera', ['CH']],
-  ['Tiziana Terenzi', ['TT']],
-];
+// Shared with the query-side expander in src/modules/products/search — the seeder
+// writes these into luxury_references.aliases (and therefore into the products
+// search haystack), while search-query.util.ts expands them back at query time.
+// One list so the two halves can never disagree about what "D&G" means.
+const BRAND_ABBREVS = BRAND_ABBREVIATIONS;
 
 function parseInspiration(str: string): { brand: string; name: string; aliases: string[] } {
   let brand = '';

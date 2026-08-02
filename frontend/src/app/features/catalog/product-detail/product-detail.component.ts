@@ -4,7 +4,7 @@ import { Subscription } from 'rxjs';
 import { isPlatformBrowser, isPlatformServer, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { RESPONSE } from '../../../core/tokens/ssr.tokens';
 import { TuiButton, TuiGroup, TuiIcon, TuiTextfield } from '@taiga-ui/core';
 import { TuiElasticContainer, TuiSlides } from '@taiga-ui/kit';
@@ -17,6 +17,7 @@ import { ToastService } from '../../../core/services/toast.service';
 import { AnalyticsService } from '../../../core/services/analytics.service';
 import { SeoService } from '../../../core/services/seo.service';
 import { WishlistService } from '../../../core/services/wishlist.service';
+import { FragranceFinderService } from '../../../core/services/fragrance-finder.service';
 import { AuthService } from '../../../core/services/auth.service';
 import { StockStreamService } from '../../../core/services/stock-stream.service';
 import { ReviewsService, ReviewSummary } from '../../../core/services/reviews.service';
@@ -51,6 +52,8 @@ interface ProductDetail {
   pyramidTop?: string | null;
   pyramidHeart?: string | null;
   pyramidBase?: string | null;
+  /** Flat note list ordered top → heart → base; served by PRODUCT_SELECT. */
+  notes?: string[] | null;
   status?: string | null;
   estimatedRestockDate?: string | null;
   images: Array<{ url: string; altText?: string | null }>;
@@ -65,6 +68,11 @@ interface ProductDetail {
   paoMonths?: number | null;
 }
 
+// How many of a product's notes are used to look for note-similar fragrances.
+// `notes` is ordered top → heart → base; the opening notes are the recognizable
+// ones, and sending the whole pyramid dilutes the match score's recall term.
+const NOTE_SIMILARITY_SAMPLE = 6;
+
 const CATEGORY_LABELS: Record<string, string> = {
   perfume: 'Perfumy',
   diffusers: 'Dyfuzory',
@@ -74,7 +82,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-product-detail',
   standalone: true,
-  imports: [FormsModule, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton, CdkTrapFocus],
+  imports: [FormsModule, RouterLink, TuiButton, TuiGroup, TuiIcon, TuiExpand, TuiCounter, TuiRating, TuiTextfield, TuiTextarea, TuiElasticContainer, TuiSlides, PricePipe, BreadcrumbComponent, ProductCardComponent, TuiSkeleton, CdkTrapFocus],
   template: `
     @if (loading()) {
       <div class="skeleton-detail">
@@ -520,6 +528,32 @@ const CATEGORY_LABELS: Record<string, string> = {
         }
       </section>
 
+      <!-- Note-similar products.
+           Distinct from "Może Ci się spodobać" below, which is category-based:
+           this one is ranked by overlap of the olfactory pyramid, so it answers
+           "smells like this" rather than "sits on the same shelf". -->
+      @if (similarByNotes().length > 0) {
+        <section class="related">
+          <div class="related__header">
+            <h2 class="related__heading">Podobne zapachy</h2>
+            <a class="related__link" routerLink="/dobierz-zapach">Dobierz zapach sam</a>
+          </div>
+          <div class="related__grid">
+            @for (p of similarByNotes(); track p.id) {
+              <div class="similar">
+                <app-product-card [product]="p" />
+                @if (p.matchedNotes.length > 0) {
+                  <p class="similar__notes">
+                    <span class="similar__notes-label">Wspólne nuty:</span>
+                    {{ p.matchedNotes.join(', ') }}
+                  </p>
+                }
+              </div>
+            }
+          </div>
+        </section>
+      }
+
       <!-- Related products -->
       @if (pages().length > 0) {
         <section class="related">
@@ -682,7 +716,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     /* Info */
     .detail__brand {
       font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
-      color: var(--color-accent); margin: 0 0 6px; font-weight: 600;
+      color: var(--color-accent-text); margin: 0 0 6px; font-weight: 600;
     }
     .detail__name { font-size: clamp(20px, 4vw, 28px); font-weight: 700; margin: 0 0 12px; line-height: 1.35; }
     .detail__catalog-no { font-size: 0.72em; font-weight: 500; color: var(--color-secondary); letter-spacing: 0.03em; white-space: nowrap; }
@@ -768,7 +802,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .detail__pyramid-row:last-child { border-bottom: none; }
     .detail__pyramid-label {
-      flex-shrink: 0; font-weight: 600; color: var(--color-accent);
+      flex-shrink: 0; font-weight: 600; color: var(--color-accent-text);
       font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
       min-width: 52px;
     }
@@ -849,7 +883,7 @@ const CATEGORY_LABELS: Record<string, string> = {
       text-decoration: none;
       transition: color 0.15s;
     }
-    .detail__sds-link:hover { color: var(--color-accent); text-decoration: underline; }
+    .detail__sds-link:hover { color: var(--color-accent-text); text-decoration: underline; }
     .detail__sds-link tui-icon { font-size: 16px; flex-shrink: 0; }
 
     /* Meta */
@@ -955,7 +989,7 @@ const CATEGORY_LABELS: Record<string, string> = {
     }
     .review-card__reply-label {
       font-size: 12px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.06em; color: var(--color-accent); display: block; margin-bottom: 4px;
+      letter-spacing: 0.06em; color: var(--color-accent-text); display: block; margin-bottom: 4px;
     }
     .review-card__reply-body { font-size: 13px; color: var(--color-secondary); margin: 0; line-height: 1.5; }
     .review-card__helpful {
@@ -1000,6 +1034,20 @@ const CATEGORY_LABELS: Record<string, string> = {
     .related__heading {
       font-size: 20px; font-weight: 700; margin: 0;
     }
+    .related__link {
+      font-size: 13px;
+      color: var(--color-accent-text);
+      text-decoration: underline;
+      white-space: nowrap;
+    }
+    .similar { display: flex; flex-direction: column; gap: 6px; }
+    .similar__notes {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--color-secondary);
+    }
+    .similar__notes-label { color: var(--color-success); font-weight: 600; }
     .related__grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -1091,6 +1139,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
   private readonly cartService = inject(CartService);
   private readonly toast = inject(ToastService);
   private readonly seo = inject(SeoService);
+  private readonly finder = inject(FragranceFinderService);
   private readonly wishlist = inject(WishlistService);
   readonly auth = inject(AuthService);
   private readonly reviewsService = inject(ReviewsService);
@@ -1112,6 +1161,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
     return w.split(';').map((s) => s.trim()).filter(Boolean);
   });
   readonly relatedProducts = signal<ProductCardData[]>([]);
+  readonly similarByNotes = signal<Array<ProductCardData & { matchedNotes: string[] }>>([]);
   readonly slideIndex = signal(0);
   readonly itemsPerPage = signal(4);
   readonly pages = computed(() => {
@@ -1268,6 +1318,7 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
           this.loading.set(false);
           if (isPlatformBrowser(this.platformId)) this.loadReviews(p.id);
           this.loadRelatedProducts(p.slug);
+          this.loadSimilarByNotes(p);
           this.subscribeStockStream(p.variants.map((v) => v.id));
 
           const queryOrderId = this.route.snapshot.queryParamMap.get('orderId');
@@ -1332,6 +1383,31 @@ export class ProductDetailComponent implements OnInit, OnDestroy {
       .get<ProductCardData[]>(`${environment.apiUrl}/products/${slug}/related?limit=6`)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({ next: (data) => this.relatedProducts.set(data) });
+  }
+
+  /**
+   * Loads fragrances whose pyramid overlaps this one's.
+   *
+   * Only the first NOTE_SIMILARITY_SAMPLE notes are sent: `notes` is ordered
+   * top → heart → base, and the opening notes are what a shopper recognizes.
+   * Passing the whole pyramid would dilute the recall term of the match score
+   * until every product with vanilla in it looked equally close.
+   */
+  private loadSimilarByNotes(product: ProductDetail): void {
+    const notes = (product.notes ?? []).slice(0, NOTE_SIMILARITY_SAMPLE);
+    if (notes.length === 0) {
+      this.similarByNotes.set([]);
+      return;
+    }
+
+    this.finder
+      .match({ notes, exclude: product.id, limit: 4 })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((response) =>
+        this.similarByNotes.set(
+          response.data as unknown as Array<ProductCardData & { matchedNotes: string[] }>,
+        ),
+      );
   }
 
   private loadReviews(productId: string, append = false): void {

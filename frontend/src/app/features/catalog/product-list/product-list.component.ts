@@ -10,6 +10,7 @@ import { environment } from '../../../../environments/environment';
 import { SeoService } from '../../../core/services/seo.service';
 import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
 import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
+import { FragranceFinderComponent } from '../../../shared/components/fragrance-finder/fragrance-finder.component';
 
 const CATEGORY_LABELS: Record<string, string> = {
   perfume: 'Perfumy',
@@ -143,6 +144,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
     TuiTooltip,
     ProductCardComponent,
     BreadcrumbComponent,
+    FragranceFinderComponent,
   ],
   template: `
     <div class="page">
@@ -266,7 +268,33 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
           @for (product of products(); track product.id) {
             <app-product-card [product]="product" />
           } @empty {
-            <p class="empty">Brak produktów w tej kategorii.</p>
+            <!-- Highest-intent moment in the store: the shopper searched and got
+                 nothing. A dead-end message wastes it, so the picker is offered
+                 inline, pre-seeded with whatever they typed and opened on the
+                 notes tab — typing a name has already demonstrably failed. -->
+            <div class="empty-state">
+              @if (searchQuery()) {
+                <h2 class="empty-state__title">
+                  Nic nie znaleźliśmy dla „{{ searchQuery() }}”
+                </h2>
+                <p class="empty-state__lead">
+                  Może opiszesz zapach inaczej? Zaznacz nuty, które lubisz — dobierzemy coś
+                  z katalogu.
+                </p>
+                <app-fragrance-finder
+                  [compact]="true"
+                  initialMode="notes"
+                  [initialQuery]="searchQuery()"
+                  [limit]="6"
+                />
+              } @else {
+                <h2 class="empty-state__title">Brak produktów dla wybranych filtrów</h2>
+                <p class="empty-state__lead">
+                  Wyczyść filtry albo pozwól nam dobrać zapach na podstawie ulubionych nut.
+                </p>
+                <app-fragrance-finder [compact]="true" initialMode="notes" [limit]="6" />
+              }
+            </div>
           }
         </div>
 
@@ -392,7 +420,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       justify-content: space-between;
       margin-bottom: 28px;
     }
-    .sort-btn { font-size: 14px; }
+    .sort-btn { font-size: 14px; min-height: 44px; }
 
     .filter-count {
       display: inline-flex;
@@ -422,7 +450,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       font-size: 14px;
       color: var(--color-secondary);
     }
-    .search-indicator tui-icon { color: var(--color-accent); font-size: 15px; flex-shrink: 0; }
+    .search-indicator tui-icon { color: var(--color-accent-text); font-size: 15px; flex-shrink: 0; }
     .search-indicator strong { color: var(--color-primary); font-weight: 600; }
     .search-indicator button { margin-left: auto; }
 
@@ -462,6 +490,26 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       .grid { grid-template-columns: repeat(4, 1fr); }
     }
     .empty { color: var(--color-secondary); }
+
+    /* Empty state spans the whole grid — it is a page-level message, not a card. */
+    .empty-state {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: var(--spacing-md) 0;
+    }
+    .empty-state__title {
+      margin: 0;
+      font-size: 20px;
+      color: var(--color-primary);
+    }
+    .empty-state__lead {
+      margin: 0 0 8px;
+      color: var(--color-secondary);
+      line-height: 1.6;
+      max-width: 60ch;
+    }
     .pagination { display: flex; justify-content: center; margin-top: 40px; }
 
     /* ── Drawer ──────────────────────────────────────────────── */
@@ -527,7 +575,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
     }
     .filter-price__input::-webkit-outer-spin-button,
     .filter-price__input::-webkit-inner-spin-button { -webkit-appearance: none; }
-    .filter-price__input:focus { outline: none; border-color: var(--color-accent); }
+    .filter-price__input:focus { outline: none; border-color: var(--color-accent-text); }
     .filter-price__sep { font-size: 14px; color: var(--color-secondary); flex-shrink: 0; }
 
     .filter-group-content {

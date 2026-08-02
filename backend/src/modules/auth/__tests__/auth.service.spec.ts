@@ -34,7 +34,6 @@ describe('AuthService', () => {
   let service: AuthService;
   let usersService: jest.Mocked<UsersService>;
   let prisma: any;
-  let jwtService: jest.Mocked<JwtService>;
   let emailService: any;
   let redis: {
     set: jest.Mock;
@@ -148,7 +147,6 @@ describe('AuthService', () => {
     service = module.get(AuthService);
     prisma = module.get(PrismaService);
     usersService = module.get(UsersService);
-    jwtService = module.get(JwtService);
     emailService = module.get(EmailQueueService);
     redis = module.get('REDIS_CLIENT');
   });

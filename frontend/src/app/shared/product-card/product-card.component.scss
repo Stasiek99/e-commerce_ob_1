@@ -90,34 +90,48 @@
 
 .product-card__wishlist {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  top: 4px;
+  right: 4px;
+  // 44x44 rather than 32x32: this button floats on top of a card that is
+  // itself a link, so a near-miss does not do nothing — it navigates to the
+  // product page. The button itself is transparent and only carries the hit
+  // area; the visible white pill moved onto the icon, so it stays 32px and the
+  // card looks unchanged.
+  width: 44px;
+  height: 44px;
   border: none;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(4px);
+  background: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   color: rgba(0, 0, 0, 0.35);
-  transition: color 0.15s, transform 0.15s, background 0.15s;
+  transition: color 0.15s, transform 0.15s;
+
+  tui-icon {
+    font-size: 16px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(4px);
+    transition: background 0.15s;
+  }
 
   &--active {
     color: var(--color-error);
-    background: rgba(255, 255, 255, 0.95);
+
+    tui-icon { background: rgba(255, 255, 255, 0.95); }
   }
 
   &:hover {
     transform: scale(1.15);
     color: var(--color-error);
-    background: rgba(255, 255, 255, 0.95);
-  }
 
-  tui-icon {
-    font-size: 16px;
+    tui-icon { background: rgba(255, 255, 255, 0.95); }
   }
 }
 
@@ -153,8 +167,10 @@
 }
 
 .product-card__subtitle {
-  font-size: 0.72rem;
-  color: var(--color-accent);
+  // 0.72rem rendered at 11.52px — under the 12px floor for body text on a
+  // phone. 0.8rem is 12.8px and leaves the card metrics untouched.
+  font-size: 0.8rem;
+  color: var(--color-accent-text);
   margin: 0;
   font-weight: 500;
   letter-spacing: 0.03em;
@@ -182,7 +198,7 @@
 .product-card__price {
   font-size: 1rem;
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   font-variant-numeric: tabular-nums;
   margin: 4px 0 0;
 
@@ -208,7 +224,10 @@
 }
 
 .product-card__unit-price {
-  font-size: 0.7rem;
+  // Was 0.7rem = 11.2px. This is price-per-unit — exactly the figure a shopper
+  // compares between products, so it is the last thing that should be the
+  // smallest text on the card.
+  font-size: 0.8rem;
   color: var(--color-secondary);
   margin: 3px 0 0;
   font-variant-numeric: tabular-nums;

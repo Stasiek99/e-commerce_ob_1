@@ -115,7 +115,7 @@ import { PwaInstallService } from '../../../core/services/pwa-install.service';
       border-radius: 10px;
       flex-shrink: 0;
     }
-    .install-banner__icon { font-size: 20px; color: var(--color-accent); }
+    .install-banner__icon { font-size: 20px; color: var(--color-accent-text); }
     .install-banner__body { display: flex; flex-direction: column; gap: 2px; flex: 1; font-size: 14px; }
     .install-banner__body strong { color: var(--color-primary); font-weight: 600; }
     .install-banner__body span { color: var(--color-secondary); }
@@ -142,7 +142,7 @@ import { PwaInstallService } from '../../../core/services/pwa-install.service';
       box-shadow: var(--shadow-hover);
       transform: translateY(-2px);
     }
-    .card:hover .card__icon { color: var(--color-accent); }
+    .card:hover .card__icon { color: var(--color-accent-text); }
 
     .card__icon {
       font-size: 32px;

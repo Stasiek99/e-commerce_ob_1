@@ -268,6 +268,16 @@ model Product {
   catalogNumber    String?
   line             String?
   inspiredBy          String?
+  // Denormalized, normalized search haystack (name + catalogNumber + inspiredBy +
+  // brand + shortDescription + notes + scentFamily + the joined luxury reference).
+  // Written exclusively by the `products_search_text_sync` DB trigger — never set
+  // it from application code, and never expose it through a public select: it
+  // contains inspiredBy, which PRODUCT_SELECT deliberately withholds.
+  searchText          String   @default("")
+  // Deduplicated, normalized form of `notes` — same normalizer as searchText, so
+  // a note picked in the fragrance finder and one typed into the search bar
+  // reduce to the same key. Also trigger-maintained; do not write from code.
+  notesNormalized     String[] @default([])
   luxuryReferenceId   Int?
   luxuryReference     LuxuryReference? @relation(fields: [luxuryReferenceId], references: [id], onDelete: SetNull)
   sortOrder        Int      @default(0)
@@ -306,6 +316,11 @@ model Product {
   @@index([categoryId, isActive, status])
   // Covers the default/unfiltered listing ORDER BY and the "no category" path.
   @@index([isActive, status, sortOrder])
+  // Trigram index backing both `LIKE '%token%'` and the `<%` word-similarity
+  // fallback emitted by the search path.
+  @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_search_text_trgm_idx")
+  // Serves the `&&` overlap prefilter behind the fragrance finder.
+  @@index([notesNormalized], type: Gin, map: "products_notes_normalized_gin_idx")
   @@map("products")
 }
 

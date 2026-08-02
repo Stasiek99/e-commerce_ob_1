@@ -85,7 +85,7 @@ import { ProductCardComponent } from '../../shared/product-card/product-card.com
     }
     .wishlist-heading__icon {
       font-size: 28px;
-      color: var(--color-accent);
+      color: var(--color-accent-text);
     }
 
     .empty {
