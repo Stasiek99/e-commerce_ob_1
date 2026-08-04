@@ -1,19 +1,19 @@
-import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
-import { ReactiveFormsModule } from '@angular/forms';
-import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
-import { CheckoutPageComponent } from '../checkout-page.component';
-import { CartService } from '../../../../core/services/cart.service';
-import { AuthService } from '../../../../core/services/auth.service';
-import { ToastService } from '../../../../core/services/toast.service';
-import { AnalyticsService } from '../../../../core/services/analytics.service';
-import { PricePipe } from '../../../../shared/pipes/price.pipe';
+import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA } from "@angular/core";
+import { TestBed } from "@angular/core/testing";
+import { ReactiveFormsModule } from "@angular/forms";
+import { provideHttpClient } from "@angular/common/http";
+import { provideHttpClientTesting } from "@angular/common/http/testing";
+import { provideRouter } from "@angular/router";
+import { CheckoutPageComponent } from "../checkout-page.component";
+import { CartService } from "../../../../core/services/cart.service";
+import { AuthService } from "../../../../core/services/auth.service";
+import { ToastService } from "../../../../core/services/toast.service";
+import { AnalyticsService } from "../../../../core/services/analytics.service";
+import { PricePipe } from "../../../../shared/pipes/price.pipe";
 
 // const enum CarrierCode is inlined by tsc — use string literals at test time
 const carrier = (code: string) =>
-  ({ code, name: 'Carrier', price: 1499, desc: 'desc' }) as any;
+  ({ code, name: "Carrier", price: 1499, desc: "desc" }) as any;
 
 function setup() {
   const mockCart = {
@@ -26,7 +26,10 @@ function setup() {
     currentUser: jest.fn().mockReturnValue(null),
   };
   const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
-  const mockAnalytics = { trackBeginCheckout: jest.fn(), trackPurchase: jest.fn() };
+  const mockAnalytics = {
+    trackBeginCheckout: jest.fn(),
+    trackPurchase: jest.fn(),
+  };
 
   TestBed.configureTestingModule({
     imports: [CheckoutPageComponent],
@@ -55,12 +58,12 @@ function setup() {
   return { component, fixture };
 }
 
-describe('CheckoutPageComponent — onStep() stepper navigation guard', () => {
+describe("CheckoutPageComponent — onStep() stepper navigation guard", () => {
   afterEach(() => jest.clearAllMocks());
 
   // ── backward navigation ─────────────────────────────────────────────
 
-  it('navigates backward when newIndex < current index', () => {
+  it("navigates backward when newIndex < current index", () => {
     const { component } = setup();
     component.index = 2;
 
@@ -69,7 +72,7 @@ describe('CheckoutPageComponent — onStep() stepper navigation guard', () => {
     expect(component.index).toBe(0);
   });
 
-  it('sets negative direction when navigating backward', () => {
+  it("sets negative direction when navigating backward", () => {
     const { component } = setup();
     component.index = 2;
 
@@ -80,7 +83,7 @@ describe('CheckoutPageComponent — onStep() stepper navigation guard', () => {
 
   // ── forward navigation — routes through onNext() ────────────────────
 
-  it('stays on step 1 when clicking step 2 tab with no carrier selected', () => {
+  it("stays on step 1 when clicking step 2 tab with no carrier selected", () => {
     const { component } = setup();
     component.index = 1;
     component.selectedCarrier.set(null);
@@ -90,20 +93,20 @@ describe('CheckoutPageComponent — onStep() stepper navigation guard', () => {
     expect(component.index).toBe(1);
   });
 
-  it('advances to step 2 when clicking step 2 tab with a valid carrier selected', () => {
+  it("advances to step 2 when clicking step 2 tab with a valid carrier selected", () => {
     const { component } = setup();
     component.index = 1;
-    component.selectCarrier(carrier('DHL'));
+    component.selectCarrier(carrier("DHL"));
 
     component.onStep(2);
 
     expect(component.index).toBe(2);
   });
 
-  it('stays on step 1 when clicking step 2 tab with INPOST selected but no locker code', () => {
+  it("stays on step 1 when clicking step 2 tab with INPOST selected but no locker code", () => {
     const { component } = setup();
     component.index = 1;
-    component.selectCarrier(carrier('INPOST'));
+    component.selectCarrier(carrier("INPOST"));
     component.lockerCode.set(null);
 
     component.onStep(2);
@@ -112,7 +115,7 @@ describe('CheckoutPageComponent — onStep() stepper navigation guard', () => {
     expect(component.lockerPickerTouched()).toBe(true);
   });
 
-  it('stays on step 0 when clicking step 1 tab with an invalid address form', () => {
+  it("stays on step 0 when clicking step 1 tab with an invalid address form", () => {
     const { component } = setup();
     // addressForm starts invalid (required fields empty) — do not fill it
 
@@ -123,7 +126,7 @@ describe('CheckoutPageComponent — onStep() stepper navigation guard', () => {
 
   // ── regression: the skipping scenario described in the bug report ────
 
-  it('cannot skip carrier validation by going Step2 → Step0 → Step2 via stepper tabs', () => {
+  it("cannot skip carrier validation by going Step2 → Step0 → Step2 via stepper tabs", () => {
     const { component } = setup();
 
     // Simulate user completing address validation up to step 1

@@ -1341,7 +1341,6 @@ describe('EmailQueueProcessor', () => {
   // dequeue the job, losing the email permanently.
 
   it('throws an Error for an unrecognised job type so BullMQ retries the job', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const badJob = { id: 'job-bad', data: { type: 'totally_unknown', payload: {} } } as unknown as Job<any>;
 
     await expect(processor.process(badJob)).rejects.toThrow(
@@ -1350,7 +1349,6 @@ describe('EmailQueueProcessor', () => {
   });
 
   it('does not call any email method before throwing on an unrecognised type', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const badJob = { id: 'job-bad', data: { type: 'totally_unknown', payload: {} } } as unknown as Job<any>;
 
     await processor.process(badJob).catch(() => undefined);

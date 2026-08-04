@@ -1,11 +1,11 @@
-import { Component, Input, inject, signal, computed } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { TuiButton, TuiIcon } from '@taiga-ui/core';
-import { PricePipe } from '../pipes/price.pipe';
-import { CartService } from '../../core/services/cart.service';
-import { WishlistService } from '../../core/services/wishlist.service';
-import { ToastService } from '../../core/services/toast.service';
-import { AnalyticsService } from '../../core/services/analytics.service';
+import { Component, Input, inject, signal, computed } from "@angular/core";
+import { RouterLink } from "@angular/router";
+import { TuiButton, TuiIcon } from "@taiga-ui/core";
+import { PricePipe } from "../pipes/price.pipe";
+import { CartService } from "../../core/services/cart.service";
+import { WishlistService } from "../../core/services/wishlist.service";
+import { ToastService } from "../../core/services/toast.service";
+import { AnalyticsService } from "../../core/services/analytics.service";
 
 export interface ProductCardData {
   id: string;
@@ -27,11 +27,11 @@ export interface ProductCardData {
 }
 
 @Component({
-  selector: 'app-product-card',
+  selector: "app-product-card",
   standalone: true,
   imports: [RouterLink, TuiButton, TuiIcon, PricePipe],
-  templateUrl: './product-card.component.html',
-  styleUrl: './product-card.component.scss',
+  templateUrl: "./product-card.component.html",
+  styleUrl: "./product-card.component.scss",
 })
 export class ProductCardComponent {
   private readonly cart = inject(CartService);
@@ -42,7 +42,9 @@ export class ProductCardComponent {
   @Input({ required: true }) product!: ProductCardData;
 
   readonly adding = signal(false);
-  readonly wishlisted = computed(() => this.wishlist.isInWishlist(this.product?.id));
+  readonly wishlisted = computed(() =>
+    this.wishlist.isInWishlist(this.product?.id),
+  );
 
   onToggleWishlist(event: Event): void {
     event.preventDefault();
@@ -77,7 +79,7 @@ export class ProductCardComponent {
     const v = this.firstVariant;
     if (!v?.volume) return null;
     const per100ml = (v.priceInCents / v.volume) * 100;
-    return (per100ml / 100).toFixed(2).replace('.', ',') + ' zł / 100ml';
+    return (per100ml / 100).toFixed(2).replace(".", ",") + " zł / 100ml";
   }
 
   onAddToCart(event: Event): void {
@@ -99,12 +101,12 @@ export class ProductCardComponent {
           priceInCents: variant.priceInCents,
           quantity: 1,
         });
-        this.toast.success('Dodano do koszyka!');
+        this.toast.success("Dodano do koszyka!");
         this.adding.set(false);
       },
       error: () => {
         this.adding.set(false);
-        this.toast.error('Nie udało się dodać do koszyka.');
+        this.toast.error("Nie udało się dodać do koszyka.");
       },
     });
   }

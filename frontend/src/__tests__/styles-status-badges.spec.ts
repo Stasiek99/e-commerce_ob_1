@@ -8,15 +8,15 @@
  * that regresses the same way.
  */
 
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { OrderStatus } from '@fragrance-store/shared-types';
+import { readFileSync } from "fs";
+import { join } from "path";
+import { OrderStatus } from "@fragrance-store/shared-types";
 
-const scss = readFileSync(join(__dirname, '../styles.scss'), 'utf8');
+const scss = readFileSync(join(__dirname, "../styles.scss"), "utf8");
 
-describe('global order status badge styles (styles.scss)', () => {
+describe("global order status badge styles (styles.scss)", () => {
   it.each(Object.values(OrderStatus))(
-    'defines a .status--%s color rule distinct from the unstyled base .status fallback',
+    "defines a .status--%s color rule distinct from the unstyled base .status fallback",
     (status) => {
       const selector = `.status--${status.toLowerCase()}`;
       expect(scss).toContain(selector);
@@ -28,6 +28,8 @@ describe('global order status badge styles (styles.scss)', () => {
     const disputeRule = scss.match(/\.status--dispute_hold\s*\{([^}]*)\}/);
 
     expect(fraudRule).not.toBeNull();
-    expect(fraudRule![1].replace(/\s+/g, '')).toBe(disputeRule![1].replace(/\s+/g, ''));
+    expect(fraudRule![1].replace(/\s+/g, "")).toBe(
+      disputeRule![1].replace(/\s+/g, ""),
+    );
   });
 });

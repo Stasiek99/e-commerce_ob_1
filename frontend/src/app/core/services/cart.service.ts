@@ -1,9 +1,16 @@
-import { Injectable, signal, computed, inject, effect, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { EMPTY, Subject, catchError, debounceTime, switchMap } from 'rxjs';
-import { environment } from '../../../environments/environment';
-import { ToastService } from './toast.service';
+import {
+  Injectable,
+  signal,
+  computed,
+  inject,
+  effect,
+  PLATFORM_ID,
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { HttpClient, HttpHeaders } from "@angular/common/http";
+import { EMPTY, Subject, catchError, debounceTime, switchMap } from "rxjs";
+import { environment } from "../../../environments/environment";
+import { ToastService } from "./toast.service";
 export interface CartItemDto {
   id: string;
   productVariantId: string;
@@ -24,10 +31,10 @@ export interface CartDto {
   totalInCents: number;
 }
 
-const SESSION_KEY = 'cart_session_id';
+const SESSION_KEY = "cart_session_id";
 
 function getOrCreateSessionId(isBrowser: boolean): string {
-  if (!isBrowser) return '';
+  if (!isBrowser) return "";
   let id = localStorage.getItem(SESSION_KEY);
   if (!id) {
     id = crypto.randomUUID();
@@ -36,7 +43,7 @@ function getOrCreateSessionId(isBrowser: boolean): string {
   return id;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class CartService {
   private readonly http = inject(HttpClient);
   private readonly platformId = inject(PLATFORM_ID);
@@ -81,9 +88,9 @@ export class CartService {
       });
   }
 
-  addItem(productVariantId: string, quantity = 1, turnstileToken = '') {
+  addItem(productVariantId: string, quantity = 1, turnstileToken = "") {
     const headers = turnstileToken
-      ? this.sessionHeaders().set('cf-turnstile-response', turnstileToken)
+      ? this.sessionHeaders().set("cf-turnstile-response", turnstileToken)
       : this.sessionHeaders();
     return this.http.post<CartDto>(
       `${environment.apiUrl}/cart/items`,
@@ -151,7 +158,9 @@ export class CartService {
               )
               .pipe(
                 catchError(() => {
-                  this.toast.error('Nie udało się zaktualizować ilości. Odśwież stronę.');
+                  this.toast.error(
+                    "Nie udało się zaktualizować ilości. Odśwież stronę.",
+                  );
                   return EMPTY;
                 }),
               ),
@@ -164,6 +173,6 @@ export class CartService {
   }
 
   private sessionHeaders(): HttpHeaders {
-    return new HttpHeaders({ 'x-session-id': this.sessionId });
+    return new HttpHeaders({ "x-session-id": this.sessionId });
   }
 }

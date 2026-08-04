@@ -6,24 +6,24 @@
  *  4. button.expand-hint: keyboard-accessible trigger; removed when expanded
  */
 
-import { PLATFORM_ID, NO_ERRORS_SCHEMA } from '@angular/core';
-import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { HomeComponent } from './home.component';
+import { PLATFORM_ID, NO_ERRORS_SCHEMA } from "@angular/core";
+import { ComponentFixture, TestBed } from "@angular/core/testing";
+import { HomeComponent } from "./home.component";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const mockMatchMedia = (matches: boolean) => {
-  Object.defineProperty(window, 'matchMedia', {
+  Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: jest.fn().mockReturnValue({ matches }),
   });
 };
 
-const buildModule = async (reducedMotion: boolean, platformId = 'browser') => {
+const buildModule = async (reducedMotion: boolean, platformId = "browser") => {
   mockMatchMedia(reducedMotion);
-  jest.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+  jest.spyOn(window, "scrollTo").mockImplementation(() => undefined);
 
   await TestBed.configureTestingModule({
     imports: [HomeComponent],
@@ -34,7 +34,8 @@ const buildModule = async (reducedMotion: boolean, platformId = 'browser') => {
     })
     .compileComponents();
 
-  const fixture: ComponentFixture<HomeComponent> = TestBed.createComponent(HomeComponent);
+  const fixture: ComponentFixture<HomeComponent> =
+    TestBed.createComponent(HomeComponent);
   fixture.detectChanges();
   return fixture;
 };
@@ -43,7 +44,7 @@ const buildModule = async (reducedMotion: boolean, platformId = 'browser') => {
 // Suite 1 — prefers-reduced-motion: reduce
 // ---------------------------------------------------------------------------
 
-describe('HomeComponent — prefers-reduced-motion: reduce → instant expansion', () => {
+describe("HomeComponent — prefers-reduced-motion: reduce → instant expansion", () => {
   let component: HomeComponent;
 
   beforeEach(async () => {
@@ -56,29 +57,29 @@ describe('HomeComponent — prefers-reduced-motion: reduce → instant expansion
     TestBed.resetTestingModule();
   });
 
-  it('sets scrollProgress to 1 immediately', () => {
+  it("sets scrollProgress to 1 immediately", () => {
     expect(component.scrollProgress).toBe(1);
   });
 
-  it('sets showContent to true immediately', () => {
+  it("sets showContent to true immediately", () => {
     expect(component.showContent).toBe(true);
   });
 
-  it('sets mediaFullyExpanded to true immediately', () => {
+  it("sets mediaFullyExpanded to true immediately", () => {
     expect(component.mediaFullyExpanded).toBe(true);
   });
 
-  it('does not register a wheel event listener', () => {
-    const spy = jest.spyOn(window, 'addEventListener');
+  it("does not register a wheel event listener", () => {
+    const spy = jest.spyOn(window, "addEventListener");
     // re-run ngOnInit in isolation to capture calls
     component.ngOnDestroy();
     component.ngOnInit();
 
-    const wheelCalls = spy.mock.calls.filter(([event]) => event === 'wheel');
+    const wheelCalls = spy.mock.calls.filter(([event]) => event === "wheel");
     expect(wheelCalls).toHaveLength(0);
   });
 
-  it('does not call window.scrollTo(0,0) when reduced motion skips animation', () => {
+  it("does not call window.scrollTo(0,0) when reduced motion skips animation", () => {
     const scrollSpy = window.scrollTo as jest.Mock;
     scrollSpy.mockClear();
 
@@ -93,7 +94,7 @@ describe('HomeComponent — prefers-reduced-motion: reduce → instant expansion
 // Suite 2 — normal motion: animation setup runs
 // ---------------------------------------------------------------------------
 
-describe('HomeComponent — no prefers-reduced-motion → animation setup', () => {
+describe("HomeComponent — no prefers-reduced-motion → animation setup", () => {
   let component: HomeComponent;
 
   beforeEach(async () => {
@@ -106,19 +107,19 @@ describe('HomeComponent — no prefers-reduced-motion → animation setup', () =
     TestBed.resetTestingModule();
   });
 
-  it('starts with scrollProgress=0', () => {
+  it("starts with scrollProgress=0", () => {
     expect(component.scrollProgress).toBe(0);
   });
 
-  it('starts with showContent=false', () => {
+  it("starts with showContent=false", () => {
     expect(component.showContent).toBe(false);
   });
 
-  it('starts with mediaFullyExpanded=false', () => {
+  it("starts with mediaFullyExpanded=false", () => {
     expect(component.mediaFullyExpanded).toBe(false);
   });
 
-  it('calls window.scrollTo(0,0) to lock scroll at top', () => {
+  it("calls window.scrollTo(0,0) to lock scroll at top", () => {
     expect(window.scrollTo).toHaveBeenCalledWith(0, 0);
   });
 });
@@ -127,7 +128,7 @@ describe('HomeComponent — no prefers-reduced-motion → animation setup', () =
 // Suite 3 — expandHero()
 // ---------------------------------------------------------------------------
 
-describe('HomeComponent — expandHero()', () => {
+describe("HomeComponent — expandHero()", () => {
   let component: HomeComponent;
 
   beforeEach(async () => {
@@ -140,22 +141,22 @@ describe('HomeComponent — expandHero()', () => {
     TestBed.resetTestingModule();
   });
 
-  it('sets scrollProgress to 1', () => {
+  it("sets scrollProgress to 1", () => {
     component.expandHero();
     expect(component.scrollProgress).toBe(1);
   });
 
-  it('sets showContent to true', () => {
+  it("sets showContent to true", () => {
     component.expandHero();
     expect(component.showContent).toBe(true);
   });
 
-  it('sets mediaFullyExpanded to true', () => {
+  it("sets mediaFullyExpanded to true", () => {
     component.expandHero();
     expect(component.mediaFullyExpanded).toBe(true);
   });
 
-  it('is idempotent when called a second time', () => {
+  it("is idempotent when called a second time", () => {
     component.expandHero();
     component.expandHero();
     expect(component.scrollProgress).toBe(1);
@@ -168,7 +169,7 @@ describe('HomeComponent — expandHero()', () => {
 // Suite 4 — [inert] on .expand-content
 // ---------------------------------------------------------------------------
 
-describe('HomeComponent — expand-content [inert] attribute', () => {
+describe("HomeComponent — expand-content [inert] attribute", () => {
   let component: HomeComponent;
   let fixture: ComponentFixture<HomeComponent>;
 
@@ -182,28 +183,31 @@ describe('HomeComponent — expand-content [inert] attribute', () => {
     TestBed.resetTestingModule();
   });
 
-  it('has inert attribute when showContent is false', () => {
-    const el: HTMLElement = fixture.nativeElement.querySelector('.expand-content');
-    expect(el.hasAttribute('inert')).toBe(true);
+  it("has inert attribute when showContent is false", () => {
+    const el: HTMLElement =
+      fixture.nativeElement.querySelector(".expand-content");
+    expect(el.hasAttribute("inert")).toBe(true);
   });
 
-  it('removes inert attribute when showContent is true', () => {
+  it("removes inert attribute when showContent is true", () => {
     component.showContent = true;
     fixture.detectChanges();
 
-    const el: HTMLElement = fixture.nativeElement.querySelector('.expand-content');
-    expect(el.hasAttribute('inert')).toBe(false);
+    const el: HTMLElement =
+      fixture.nativeElement.querySelector(".expand-content");
+    expect(el.hasAttribute("inert")).toBe(false);
   });
 
-  it('restores inert attribute when showContent goes back to false', () => {
+  it("restores inert attribute when showContent goes back to false", () => {
     component.showContent = true;
     fixture.detectChanges();
 
     component.showContent = false;
     fixture.detectChanges();
 
-    const el: HTMLElement = fixture.nativeElement.querySelector('.expand-content');
-    expect(el.hasAttribute('inert')).toBe(true);
+    const el: HTMLElement =
+      fixture.nativeElement.querySelector(".expand-content");
+    expect(el.hasAttribute("inert")).toBe(true);
   });
 });
 
@@ -211,7 +215,7 @@ describe('HomeComponent — expand-content [inert] attribute', () => {
 // Suite 5 — keyboard trigger button (.expand-hint)
 // ---------------------------------------------------------------------------
 
-describe('HomeComponent — keyboard trigger button (.expand-hint)', () => {
+describe("HomeComponent — keyboard trigger button (.expand-hint)", () => {
   let component: HomeComponent;
   let fixture: ComponentFixture<HomeComponent>;
 
@@ -225,40 +229,46 @@ describe('HomeComponent — keyboard trigger button (.expand-hint)', () => {
     TestBed.resetTestingModule();
   });
 
-  it('renders button.expand-hint when mediaFullyExpanded is false', () => {
-    const btn: HTMLButtonElement | null = fixture.nativeElement.querySelector('button.expand-hint');
+  it("renders button.expand-hint when mediaFullyExpanded is false", () => {
+    const btn: HTMLButtonElement | null =
+      fixture.nativeElement.querySelector("button.expand-hint");
     expect(btn).not.toBeNull();
   });
 
-  it('removes button.expand-hint when mediaFullyExpanded is true', () => {
+  it("removes button.expand-hint when mediaFullyExpanded is true", () => {
     component.mediaFullyExpanded = true;
     fixture.detectChanges();
 
-    const btn: HTMLButtonElement | null = fixture.nativeElement.querySelector('button.expand-hint');
+    const btn: HTMLButtonElement | null =
+      fixture.nativeElement.querySelector("button.expand-hint");
     expect(btn).toBeNull();
   });
 
-  it('clicking the button sets scrollProgress to 1', () => {
-    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.expand-hint');
+  it("clicking the button sets scrollProgress to 1", () => {
+    const btn: HTMLButtonElement =
+      fixture.nativeElement.querySelector("button.expand-hint");
     btn.click();
     expect(component.scrollProgress).toBe(1);
   });
 
-  it('clicking the button sets showContent to true', () => {
-    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.expand-hint');
+  it("clicking the button sets showContent to true", () => {
+    const btn: HTMLButtonElement =
+      fixture.nativeElement.querySelector("button.expand-hint");
     btn.click();
     expect(component.showContent).toBe(true);
   });
 
-  it('clicking the button sets mediaFullyExpanded to true', () => {
-    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.expand-hint');
+  it("clicking the button sets mediaFullyExpanded to true", () => {
+    const btn: HTMLButtonElement =
+      fixture.nativeElement.querySelector("button.expand-hint");
     btn.click();
     expect(component.mediaFullyExpanded).toBe(true);
   });
 
-  it('button carries an aria-label for screen readers', () => {
-    const btn: HTMLButtonElement = fixture.nativeElement.querySelector('button.expand-hint');
-    expect(btn.getAttribute('aria-label')).toBeTruthy();
+  it("button carries an aria-label for screen readers", () => {
+    const btn: HTMLButtonElement =
+      fixture.nativeElement.querySelector("button.expand-hint");
+    expect(btn.getAttribute("aria-label")).toBeTruthy();
   });
 });
 
@@ -266,23 +276,26 @@ describe('HomeComponent — keyboard trigger button (.expand-hint)', () => {
 // Suite 6 — SSR guard (non-browser platform)
 // ---------------------------------------------------------------------------
 
-describe('HomeComponent — SSR: non-browser platform skips all browser APIs', () => {
+describe("HomeComponent — SSR: non-browser platform skips all browser APIs", () => {
   afterEach(() => {
     jest.clearAllMocks();
     TestBed.resetTestingModule();
   });
 
-  it('does not call matchMedia in a server context', async () => {
+  it("does not call matchMedia in a server context", async () => {
     const matchMediaSpy = jest.fn();
-    Object.defineProperty(window, 'matchMedia', { writable: true, value: matchMediaSpy });
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: matchMediaSpy,
+    });
 
-    await buildModule(false, 'server');
+    await buildModule(false, "server");
 
     expect(matchMediaSpy).not.toHaveBeenCalled();
   });
 
-  it('leaves scrollProgress at 0 in a server context', async () => {
-    const fixture = await buildModule(false, 'server');
+  it("leaves scrollProgress at 0 in a server context", async () => {
+    const fixture = await buildModule(false, "server");
     expect(fixture.componentInstance.scrollProgress).toBe(0);
   });
 });

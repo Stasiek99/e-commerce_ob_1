@@ -1,8 +1,8 @@
-import { Component, Input } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { TuiLink } from '@taiga-ui/core';
-import { TuiBreadcrumbs } from '@taiga-ui/kit';
-import { TuiItem } from '@taiga-ui/cdk';
+import { Component, Input } from "@angular/core";
+import { RouterLink } from "@angular/router";
+import { TuiLink } from "@taiga-ui/core";
+import { TuiBreadcrumbs } from "@taiga-ui/kit";
+import { TuiItem } from "@taiga-ui/cdk";
 
 export interface Breadcrumb {
   label: string;
@@ -10,7 +10,7 @@ export interface Breadcrumb {
 }
 
 @Component({
-  selector: 'app-breadcrumb',
+  selector: "app-breadcrumb",
   standalone: true,
   imports: [RouterLink, TuiLink, TuiBreadcrumbs, TuiItem],
   template: `
@@ -26,9 +26,14 @@ export interface Breadcrumb {
       </tui-breadcrumbs>
     </nav>
   `,
-  styles: [`
-    :host { display: block; margin-bottom: 16px; }
-  `],
+  styles: [
+    `
+      :host {
+        display: block;
+        margin-bottom: 16px;
+      }
+    `,
+  ],
 })
 export class BreadcrumbComponent {
   @Input({ required: true }) crumbs: Breadcrumb[] = [];

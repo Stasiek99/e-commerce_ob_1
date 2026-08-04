@@ -1,7 +1,7 @@
-import { HttpInterceptorFn } from '@angular/common/http';
-import { isPlatformServer } from '@angular/common';
-import { PLATFORM_ID, inject } from '@angular/core';
-import { timeout } from 'rxjs/operators';
+import { HttpInterceptorFn } from "@angular/common/http";
+import { isPlatformServer } from "@angular/common";
+import { PLATFORM_ID, inject } from "@angular/core";
+import { timeout } from "rxjs/operators";
 
 // HTTP calls that take longer than this during SSR are aborted so the render
 // can still complete (with empty/error state) within the outer 10s Promise.race

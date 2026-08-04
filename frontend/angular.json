@@ -23,13 +23,9 @@
             "outputPath": "dist/frontend",
             "index": "src/index.html",
             "browser": "src/main.ts",
-            "polyfills": [
-              "zone.js"
-            ],
+            "polyfills": ["zone.js"],
             "tsConfig": "tsconfig.app.json",
-            "allowedCommonJsDependencies": [
-              "@fragrance-store/shared-types"
-            ],
+            "allowedCommonJsDependencies": ["@fragrance-store/shared-types"],
             "assets": [
               "src/favicon.ico",
               "src/assets",
@@ -48,8 +44,8 @@
               }
             ],
             "styles": [
-              "node_modules/@taiga-ui/core/styles/taiga-ui-theme.less",
-              "node_modules/@taiga-ui/core/styles/taiga-ui-fonts.less",
+              "node_modules/@taiga-ui/styles/taiga-ui-theme.less",
+              "node_modules/@taiga-ui/styles/taiga-ui-fonts.less",
               "src/styles.scss"
             ],
             "scripts": [],
@@ -66,8 +62,16 @@
             "production": {
               "serviceWorker": "ngsw-config.json",
               "budgets": [
-                { "type": "initial", "maximumWarning": "600kB", "maximumError": "1.20MB" },
-                { "type": "anyComponentStyle", "maximumWarning": "12kB", "maximumError": "16kB" }
+                {
+                  "type": "initial",
+                  "maximumWarning": "600kB",
+                  "maximumError": "1.20MB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "12kB",
+                  "maximumError": "16kB"
+                }
               ],
               "outputHashing": "all",
               "optimization": {
@@ -106,6 +110,7 @@
     }
   },
   "cli": {
-    "analytics": false
+    "analytics": false,
+    "packageManager": "pnpm"
   }
 }

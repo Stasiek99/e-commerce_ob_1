@@ -7,12 +7,7 @@
       "name": "app-shell",
       "installMode": "prefetch",
       "resources": {
-        "files": [
-          "/favicon.ico",
-          "/manifest.webmanifest",
-          "/*.css",
-          "/*.js"
-        ]
+        "files": ["/favicon.ico", "/manifest.webmanifest", "/*.css", "/*.js"]
       }
     },
     {

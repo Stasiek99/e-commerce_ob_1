@@ -3,18 +3,23 @@
   <a
     [routerLink]="['/products', product.slug]"
     class="product-card__link"
-    [attr.aria-label]="product.name">
-
+    [attr.aria-label]="product.name"
+  >
     <div class="product-card__image-wrap">
       @if (product.images?.[0]?.url) {
         <img
           class="product-card__image"
           [src]="product.images![0].url"
           [alt]="product.name"
-          loading="lazy" />
+          loading="lazy"
+        />
       } @else {
         <div class="product-card__placeholder" aria-hidden="true">
-          <img src="assets/images/logo_small_black.png" alt="" class="product-card__placeholder-logo" />
+          <img
+            src="assets/images/logo_small_black.png"
+            alt=""
+            class="product-card__placeholder-logo"
+          />
         </div>
       }
 
@@ -26,17 +31,26 @@
         class="product-card__wishlist"
         type="button"
         [class.product-card__wishlist--active]="wishlisted()"
-        [attr.aria-label]="wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'"
-        (click)="onToggleWishlist($event)">
+        [attr.aria-label]="
+          wishlisted() ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'
+        "
+        (click)="onToggleWishlist($event)"
+      >
         <tui-icon
           icon="@tui.heart"
-          [style.color]="wishlisted() ? 'var(--color-error)' : null" />
+          [style.color]="wishlisted() ? 'var(--color-error)' : null"
+        />
       </button>
     </div>
 
     <div class="product-card__body">
       <h3 class="product-card__name">
-        {{ product.name }}@if (product.catalogNumber) {<span class="product-card__catalog-no"> NO.&nbsp;{{ product.catalogNumber }}</span>}
+        {{ product.name }}
+        @if (product.catalogNumber) {
+          <span class="product-card__catalog-no">
+            NO.&nbsp;{{ product.catalogNumber }}</span
+          >
+        }
       </h3>
 
       @if (product.gender) {
@@ -50,14 +64,24 @@
       <div class="product-card__price-block">
         @if (firstVariant?.compareAtPriceInCents) {
           <div class="product-card__price-row">
-            <span class="product-card__price product-card__price--sale">{{ firstVariant!.priceInCents | price }}</span>
-            <span class="product-card__price product-card__price--was">{{ firstVariant!.compareAtPriceInCents | price }}</span>
+            <span class="product-card__price product-card__price--sale">{{
+              firstVariant!.priceInCents | price
+            }}</span>
+            <span class="product-card__price product-card__price--was">{{
+              firstVariant!.compareAtPriceInCents | price
+            }}</span>
           </div>
           <p class="product-card__omnibus">
-            Najniższa cena z 30 dni: {{ (firstVariant!.lowestPrice30dInCents ?? firstVariant!.priceInCents) | price }}
+            Najniższa cena z 30 dni:
+            {{
+              firstVariant!.lowestPrice30dInCents ?? firstVariant!.priceInCents
+                | price
+            }}
           </p>
         } @else {
-          <p class="product-card__price">od {{ firstVariant?.priceInCents | price }}</p>
+          <p class="product-card__price">
+            od {{ firstVariant?.priceInCents | price }}
+          </p>
         }
         @if (unitPriceText) {
           <p class="product-card__unit-price">{{ unitPriceText }}</p>
@@ -76,9 +100,12 @@
       class="product-card__btn"
       [disabled]="adding() || outOfStock"
       (click)="onAddToCart($event)"
-      [attr.aria-label]="'Dodaj ' + product.name + ' do koszyka'">
+      [attr.aria-label]="'Dodaj ' + product.name + ' do koszyka'"
+    >
       <tui-icon icon="@tui.shopping-cart" />
-      {{ outOfStock ? 'Brak w magazynie' : (adding() ? 'Dodawanie…' : 'Do koszyka') }}
+      {{
+        outOfStock ? "Brak w magazynie" : adding() ? "Dodawanie…" : "Do koszyka"
+      }}
     </button>
   </div>
 </article>

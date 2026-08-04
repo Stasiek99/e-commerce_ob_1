@@ -3,18 +3,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── SPACING ──────────────────────────────────────────────────────────────
-$spacing-xs: 0.5rem;    // 8px
-$spacing-sm: 1rem;      // 16px
-$spacing-md: 1.5rem;    // 24px
-$spacing-lg: 2rem;      // 32px
-$spacing-xl: 2.5rem;    // 40px
-$spacing-2xl: 3rem;     // 48px
+$spacing-xs: 0.5rem; // 8px
+$spacing-sm: 1rem; // 16px
+$spacing-md: 1.5rem; // 24px
+$spacing-lg: 2rem; // 32px
+$spacing-xl: 2.5rem; // 40px
+$spacing-2xl: 3rem; // 48px
 
 // ── COLORS ───────────────────────────────────────────────────────────────
-$color-primary: #1a1a1a;      // Deep black
-$color-surface: #ffffff;       // White
-$color-secondary: #6b6b6b;    // Neutral gray
-$color-accent: #c9a96e;       // Warm gold — decorative use and dark surfaces
+$color-primary: #1a1a1a; // Deep black
+$color-surface: #ffffff; // White
+$color-secondary: #6b6b6b; // Neutral gray
+$color-accent: #c9a96e; // Warm gold — decorative use and dark surfaces
 // Text-safe variant of the gold. The brand tone scores 1.90:1 on the pale
 // section backgrounds, so every gold label on the site failed WCAG 1.4.3 —
 // one rule accounting for every contrast violation axe reports. This one holds
@@ -22,12 +22,16 @@ $color-accent: #c9a96e;       // Warm gold — decorative use and dark surfaces
 // the gold is TEXT on a light surface; keep $color-accent for borders, fills
 // and anything sitting on the dark footer or cookie banner.
 $color-accent-text: #7d6234;
-$color-border: #e5e5e5;        // Light gray
-$color-error: #e63946;         // Red
-$color-success: #2a9d8f;       // Teal
+$color-border: #e5e5e5; // Light gray
+$color-error: #e63946; // Red
+$color-success: #2a9d8f; // Teal
 
 // ── TYPOGRAPHY ───────────────────────────────────────────────────────────
-$font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
+$font-family-base:
+  "Inter",
+  system-ui,
+  -apple-system,
+  sans-serif;
 
 $font-size-caption: 0.875rem;
 $font-size-body: 1rem;
@@ -48,19 +52,19 @@ $border-radius-md: 8px;
 $border-radius-lg: 16px;
 
 // ── SHADOWS ──────────────────────────────────────────────────────────────
-$shadow-sm:    0 2px 8px rgba(0, 0, 0, 0.08);
-$shadow-md:    0 4px 12px rgba(0, 0, 0, 0.15);
-$shadow-lg:    0 8px 24px rgba(0, 0, 0, 0.2);
+$shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+$shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
+$shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.2);
 $shadow-hover: 0 6px 20px rgba(0, 0, 0, 0.13);
 
 // ── STATUS BADGE COLORS ───────────────────────────────────────────────────
-$color-status-paid-bg:      #d1fae5;
-$color-status-paid-text:    #065f46;
-$color-status-pending-bg:   #fef3c7;
+$color-status-paid-bg: #d1fae5;
+$color-status-paid-text: #065f46;
+$color-status-pending-bg: #fef3c7;
 $color-status-pending-text: #92400e;
 $color-status-cancelled-bg: #fee2e2;
 $color-status-cancelled-text: #991b1b;
-$color-status-shipped-bg:   #dbeafe;
+$color-status-shipped-bg: #dbeafe;
 $color-status-shipped-text: #1e40af;
 
 // ── CSS VARIABLES (for JS access) ────────────────────────────────────────
@@ -97,19 +101,19 @@ $color-status-shipped-text: #1e40af;
   --border-radius-md: #{$border-radius-md};
   --border-radius-lg: #{$border-radius-lg};
 
-  --shadow-sm:    #{$shadow-sm};
-  --shadow-md:    #{$shadow-md};
-  --shadow-lg:    #{$shadow-lg};
+  --shadow-sm: #{$shadow-sm};
+  --shadow-md: #{$shadow-md};
+  --shadow-lg: #{$shadow-lg};
   --shadow-hover: #{$shadow-hover};
 
-  --color-status-paid-bg:        #{$color-status-paid-bg};
-  --color-status-paid-text:      #{$color-status-paid-text};
-  --color-status-pending-bg:     #{$color-status-pending-bg};
-  --color-status-pending-text:   #{$color-status-pending-text};
-  --color-status-cancelled-bg:   #{$color-status-cancelled-bg};
+  --color-status-paid-bg: #{$color-status-paid-bg};
+  --color-status-paid-text: #{$color-status-paid-text};
+  --color-status-pending-bg: #{$color-status-pending-bg};
+  --color-status-pending-text: #{$color-status-pending-text};
+  --color-status-cancelled-bg: #{$color-status-cancelled-bg};
   --color-status-cancelled-text: #{$color-status-cancelled-text};
-  --color-status-shipped-bg:     #{$color-status-shipped-bg};
-  --color-status-shipped-text:   #{$color-status-shipped-text};
+  --color-status-shipped-bg: #{$color-status-shipped-bg};
+  --color-status-shipped-text: #{$color-status-shipped-text};
 
   // Taiga UI overrides (v3 compat + v4 variables)
   --tui-primary: #{$color-primary};

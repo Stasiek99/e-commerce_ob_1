@@ -11,17 +11,17 @@
  * the source-level assertions in pwa.spec.ts.
  */
 
-import { TestBed } from '@angular/core/testing';
+import { TestBed } from "@angular/core/testing";
 import {
   ApplicationInitStatus,
   PLATFORM_ID,
   inject,
   provideAppInitializer,
-} from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { firstValueFrom, of, throwError, EMPTY } from 'rxjs';
-import { catchError } from 'rxjs/operators';
-import { AuthService } from './core/services/auth.service';
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { firstValueFrom, of, throwError, EMPTY } from "rxjs";
+import { catchError } from "rxjs/operators";
+import { AuthService } from "./core/services/auth.service";
 
 // Mirrors the inline initializer in app.config.ts.
 const ssrGuardedAuthInitializer = async () => {
@@ -32,13 +32,13 @@ const ssrGuardedAuthInitializer = async () => {
 
 // ── server platform ───────────────────────────────────────────────────────────
 
-describe('auth appInitializer — server platform (SSR / prerender)', () => {
-  it('does not call auth.refresh() — skips the HTTP round-trip entirely', async () => {
+describe("auth appInitializer — server platform (SSR / prerender)", () => {
+  it("does not call auth.refresh() — skips the HTTP round-trip entirely", async () => {
     const mockRefresh = jest.fn().mockReturnValue(EMPTY);
 
     TestBed.configureTestingModule({
       providers: [
-        { provide: PLATFORM_ID, useValue: 'server' },
+        { provide: PLATFORM_ID, useValue: "server" },
         { provide: AuthService, useValue: { refresh: mockRefresh } },
         provideAppInitializer(ssrGuardedAuthInitializer),
       ],
@@ -49,12 +49,12 @@ describe('auth appInitializer — server platform (SSR / prerender)', () => {
     expect(mockRefresh).not.toHaveBeenCalled();
   });
 
-  it('resolves without blocking the bootstrap lifecycle', async () => {
+  it("resolves without blocking the bootstrap lifecycle", async () => {
     const mockRefresh = jest.fn().mockReturnValue(EMPTY);
 
     TestBed.configureTestingModule({
       providers: [
-        { provide: PLATFORM_ID, useValue: 'server' },
+        { provide: PLATFORM_ID, useValue: "server" },
         { provide: AuthService, useValue: { refresh: mockRefresh } },
         provideAppInitializer(ssrGuardedAuthInitializer),
       ],
@@ -68,15 +68,15 @@ describe('auth appInitializer — server platform (SSR / prerender)', () => {
 
 // ── browser platform ──────────────────────────────────────────────────────────
 
-describe('auth appInitializer — browser platform', () => {
-  it('calls auth.refresh() exactly once to restore the session', async () => {
+describe("auth appInitializer — browser platform", () => {
+  it("calls auth.refresh() exactly once to restore the session", async () => {
     const mockRefresh = jest
       .fn()
-      .mockReturnValue(of({ accessToken: 'restored-token' }));
+      .mockReturnValue(of({ accessToken: "restored-token" }));
 
     TestBed.configureTestingModule({
       providers: [
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
         { provide: AuthService, useValue: { refresh: mockRefresh } },
         provideAppInitializer(ssrGuardedAuthInitializer),
       ],
@@ -87,14 +87,14 @@ describe('auth appInitializer — browser platform', () => {
     expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it('still resolves when auth.refresh() returns a 401 (catchError swallows it)', async () => {
+  it("still resolves when auth.refresh() returns a 401 (catchError swallows it)", async () => {
     const mockRefresh = jest
       .fn()
       .mockReturnValue(throwError(() => ({ status: 401 })));
 
     TestBed.configureTestingModule({
       providers: [
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
         { provide: AuthService, useValue: { refresh: mockRefresh } },
         provideAppInitializer(ssrGuardedAuthInitializer),
       ],
@@ -106,14 +106,14 @@ describe('auth appInitializer — browser platform', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('still resolves when auth.refresh() returns a network error', async () => {
+  it("still resolves when auth.refresh() returns a network error", async () => {
     const mockRefresh = jest
       .fn()
-      .mockReturnValue(throwError(() => new Error('Network error')));
+      .mockReturnValue(throwError(() => new Error("Network error")));
 
     TestBed.configureTestingModule({
       providers: [
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
         { provide: AuthService, useValue: { refresh: mockRefresh } },
         provideAppInitializer(ssrGuardedAuthInitializer),
       ],

@@ -1,12 +1,14 @@
 // ── Design System ────────────────────────────────────────────────────────
-@use 'styles/design-tokens';
-@use 'styles/spacing';
-@use 'styles/colors';
-@use 'styles/typography';
-@use 'styles/interactions';
+@use "styles/design-tokens";
+@use "styles/spacing";
+@use "styles/colors";
+@use "styles/typography";
+@use "styles/interactions";
 
 // ── Global Reset ─────────────────────────────────────────────────────────
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -23,7 +25,8 @@
   border: 0;
 }
 
-html, body {
+html,
+body {
   height: 100%;
   margin: 0;
   font-family: var(--font-family-base), sans-serif;
@@ -46,17 +49,50 @@ a {
   background: var(--color-border);
   white-space: nowrap;
 }
-.status--paid               { background: var(--color-status-paid-bg);     color: var(--color-status-paid-text); }
-.status--pending_payment    { background: var(--color-status-pending-bg);   color: var(--color-status-pending-text); }
-.status--cancelled          { background: var(--color-status-cancelled-bg); color: var(--color-status-cancelled-text); }
-.status--shipped            { background: var(--color-status-shipped-bg);   color: var(--color-status-shipped-text); }
-.status--refunded           { background: #f3f4f6; color: #6b7280; }
-.status--partially_refunded { background: #fefce8; color: #854d0e; }
-.status--processing         { background: #eff6ff; color: #1d4ed8; }
-.status--delivered          { background: #f0fdf4; color: #166534; }
-.status--fraud_review       { background: #ffedd5; color: #9a3412; }
-.status--dispute_hold       { background: #ffedd5; color: #9a3412; }
-.status--dispute_lost_review { background: #fecdd3; color: #9f1239; }
+.status--paid {
+  background: var(--color-status-paid-bg);
+  color: var(--color-status-paid-text);
+}
+.status--pending_payment {
+  background: var(--color-status-pending-bg);
+  color: var(--color-status-pending-text);
+}
+.status--cancelled {
+  background: var(--color-status-cancelled-bg);
+  color: var(--color-status-cancelled-text);
+}
+.status--shipped {
+  background: var(--color-status-shipped-bg);
+  color: var(--color-status-shipped-text);
+}
+.status--refunded {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+.status--partially_refunded {
+  background: #fefce8;
+  color: #854d0e;
+}
+.status--processing {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.status--delivered {
+  background: #f0fdf4;
+  color: #166534;
+}
+.status--fraud_review {
+  background: #ffedd5;
+  color: #9a3412;
+}
+.status--dispute_hold {
+  background: #ffedd5;
+  color: #9a3412;
+}
+.status--dispute_lost_review {
+  background: #fecdd3;
+  color: #9f1239;
+}
 
 // ── Taiga UI global overrides ─────────────────────────────────────────────
 [tuiHeader] {
@@ -73,7 +109,7 @@ a {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18) !important;
   }
 
-.bottom-bar {
+  .bottom-bar {
     background: #1a1a1a !important;
     border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
 
@@ -83,10 +119,18 @@ a {
       color: rgba(255, 255, 255, 0.45) !important;
       background: transparent !important;
       border-top: 2px solid transparent !important;
-      transition: color 0.15s, border-color 0.15s !important;
+      transition:
+        color 0.15s,
+        border-color 0.15s !important;
 
-      i, svg { color: inherit !important; fill: currentColor !important; }
-      span    { color: inherit !important; }
+      i,
+      svg {
+        color: inherit !important;
+        fill: currentColor !important;
+      }
+      span {
+        color: inherit !important;
+      }
     }
 
     .tab-map.tabs-active,
@@ -94,8 +138,14 @@ a {
       color: #c9a96e !important;
       border-top-color: #c9a96e !important;
 
-      i, svg { color: #c9a96e !important; fill: #c9a96e !important; }
-      span    { color: #c9a96e !important; }
+      i,
+      svg {
+        color: #c9a96e !important;
+        fill: #c9a96e !important;
+      }
+      span {
+        color: #c9a96e !important;
+      }
     }
   }
 }

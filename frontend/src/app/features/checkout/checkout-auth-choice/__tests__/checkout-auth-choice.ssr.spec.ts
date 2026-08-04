@@ -6,15 +6,15 @@
  * continueAsGuest() server-side throws ReferenceError in Node.
  */
 
-import { TestBed } from '@angular/core/testing';
-import { provideRouter, Router } from '@angular/router';
-import { PLATFORM_ID } from '@angular/core';
-import { CheckoutAuthChoiceComponent } from '../checkout-auth-choice.component';
-import { CartService } from '../../../../core/services/cart.service';
-import { AuthService } from '../../../../core/services/auth.service';
+import { TestBed } from "@angular/core/testing";
+import { provideRouter, Router } from "@angular/router";
+import { PLATFORM_ID } from "@angular/core";
+import { CheckoutAuthChoiceComponent } from "../checkout-auth-choice.component";
+import { CartService } from "../../../../core/services/cart.service";
+import { AuthService } from "../../../../core/services/auth.service";
 
 function createComponent(platformId: string) {
-  const mockCart = { items: jest.fn().mockReturnValue([{ id: '1' }]) };
+  const mockCart = { items: jest.fn().mockReturnValue([{ id: "1" }]) };
   const mockAuth = { isAuthenticated: jest.fn().mockReturnValue(false) };
 
   TestBed.configureTestingModule({
@@ -27,15 +27,15 @@ function createComponent(platformId: string) {
     ],
   });
 
-  const fixture   = TestBed.createComponent(CheckoutAuthChoiceComponent);
+  const fixture = TestBed.createComponent(CheckoutAuthChoiceComponent);
   const component = fixture.componentInstance;
-  const router    = TestBed.inject(Router);
-  jest.spyOn(router, 'navigate').mockResolvedValue(true);
+  const router = TestBed.inject(Router);
+  jest.spyOn(router, "navigate").mockResolvedValue(true);
   fixture.detectChanges();
   return { fixture, component, router };
 }
 
-describe('CheckoutAuthChoiceComponent — continueAsGuest SSR guard', () => {
+describe("CheckoutAuthChoiceComponent — continueAsGuest SSR guard", () => {
   afterEach(() => {
     jest.restoreAllMocks();
     TestBed.resetTestingModule();
@@ -43,40 +43,40 @@ describe('CheckoutAuthChoiceComponent — continueAsGuest SSR guard', () => {
 
   // ── server platform ────────────────────────────────────────────────────────
 
-  it('does not call sessionStorage.setItem() on the server platform', () => {
-    const setItemSpy = jest.spyOn(Storage.prototype, 'setItem');
-    const { component } = createComponent('server');
+  it("does not call sessionStorage.setItem() on the server platform", () => {
+    const setItemSpy = jest.spyOn(Storage.prototype, "setItem");
+    const { component } = createComponent("server");
 
     component.continueAsGuest();
 
     expect(setItemSpy).not.toHaveBeenCalled();
   });
 
-  it('still navigates to /checkout on the server platform after continueAsGuest', () => {
-    const { component, router } = createComponent('server');
+  it("still navigates to /checkout on the server platform after continueAsGuest", () => {
+    const { component, router } = createComponent("server");
 
     component.continueAsGuest();
 
-    expect(router.navigate).toHaveBeenCalledWith(['/checkout']);
+    expect(router.navigate).toHaveBeenCalledWith(["/checkout"]);
   });
 
   // ── browser platform ───────────────────────────────────────────────────────
 
-  it('sets checkout_guest in sessionStorage in the browser', () => {
-    const setItemSpy = jest.spyOn(Storage.prototype, 'setItem');
-    const { component } = createComponent('browser');
+  it("sets checkout_guest in sessionStorage in the browser", () => {
+    const setItemSpy = jest.spyOn(Storage.prototype, "setItem");
+    const { component } = createComponent("browser");
 
     component.continueAsGuest();
 
-    expect(setItemSpy).toHaveBeenCalledWith('checkout_guest', '1');
+    expect(setItemSpy).toHaveBeenCalledWith("checkout_guest", "1");
   });
 
-  it('navigates to /checkout after setting the guest flag in the browser', () => {
-    jest.spyOn(Storage.prototype, 'setItem');
-    const { component, router } = createComponent('browser');
+  it("navigates to /checkout after setting the guest flag in the browser", () => {
+    jest.spyOn(Storage.prototype, "setItem");
+    const { component, router } = createComponent("browser");
 
     component.continueAsGuest();
 
-    expect(router.navigate).toHaveBeenCalledWith(['/checkout']);
+    expect(router.navigate).toHaveBeenCalledWith(["/checkout"]);
   });
 });
