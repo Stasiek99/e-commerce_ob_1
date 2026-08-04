@@ -1,12 +1,12 @@
-import { Injectable, PLATFORM_ID, inject, signal } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
+import { Injectable, PLATFORM_ID, inject, signal } from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
-  readonly userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+  readonly userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class PwaInstallService {
   private readonly platformId = inject(PLATFORM_ID);
 
@@ -20,28 +20,28 @@ export class PwaInstallService {
   constructor() {
     if (!isPlatformBrowser(this.platformId)) return;
     // Already running as installed PWA — nothing to offer.
-    if (window.matchMedia('(display-mode: standalone)').matches) return;
+    if (window.matchMedia("(display-mode: standalone)").matches) return;
 
-    window.addEventListener('beforeinstallprompt', (e: Event) => {
+    window.addEventListener("beforeinstallprompt", (e: Event) => {
       e.preventDefault();
       this.deferredPrompt = e as BeforeInstallPromptEvent;
       this.canInstall.set(true);
     });
 
-    window.addEventListener('appinstalled', () => {
+    window.addEventListener("appinstalled", () => {
       this.deferredPrompt = null;
       this.canInstall.set(false);
       this.isInstalled.set(true);
     });
   }
 
-  async promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable'> {
-    if (!this.deferredPrompt) return 'unavailable';
+  async promptInstall(): Promise<"accepted" | "dismissed" | "unavailable"> {
+    if (!this.deferredPrompt) return "unavailable";
 
     await this.deferredPrompt.prompt();
     const { outcome } = await this.deferredPrompt.userChoice;
 
-    if (outcome === 'accepted') {
+    if (outcome === "accepted") {
       this.deferredPrompt = null;
       this.canInstall.set(false);
     }

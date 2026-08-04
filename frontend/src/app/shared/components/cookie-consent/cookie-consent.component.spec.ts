@@ -1,11 +1,11 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { TestBed } from '@angular/core/testing';
-import { computed } from '@angular/core';
-import { By } from '@angular/platform-browser';
-import { provideRouter } from '@angular/router';
-import { CookieConsentComponent } from './cookie-consent.component';
-import { ConsentService } from '../../../core/services/consent.service';
+import * as fs from "fs";
+import * as path from "path";
+import { TestBed } from "@angular/core/testing";
+import { computed } from "@angular/core";
+import { By } from "@angular/platform-browser";
+import { provideRouter } from "@angular/router";
+import { CookieConsentComponent } from "./cookie-consent.component";
+import { ConsentService } from "../../../core/services/consent.service";
 
 function makeConsentMock(hasDecided: boolean) {
   return {
@@ -17,7 +17,7 @@ function makeConsentMock(hasDecided: boolean) {
   };
 }
 
-describe('CookieConsentComponent', () => {
+describe("CookieConsentComponent", () => {
   afterEach(() => TestBed.resetTestingModule());
 
   function setup(hasDecided = false) {
@@ -36,13 +36,15 @@ describe('CookieConsentComponent', () => {
 
   // ── Visibility ─────────────────────────────────────────────────────────────
 
-  describe('visibility', () => {
-    it('renders the banner when the user has not yet decided', () => {
+  describe("visibility", () => {
+    it("renders the banner when the user has not yet decided", () => {
       const { fixture } = setup(false);
-      expect(fixture.debugElement.query(By.css('[role="dialog"]'))).toBeTruthy();
+      expect(
+        fixture.debugElement.query(By.css('[role="dialog"]')),
+      ).toBeTruthy();
     });
 
-    it('hides the banner once the user has made a choice', () => {
+    it("hides the banner once the user has made a choice", () => {
       const { fixture } = setup(true);
       expect(fixture.debugElement.query(By.css('[role="dialog"]'))).toBeNull();
     });
@@ -50,19 +52,22 @@ describe('CookieConsentComponent', () => {
 
   // ── WCAG 1.4.3 — contrast ─────────────────────────────────────────────────
 
-  describe('WCAG 1.4.3 — reject-button contrast', () => {
+  describe("WCAG 1.4.3 — reject-button contrast", () => {
     // Guards the intent rather than one literal colour: the reject label
     // originally shipped at rgba(255,255,255,0.42) (≈3.9:1 on #1a1a1a), which
     // fails 1.4.3. Anything at or above 0.70 alpha clears 4.5:1, so the rule
     // survives restyling as long as the contrast does.
     const MIN_ALPHA = 0.7;
 
-    it('keeps the reject label at or above the alpha that clears 4.5:1 on the dark banner', () => {
+    it("keeps the reject label at or above the alpha that clears 4.5:1 on the dark banner", () => {
       const src = fs.readFileSync(
-        path.resolve(__dirname, 'cookie-consent.component.ts'),
-        'utf8',
+        path.resolve(__dirname, "cookie-consent.component.ts"),
+        "utf8",
       );
-      const rule = /\.btn-reject\s*\{[^}]*?color:\s*rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/.exec(src);
+      const rule =
+        /\.btn-reject\s*\{[^}]*?color:\s*rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/.exec(
+          src,
+        );
 
       expect(rule).not.toBeNull();
       expect(Number(rule![1])).toBeGreaterThanOrEqual(MIN_ALPHA);
@@ -71,23 +76,23 @@ describe('CookieConsentComponent', () => {
 
   // ── Accessibility ──────────────────────────────────────────────────────────
 
-  describe('accessibility', () => {
+  describe("accessibility", () => {
     it('has role="dialog" on the banner container', () => {
       const { fixture } = setup(false);
-      const banner = fixture.debugElement.query(By.css('.banner'));
-      expect(banner.nativeElement.getAttribute('role')).toBe('dialog');
+      const banner = fixture.debugElement.query(By.css(".banner"));
+      expect(banner.nativeElement.getAttribute("role")).toBe("dialog");
     });
 
     it('has aria-live="polite" so assistive technology announces it non-disruptively', () => {
       const { fixture } = setup(false);
       const banner = fixture.debugElement.query(By.css('[role="dialog"]'));
-      expect(banner.nativeElement.getAttribute('aria-live')).toBe('polite');
+      expect(banner.nativeElement.getAttribute("aria-live")).toBe("polite");
     });
 
-    it('has a non-empty aria-label describing the dialog purpose', () => {
+    it("has a non-empty aria-label describing the dialog purpose", () => {
       const { fixture } = setup(false);
       const banner = fixture.debugElement.query(By.css('[role="dialog"]'));
-      const label = banner.nativeElement.getAttribute('aria-label');
+      const label = banner.nativeElement.getAttribute("aria-label");
       expect(label).toBeTruthy();
       expect(label.length).toBeGreaterThan(0);
     });
@@ -95,16 +100,19 @@ describe('CookieConsentComponent', () => {
 
   // ── Button actions ─────────────────────────────────────────────────────────
 
-  describe('button actions', () => {
-    function getButton(fixture: ReturnType<typeof setup>['fixture'], text: string) {
+  describe("button actions", () => {
+    function getButton(
+      fixture: ReturnType<typeof setup>["fixture"],
+      text: string,
+    ) {
       return fixture.debugElement
-        .queryAll(By.css('button'))
-        .find(b => b.nativeElement.textContent.trim() === text);
+        .queryAll(By.css("button"))
+        .find((b) => b.nativeElement.textContent.trim() === text);
     }
 
     it('"Akceptuj wszystkie" calls consent.acceptAll()', () => {
       const { fixture, consent } = setup(false);
-      const btn = getButton(fixture, 'Akceptuj wszystkie');
+      const btn = getButton(fixture, "Akceptuj wszystkie");
       expect(btn).toBeTruthy();
       btn!.nativeElement.click();
       expect(consent.acceptAll).toHaveBeenCalledTimes(1);
@@ -112,7 +120,7 @@ describe('CookieConsentComponent', () => {
 
     it('"Tylko niezbędne" calls consent.rejectNonEssential()', () => {
       const { fixture, consent } = setup(false);
-      const btn = getButton(fixture, 'Tylko niezbędne');
+      const btn = getButton(fixture, "Tylko niezbędne");
       expect(btn).toBeTruthy();
       btn!.nativeElement.click();
       expect(consent.rejectNonEssential).toHaveBeenCalledTimes(1);
@@ -120,13 +128,13 @@ describe('CookieConsentComponent', () => {
 
     it('"Akceptuj wszystkie" does not call rejectNonEssential()', () => {
       const { fixture, consent } = setup(false);
-      getButton(fixture, 'Akceptuj wszystkie')!.nativeElement.click();
+      getButton(fixture, "Akceptuj wszystkie")!.nativeElement.click();
       expect(consent.rejectNonEssential).not.toHaveBeenCalled();
     });
 
     it('"Tylko niezbędne" does not call acceptAll()', () => {
       const { fixture, consent } = setup(false);
-      getButton(fixture, 'Tylko niezbędne')!.nativeElement.click();
+      getButton(fixture, "Tylko niezbędne")!.nativeElement.click();
       expect(consent.acceptAll).not.toHaveBeenCalled();
     });
   });

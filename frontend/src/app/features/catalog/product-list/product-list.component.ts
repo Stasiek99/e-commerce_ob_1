@@ -1,22 +1,51 @@
-import { Component, DestroyRef, OnInit, inject, signal, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { ActivatedRoute, Router } from '@angular/router';
-import { FormsModule } from '@angular/forms';
-import { combineLatest, debounceTime, switchMap, catchError, of } from 'rxjs';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { TuiButton, TuiDataList, TuiDropdown, TuiIcon, TuiLink, TuiPopup } from '@taiga-ui/core';
-import { TuiAccordion, TuiCheckbox, TuiChevron, TuiChip, TuiDrawer, TuiPagination, TuiSwitch, TuiTooltip } from '@taiga-ui/kit';
-import { environment } from '../../../../environments/environment';
-import { SeoService } from '../../../core/services/seo.service';
-import { ProductCardComponent, ProductCardData } from '../../../shared/product-card/product-card.component';
-import { BreadcrumbComponent, Breadcrumb } from '../../../shared/components/breadcrumb/breadcrumb.component';
-import { FragranceFinderComponent } from '../../../shared/components/fragrance-finder/fragrance-finder.component';
+import {
+  Component,
+  DestroyRef,
+  OnInit,
+  inject,
+  signal,
+  computed,
+} from "@angular/core";
+import { HttpClient } from "@angular/common/http";
+import { ActivatedRoute, Router } from "@angular/router";
+import { FormsModule } from "@angular/forms";
+import { combineLatest, debounceTime, switchMap, catchError, of } from "rxjs";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
+import {
+  TuiButton,
+  TuiDataList,
+  TuiDropdown,
+  TuiIcon,
+  TuiLink,
+  TuiPopup,
+  TuiCheckbox,
+} from "@taiga-ui/core";
+import {
+  TuiAccordion,
+  TuiChevron,
+  TuiChip,
+  TuiDrawer,
+  TuiPagination,
+  TuiSwitch,
+  TuiTooltip,
+} from "@taiga-ui/kit";
+import { environment } from "../../../../environments/environment";
+import { SeoService } from "../../../core/services/seo.service";
+import {
+  ProductCardComponent,
+  ProductCardData,
+} from "../../../shared/product-card/product-card.component";
+import {
+  BreadcrumbComponent,
+  Breadcrumb,
+} from "../../../shared/components/breadcrumb/breadcrumb.component";
+import { FragranceFinderComponent } from "../../../shared/components/fragrance-finder/fragrance-finder.component";
 
 const CATEGORY_LABELS: Record<string, string> = {
-  perfume: 'Perfumy',
-  'perfume-luxury': 'Perfumy Luksusowe',
-  diffusers: 'Dyfuzory',
-  gels: 'Żele pod prysznic',
+  perfume: "Perfumy",
+  "perfume-luxury": "Perfumy Luksusowe",
+  diffusers: "Dyfuzory",
+  gels: "Żele pod prysznic",
 };
 
 const PAGE_SIZE = 20;
@@ -28,56 +57,84 @@ interface FilterGroup {
 }
 
 const VOLUME_OPTIONS: Record<string, string[]> = {
-  perfume: ['30ml', '50ml', '70ml'],
-  'perfume-luxury': ['50ml'],
-  diffusers: ['100ml', '200ml', '500ml'],
-  gels: ['250ml'],
+  perfume: ["30ml", "50ml", "70ml"],
+  "perfume-luxury": ["50ml"],
+  diffusers: ["100ml", "200ml", "500ml"],
+  gels: ["250ml"],
 };
-const ALL_VOLUMES = ['30ml', '50ml', '70ml', '100ml', '200ml', '250ml', '500ml'];
+const ALL_VOLUMES = [
+  "30ml",
+  "50ml",
+  "70ml",
+  "100ml",
+  "200ml",
+  "250ml",
+  "500ml",
+];
 
 const LINE_OPTIONS: Record<string, string[]> = {
-  perfume: ['Millesime', 'Luxury'],
-  'perfume-luxury': ['Luxury'],
+  perfume: ["Millesime", "Luxury"],
+  "perfume-luxury": ["Luxury"],
 };
-const ALL_LINE_OPTIONS = ['Millesime', 'Luxury'];
+const ALL_LINE_OPTIONS = ["Millesime", "Luxury"];
 
 const LINE_VOLUMES: Record<string, string[]> = {
-  Millesime: ['30ml', '70ml'],
-  Luxury: ['50ml'],
+  Millesime: ["30ml", "70ml"],
+  Luxury: ["50ml"],
 };
 
-function getVolumeOptions(slug: string | null, stagedLines: string[]): string[] {
-  if (slug === 'perfume' && stagedLines.length > 0) {
-    const allowed = [...new Set(stagedLines.flatMap(l => LINE_VOLUMES[l] ?? []))];
-    if (allowed.length > 0) return allowed.sort((a, b) => parseInt(a) - parseInt(b));
+function getVolumeOptions(
+  slug: string | null,
+  stagedLines: string[],
+): string[] {
+  if (slug === "perfume" && stagedLines.length > 0) {
+    const allowed = [
+      ...new Set(stagedLines.flatMap((l) => LINE_VOLUMES[l] ?? [])),
+    ];
+    if (allowed.length > 0)
+      return allowed.sort((a, b) => parseInt(a) - parseInt(b));
   }
   return slug ? (VOLUME_OPTIONS[slug] ?? []) : ALL_VOLUMES;
 }
 
 const VOLUME_LINES: Record<string, string[]> = {
-  '30ml': ['Millesime'],
-  '50ml': ['Luxury'],
-  '70ml': ['Millesime'],
+  "30ml": ["Millesime"],
+  "50ml": ["Luxury"],
+  "70ml": ["Millesime"],
 };
 
-function getLineOptions(slug: string | null, stagedVolumes: string[]): string[] {
-  if (slug === 'perfume' && stagedVolumes.length > 0) {
-    const allowed = [...new Set(stagedVolumes.flatMap(v => VOLUME_LINES[v] ?? []))];
+function getLineOptions(
+  slug: string | null,
+  stagedVolumes: string[],
+): string[] {
+  if (slug === "perfume" && stagedVolumes.length > 0) {
+    const allowed = [
+      ...new Set(stagedVolumes.flatMap((v) => VOLUME_LINES[v] ?? [])),
+    ];
     if (allowed.length > 0) return allowed;
   }
   return slug ? (LINE_OPTIONS[slug] ?? []) : ALL_LINE_OPTIONS;
 }
 
 const APPLICABLE_FILTERS: Record<string, Set<string>> = {
-  'perfume': new Set(['gender', 'volume', 'line', 'scentFamily']),
-  'perfume-luxury': new Set(['gender', 'scentFamily']),
-  'diffusers': new Set(['volume']),
-  'gels': new Set(['gender', 'scentFamily']),
+  perfume: new Set(["gender", "volume", "line", "scentFamily"]),
+  "perfume-luxury": new Set(["gender", "scentFamily"]),
+  diffusers: new Set(["volume"]),
+  gels: new Set(["gender", "scentFamily"]),
 };
 
 const SCENT_FAMILY_OPTIONS = [
-  'Ambra', 'Aromatyczny', 'Chypre', 'Cytrusowy', 'Kwiatowy',
-  'Fougère', 'Owocowy', 'Skórzany', 'Piżmowy', 'Korzenny', 'Drzewny',
+  "Ambra",
+  "Aromatyczny",
+  "Chypre",
+  "Cytrusowy",
+  "Kwiatowy",
+  "Fougère",
+  "Owocowy",
+  "Skórzany",
+  "Piżmowy",
+  "Korzenny",
+  "Drzewny",
 ];
 
 interface CategoryFacets {
@@ -90,41 +147,53 @@ function buildFilterGroups(
   staged: FilterState = {},
   facets?: CategoryFacets | null,
 ): FilterGroup[] {
-  const stagedLines = staged['line'] ?? [];
-  const stagedVolumes = staged['volume'] ?? [];
+  const stagedLines = staged["line"] ?? [];
+  const stagedVolumes = staged["volume"] ?? [];
   const applicable = slug ? APPLICABLE_FILTERS[slug] : null;
 
   const genderOptions = facets?.genders?.length
-    ? ['Kobieta', 'Mężczyzna', 'Unisex'].filter(o => facets.genders.includes(o))
-    : ['Kobieta', 'Mężczyzna', 'Unisex'];
+    ? ["Kobieta", "Mężczyzna", "Unisex"].filter((o) =>
+        facets.genders.includes(o),
+      )
+    : ["Kobieta", "Mężczyzna", "Unisex"];
 
   const scentOptions = facets?.scentFamilies?.length
-    ? SCENT_FAMILY_OPTIONS.filter(o => facets.scentFamilies.includes(o))
+    ? SCENT_FAMILY_OPTIONS.filter((o) => facets.scentFamilies.includes(o))
     : SCENT_FAMILY_OPTIONS;
 
   const all: FilterGroup[] = [
-    { label: 'Płeć', key: 'gender', options: genderOptions },
-    { label: 'Pojemność', key: 'volume', options: getVolumeOptions(slug, stagedLines) },
-    { label: 'Linia', key: 'line', options: getLineOptions(slug, stagedVolumes) },
-    { label: 'Grupa olfaktoryczna', key: 'scentFamily', options: scentOptions },
+    { label: "Płeć", key: "gender", options: genderOptions },
+    {
+      label: "Pojemność",
+      key: "volume",
+      options: getVolumeOptions(slug, stagedLines),
+    },
+    {
+      label: "Linia",
+      key: "line",
+      options: getLineOptions(slug, stagedVolumes),
+    },
+    { label: "Grupa olfaktoryczna", key: "scentFamily", options: scentOptions },
   ];
 
-  return applicable ? all.filter(g => applicable.has(g.key)) : all;
+  return applicable ? all.filter((g) => applicable.has(g.key)) : all;
 }
 
 type FilterState = Record<string, string[]>;
 const emptyFilters = (): FilterState =>
-  Object.fromEntries(buildFilterGroups(null, {}).map((g: FilterGroup) => [g.key, []]));
+  Object.fromEntries(
+    buildFilterGroups(null, {}).map((g: FilterGroup) => [g.key, []]),
+  );
 
-type SortOption = 'relevance' | 'price_asc' | 'price_desc';
+type SortOption = "relevance" | "price_asc" | "price_desc";
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
-  { value: 'relevance', label: 'Polecane' },
-  { value: 'price_asc', label: 'Cena: rosnąco' },
-  { value: 'price_desc', label: 'Cena: malejąco' },
+  { value: "relevance", label: "Polecane" },
+  { value: "price_asc", label: "Cena: rosnąco" },
+  { value: "price_desc", label: "Cena: malejąco" },
 ];
 
 @Component({
-  selector: 'app-product-list',
+  selector: "app-product-list",
   standalone: true,
   imports: [
     FormsModule,
@@ -155,7 +224,13 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       <h1>{{ pageTitle() }}</h1>
 
       <div class="toolbar">
-        <button tuiButton appearance="secondary" size="s" type="button" (click)="openDrawer()">
+        <button
+          tuiButton
+          appearance="secondary"
+          size="s"
+          type="button"
+          (click)="openDrawer()"
+        >
           <tui-icon icon="@tui.sliders-horizontal" />
           Filtry
           @if (activeFilterCount() > 0) {
@@ -170,7 +245,9 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
           class="sort-btn"
           [tuiDropdown]="sortDropdown"
           [(tuiDropdownOpen)]="sortOpen"
-        >{{ sortLabel() }}</button>
+        >
+          {{ sortLabel() }}
+        </button>
       </div>
 
       <ng-template #sortDropdown>
@@ -178,9 +255,9 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
           @for (option of sortOptions; track option.value) {
             <button tuiOption type="button" (click)="setSortBy(option.value)">
               {{ option.label }}
-              @if (option.value === 'relevance') {
+              @if (option.value === "relevance") {
                 <tui-icon
-                  [tuiHintDirection]="'right'"
+                  [tuiHintDirection]="'end'"
                   tuiTooltip="Polecane — sortowanie na podstawie popularności i dostępności, bez płatnego promowania."
                 />
               }
@@ -195,7 +272,9 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       @if (searchQuery()) {
         <div class="search-indicator">
           <tui-icon icon="@tui.search" />
-          <span>Wyniki dla: <strong>{{ searchQuery() }}</strong></span>
+          <span
+            >Wyniki dla: <strong>{{ searchQuery() }}</strong></span
+          >
           <button
             appearance="icon"
             iconStart="@tui.x"
@@ -203,11 +282,18 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
             type="button"
             size="s"
             (click)="clearSearch()"
-          >Wyczyść</button>
+          >
+            Wyczyść
+          </button>
         </div>
       }
 
-      @if (activeChips().length > 0 || appliedInStock() || appliedMinPrice() !== null || appliedMaxPrice() !== null) {
+      @if (
+        activeChips().length > 0 ||
+        appliedInStock() ||
+        appliedMinPrice() !== null ||
+        appliedMaxPrice() !== null
+      ) {
         <div class="filter-chips">
           @for (chip of activeChips(); track chip.key + chip.value) {
             <span tuiChip size="s" appearance="outline">
@@ -218,7 +304,9 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
                 tuiIconButton
                 type="button"
                 (click)="removeFilter(chip.key, chip.value)"
-              >Usuń</button>
+              >
+                Usuń
+              </button>
             </span>
           }
           @if (appliedInStock()) {
@@ -230,22 +318,36 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
                 tuiIconButton
                 type="button"
                 (click)="removeInStock()"
-              >Usuń</button>
+              >
+                Usuń
+              </button>
             </span>
           }
           @if (appliedMinPrice() !== null || appliedMaxPrice() !== null) {
             <span tuiChip size="s">
-              {{ appliedMinPrice() !== null ? appliedMinPrice() : '0' }} – {{ appliedMaxPrice() !== null ? appliedMaxPrice() : '∞' }} PLN
+              {{ appliedMinPrice() !== null ? appliedMinPrice() : "0" }} –
+              {{ appliedMaxPrice() !== null ? appliedMaxPrice() : "∞" }} PLN
               <button
                 iconStart="@tui.x"
                 size="s"
                 tuiIconButton
                 type="button"
                 (click)="removePriceFilter()"
-              >Usuń</button>
+              >
+                Usuń
+              </button>
             </span>
           }
-          <button tuiButton size="s" appearance="outline" type="button" class="clear-chips-btn" (click)="clearAllFilters()">Wyczyść wszystko</button>
+          <button
+            tuiButton
+            size="s"
+            appearance="outline"
+            type="button"
+            class="clear-chips-btn"
+            (click)="clearAllFilters()"
+          >
+            Wyczyść wszystko
+          </button>
         </div>
       }
 
@@ -278,8 +380,8 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
                   Nic nie znaleźliśmy dla „{{ searchQuery() }}”
                 </h2>
                 <p class="empty-state__lead">
-                  Może opiszesz zapach inaczej? Zaznacz nuty, które lubisz — dobierzemy coś
-                  z katalogu.
+                  Może opiszesz zapach inaczej? Zaznacz nuty, które lubisz —
+                  dobierzemy coś z katalogu.
                 </p>
                 <app-fragrance-finder
                   [compact]="true"
@@ -288,11 +390,18 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
                   [limit]="6"
                 />
               } @else {
-                <h2 class="empty-state__title">Brak produktów dla wybranych filtrów</h2>
+                <h2 class="empty-state__title">
+                  Brak produktów dla wybranych filtrów
+                </h2>
                 <p class="empty-state__lead">
-                  Wyczyść filtry albo pozwól nam dobrać zapach na podstawie ulubionych nut.
+                  Wyczyść filtry albo pozwól nam dobrać zapach na podstawie
+                  ulubionych nut.
                 </p>
-                <app-fragrance-finder [compact]="true" initialMode="notes" [limit]="6" />
+                <app-fragrance-finder
+                  [compact]="true"
+                  initialMode="notes"
+                  [limit]="6"
+                />
               }
             </div>
           }
@@ -315,7 +424,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       <!-- Real DOM backdrop — pseudo-elements can't be event targets -->
       <div class="filter-overlay" (click)="closeDrawer()"></div>
 
-      <tui-drawer direction="left">
+      <tui-drawer direction="start">
         <!-- Header in default slot so our CSS fully controls it -->
         <div class="drawer-header">
           <span class="drawer-title">Filtry</span>
@@ -325,7 +434,9 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
             tuiIconButton
             type="button"
             (click)="closeDrawer()"
-          >Zamknij</button>
+          >
+            Zamknij
+          </button>
         </div>
 
         <label class="filter-instock">
@@ -366,30 +477,32 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 
         <tui-accordion>
           @for (group of filterGroups(); track group.key) {
-            <tui-accordion-item
-              [open]="openGroups()[group.key]"
-              (openChange)="setGroupOpen(group.key, $event)"
+            <button
+              [tuiAccordion]="openGroups()[group.key]"
+              (tuiAccordionChange)="setGroupOpen(group.key, !!$event)"
             >
               {{ group.label }}
-              <div tuiAccordionItemContent class="filter-group-content">
-                @if (group.options.length > 0) {
-                  @for (option of group.options; track option) {
-                    <label class="filter-option">
-                      <input
-                        type="checkbox"
-                        tuiCheckbox
-                        [ngModel]="isSelected(group.key, option)"
-                        [ngModelOptions]="{ standalone: true }"
-                        (ngModelChange)="onCheckboxChange(group.key, option, $event)"
-                      />
-                      <span>{{ option }}</span>
-                    </label>
-                  }
-                } @else {
-                  <p class="filter-empty">Wkrótce dostępne</p>
+            </button>
+            <tui-expand>
+              @if (group.options.length > 0) {
+                @for (option of group.options; track option) {
+                  <label class="filter-option">
+                    <input
+                      type="checkbox"
+                      tuiCheckbox
+                      [ngModel]="isSelected(group.key, option)"
+                      [ngModelOptions]="{ standalone: true }"
+                      (ngModelChange)="
+                        onCheckboxChange(group.key, option, $event)
+                      "
+                    />
+                    <span>{{ option }}</span>
+                  </label>
                 }
-              </div>
-            </tui-accordion-item>
+              } @else {
+                <p class="filter-empty">Wkrótce dostępne</p>
+              }
+            </tui-expand>
           }
         </tui-accordion>
 
@@ -408,242 +521,336 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
       </tui-drawer>
     </ng-template>
   `,
-  styles: [`
-    /* ── Page layout ─────────────────────────────────────────── */
-    .page { padding: 32px 0; }
+  styles: [
+    `
+      /* ── Page layout ─────────────────────────────────────────── */
+      .page {
+        padding: 32px 0;
+      }
 
-    h1 { font-size: 1.75rem; font-weight: 700; color: var(--color-primary); margin: 0 0 24px; }
+      h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        margin: 0 0 24px;
+      }
 
-    .toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 28px;
-    }
-    .sort-btn { font-size: 14px; min-height: 44px; }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 28px;
+      }
+      .sort-btn {
+        font-size: 14px;
+        min-height: 44px;
+      }
 
-    .filter-count {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 18px;
-      height: 18px;
-      padding: 0 4px;
-      border-radius: 999px;
-      background: var(--color-accent);
-      color: #fff;
-      font-size: 11px;
-      font-weight: 700;
-      line-height: 1;
-    }
+      .filter-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: var(--color-accent);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+      }
 
-    /* ── Search indicator ────────────────────────────────────── */
-    .search-indicator {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 16px;
-      background: var(--tui-background-neutral-1, #f8f7f4);
-      border: 1px solid var(--color-border);
-      border-radius: 6px;
-      margin-bottom: 16px;
-      font-size: 14px;
-      color: var(--color-secondary);
-    }
-    .search-indicator tui-icon { color: var(--color-accent-text); font-size: 15px; flex-shrink: 0; }
-    .search-indicator strong { color: var(--color-primary); font-weight: 600; }
-    .search-indicator button { margin-left: auto; }
+      /* ── Search indicator ────────────────────────────────────── */
+      .search-indicator {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        background: var(--tui-background-neutral-1, #f8f7f4);
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        margin-bottom: 16px;
+        font-size: 14px;
+        color: var(--color-secondary);
+      }
+      .search-indicator tui-icon {
+        color: var(--color-accent-text);
+        font-size: 15px;
+        flex-shrink: 0;
+      }
+      .search-indicator strong {
+        color: var(--color-primary);
+        font-weight: 600;
+      }
+      .search-indicator button {
+        margin-left: auto;
+      }
 
-    /* ── Active filter chips ─────────────────────────────────── */
-    .filter-chips {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 20px;
-    }
-    .clear-chips-btn {
-      padding: 5px 12px;
-      border: 1px solid var(--color-border);
-      border-radius: 999px;
-      background: none;
-      font-size: 13px;
-      color: var(--color-secondary);
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
-    }
-    .clear-chips-btn:hover { color: var(--color-primary); border-color: var(--color-primary); }
+      /* ── Active filter chips ─────────────────────────────────── */
+      .filter-chips {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 20px;
+      }
+      .clear-chips-btn {
+        padding: 5px 12px;
+        border: 1px solid var(--color-border);
+        border-radius: 999px;
+        background: none;
+        font-size: 13px;
+        color: var(--color-secondary);
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          border-color 0.15s;
+      }
+      .clear-chips-btn:hover {
+        color: var(--color-primary);
+        border-color: var(--color-primary);
+      }
 
-    /* ── Grid ────────────────────────────────────────────────── */
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 16px;
-    }
-    @media (min-width: 480px) {
-      .grid { grid-template-columns: repeat(2, 1fr); gap: 20px; }
-    }
-    @media (min-width: 768px) {
-      .grid { grid-template-columns: repeat(3, 1fr); gap: 24px; }
-    }
-    @media (min-width: 1200px) {
-      .grid { grid-template-columns: repeat(4, 1fr); }
-    }
-    .empty { color: var(--color-secondary); }
+      /* ── Grid ────────────────────────────────────────────────── */
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      @media (min-width: 480px) {
+        .grid {
+          grid-template-columns: repeat(2, 1fr);
+          gap: 20px;
+        }
+      }
+      @media (min-width: 768px) {
+        .grid {
+          grid-template-columns: repeat(3, 1fr);
+          gap: 24px;
+        }
+      }
+      @media (min-width: 1200px) {
+        .grid {
+          grid-template-columns: repeat(4, 1fr);
+        }
+      }
+      .empty {
+        color: var(--color-secondary);
+      }
 
-    /* Empty state spans the whole grid — it is a page-level message, not a card. */
-    .empty-state {
-      grid-column: 1 / -1;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      padding: var(--spacing-md) 0;
-    }
-    .empty-state__title {
-      margin: 0;
-      font-size: 20px;
-      color: var(--color-primary);
-    }
-    .empty-state__lead {
-      margin: 0 0 8px;
-      color: var(--color-secondary);
-      line-height: 1.6;
-      max-width: 60ch;
-    }
-    .pagination { display: flex; justify-content: center; margin-top: 40px; }
+      /* Empty state spans the whole grid — it is a page-level message, not a card. */
+      .empty-state {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: var(--spacing-md) 0;
+      }
+      .empty-state__title {
+        margin: 0;
+        font-size: 20px;
+        color: var(--color-primary);
+      }
+      .empty-state__lead {
+        margin: 0 0 8px;
+        color: var(--color-secondary);
+        line-height: 1.6;
+        max-width: 60ch;
+      }
+      .pagination {
+        display: flex;
+        justify-content: center;
+        margin-top: 40px;
+      }
 
-    /* ── Drawer ──────────────────────────────────────────────── */
-    /* Real backdrop div — lets us detect outside-clicks reliably */
-    .filter-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.35);
-    }
-    /* Header lives in the default content slot so our CSS fully controls it.
+      /* ── Drawer ──────────────────────────────────────────────── */
+      /* Real backdrop div — lets us detect outside-clicks reliably */
+      .filter-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+      }
+      /* Header lives in the default content slot so our CSS fully controls it.
        Counteract t-content's 1.25rem/1.5rem padding to sit flush at the top. */
-    .drawer-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 4px 4px 0 0;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--color-border);
-      margin-bottom: 4px;
-    }
-    .drawer-title {
-      font-size: 18px;
-      font-weight: 700;
-      color: var(--color-primary);
-    }
-    .filter-instock {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 0 16px;
-      border-bottom: 1px solid var(--color-border);
-      margin-bottom: 4px;
-    }
-    .filter-instock span { font-size: 14px; color: var(--color-primary); }
+      .drawer-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 4px 0 0;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--color-border);
+        margin-bottom: 4px;
+      }
+      .drawer-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--color-primary);
+      }
+      .filter-instock {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 0 16px;
+        border-bottom: 1px solid var(--color-border);
+        margin-bottom: 4px;
+      }
+      .filter-instock span {
+        font-size: 14px;
+        color: var(--color-primary);
+      }
 
-    .filter-price {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--color-border);
-    }
-    .filter-price__label {
-      display: block;
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--color-primary);
-      margin-bottom: 12px;
-    }
-    .filter-price__inputs {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .filter-price__input {
-      flex: 1;
-      min-width: 0;
-      padding: 8px 10px;
-      border: 1px solid var(--color-border);
-      border-radius: 6px;
-      font-size: 14px;
-      color: var(--color-primary);
-      background: var(--color-surface);
-      appearance: textfield;
-      -moz-appearance: textfield;
-    }
-    .filter-price__input::-webkit-outer-spin-button,
-    .filter-price__input::-webkit-inner-spin-button { -webkit-appearance: none; }
-    .filter-price__input:focus { outline: none; border-color: var(--color-accent-text); }
-    .filter-price__sep { font-size: 14px; color: var(--color-secondary); flex-shrink: 0; }
+      .filter-price {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--color-border);
+      }
+      .filter-price__label {
+        display: block;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--color-primary);
+        margin-bottom: 12px;
+      }
+      .filter-price__inputs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .filter-price__input {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 10px;
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        font-size: 14px;
+        color: var(--color-primary);
+        background: var(--color-surface);
+        appearance: textfield;
+        -moz-appearance: textfield;
+      }
+      .filter-price__input::-webkit-outer-spin-button,
+      .filter-price__input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+      }
+      .filter-price__input:focus {
+        outline: none;
+        border-color: var(--color-accent-text);
+      }
+      .filter-price__sep {
+        font-size: 14px;
+        color: var(--color-secondary);
+        flex-shrink: 0;
+      }
 
-    .filter-group-content {
-      display: flex;
-      flex-direction: column;
-      padding: 4px 0 8px;
-    }
-    .filter-option {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 16px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .filter-option:hover { background: var(--tui-background-neutral-1-hover, rgba(0,0,0,.04)); }
-    .filter-option span { font-size: 14px; color: var(--color-primary); }
-    .filter-empty {
-      font-size: 13px;
-      color: var(--color-secondary);
-      padding: 10px 16px;
-      margin: 0;
-    }
-    .drawer-footer {
-      padding: 16px 20px;
-      border-top: 1px solid var(--color-border);
-      background: var(--color-surface);
-    }
+      .filter-group-content {
+        display: flex;
+        flex-direction: column;
+        padding: 4px 0 8px;
+      }
+      .filter-option {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 16px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .filter-option:hover {
+        background: var(--tui-background-neutral-1-hover, rgba(0, 0, 0, 0.04));
+      }
+      .filter-option span {
+        font-size: 14px;
+        color: var(--color-primary);
+      }
+      .filter-empty {
+        font-size: 13px;
+        color: var(--color-secondary);
+        padding: 10px 16px;
+        margin: 0;
+      }
+      .drawer-footer {
+        padding: 16px 20px;
+        border-top: 1px solid var(--color-border);
+        background: var(--color-surface);
+      }
 
-    /* ── Skeleton loader ─────────────────────────────────────── */
-    @keyframes shimmer {
-      0%   { background-position: -400% 0; }
-      100% { background-position:  400% 0; }
-    }
-    .skeleton-card {
-      border-radius: 8px;
-      overflow: hidden;
-      background: var(--color-surface);
-      box-shadow: 0 2px 8px rgba(0,0,0,.07);
-      display: flex;
-      flex-direction: column;
-    }
-    .skeleton-image {
-      aspect-ratio: 1;
-      background: linear-gradient(90deg, #f0ede8 25%, #e8e3dc 50%, #f0ede8 75%);
-      background-size: 400% 100%;
-      animation: shimmer 1.6s infinite;
-    }
-    .skeleton-body { padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
-    .skeleton-line {
-      border-radius: 4px;
-      background: linear-gradient(90deg, #f0ede8 25%, #e8e3dc 50%, #f0ede8 75%);
-      background-size: 400% 100%;
-      animation: shimmer 1.6s infinite;
-    }
-    .skeleton-line--title  { height: 16px; width: 80%; animation-delay: .1s; }
-    .skeleton-line--brand  { height: 11px; width: 45%; animation-delay: .15s; }
-    .skeleton-line--price  { height: 14px; width: 35%; margin-top: 4px; animation-delay: .2s; }
-    .skeleton-btn {
-      margin: 8px 12px 12px;
-      height: 40px;
-      border-radius: 6px;
-      background: linear-gradient(90deg, #f0ede8 25%, #e8e3dc 50%, #f0ede8 75%);
-      background-size: 400% 100%;
-      animation: shimmer 1.6s infinite;
-      animation-delay: .25s;
-    }
-  `],
+      /* ── Skeleton loader ─────────────────────────────────────── */
+      @keyframes shimmer {
+        0% {
+          background-position: -400% 0;
+        }
+        100% {
+          background-position: 400% 0;
+        }
+      }
+      .skeleton-card {
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--color-surface);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+        display: flex;
+        flex-direction: column;
+      }
+      .skeleton-image {
+        aspect-ratio: 1;
+        background: linear-gradient(
+          90deg,
+          #f0ede8 25%,
+          #e8e3dc 50%,
+          #f0ede8 75%
+        );
+        background-size: 400% 100%;
+        animation: shimmer 1.6s infinite;
+      }
+      .skeleton-body {
+        padding: 14px 16px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .skeleton-line {
+        border-radius: 4px;
+        background: linear-gradient(
+          90deg,
+          #f0ede8 25%,
+          #e8e3dc 50%,
+          #f0ede8 75%
+        );
+        background-size: 400% 100%;
+        animation: shimmer 1.6s infinite;
+      }
+      .skeleton-line--title {
+        height: 16px;
+        width: 80%;
+        animation-delay: 0.1s;
+      }
+      .skeleton-line--brand {
+        height: 11px;
+        width: 45%;
+        animation-delay: 0.15s;
+      }
+      .skeleton-line--price {
+        height: 14px;
+        width: 35%;
+        margin-top: 4px;
+        animation-delay: 0.2s;
+      }
+      .skeleton-btn {
+        margin: 8px 12px 12px;
+        height: 40px;
+        border-radius: 6px;
+        background: linear-gradient(
+          90deg,
+          #f0ede8 25%,
+          #e8e3dc 50%,
+          #f0ede8 75%
+        );
+        background-size: 400% 100%;
+        animation: shimmer 1.6s infinite;
+        animation-delay: 0.25s;
+      }
+    `,
+  ],
 })
 export class ProductListComponent implements OnInit {
   private readonly http = inject(HttpClient);
@@ -658,7 +865,7 @@ export class ProductListComponent implements OnInit {
   readonly pageIndex = signal(0);
   readonly totalPages = signal(1);
   readonly skeletons = Array(8);
-  readonly searchQuery = signal<string>('');
+  readonly searchQuery = signal<string>("");
 
   readonly slug = signal<string | null>(null);
   readonly drawerOpen = signal(false);
@@ -676,7 +883,7 @@ export class ProductListComponent implements OnInit {
   readonly sortOptions = SORT_OPTIONS;
 
   // Sort — applied immediately, backend connection comes in the next step
-  readonly sortBy = signal<SortOption>('relevance');
+  readonly sortBy = signal<SortOption>("relevance");
   sortOpen = false;
 
   // In-stock toggle — staged with the rest of the drawer filters, default OFF (show all)
@@ -690,27 +897,36 @@ export class ProductListComponent implements OnInit {
   readonly appliedMaxPrice = signal<number | null>(null);
 
   readonly sortLabel = computed(
-    () => SORT_OPTIONS.find(o => o.value === this.sortBy())?.label ?? 'Sortuj',
+    () =>
+      SORT_OPTIONS.find((o) => o.value === this.sortBy())?.label ?? "Sortuj",
   );
 
   // Filter groups are slug-, staged-, and facets-aware: options narrow to what exists in the category
-  readonly filterGroups = computed(() => buildFilterGroups(this.slug(), this.staged(), this.facets()));
+  readonly filterGroups = computed(() =>
+    buildFilterGroups(this.slug(), this.staged(), this.facets()),
+  );
 
   readonly pageTitle = computed(() => {
-    if (this.featuredMode()) return 'Bestsellery';
+    if (this.featuredMode()) return "Bestsellery";
     const s = this.slug();
-    return s ? (CATEGORY_LABELS[s] ?? s) : 'Wszystkie produkty';
+    return s ? (CATEGORY_LABELS[s] ?? s) : "Wszystkie produkty";
   });
 
   readonly breadcrumbs = computed<Breadcrumb[]>(() => [
-    { label: 'Strona główna', link: '/' },
+    { label: "Strona główna", link: "/" },
     { label: this.pageTitle() },
   ]);
 
-  readonly activeFilterCount = computed(() =>
-    Object.values(this.appliedFilters()).reduce((sum, arr) => sum + arr.length, 0)
-    + (this.appliedInStock() ? 1 : 0)
-    + (this.appliedMinPrice() !== null || this.appliedMaxPrice() !== null ? 1 : 0),
+  readonly activeFilterCount = computed(
+    () =>
+      Object.values(this.appliedFilters()).reduce(
+        (sum, arr) => sum + arr.length,
+        0,
+      ) +
+      (this.appliedInStock() ? 1 : 0) +
+      (this.appliedMinPrice() !== null || this.appliedMaxPrice() !== null
+        ? 1
+        : 0),
   );
 
   readonly activeChips = computed(() => {
@@ -722,80 +938,106 @@ export class ProductListComponent implements OnInit {
   });
 
   ngOnInit() {
-    combineLatest([this.route.paramMap, this.route.queryParamMap]).pipe(
-      debounceTime(0), // coalesce simultaneous slug + queryParam emissions into one tick
-      switchMap(([pm, qpm]) => {
-        const slug = pm.get('slug');
-        const q = qpm.get('q') ?? '';
-        const sort = (qpm.get('sort') ?? 'relevance') as SortOption;
-        const page = Math.max(1, Math.min(50, parseInt(qpm.get('page') ?? '1', 10)));
-        const inStock = qpm.get('inStock') === 'true';
-        const featured = qpm.get('featured') === 'true';
-        const minPriceRaw = qpm.get('minPrice');
-        const maxPriceRaw = qpm.get('maxPrice');
-        const minPrice = minPriceRaw !== null && minPriceRaw !== '' ? Number(minPriceRaw) : null;
-        const maxPrice = maxPriceRaw !== null && maxPriceRaw !== '' ? Number(maxPriceRaw) : null;
-        const gender = qpm.getAll('gender');
-        const scentFamily = qpm.getAll('scentFamily');
-        const line = qpm.getAll('line');
-        const volume = qpm.getAll('volume');
+    combineLatest([this.route.paramMap, this.route.queryParamMap])
+      .pipe(
+        debounceTime(0), // coalesce simultaneous slug + queryParam emissions into one tick
+        switchMap(([pm, qpm]) => {
+          const slug = pm.get("slug");
+          const q = qpm.get("q") ?? "";
+          const sort = (qpm.get("sort") ?? "relevance") as SortOption;
+          const page = Math.max(
+            1,
+            Math.min(50, parseInt(qpm.get("page") ?? "1", 10)),
+          );
+          const inStock = qpm.get("inStock") === "true";
+          const featured = qpm.get("featured") === "true";
+          const minPriceRaw = qpm.get("minPrice");
+          const maxPriceRaw = qpm.get("maxPrice");
+          const minPrice =
+            minPriceRaw !== null && minPriceRaw !== ""
+              ? Number(minPriceRaw)
+              : null;
+          const maxPrice =
+            maxPriceRaw !== null && maxPriceRaw !== ""
+              ? Number(maxPriceRaw)
+              : null;
+          const gender = qpm.getAll("gender");
+          const scentFamily = qpm.getAll("scentFamily");
+          const line = qpm.getAll("line");
+          const volume = qpm.getAll("volume");
 
-        // Sync all derived signals from URL
-        this.slug.set(slug);
-        this.searchQuery.set(q);
-        this.sortBy.set(sort);
-        this.pageIndex.set(page - 1);
-        this.appliedInStock.set(inStock);
-        this.appliedMinPrice.set(minPrice !== null && !isNaN(minPrice) && minPrice > 0 ? minPrice : null);
-        this.appliedMaxPrice.set(maxPrice !== null && !isNaN(maxPrice) && maxPrice > 0 ? maxPrice : null);
-        this.featuredMode.set(featured);
-        const filters = emptyFilters();
-        if (gender.length) filters['gender'] = gender;
-        if (scentFamily.length) filters['scentFamily'] = scentFamily;
-        if (line.length) filters['line'] = line;
-        if (volume.length) filters['volume'] = volume;
-        this.appliedFilters.set(filters);
+          // Sync all derived signals from URL
+          this.slug.set(slug);
+          this.searchQuery.set(q);
+          this.sortBy.set(sort);
+          this.pageIndex.set(page - 1);
+          this.appliedInStock.set(inStock);
+          this.appliedMinPrice.set(
+            minPrice !== null && !isNaN(minPrice) && minPrice > 0
+              ? minPrice
+              : null,
+          );
+          this.appliedMaxPrice.set(
+            maxPrice !== null && !isNaN(maxPrice) && maxPrice > 0
+              ? maxPrice
+              : null,
+          );
+          this.featuredMode.set(featured);
+          const filters = emptyFilters();
+          if (gender.length) filters["gender"] = gender;
+          if (scentFamily.length) filters["scentFamily"] = scentFamily;
+          if (line.length) filters["line"] = line;
+          if (volume.length) filters["volume"] = volume;
+          this.appliedFilters.set(filters);
 
-        const hasFilters = q.length > 0 || inStock || page > 1 ||
-          gender.length > 0 || scentFamily.length > 0 ||
-          line.length > 0 || volume.length > 0 || sort !== 'relevance' ||
-          minPrice !== null || maxPrice !== null;
-        this.updateSeo(slug, featured, hasFilters);
-        this.loadFacets(slug);
-        this.loading.set(true);
+          const hasFilters =
+            q.length > 0 ||
+            inStock ||
+            page > 1 ||
+            gender.length > 0 ||
+            scentFamily.length > 0 ||
+            line.length > 0 ||
+            volume.length > 0 ||
+            sort !== "relevance" ||
+            minPrice !== null ||
+            maxPrice !== null;
+          this.updateSeo(slug, featured, hasFilters);
+          this.loadFacets(slug);
+          this.loading.set(true);
 
-        const apiParams = new URLSearchParams();
-        apiParams.set('page', String(page));
-        apiParams.set('limit', String(PAGE_SIZE));
-        if (slug) apiParams.set('category', slug);
-        if (featured) apiParams.set('featured', 'true');
-        if (q) apiParams.set('search', q);
-        gender.forEach(v => apiParams.append('gender', v));
-        scentFamily.forEach(v => apiParams.append('scentFamily', v));
-        line.forEach(v => apiParams.append('line', v));
-        volume.forEach(v => {
-          const ml = parseInt(v, 10);
-          if (!isNaN(ml)) apiParams.append('volumes', String(ml));
-        });
-        if (inStock) apiParams.set('inStock', 'true');
-        if (minPrice !== null && !isNaN(minPrice) && minPrice > 0)
-          apiParams.set('minPrice', String(Math.round(minPrice * 100)));
-        if (maxPrice !== null && !isNaN(maxPrice) && maxPrice > 0)
-          apiParams.set('maxPrice', String(Math.round(maxPrice * 100)));
-        if (sort !== 'relevance') apiParams.set('sortBy', sort);
+          const apiParams = new URLSearchParams();
+          apiParams.set("page", String(page));
+          apiParams.set("limit", String(PAGE_SIZE));
+          if (slug) apiParams.set("category", slug);
+          if (featured) apiParams.set("featured", "true");
+          if (q) apiParams.set("search", q);
+          gender.forEach((v) => apiParams.append("gender", v));
+          scentFamily.forEach((v) => apiParams.append("scentFamily", v));
+          line.forEach((v) => apiParams.append("line", v));
+          volume.forEach((v) => {
+            const ml = parseInt(v, 10);
+            if (!isNaN(ml)) apiParams.append("volumes", String(ml));
+          });
+          if (inStock) apiParams.set("inStock", "true");
+          if (minPrice !== null && !isNaN(minPrice) && minPrice > 0)
+            apiParams.set("minPrice", String(Math.round(minPrice * 100)));
+          if (maxPrice !== null && !isNaN(maxPrice) && maxPrice > 0)
+            apiParams.set("maxPrice", String(Math.round(maxPrice * 100)));
+          if (sort !== "relevance") apiParams.set("sortBy", sort);
 
-        return this.http
-          .get<{ data: ProductCardData[]; meta: { totalPages: number } }>(
-            `${environment.apiUrl}/products?${apiParams.toString()}`,
-          )
-          .pipe(catchError(() => of({ data: [], meta: { totalPages: 1 } })));
-      }),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe(res => {
-      this.products.set(res.data ?? []);
-      this.totalPages.set(res.meta?.totalPages ?? 1);
-      this.loading.set(false);
-    });
+          return this.http
+            .get<{ data: ProductCardData[]; meta: { totalPages: number } }>(
+              `${environment.apiUrl}/products?${apiParams.toString()}`,
+            )
+            .pipe(catchError(() => of({ data: [], meta: { totalPages: 1 } })));
+        }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((res) => {
+        this.products.set(res.data ?? []);
+        this.totalPages.set(res.meta?.totalPages ?? 1);
+        this.loading.set(false);
+      });
   }
 
   openDrawer(): void {
@@ -819,18 +1061,22 @@ export class ProductListComponent implements OnInit {
     this.drawerOpen.set(false);
     this.navigate({
       page: null,
-      gender: f['gender']?.length ? f['gender'] : null,
-      scentFamily: f['scentFamily']?.length ? f['scentFamily'] : null,
-      line: f['line']?.length ? f['line'] : null,
-      volume: f['volume']?.length ? f['volume'] : null,
-      inStock: this.stagedInStock() ? 'true' : null,
-      minPrice: this.stagedMinPrice() !== null ? String(this.stagedMinPrice()) : null,
-      maxPrice: this.stagedMaxPrice() !== null ? String(this.stagedMaxPrice()) : null,
+      gender: f["gender"]?.length ? f["gender"] : null,
+      scentFamily: f["scentFamily"]?.length ? f["scentFamily"] : null,
+      line: f["line"]?.length ? f["line"] : null,
+      volume: f["volume"]?.length ? f["volume"] : null,
+      inStock: this.stagedInStock() ? "true" : null,
+      minPrice:
+        this.stagedMinPrice() !== null ? String(this.stagedMinPrice()) : null,
+      maxPrice:
+        this.stagedMaxPrice() !== null ? String(this.stagedMaxPrice()) : null,
     });
   }
 
   removeFilter(key: string, value: string): void {
-    const updated = (this.appliedFilters()[key] ?? []).filter(x => x !== value);
+    const updated = (this.appliedFilters()[key] ?? []).filter(
+      (x) => x !== value,
+    );
     this.navigate({ [key]: updated.length ? updated : null, page: null });
   }
 
@@ -839,7 +1085,16 @@ export class ProductListComponent implements OnInit {
   }
 
   clearAllFilters(): void {
-    this.navigate({ gender: null, scentFamily: null, line: null, volume: null, inStock: null, minPrice: null, maxPrice: null, page: null });
+    this.navigate({
+      gender: null,
+      scentFamily: null,
+      line: null,
+      volume: null,
+      inStock: null,
+      minPrice: null,
+      maxPrice: null,
+      page: null,
+    });
   }
 
   removePriceFilter(): void {
@@ -852,11 +1107,11 @@ export class ProductListComponent implements OnInit {
 
   setSortBy(value: SortOption): void {
     this.sortOpen = false;
-    this.navigate({ sort: value !== 'relevance' ? value : null, page: null });
+    this.navigate({ sort: value !== "relevance" ? value : null, page: null });
   }
 
   setGroupOpen(key: string, open: boolean): void {
-    this.openGroups.update(s => ({ ...s, [key]: open }));
+    this.openGroups.update((s) => ({ ...s, [key]: open }));
   }
 
   isSelected(key: string, option: string): boolean {
@@ -864,30 +1119,34 @@ export class ProductListComponent implements OnInit {
   }
 
   onCheckboxChange(key: string, option: string, checked: boolean): void {
-    this.staged.update(s => {
+    this.staged.update((s) => {
       const updated = {
         ...s,
         [key]: checked
           ? [...(s[key] ?? []), option]
-          : (s[key] ?? []).filter(v => v !== option),
+          : (s[key] ?? []).filter((v) => v !== option),
       };
-      if (this.slug() === 'perfume') {
-        if (key === 'line') {
-          const newLines = updated['line'] ?? [];
+      if (this.slug() === "perfume") {
+        if (key === "line") {
+          const newLines = updated["line"] ?? [];
           const allowed = new Set(
             newLines.length > 0
-              ? newLines.flatMap(l => LINE_VOLUMES[l] ?? [])
-              : VOLUME_OPTIONS['perfume'] ?? [],
+              ? newLines.flatMap((l) => LINE_VOLUMES[l] ?? [])
+              : (VOLUME_OPTIONS["perfume"] ?? []),
           );
-          updated['volume'] = (updated['volume'] ?? []).filter(v => allowed.has(v));
-        } else if (key === 'volume') {
-          const newVols = updated['volume'] ?? [];
+          updated["volume"] = (updated["volume"] ?? []).filter((v) =>
+            allowed.has(v),
+          );
+        } else if (key === "volume") {
+          const newVols = updated["volume"] ?? [];
           const allowed = new Set(
             newVols.length > 0
-              ? newVols.flatMap(v => VOLUME_LINES[v] ?? [])
-              : LINE_OPTIONS['perfume'] ?? [],
+              ? newVols.flatMap((v) => VOLUME_LINES[v] ?? [])
+              : (LINE_OPTIONS["perfume"] ?? []),
           );
-          updated['line'] = (updated['line'] ?? []).filter(l => allowed.has(l));
+          updated["line"] = (updated["line"] ?? []).filter((l) =>
+            allowed.has(l),
+          );
         }
       }
       return updated;
@@ -896,34 +1155,53 @@ export class ProductListComponent implements OnInit {
 
   goToPage(index: number): void {
     this.navigate({ page: index > 0 ? String(index + 1) : null });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   private navigate(params: Record<string, string | string[] | null>): void {
-    this.router.navigate([], { queryParams: params, queryParamsHandling: 'merge' });
+    this.router.navigate([], {
+      queryParams: params,
+      queryParamsHandling: "merge",
+    });
   }
 
-  private updateSeo(slug: string | null, featured: boolean, hasFilters: boolean): void {
-    const label = featured ? 'Bestsellery' : slug ? (CATEGORY_LABELS[slug] ?? slug) : 'Wszystkie produkty';
-    const canonicalPath = slug ? `/category/${slug}` : '/products';
+  private updateSeo(
+    slug: string | null,
+    featured: boolean,
+    hasFilters: boolean,
+  ): void {
+    const label = featured
+      ? "Bestsellery"
+      : slug
+        ? (CATEGORY_LABELS[slug] ?? slug)
+        : "Wszystkie produkty";
+    const canonicalPath = slug ? `/category/${slug}` : "/products";
     this.seo.updatePageMeta({
       title: label,
       description: slug
         ? `${label} — premium zapachy w Aromaterie.`
-        : 'Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.',
+        : "Odkryj pełną kolekcję perfum, dyfuzorów i żeli pod prysznic premium.",
       path: canonicalPath,
     });
     if (hasFilters) {
-      this.seo.setRobotsTag('noindex,follow');
+      this.seo.setRobotsTag("noindex,follow");
     }
   }
 
   private loadFacets(slug: string | null): void {
-    if (!slug) { this.facets.set(null); return; }
+    if (!slug) {
+      this.facets.set(null);
+      return;
+    }
     const params = new URLSearchParams({ category: slug });
     this.http
-      .get<CategoryFacets>(`${environment.apiUrl}/products/facets?${params.toString()}`)
+      .get<CategoryFacets>(
+        `${environment.apiUrl}/products/facets?${params.toString()}`,
+      )
       .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({ next: (res) => this.facets.set(res), error: () => this.facets.set(null) });
+      .subscribe({
+        next: (res) => this.facets.set(res),
+        error: () => this.facets.set(null),
+      });
   }
 }

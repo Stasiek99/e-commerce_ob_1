@@ -12,10 +12,10 @@
  *     catalog scroll position. 'top' would cause back-button abandonment on mobile.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { createHash } from 'crypto';
-import { TestBed } from '@angular/core/testing';
+import * as fs from "fs";
+import * as path from "path";
+import { createHash } from "crypto";
+import { TestBed } from "@angular/core/testing";
 import {
   FetchBackend,
   HttpBackend,
@@ -23,9 +23,12 @@ import {
   provideHttpClient,
   withFetch,
   ɵwithHttpTransferCache as withHttpTransferCache,
-} from '@angular/common/http';
-import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
-import { makeStateKey, TransferState } from '@angular/core';
+} from "@angular/common/http";
+import {
+  provideHttpClientTesting,
+  HttpTestingController,
+} from "@angular/common/http/testing";
+import { makeStateKey, TransferState } from "@angular/core";
 
 // ── Mirrors Angular's internal cache key algorithm (common/fesm2022/http.mjs) ─
 //
@@ -34,26 +37,32 @@ import { makeStateKey, TransferState } from '@angular/core';
 // identical to Node's crypto.createHash('sha256'). We use Node crypto here to
 // avoid duplicating the 100-line pure-JS SHA-256 implementation verbatim.
 
-function makeHttpCacheKey(method: string, url: string, params = '', body = '', responseType = 'json') {
-  const raw = [method, responseType, url, body, params].join('|');
-  const hash = createHash('sha256').update(raw).digest('hex');
+function makeHttpCacheKey(
+  method: string,
+  url: string,
+  params = "",
+  body = "",
+  responseType = "json",
+) {
+  const raw = [method, responseType, url, body, params].join("|");
+  const hash = createHash("sha256").update(raw).digest("hex");
   return makeStateKey<unknown>(hash);
 }
 
 // Mirrors Angular's internal cached-response field constants (common/fesm2022/http.mjs)
-const CACHE_BODY = 'b';
-const CACHE_HEADERS = 'h';
-const CACHE_STATUS = 's';
-const CACHE_STATUS_TEXT = 'st';
-const CACHE_REQ_URL = 'u';
-const CACHE_RESPONSE_TYPE = 'rt';
+const CACHE_BODY = "b";
+const CACHE_HEADERS = "h";
+const CACHE_STATUS = "s";
+const CACHE_STATUS_TEXT = "st";
+const CACHE_REQ_URL = "u";
+const CACHE_RESPONSE_TYPE = "rt";
 
 // ── Suite 1 — withFetch() backend registration ────────────────────────────────
 
-describe('appConfig — withFetch() HTTP backend', () => {
+describe("appConfig — withFetch() HTTP backend", () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('registers FetchBackend when withFetch() is provided — required for HTTP transfer cache', () => {
+  it("registers FetchBackend when withFetch() is provided — required for HTTP transfer cache", () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(withFetch())],
     });
@@ -63,7 +72,7 @@ describe('appConfig — withFetch() HTTP backend', () => {
     expect(backend).toBeInstanceOf(FetchBackend);
   });
 
-  it('does NOT register FetchBackend when withFetch() is absent (regression baseline)', () => {
+  it("does NOT register FetchBackend when withFetch() is absent (regression baseline)", () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient()],
     });
@@ -76,12 +85,12 @@ describe('appConfig — withFetch() HTTP backend', () => {
 
 // ── Suite 2 — HTTP transfer cache behaviour ───────────────────────────────────
 
-describe('appConfig — HTTP transfer cache', () => {
+describe("appConfig — HTTP transfer cache", () => {
   let http: HttpClient;
   let httpMock: HttpTestingController;
   let transferState: TransferState;
 
-  const PRODUCTS_URL = '/api/products';
+  const PRODUCTS_URL = "/api/products";
 
   beforeEach(() => {
     TestBed.configureTestingModule({
@@ -104,17 +113,17 @@ describe('appConfig — HTTP transfer cache', () => {
 
   // ── GET served from cache ─────────────────────────────────────────────────
 
-  it('serves GET response from TransferState without forwarding to the network backend', () => {
-    const storeKey = makeHttpCacheKey('GET', PRODUCTS_URL);
-    const cachedProducts = [{ id: '1', name: 'Rose Oud' }];
+  it("serves GET response from TransferState without forwarding to the network backend", () => {
+    const storeKey = makeHttpCacheKey("GET", PRODUCTS_URL);
+    const cachedProducts = [{ id: "1", name: "Rose Oud" }];
 
     transferState.set(storeKey, {
       [CACHE_BODY]: cachedProducts,
       [CACHE_HEADERS]: {},
       [CACHE_STATUS]: 200,
-      [CACHE_STATUS_TEXT]: 'OK',
+      [CACHE_STATUS_TEXT]: "OK",
       [CACHE_REQ_URL]: PRODUCTS_URL,
-      [CACHE_RESPONSE_TYPE]: 'json',
+      [CACHE_RESPONSE_TYPE]: "json",
     });
 
     let received: unknown;
@@ -124,17 +133,17 @@ describe('appConfig — HTTP transfer cache', () => {
     expect(received).toEqual(cachedProducts);
   });
 
-  it('provides the correct body from the cache entry', () => {
-    const storeKey = makeHttpCacheKey('GET', PRODUCTS_URL);
-    const payload = { id: '42', name: 'Oud Wood', price: 299 };
+  it("provides the correct body from the cache entry", () => {
+    const storeKey = makeHttpCacheKey("GET", PRODUCTS_URL);
+    const payload = { id: "42", name: "Oud Wood", price: 299 };
 
     transferState.set(storeKey, {
       [CACHE_BODY]: payload,
       [CACHE_HEADERS]: {},
       [CACHE_STATUS]: 200,
-      [CACHE_STATUS_TEXT]: 'OK',
+      [CACHE_STATUS_TEXT]: "OK",
       [CACHE_REQ_URL]: PRODUCTS_URL,
-      [CACHE_RESPONSE_TYPE]: 'json',
+      [CACHE_RESPONSE_TYPE]: "json",
     });
 
     let received: unknown;
@@ -143,35 +152,35 @@ describe('appConfig — HTTP transfer cache', () => {
     expect(received).toEqual(payload);
   });
 
-  it('forwards GET to the backend when TransferState has no cached entry for the URL', () => {
+  it("forwards GET to the backend when TransferState has no cached entry for the URL", () => {
     http.get(PRODUCTS_URL).subscribe();
 
     const req = httpMock.expectOne(PRODUCTS_URL);
-    expect(req.request.method).toBe('GET');
-    req.flush([{ id: '1', name: 'Rose Oud' }]);
+    expect(req.request.method).toBe("GET");
+    req.flush([{ id: "1", name: "Rose Oud" }]);
   });
 
   // ── POST bypasses cache ───────────────────────────────────────────────────
 
-  it('bypasses the cache for POST requests (includePostRequests: false)', () => {
-    http.post(PRODUCTS_URL, { name: 'New Product' }).subscribe();
+  it("bypasses the cache for POST requests (includePostRequests: false)", () => {
+    http.post(PRODUCTS_URL, { name: "New Product" }).subscribe();
 
-    const req = httpMock.expectOne({ url: PRODUCTS_URL, method: 'POST' });
-    req.flush({ id: '99', name: 'New Product' });
+    const req = httpMock.expectOne({ url: PRODUCTS_URL, method: "POST" });
+    req.flush({ id: "99", name: "New Product" });
   });
 
-  it('bypasses the cache for PUT requests (only GET/HEAD are cacheable by default)', () => {
-    http.put(PRODUCTS_URL + '/1', { name: 'Updated' }).subscribe();
+  it("bypasses the cache for PUT requests (only GET/HEAD are cacheable by default)", () => {
+    http.put(PRODUCTS_URL + "/1", { name: "Updated" }).subscribe();
 
-    const req = httpMock.expectOne({ method: 'PUT' });
-    req.flush({ id: '1', name: 'Updated' });
+    const req = httpMock.expectOne({ method: "PUT" });
+    req.flush({ id: "1", name: "Updated" });
   });
 
-  it('bypasses the cache for DELETE requests', () => {
-    http.delete(PRODUCTS_URL + '/1').subscribe();
+  it("bypasses the cache for DELETE requests", () => {
+    http.delete(PRODUCTS_URL + "/1").subscribe();
 
-    const req = httpMock.expectOne({ method: 'DELETE' });
-    req.flush(null, { status: 204, statusText: 'No Content' });
+    const req = httpMock.expectOne({ method: "DELETE" });
+    req.flush(null, { status: 204, statusText: "No Content" });
   });
 });
 
@@ -182,26 +191,26 @@ describe('appConfig — HTTP transfer cache', () => {
 // declared configuration without coupling to Angular's internal shapes.
 // (Same approach used by pwa.spec.ts for service-worker config assertions.)
 
-describe('appConfig — scroll position restoration', () => {
-  const frontendRoot = path.resolve(__dirname, '../..');
+describe("appConfig — scroll position restoration", () => {
+  const frontendRoot = path.resolve(__dirname, "../..");
   let source: string;
 
   beforeAll(() => {
     source = fs.readFileSync(
-      path.join(frontendRoot, 'src/app/app.config.ts'),
-      'utf-8',
+      path.join(frontendRoot, "src/app/app.config.ts"),
+      "utf-8",
     );
   });
 
   it("sets scrollPositionRestoration to 'enabled' so back-navigation restores catalog scroll position", () => {
-    expect(source).toContain("scrollPositionRestoration: 'enabled'");
+    expect(source).toContain('scrollPositionRestoration: "enabled"');
   });
 
   it("does NOT use 'top' restoration (regression guard: 'top' causes back-button abandonment)", () => {
-    expect(source).not.toContain("scrollPositionRestoration: 'top'");
+    expect(source).not.toContain('scrollPositionRestoration: "top"');
   });
 
-  it('calls withInMemoryScrolling in the provideRouter configuration', () => {
-    expect(source).toContain('withInMemoryScrolling');
+  it("calls withInMemoryScrolling in the provideRouter configuration", () => {
+    expect(source).toContain("withInMemoryScrolling");
   });
 });

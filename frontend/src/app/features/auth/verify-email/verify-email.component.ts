@@ -1,14 +1,14 @@
-import { Component, inject, OnInit, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { ActivatedRoute, RouterLink } from '@angular/router';
-import { TuiButton, TuiTitle } from '@taiga-ui/core';
-import { TuiCard, TuiHeader } from '@taiga-ui/layout';
-import { AuthService } from '../../../core/services/auth.service';
+import { Component, inject, OnInit, PLATFORM_ID } from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { ActivatedRoute, RouterLink } from "@angular/router";
+import { TuiButton, TuiTitle } from "@taiga-ui/core";
+import { TuiCard, TuiHeader } from "@taiga-ui/layout";
+import { AuthService } from "../../../core/services/auth.service";
 
-type State = 'pending' | 'success' | 'email-changed' | 'error';
+type State = "pending" | "success" | "email-changed" | "error";
 
 @Component({
-  selector: 'app-verify-email',
+  selector: "app-verify-email",
   standalone: true,
   imports: [RouterLink, TuiButton, TuiTitle, TuiCard, TuiHeader],
   template: `
@@ -18,46 +18,78 @@ type State = 'pending' | 'success' | 'email-changed' | 'error';
           <h1 tuiTitle>Weryfikacja email</h1>
         </header>
 
-        @if (state === 'pending') {
+        @if (state === "pending") {
           <p class="info-text">Trwa weryfikacja adresu email…</p>
         }
-        @if (state === 'success') {
+        @if (state === "success") {
           <p class="info-text">
-            Adres email został potwierdzony. Możesz teraz w pełni korzystać ze swojego konta.
+            Adres email został potwierdzony. Możesz teraz w pełni korzystać ze
+            swojego konta.
           </p>
-          <a tuiButton [routerLink]="['/account']" class="btn-full">Przejdź do konta</a>
+          <a tuiButton [routerLink]="['/account']" class="btn-full"
+            >Przejdź do konta</a
+          >
         }
-        @if (state === 'email-changed') {
+        @if (state === "email-changed") {
           <p class="info-text">
-            Adres email został zmieniony. Zaloguj się ponownie używając nowego adresu.
+            Adres email został zmieniony. Zaloguj się ponownie używając nowego
+            adresu.
           </p>
-          <a tuiButton [routerLink]="['/auth/login']" class="btn-full">Zaloguj się</a>
+          <a tuiButton [routerLink]="['/auth/login']" class="btn-full"
+            >Zaloguj się</a
+          >
         }
-        @if (state === 'error') {
+        @if (state === "error") {
           <p class="info-text error-text">
             Link weryfikacyjny jest nieprawidłowy lub wygasł.
           </p>
-          <a tuiButton appearance="secondary" [routerLink]="['/account']" class="btn-full">
+          <a
+            tuiButton
+            appearance="secondary"
+            [routerLink]="['/account']"
+            class="btn-full"
+          >
             Wyślij nowy link z poziomu konta
           </a>
         }
       </div>
     </div>
   `,
-  styles: [`
-    .auth-page { display: flex; justify-content: center; padding: 32px 16px; }
-    .auth-card { width: 100%; max-width: 420px; box-shadow: var(--shadow-sm) !important; }
-    .btn-full { display: flex; width: 100%; justify-content: center; }
-    .info-text { font-size: 14px; color: var(--color-secondary); margin: 0; line-height: 1.6; }
-    .error-text { color: var(--tui-status-negative); }
-  `],
+  styles: [
+    `
+      .auth-page {
+        display: flex;
+        justify-content: center;
+        padding: 32px 16px;
+      }
+      .auth-card {
+        width: 100%;
+        max-width: 420px;
+        box-shadow: var(--shadow-sm) !important;
+      }
+      .btn-full {
+        display: flex;
+        width: 100%;
+        justify-content: center;
+      }
+      .info-text {
+        font-size: 14px;
+        color: var(--color-secondary);
+        margin: 0;
+        line-height: 1.6;
+      }
+      .error-text {
+        color: var(--tui-status-negative);
+      }
+    `,
+  ],
 })
 export class VerifyEmailComponent implements OnInit {
-  private readonly auth       = inject(AuthService);
-  private readonly route      = inject(ActivatedRoute);
+  private readonly auth = inject(AuthService);
+  private readonly route = inject(ActivatedRoute);
   private readonly platformId = inject(PLATFORM_ID);
 
-  state: State = 'pending';
+  state: State = "pending";
 
   ngOnInit() {
     // The token is single-use — only the real browser may consume it. Without
@@ -66,23 +98,29 @@ export class VerifyEmailComponent implements OnInit {
     // genuine success with an error.
     if (!isPlatformBrowser(this.platformId)) return;
 
-    const token = this.route.snapshot.queryParams['token'] as string | undefined;
-    if (!token) { this.state = 'error'; return; }
+    const token = this.route.snapshot.queryParams["token"] as
+      string | undefined;
+    if (!token) {
+      this.state = "error";
+      return;
+    }
 
     this.auth.verifyEmail(token).subscribe({
       next: (res) => {
-        if (res.type === 'email_change') {
+        if (res.type === "email_change") {
           // All sessions were revoked server-side; clear local state and show
           // a re-login prompt instead of trying to reload the user.
           this.auth.clearSession();
-          this.state = 'email-changed';
+          this.state = "email-changed";
         } else {
-          this.state = 'success';
+          this.state = "success";
           // Refresh the in-memory user so the dashboard banner disappears
           this.auth.loadCurrentUser();
         }
       },
-      error: () => { this.state = 'error'; },
+      error: () => {
+        this.state = "error";
+      },
     });
   }
 }

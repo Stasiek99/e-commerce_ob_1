@@ -1,15 +1,18 @@
-import { Component, computed, inject, signal } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { from, concatMap, toArray, map, catchError, of } from 'rxjs';
-import { TuiButton, TuiIcon } from '@taiga-ui/core';
-import { WishlistService, WishlistItemData } from '../../core/services/wishlist.service';
-import { CartService } from '../../core/services/cart.service';
-import { ToastService } from '../../core/services/toast.service';
-import { AuthService } from '../../core/services/auth.service';
-import { ProductCardComponent } from '../../shared/product-card/product-card.component';
+import { Component, computed, inject, signal } from "@angular/core";
+import { RouterLink } from "@angular/router";
+import { from, concatMap, toArray, map, catchError, of } from "rxjs";
+import { TuiButton, TuiIcon } from "@taiga-ui/core";
+import {
+  WishlistService,
+  WishlistItemData,
+} from "../../core/services/wishlist.service";
+import { CartService } from "../../core/services/cart.service";
+import { ToastService } from "../../core/services/toast.service";
+import { AuthService } from "../../core/services/auth.service";
+import { ProductCardComponent } from "../../shared/product-card/product-card.component";
 
 @Component({
-  selector: 'app-wishlist',
+  selector: "app-wishlist",
   standalone: true,
   imports: [RouterLink, TuiButton, TuiIcon, ProductCardComponent],
   template: `
@@ -28,7 +31,11 @@ import { ProductCardComponent } from '../../shared/product-card/product-card.com
             [disabled]="addingAll()"
             (click)="addAllToCart()"
           >
-            {{ addingAll() ? 'Dodawanie…' : 'Dodaj wszystkie do koszyka (' + inStockCount() + ')' }}
+            {{
+              addingAll()
+                ? "Dodawanie…"
+                : "Dodaj wszystkie do koszyka (" + inStockCount() + ")"
+            }}
           </button>
         }
       </div>
@@ -49,13 +56,25 @@ import { ProductCardComponent } from '../../shared/product-card/product-card.com
                 <button
                   tuiButton
                   type="button"
-                  [appearance]="product.notifyOnRestock ? 'accent' : 'secondary'"
+                  [appearance]="
+                    product.notifyOnRestock ? 'accent' : 'secondary'
+                  "
                   size="s"
                   class="notify-btn"
-                  (click)="wishlist.setNotify(product.id, !product.notifyOnRestock)"
+                  (click)="
+                    wishlist.setNotify(product.id, !product.notifyOnRestock)
+                  "
                 >
-                  <tui-icon [icon]="product.notifyOnRestock ? '@tui.bell-ring' : '@tui.bell'" />
-                  {{ product.notifyOnRestock ? 'Powiadomienie włączone' : 'Powiadom gdy wróci' }}
+                  <tui-icon
+                    [icon]="
+                      product.notifyOnRestock ? '@tui.bell-ring' : '@tui.bell'
+                    "
+                  />
+                  {{
+                    product.notifyOnRestock
+                      ? "Powiadomienie włączone"
+                      : "Powiadom gdy wróci"
+                  }}
                 </button>
               }
             </div>
@@ -64,52 +83,80 @@ import { ProductCardComponent } from '../../shared/product-card/product-card.com
       }
     </div>
   `,
-  styles: [`
-    .page { padding: 32px 0; }
+  styles: [
+    `
+      .page {
+        padding: 32px 0;
+      }
 
-    .wishlist-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 32px;
-      flex-wrap: wrap;
-    }
-    .wishlist-heading {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 28px;
-      font-weight: 700;
-      margin: 0;
-    }
-    .wishlist-heading__icon {
-      font-size: 28px;
-      color: var(--color-accent-text);
-    }
+      .wishlist-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 32px;
+        flex-wrap: wrap;
+      }
+      .wishlist-heading {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 28px;
+        font-weight: 700;
+        margin: 0;
+      }
+      .wishlist-heading__icon {
+        font-size: 28px;
+        color: var(--color-accent-text);
+      }
 
-    .empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 20px;
-      padding: 64px 0;
-      text-align: center;
-    }
-    .empty p { font-size: 16px; color: var(--color-secondary); margin: 0; }
+      .empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        padding: 64px 0;
+        text-align: center;
+      }
+      .empty p {
+        font-size: 16px;
+        color: var(--color-secondary);
+        margin: 0;
+      }
 
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 24px;
-    }
-    @media (max-width: 1024px) { .grid { grid-template-columns: repeat(3, 1fr); gap: 24px; } }
-    @media (max-width: 768px)  { .grid { grid-template-columns: repeat(2, 1fr); gap: 20px; } }
-    @media (max-width: 480px)  { .grid { grid-template-columns: 1fr; } }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 24px;
+      }
+      @media (max-width: 1024px) {
+        .grid {
+          grid-template-columns: repeat(3, 1fr);
+          gap: 24px;
+        }
+      }
+      @media (max-width: 768px) {
+        .grid {
+          grid-template-columns: repeat(2, 1fr);
+          gap: 20px;
+        }
+      }
+      @media (max-width: 480px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
 
-    .wishlist-item { display: flex; flex-direction: column; gap: 8px; }
-    .notify-btn { width: 100%; }
-  `],
+      .wishlist-item {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .notify-btn {
+        width: 100%;
+      }
+    `,
+  ],
 })
 export class WishlistComponent {
   private readonly cart = inject(CartService);
@@ -124,8 +171,10 @@ export class WishlistComponent {
 
   readonly addingAll = signal(false);
 
-  readonly inStockCount = computed(() =>
-    this.wishlist.items().filter((p) => p.variants?.some((v) => v.stock > 0)).length,
+  readonly inStockCount = computed(
+    () =>
+      this.wishlist.items().filter((p) => p.variants?.some((v) => v.stock > 0))
+        .length,
   );
 
   constructor() {}
@@ -141,39 +190,45 @@ export class WishlistComponent {
 
     // Sequential (concatMap) so only one request holds the Redis checkout lock at a time.
     // Per-item catchError lets the stream continue when a single item fails (e.g. race-depleted stock).
-    from(inStockProducts).pipe(
-      concatMap((product) => {
-        const variant = product.variants!.find((v) => v.stock > 0)!;
-        return this.cart.addItem(variant.id, 1).pipe(
-          map((cart) => ({ ok: true as const, cart })),
-          catchError(() => of({ ok: false as const, cart: null })),
-        );
-      }),
-      toArray(),
-    ).subscribe({
-      next: (results) => {
-        const successes = results.filter((r) => r.ok);
-        const failures = results.filter((r) => !r.ok);
-        const lastCart = [...successes].reverse()[0]?.cart;
+    from(inStockProducts)
+      .pipe(
+        concatMap((product) => {
+          const variant = product.variants!.find((v) => v.stock > 0)!;
+          return this.cart.addItem(variant.id, 1).pipe(
+            map((cart) => ({ ok: true as const, cart })),
+            catchError(() => of({ ok: false as const, cart: null })),
+          );
+        }),
+        toArray(),
+      )
+      .subscribe({
+        next: (results) => {
+          const successes = results.filter((r) => r.ok);
+          const failures = results.filter((r) => !r.ok);
+          const lastCart = [...successes].reverse()[0]?.cart;
 
-        if (lastCart) this.cart.refreshFromServer(lastCart);
-        else this.cart.loadCart();
+          if (lastCart) this.cart.refreshFromServer(lastCart);
+          else this.cart.loadCart();
 
-        if (successes.length > 0) {
-          const n = successes.length;
-          this.toast.success(`Dodano ${n} ${n === 1 ? 'produkt' : 'produkty'} do koszyka!`);
-        }
-        if (failures.length > 0) {
-          const n = failures.length;
-          this.toast.error(`${n} ${n === 1 ? 'produkt nie mógł' : 'produkty nie mogły'} zostać dodane (brak w magazynie).`);
-        }
-        this.addingAll.set(false);
-      },
-      error: () => {
-        this.cart.loadCart();
-        this.toast.error('Nie udało się dodać produktów do koszyka.');
-        this.addingAll.set(false);
-      },
-    });
+          if (successes.length > 0) {
+            const n = successes.length;
+            this.toast.success(
+              `Dodano ${n} ${n === 1 ? "produkt" : "produkty"} do koszyka!`,
+            );
+          }
+          if (failures.length > 0) {
+            const n = failures.length;
+            this.toast.error(
+              `${n} ${n === 1 ? "produkt nie mógł" : "produkty nie mogły"} zostać dodane (brak w magazynie).`,
+            );
+          }
+          this.addingAll.set(false);
+        },
+        error: () => {
+          this.cart.loadCart();
+          this.toast.error("Nie udało się dodać produktów do koszyka.");
+          this.addingAll.set(false);
+        },
+      });
   }
 }

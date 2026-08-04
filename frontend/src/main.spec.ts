@@ -16,26 +16,28 @@ const handleBootstrapError = (
   err: { name?: string; message?: string } | null | undefined,
   reload: () => void = () => window.location.reload(),
 ): void => {
-  if (err?.name === 'ChunkLoadError' || err?.message?.includes('chunk')) {
+  if (err?.name === "ChunkLoadError" || err?.message?.includes("chunk")) {
     reload();
     return;
   }
   console.error(err);
 };
 
-describe('main.ts bootstrap catch handler', () => {
+describe("main.ts bootstrap catch handler", () => {
   let reloadSpy: jest.Mock;
   let consoleSpy: jest.SpyInstance;
 
   beforeEach(() => {
     reloadSpy = jest.fn();
-    consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => jest.clearAllMocks());
 
-  it('calls reload when the error name is ChunkLoadError', () => {
-    const err = Object.assign(new Error('Loading chunk 5 failed.'), { name: 'ChunkLoadError' });
+  it("calls reload when the error name is ChunkLoadError", () => {
+    const err = Object.assign(new Error("Loading chunk 5 failed."), {
+      name: "ChunkLoadError",
+    });
 
     handleBootstrapError(err, reloadSpy);
 
@@ -44,7 +46,9 @@ describe('main.ts bootstrap catch handler', () => {
   });
 
   it('calls reload when the error message contains "chunk"', () => {
-    const err = new Error('Failed to fetch dynamically imported module: chunk-ABCDEF12.js');
+    const err = new Error(
+      "Failed to fetch dynamically imported module: chunk-ABCDEF12.js",
+    );
 
     handleBootstrapError(err, reloadSpy);
 
@@ -52,8 +56,8 @@ describe('main.ts bootstrap catch handler', () => {
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 
-  it('logs via console.error and does NOT reload for an unrelated error', () => {
-    const err = new Error('Cannot read properties of undefined');
+  it("logs via console.error and does NOT reload for an unrelated error", () => {
+    const err = new Error("Cannot read properties of undefined");
 
     handleBootstrapError(err, reloadSpy);
 
@@ -61,7 +65,7 @@ describe('main.ts bootstrap catch handler', () => {
     expect(consoleSpy).toHaveBeenCalledWith(err);
   });
 
-  it('logs via console.error and does NOT reload for a null error', () => {
+  it("logs via console.error and does NOT reload for a null error", () => {
     handleBootstrapError(null, reloadSpy);
 
     expect(reloadSpy).not.toHaveBeenCalled();

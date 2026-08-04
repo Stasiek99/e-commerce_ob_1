@@ -7,32 +7,35 @@ import {
   computed,
   inject,
   signal,
-} from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { Router, RouterLink } from '@angular/router';
-import { FormControl, ReactiveFormsModule } from '@angular/forms';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { map, tap } from 'rxjs';
-import { TuiButton, TuiIcon, TuiLoader, TuiTextfield } from '@taiga-ui/core';
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { Router, RouterLink } from "@angular/router";
+import { FormControl, ReactiveFormsModule } from "@angular/forms";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
+import { map, tap } from "rxjs";
+import { TuiButton, TuiIcon, TuiLoader, TuiInput } from "@taiga-ui/core";
 import {
   FinderNote,
   FinderProduct,
   FragranceFinderService,
-} from '../../../core/services/fragrance-finder.service';
-import { ProductCardComponent } from '../../product-card/product-card.component';
-import { SEARCH_MIN_LENGTH } from '../../../core/constants/search.constants';
-import { createSearchStream, createTextSearchStream } from '../../../core/utils/search-stream';
+} from "../../../core/services/fragrance-finder.service";
+import { ProductCardComponent } from "../../product-card/product-card.component";
+import { SEARCH_MIN_LENGTH } from "../../../core/constants/search.constants";
+import {
+  createSearchStream,
+  createTextSearchStream,
+} from "../../../core/utils/search-stream";
 
-type FinderMode = 'name' | 'notes';
+type FinderMode = "name" | "notes";
 
 /** Catalog `gender` values, plus the "no filter" sentinel. */
-type GenderFilter = 'all' | 'Kobieta' | 'Mężczyzna' | 'Unisex';
+type GenderFilter = "all" | "Kobieta" | "Mężczyzna" | "Unisex";
 
 const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
-  { value: 'all', label: 'Wszystkie' },
-  { value: 'Kobieta', label: 'Dla niej' },
-  { value: 'Mężczyzna', label: 'Dla niego' },
-  { value: 'Unisex', label: 'Unisex' },
+  { value: "all", label: "Wszystkie" },
+  { value: "Kobieta", label: "Dla niej" },
+  { value: "Mężczyzna", label: "Dla niego" },
+  { value: "Unisex", label: "Unisex" },
 ];
 
 /**
@@ -52,7 +55,7 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
  * catalog empty state, where surrounding context already explains the purpose.
  */
 @Component({
-  selector: 'app-fragrance-finder',
+  selector: "app-fragrance-finder",
   standalone: true,
   imports: [
     RouterLink,
@@ -60,7 +63,7 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
     TuiButton,
     TuiIcon,
     TuiLoader,
-    TuiTextfield,
+    TuiInput,
     ProductCardComponent,
   ],
   template: `
@@ -68,7 +71,11 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
       <!-- No intro copy here on purpose: every host already sets up the widget
            in its own words (the page lead, the empty-state message, the dialog
            title), and a generic paragraph on top of those read as duplication. -->
-      <div class="finder__modes" role="tablist" aria-label="Sposób doboru zapachu">
+      <div
+        class="finder__modes"
+        role="tablist"
+        aria-label="Sposób doboru zapachu"
+      >
         <button
           type="button"
           role="tab"
@@ -115,10 +122,10 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
            viewport. Hosts that project nothing simply get an empty slot. -->
       <div class="finder__query">
         <div class="finder__query-main">
-          @if (mode() === 'name') {
+          @if (mode() === "name") {
             <tui-textfield iconStart="@tui.search" class="finder__field">
               <input
-                tuiTextfield
+                tuiInput
                 [formControl]="nameControl"
                 placeholder="np. „YSL Libre”"
                 aria-label="Nazwa znanego zapachu"
@@ -130,11 +137,15 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
               <div class="finder__loading"><tui-loader size="m" /></div>
             } @else if (notes().length === 0) {
               <p class="finder__error">
-                Nie udało się wczytać listy nut. Odśwież stronę albo skorzystaj z wyszukiwania po
-                nazwie.
+                Nie udało się wczytać listy nut. Odśwież stronę albo skorzystaj
+                z wyszukiwania po nazwie.
               </p>
             } @else {
-              <div class="finder__notes" role="group" aria-label="Nuty zapachowe">
+              <div
+                class="finder__notes"
+                role="group"
+                aria-label="Nuty zapachowe"
+              >
                 @for (note of notes(); track note.key) {
                   <button
                     type="button"
@@ -148,7 +159,11 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
                 }
               </div>
               @if (selectedNotes().length > 0) {
-                <button type="button" class="finder__clear" (click)="clearNotes()">
+                <button
+                  type="button"
+                  class="finder__clear"
+                  (click)="clearNotes()"
+                >
                   Wyczyść wybór ({{ selectedNotes().length }})
                 </button>
               }
@@ -167,15 +182,19 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         } @else if (!hasSearched()) {
           <!-- Name mode gets no placeholder: the input's own placeholder already
                says what to type, and a second line under it repeated it. -->
-          @if (mode() === 'notes') {
-            <p class="finder__hint">Zaznacz od jednej do kilku nut, które lubisz.</p>
+          @if (mode() === "notes") {
+            <p class="finder__hint">
+              Zaznacz od jednej do kilku nut, które lubisz.
+            </p>
           }
         } @else if (results().length === 0) {
           <p class="finder__empty">
-            @if (mode() === 'name') {
-              Nie znaleźliśmy nic podobnego. Spróbuj samej nazwy marki albo przejdź na dobór po nutach.
+            @if (mode() === "name") {
+              Nie znaleźliśmy nic podobnego. Spróbuj samej nazwy marki albo
+              przejdź na dobór po nutach.
             } @else {
-              Żaden zapach nie ma tej kombinacji nut. Odznacz jedną z nich albo zmień filtr „dla kogo”.
+              Żaden zapach nie ma tej kombinacji nut. Odznacz jedną z nich albo
+              zmień filtr „dla kogo”.
             }
           </p>
         } @else {
@@ -189,7 +208,7 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
                 @if (item.matchedNotes.length > 0) {
                   <p class="finder__matched">
                     <span class="finder__matched-label">Wspólne nuty:</span>
-                    {{ item.matchedNotes.join(', ') }}
+                    {{ item.matchedNotes.join(", ") }}
                   </p>
                 }
               </div>
@@ -223,7 +242,9 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         gap: var(--spacing-md);
         min-width: 0;
       }
-      .finder--compact { gap: var(--spacing-sm); }
+      .finder--compact {
+        gap: var(--spacing-sm);
+      }
 
       /* ── Mode tabs ─────────────────────────────── */
       .finder__modes {
@@ -243,16 +264,27 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         font: inherit;
         font-size: 14px;
         cursor: pointer;
-        transition: color 0.15s, border-color 0.15s, background 0.15s;
+        transition:
+          color 0.15s,
+          border-color 0.15s,
+          background 0.15s;
       }
-      .finder__mode tui-icon { font-size: 18px; }
-      .finder__mode:hover { color: var(--color-primary); border-color: var(--color-accent-text); }
+      .finder__mode tui-icon {
+        font-size: 18px;
+      }
+      .finder__mode:hover {
+        color: var(--color-primary);
+        border-color: var(--color-accent-text);
+      }
       .finder__mode.is-active {
         color: var(--color-surface);
         background: var(--color-primary);
         border-color: var(--color-primary);
       }
-      .finder__mode:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
+      .finder__mode:focus-visible {
+        outline: 3px solid var(--color-accent);
+        outline-offset: 3px;
+      }
 
       /* ── Gender + note chips ───────────────────── */
       .finder__gender {
@@ -283,16 +315,26 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         font: inherit;
         font-size: 13px;
         cursor: pointer;
-        transition: color 0.15s, border-color 0.15s, background 0.15s;
+        transition:
+          color 0.15s,
+          border-color 0.15s,
+          background 0.15s;
       }
-      .finder__chip:hover { border-color: var(--color-accent-text); }
+      .finder__chip:hover {
+        border-color: var(--color-accent-text);
+      }
       .finder__chip.is-active {
         background: var(--color-accent);
         border-color: var(--color-accent-text);
         color: #fff;
       }
-      .finder__chip:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
-      .finder__chip--gender { font-size: 13px; }
+      .finder__chip:focus-visible {
+        outline: 3px solid var(--color-accent);
+        outline-offset: 3px;
+      }
+      .finder__chip--gender {
+        font-size: 13px;
+      }
 
       .finder__clear {
         align-self: flex-start;
@@ -305,7 +347,9 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         text-decoration: underline;
         cursor: pointer;
       }
-      .finder__clear:hover { color: var(--color-accent-text); }
+      .finder__clear:hover {
+        color: var(--color-accent-text);
+      }
 
       /* flex-start, not center: the projected aside must sit level with the TOP
          of the query area, so it lines up with the search field rather than
@@ -323,12 +367,23 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         flex-direction: column;
         gap: var(--spacing-sm);
       }
-      .finder__query-aside { flex-shrink: 0; }
-      .finder__field { width: 100%; max-width: 560px; }
+      .finder__query-aside {
+        flex-shrink: 0;
+      }
+      .finder__field {
+        width: 100%;
+        max-width: 560px;
+      }
 
       /* ── Results ───────────────────────────────── */
-      .finder__results { min-height: 60px; }
-      .finder__loading { display: flex; justify-content: center; padding: var(--spacing-md) 0; }
+      .finder__results {
+        min-height: 60px;
+      }
+      .finder__loading {
+        display: flex;
+        justify-content: center;
+        padding: var(--spacing-md) 0;
+      }
       .finder__hint,
       .finder__empty,
       .finder__error {
@@ -337,7 +392,9 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         padding: var(--spacing-sm) 0;
         line-height: 1.6;
       }
-      .finder__error { color: var(--color-error, #c0392b); }
+      .finder__error {
+        color: var(--color-error, #c0392b);
+      }
       .finder__count {
         margin: 0 0 var(--spacing-sm);
         font-size: 14px;
@@ -354,29 +411,53 @@ const GENDER_OPTIONS: ReadonlyArray<{ value: GenderFilter; label: string }> = [
         gap: var(--spacing-md);
       }
       @media (min-width: 768px) {
-        .finder__grid { grid-template-columns: repeat(3, 1fr); }
+        .finder__grid {
+          grid-template-columns: repeat(3, 1fr);
+        }
       }
       @media (min-width: 1200px) {
-        .finder__grid { grid-template-columns: repeat(4, 1fr); }
+        .finder__grid {
+          grid-template-columns: repeat(4, 1fr);
+        }
       }
-      .finder__result { display: flex; flex-direction: column; gap: 6px; }
+      .finder__result {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
       .finder__matched {
         margin: 0;
         font-size: 12px;
         line-height: 1.5;
         color: var(--color-secondary);
       }
-      .finder__matched-label { color: var(--color-success); font-weight: 600; }
-      .finder__all { align-self: flex-start; margin-top: var(--spacing-md); }
+      .finder__matched-label {
+        color: var(--color-success);
+        font-weight: 600;
+      }
+      .finder__all {
+        align-self: flex-start;
+        margin-top: var(--spacing-md);
+      }
 
       @media (max-width: 900px) {
         /* No right gutter left to fill — the aside stacks under the query. */
-        .finder__query { flex-direction: column; align-items: stretch; }
-        .finder__query-aside { align-self: flex-start; }
+        .finder__query {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .finder__query-aside {
+          align-self: flex-start;
+        }
       }
       @media (max-width: 560px) {
-        .finder__grid { gap: var(--spacing-sm); }
-        .finder__mode { flex: 1; justify-content: center; }
+        .finder__grid {
+          gap: var(--spacing-sm);
+        }
+        .finder__mode {
+          flex: 1;
+          justify-content: center;
+        }
       }
     `,
   ],
@@ -386,9 +467,9 @@ export class FragranceFinderComponent implements OnInit {
   @Input() compact = false;
   /** Starting mode. The catalog empty state opens straight on notes, because the
    *  shopper has just proven that typing a name did not work for them. */
-  @Input() initialMode: FinderMode = 'name';
+  @Input() initialMode: FinderMode = "name";
   /** Seeds the name field, e.g. with the query that returned nothing. */
-  @Input() initialQuery = '';
+  @Input() initialQuery = "";
   /** Restricts matching to one category slug (unset = whole catalog). */
   @Input() category?: string;
   @Input() limit = 8;
@@ -400,13 +481,13 @@ export class FragranceFinderComponent implements OnInit {
 
   readonly genderOptions = GENDER_OPTIONS;
 
-  readonly mode = signal<FinderMode>('name');
-  readonly gender = signal<GenderFilter>('all');
+  readonly mode = signal<FinderMode>("name");
+  readonly gender = signal<GenderFilter>("all");
   readonly selectedNotes = signal<string[]>([]);
   readonly notes = signal<FinderNote[]>([]);
   readonly notesLoading = signal(false);
 
-  readonly nameControl = new FormControl<string>('', { nonNullable: true });
+  readonly nameControl = new FormControl<string>("", { nonNullable: true });
 
   /**
    * Both modes run on the shared search pipeline (debounce → normalize →
@@ -453,7 +534,7 @@ export class FragranceFinderComponent implements OnInit {
         .pipe(map((response) => response.data)),
     isEmpty: (notes) => notes.length === 0,
     normalize: (notes) => notes,
-    keyOf: (notes) => [...notes].sort().join('|'),
+    keyOf: (notes) => [...notes].sort().join("|"),
     empty: [],
     destroyRef: this.destroyRef,
     debounceMs: 0,
@@ -469,15 +550,19 @@ export class FragranceFinderComponent implements OnInit {
   readonly nameQuery = this.nameStream.current;
 
   readonly results = computed(() =>
-    this.mode() === 'name' ? this.nameStream.results() : this.noteStream.results(),
+    this.mode() === "name"
+      ? this.nameStream.results()
+      : this.noteStream.results(),
   );
 
   readonly loading = computed(() =>
-    this.mode() === 'name' ? this.nameStream.loading() : this.noteStream.loading(),
+    this.mode() === "name"
+      ? this.nameStream.loading()
+      : this.noteStream.loading(),
   );
 
   readonly hasSearched = computed(() =>
-    this.mode() === 'name'
+    this.mode() === "name"
       ? this.nameQuery().length >= SEARCH_MIN_LENGTH
       : this.selectedNotes().length > 0,
   );
@@ -493,7 +578,7 @@ export class FragranceFinderComponent implements OnInit {
    */
   readonly showAllResultsLink = computed(
     () =>
-      this.mode() === 'name' &&
+      this.mode() === "name" &&
       this.nameQuery().length > 0 &&
       this.nameTotal() > this.results().length,
   );
@@ -522,7 +607,8 @@ export class FragranceFinderComponent implements OnInit {
 
   setMode(mode: FinderMode): void {
     this.mode.set(mode);
-    if (mode === 'notes' && this.notes().length === 0 && this.isBrowser) this.loadNotes();
+    if (mode === "notes" && this.notes().length === 0 && this.isBrowser)
+      this.loadNotes();
   }
 
   setGender(gender: GenderFilter): void {
@@ -541,7 +627,9 @@ export class FragranceFinderComponent implements OnInit {
 
   toggleNote(key: string): void {
     this.selectedNotes.update((current) =>
-      current.includes(key) ? current.filter((k) => k !== key) : [...current, key],
+      current.includes(key)
+        ? current.filter((k) => k !== key)
+        : [...current, key],
     );
     this.noteStream.search(this.selectedNotes());
   }
@@ -553,19 +641,20 @@ export class FragranceFinderComponent implements OnInit {
 
   private loadNotes(): void {
     this.notesLoading.set(true);
-    this.finder.notes$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((notes) => {
-      this.notes.set(notes);
-      this.notesLoading.set(false);
-    });
+    this.finder.notes$
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((notes) => {
+        this.notes.set(notes);
+        this.notesLoading.set(false);
+      });
   }
 
   private selectedGenders(): string[] | undefined {
     const gender = this.gender();
-    if (gender === 'all') return undefined;
+    if (gender === "all") return undefined;
     // "Dla niej"/"Dla niego" include unisex: excluding it would hide a large and
     // genuinely relevant slice of the catalog behind a filter the shopper reads
     // as a preference, not a hard constraint.
-    return gender === 'Unisex' ? ['Unisex'] : [gender, 'Unisex'];
+    return gender === "Unisex" ? ["Unisex"] : [gender, "Unisex"];
   }
-
 }

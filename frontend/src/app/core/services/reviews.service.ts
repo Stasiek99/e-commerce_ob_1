@@ -1,6 +1,6 @@
-import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { environment } from '../../../environments/environment';
+import { Injectable, inject } from "@angular/core";
+import { HttpClient } from "@angular/common/http";
+import { environment } from "../../../environments/environment";
 
 export interface ReviewSummary {
   id: string;
@@ -27,14 +27,18 @@ export interface CreateReviewDto {
   body?: string;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class ReviewsService {
   private readonly http = inject(HttpClient);
 
-  getByProduct(productId: string, page = 1, sort: 'recent' | 'helpful' = 'recent') {
+  getByProduct(
+    productId: string,
+    page = 1,
+    sort: "recent" | "helpful" = "recent",
+  ) {
     return this.http.get<ReviewsPage>(
       `${environment.apiUrl}/reviews/product/${productId}`,
-      { params: { page: String(page), limit: '10', sort } },
+      { params: { page: String(page), limit: "10", sort } },
     );
   }
 

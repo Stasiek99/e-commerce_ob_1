@@ -106,7 +106,9 @@
   align-items: center;
   justify-content: center;
   color: rgba(0, 0, 0, 0.35);
-  transition: color 0.15s, transform 0.15s;
+  transition:
+    color 0.15s,
+    transform 0.15s;
 
   tui-icon {
     font-size: 16px;
@@ -124,14 +126,18 @@
   &--active {
     color: var(--color-error);
 
-    tui-icon { background: rgba(255, 255, 255, 0.95); }
+    tui-icon {
+      background: rgba(255, 255, 255, 0.95);
+    }
   }
 
   &:hover {
     transform: scale(1.15);
     color: var(--color-error);
 
-    tui-icon { background: rgba(255, 255, 255, 0.95); }
+    tui-icon {
+      background: rgba(255, 255, 255, 0.95);
+    }
   }
 }
 

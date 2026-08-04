@@ -1,5 +1,5 @@
-import { AbstractControl } from '@angular/forms';
-import { isValidPhoneNumber } from 'libphonenumber-js';
+import { AbstractControl } from "@angular/forms";
+import { isValidPhoneNumber } from "libphonenumber-js";
 
 // Unicode letters + combining marks + space / hyphen / apostrophe.
 // The `u` flag enables \p{} property escapes — supported in all modern browsers.
@@ -13,7 +13,9 @@ const STREET_CHARS_RE = /^[\p{L}\p{M}0-9 .,\-\/]+$/u;
 // so invalid passwords are caught client-side instead of round-tripping to the server.
 export const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 
-export function nameValidator(control: AbstractControl): { nameTooShort: true } | { nameInvalid: true } | null {
+export function nameValidator(
+  control: AbstractControl,
+): { nameTooShort: true } | { nameInvalid: true } | null {
   const val = (control.value as string)?.trim();
   if (!val) return null;
   if (val.length < 2) return { nameTooShort: true };
@@ -21,13 +23,17 @@ export function nameValidator(control: AbstractControl): { nameTooShort: true } 
   return null;
 }
 
-export function phoneValidator(control: AbstractControl): { invalidPhone: true } | null {
+export function phoneValidator(
+  control: AbstractControl,
+): { invalidPhone: true } | null {
   const val = control.value as string;
   if (!val) return null;
   return isValidPhoneNumber(val) ? null : { invalidPhone: true };
 }
 
-export function streetValidator(control: AbstractControl): { streetInvalid: true } | null {
+export function streetValidator(
+  control: AbstractControl,
+): { streetInvalid: true } | null {
   const val = (control.value as string)?.trim();
   if (!val) return null;
   // Must contain at least one letter (street name) and one digit (house number)

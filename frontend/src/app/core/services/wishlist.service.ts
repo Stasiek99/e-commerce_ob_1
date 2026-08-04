@@ -1,17 +1,34 @@
-import { Injectable, PLATFORM_ID, computed, effect, inject, signal, untracked } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
-import { switchMap, catchError, forkJoin, of, map, from, concatMap, toArray } from 'rxjs';
-import { ProductCardData } from '../../shared/product-card/product-card.component';
-import { AuthService } from './auth.service';
-import { LOCAL_STORAGE } from '../tokens/storage.tokens';
-import { environment } from '../../../environments/environment';
+import {
+  Injectable,
+  PLATFORM_ID,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { HttpClient } from "@angular/common/http";
+import {
+  switchMap,
+  catchError,
+  forkJoin,
+  of,
+  map,
+  from,
+  concatMap,
+  toArray,
+} from "rxjs";
+import { ProductCardData } from "../../shared/product-card/product-card.component";
+import { AuthService } from "./auth.service";
+import { LOCAL_STORAGE } from "../tokens/storage.tokens";
+import { environment } from "../../../environments/environment";
 
 export interface WishlistItemData extends ProductCardData {
   notifyOnRestock: boolean;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class WishlistService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
@@ -19,7 +36,7 @@ export class WishlistService {
   private readonly isBrowser = isPlatformBrowser(this.platformId);
   private readonly storage = inject(LOCAL_STORAGE);
 
-  private readonly STORAGE_KEY = 'wishlist_v1';
+  private readonly STORAGE_KEY = "wishlist_v1";
   // Matches the backend's MergeWishlistDto ArrayMaxSize(100) — batching keeps a long-lived
   // guest session's wishlist from being rejected wholesale on login.
   private readonly MERGE_CHUNK_SIZE = 100;
@@ -54,14 +71,21 @@ export class WishlistService {
     if (this.auth.isAuthenticated()) {
       if (inWishlist) {
         this._items.update((items) => items.filter((p) => p.id !== product.id));
-        this.http.delete(`${environment.apiUrl}/wishlist/${product.id}`).subscribe({
-          error: () => this._items.update((items) => [...items, item]),
-        });
+        this.http
+          .delete(`${environment.apiUrl}/wishlist/${product.id}`)
+          .subscribe({
+            error: () => this._items.update((items) => [...items, item]),
+          });
       } else {
         this._items.update((items) => [...items, item]);
-        this.http.post(`${environment.apiUrl}/wishlist/${product.id}`, {}).subscribe({
-          error: () => this._items.update((items) => items.filter((p) => p.id !== product.id)),
-        });
+        this.http
+          .post(`${environment.apiUrl}/wishlist/${product.id}`, {})
+          .subscribe({
+            error: () =>
+              this._items.update((items) =>
+                items.filter((p) => p.id !== product.id),
+              ),
+          });
       }
     } else {
       if (inWishlist) {
@@ -77,21 +101,29 @@ export class WishlistService {
     if (!this.auth.isAuthenticated()) return;
 
     this._items.update((items) =>
-      items.map((p) => (p.id === productId ? { ...p, notifyOnRestock: notify } : p)),
+      items.map((p) =>
+        p.id === productId ? { ...p, notifyOnRestock: notify } : p,
+      ),
     );
 
-    this.http.patch(`${environment.apiUrl}/wishlist/${productId}/notify`, { notify }).subscribe({
-      error: () =>
-        this._items.update((items) =>
-          items.map((p) => (p.id === productId ? { ...p, notifyOnRestock: !notify } : p)),
-        ),
-    });
+    this.http
+      .patch(`${environment.apiUrl}/wishlist/${productId}/notify`, { notify })
+      .subscribe({
+        error: () =>
+          this._items.update((items) =>
+            items.map((p) =>
+              p.id === productId ? { ...p, notifyOnRestock: !notify } : p,
+            ),
+          ),
+      });
   }
 
   private syncFromBackend(guestIds: string[]): void {
     this.loading.set(true);
 
-    const fetch$ = this.http.get<WishlistItemData[]>(`${environment.apiUrl}/wishlist`);
+    const fetch$ = this.http.get<WishlistItemData[]>(
+      `${environment.apiUrl}/wishlist`,
+    );
 
     if (!guestIds.length) {
       fetch$.subscribe({
@@ -111,7 +143,11 @@ export class WishlistService {
 
     from(chunks)
       .pipe(
-        concatMap((chunk) => this.http.post(`${environment.apiUrl}/wishlist/merge`, { productIds: chunk })),
+        concatMap((chunk) =>
+          this.http.post(`${environment.apiUrl}/wishlist/merge`, {
+            productIds: chunk,
+          }),
+        ),
         toArray(),
         switchMap(() => fetch$),
       )
@@ -144,20 +180,22 @@ export class WishlistService {
     this.loading.set(true);
     forkJoin(
       items.map((item) =>
-        this.http.get<ProductCardData>(`${environment.apiUrl}/products/${item.slug}`).pipe(
-          map((fresh): WishlistItemData => ({
-            id: fresh.id,
-            name: fresh.name,
-            slug: fresh.slug,
-            brand: fresh.brand,
-            gender: fresh.gender,
-            catalogNumber: fresh.catalogNumber,
-            images: fresh.images,
-            variants: fresh.variants,
-            notifyOnRestock: item.notifyOnRestock,
-          })),
-          catchError(() => of({ id: item.id, invalid: true as const })),
-        ),
+        this.http
+          .get<ProductCardData>(`${environment.apiUrl}/products/${item.slug}`)
+          .pipe(
+            map((fresh): WishlistItemData => ({
+              id: fresh.id,
+              name: fresh.name,
+              slug: fresh.slug,
+              brand: fresh.brand,
+              gender: fresh.gender,
+              catalogNumber: fresh.catalogNumber,
+              images: fresh.images,
+              variants: fresh.variants,
+              notifyOnRestock: item.notifyOnRestock,
+            })),
+            catchError(() => of({ id: item.id, invalid: true as const })),
+          ),
       ),
     ).subscribe((results) => {
       this.loading.set(false);
@@ -170,14 +208,16 @@ export class WishlistService {
       const refreshed = new Map<string, WishlistItemData>();
       const invalidIds = new Set<string>();
       for (const r of results) {
-        if ('invalid' in r) invalidIds.add(r.id);
+        if ("invalid" in r) invalidIds.add(r.id);
         else refreshed.set(r.id, r);
       }
 
       // Merge into the *current* items rather than replacing outright, so a toggle()
       // that landed after this revalidation started is never discarded.
       this._items.update((current) =>
-        current.filter((p) => !invalidIds.has(p.id)).map((p) => refreshed.get(p.id) ?? p),
+        current
+          .filter((p) => !invalidIds.has(p.id))
+          .map((p) => refreshed.get(p.id) ?? p),
       );
       this.saveToStorage();
     });
@@ -186,8 +226,13 @@ export class WishlistService {
   private loadFromStorage(): WishlistItemData[] {
     if (!this.isBrowser) return [];
     try {
-      const raw: any[] = JSON.parse(this.storage.getItem(this.STORAGE_KEY) ?? '[]');
-      return raw.map((p) => ({ ...p, notifyOnRestock: p.notifyOnRestock ?? false }));
+      const raw: any[] = JSON.parse(
+        this.storage.getItem(this.STORAGE_KEY) ?? "[]",
+      );
+      return raw.map((p) => ({
+        ...p,
+        notifyOnRestock: p.notifyOnRestock ?? false,
+      }));
     } catch {
       return [];
     }

@@ -1,7 +1,19 @@
-import { DestroyRef, Signal, signal } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { Observable, Subject, catchError, debounceTime, distinctUntilChanged, filter, map, merge, of, switchMap, tap } from 'rxjs';
-import { SEARCH_DEBOUNCE_MS } from '../constants/search.constants';
+import { DestroyRef, Signal, signal } from "@angular/core";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
+import {
+  Observable,
+  Subject,
+  catchError,
+  debounceTime,
+  distinctUntilChanged,
+  filter,
+  map,
+  merge,
+  of,
+  switchMap,
+  tap,
+} from "rxjs";
+import { SEARCH_DEBOUNCE_MS } from "../constants/search.constants";
 
 /**
  * Shared request pipeline for every search-as-you-type surface in the app.
@@ -76,7 +88,11 @@ export function createSearchStream<TInput, TResult>(
     // Only the typed branch is debounced and de-duplicated. `refresh` bypasses
     // both on purpose: re-running the same term under a changed filter is a new
     // request, and distinctUntilChanged would swallow it.
-    typed$.pipe(map(normalize), debounceTime(debounceMs), distinctUntilChanged((a, b) => keyOf(a) === keyOf(b))),
+    typed$.pipe(
+      map(normalize),
+      debounceTime(debounceMs),
+      distinctUntilChanged((a, b) => keyOf(a) === keyOf(b)),
+    ),
     immediate$.pipe(map(normalize)),
   )
     .pipe(
@@ -90,7 +106,9 @@ export function createSearchStream<TInput, TResult>(
         }
       }),
       filter((input) => !isEmpty(input)),
-      switchMap((input) => fetch(input).pipe(catchError(() => of([] as TResult[])))),
+      switchMap((input) =>
+        fetch(input).pipe(catchError(() => of([] as TResult[]))),
+      ),
       takeUntilDestroyed(destroyRef),
     )
     .subscribe((rows) => {
@@ -124,7 +142,7 @@ export function createTextSearchStream<TResult>(config: {
     isEmpty: (term) => term.length < config.minLength,
     normalize: (term) => term.trim(),
     keyOf: (term) => term,
-    empty: '',
+    empty: "",
     destroyRef: config.destroyRef,
     debounceMs: config.debounceMs,
   });

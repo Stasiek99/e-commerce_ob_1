@@ -1,6 +1,6 @@
-import { ErrorHandler, Injectable } from '@angular/core';
-import type { Router } from '@angular/router';
-import { environment } from '../../environments/environment';
+import { ErrorHandler, Injectable } from "@angular/core";
+import type { Router } from "@angular/router";
+import { environment } from "../../environments/environment";
 
 /**
  * Lazy Sentry wiring.
@@ -17,7 +17,7 @@ import { environment } from '../../environments/environment';
  * registers before bootstrap) and replayed into Sentry as soon as it loads.
  */
 
-type SentryModule = typeof import('@sentry/angular');
+type SentryModule = typeof import("@sentry/angular");
 
 const MAX_BUFFERED_ERRORS = 20;
 
@@ -40,9 +40,13 @@ function capture(error: unknown): void {
  * once — the listeners are idempotent in effect, and a no-op without a DSN.
  */
 export function installEarlyErrorCapture(): void {
-  if (typeof window === 'undefined' || !environment.sentryDsn) return;
-  window.addEventListener('error', (event) => capture(event.error ?? event.message));
-  window.addEventListener('unhandledrejection', (event) => capture(event.reason));
+  if (typeof window === "undefined" || !environment.sentryDsn) return;
+  window.addEventListener("error", (event) =>
+    capture(event.error ?? event.message),
+  );
+  window.addEventListener("unhandledrejection", (event) =>
+    capture(event.reason),
+  );
 }
 
 /**
@@ -53,11 +57,11 @@ export function loadSentry(router: Router): Promise<SentryModule | null> {
   if (loading) return loading;
   if (!environment.sentryDsn) return Promise.resolve(null);
 
-  loading = import('@sentry/angular')
+  loading = import("@sentry/angular")
     .then((mod) => {
       mod.init({
         dsn: environment.sentryDsn,
-        environment: environment.production ? 'production' : 'development',
+        environment: environment.production ? "production" : "development",
         integrations: [mod.browserTracingIntegration()],
         tracesSampleRate: environment.sentryTracesSampleRate,
         tracePropagationTargets: environment.sentryTracePropagationTargets,
@@ -80,9 +84,9 @@ export function loadSentry(router: Router): Promise<SentryModule | null> {
 
 /** Schedules `loadSentry` for the first idle moment after the app is running. */
 export function scheduleSentryLoad(router: Router): void {
-  if (typeof window === 'undefined' || !environment.sentryDsn) return;
+  if (typeof window === "undefined" || !environment.sentryDsn) return;
   const start = () => void loadSentry(router);
-  if (typeof window.requestIdleCallback === 'function') {
+  if (typeof window.requestIdleCallback === "function") {
     window.requestIdleCallback(start, { timeout: 5000 });
   } else {
     window.setTimeout(start, 2000); // Safari < 16.4

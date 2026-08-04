@@ -10,47 +10,52 @@
  *      site root in every production build.
  */
 
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from "fs";
+import { join } from "path";
 
 const SRC_DIR = __dirname;
-const FRONTEND_DIR = join(SRC_DIR, '..');
+const FRONTEND_DIR = join(SRC_DIR, "..");
 
-const robotsTxt = readFileSync(join(SRC_DIR, 'robots.txt'), 'utf8');
-const prerenderRoutes = readFileSync(join(FRONTEND_DIR, 'prerender-routes.txt'), 'utf8');
-const angularJson = JSON.parse(readFileSync(join(FRONTEND_DIR, 'angular.json'), 'utf8'));
+const robotsTxt = readFileSync(join(SRC_DIR, "robots.txt"), "utf8");
+const prerenderRoutes = readFileSync(
+  join(FRONTEND_DIR, "prerender-routes.txt"),
+  "utf8",
+);
+const angularJson = JSON.parse(
+  readFileSync(join(FRONTEND_DIR, "angular.json"), "utf8"),
+);
 
 // ---------------------------------------------------------------------------
 // robots.txt content
 // ---------------------------------------------------------------------------
 
-describe('robots.txt — crawler disallow rules', () => {
-  it('disallows /checkout/ to prevent indexing of checkout flow pages', () => {
-    expect(robotsTxt).toContain('Disallow: /checkout/');
+describe("robots.txt — crawler disallow rules", () => {
+  it("disallows /checkout/ to prevent indexing of checkout flow pages", () => {
+    expect(robotsTxt).toContain("Disallow: /checkout/");
   });
 
-  it('disallows /account/ to prevent indexing of protected account pages', () => {
-    expect(robotsTxt).toContain('Disallow: /account/');
+  it("disallows /account/ to prevent indexing of protected account pages", () => {
+    expect(robotsTxt).toContain("Disallow: /account/");
   });
 
-  it('disallows /auth/ to prevent indexing of OAuth callback and login pages', () => {
-    expect(robotsTxt).toContain('Disallow: /auth/');
+  it("disallows /auth/ to prevent indexing of OAuth callback and login pages", () => {
+    expect(robotsTxt).toContain("Disallow: /auth/");
   });
 
-  it('disallows /cart so an empty-cart page is never indexed or cached publicly', () => {
-    expect(robotsTxt).toContain('Disallow: /cart');
+  it("disallows /cart so an empty-cart page is never indexed or cached publicly", () => {
+    expect(robotsTxt).toContain("Disallow: /cart");
   });
 
-  it('explicitly allows / so the crawl-budget Allow/Disallow resolution is unambiguous', () => {
-    expect(robotsTxt).toContain('Allow: /');
+  it("explicitly allows / so the crawl-budget Allow/Disallow resolution is unambiguous", () => {
+    expect(robotsTxt).toContain("Allow: /");
   });
 
-  it('includes a Sitemap directive so crawlers discover sitemap.xml', () => {
+  it("includes a Sitemap directive so crawlers discover sitemap.xml", () => {
     expect(robotsTxt).toMatch(/^Sitemap:\s+https?:\/\//m);
   });
 
-  it('applies rules to all user-agents via the wildcard directive', () => {
-    expect(robotsTxt).toContain('User-agent: *');
+  it("applies rules to all user-agents via the wildcard directive", () => {
+    expect(robotsTxt).toContain("User-agent: *");
   });
 });
 
@@ -58,18 +63,18 @@ describe('robots.txt — crawler disallow rules', () => {
 // prerender-routes.txt — /cart must not be prerendered
 // ---------------------------------------------------------------------------
 
-describe('prerender-routes.txt — /cart must be absent', () => {
+describe("prerender-routes.txt — /cart must be absent", () => {
   const routes = prerenderRoutes
-    .split('\n')
-    .map(r => r.trim())
+    .split("\n")
+    .map((r) => r.trim())
     .filter(Boolean);
 
-  it('does not contain /cart — a prerendered empty-cart page has no SEO value', () => {
-    expect(routes).not.toContain('/cart');
+  it("does not contain /cart — a prerendered empty-cart page has no SEO value", () => {
+    expect(routes).not.toContain("/cart");
   });
 
-  it('still contains the home route /', () => {
-    expect(routes).toContain('/');
+  it("still contains the home route /", () => {
+    expect(routes).toContain("/");
   });
 });
 
@@ -77,13 +82,16 @@ describe('prerender-routes.txt — /cart must be absent', () => {
 // angular.json — robots.txt must be in the assets array
 // ---------------------------------------------------------------------------
 
-describe('angular.json — robots.txt wired as a build asset', () => {
+describe("angular.json — robots.txt wired as a build asset", () => {
   const assets: unknown[] =
     angularJson?.projects?.frontend?.architect?.build?.options?.assets ?? [];
 
-  it('includes src/robots.txt so it is copied to the output directory on every build', () => {
+  it("includes src/robots.txt so it is copied to the output directory on every build", () => {
     const hasEntry = assets.some(
-      (a) => a === 'src/robots.txt' || (typeof a === 'object' && (a as { glob?: string }).glob === 'robots.txt'),
+      (a) =>
+        a === "src/robots.txt" ||
+        (typeof a === "object" &&
+          (a as { glob?: string }).glob === "robots.txt"),
     );
     expect(hasEntry).toBe(true);
   });

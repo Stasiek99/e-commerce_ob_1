@@ -1,9 +1,9 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
-import { TuiIcon } from '@taiga-ui/core';
-import { TuiToast } from '@taiga-ui/kit';
-import { injectContext } from '@taiga-ui/polymorpheus';
+import { ChangeDetectionStrategy, Component } from "@angular/core";
+import { TuiIcon } from "@taiga-ui/core";
+import { TuiToast } from "@taiga-ui/kit";
+import { injectContext } from "@taiga-ui/polymorpheus";
 
-export type AppToastType = 'success' | 'error' | 'info';
+export type AppToastType = "success" | "error" | "info";
 
 export interface AppToastData {
   message: string;
@@ -11,15 +11,15 @@ export interface AppToastData {
 }
 
 const ICONS: Record<AppToastType, string> = {
-  success: '@tui.check-circle',
-  error: '@tui.circle-x',
-  info: '@tui.info',
+  success: "@tui.check-circle",
+  error: "@tui.circle-x",
+  info: "@tui.info",
 };
 
 const COLORS: Record<AppToastType, string> = {
-  success: 'var(--tui-status-positive)',
-  error: 'var(--tui-status-negative)',
-  info: 'var(--tui-status-info)',
+  success: "var(--tui-status-positive)",
+  error: "var(--tui-status-negative)",
+  info: "var(--tui-status-info)",
 };
 
 @Component({

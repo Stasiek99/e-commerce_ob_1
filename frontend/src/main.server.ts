@@ -7,10 +7,10 @@
  */
 const globalScope = globalThis as Record<string, unknown>;
 
-if (typeof globalScope['requestAnimationFrame'] !== 'function') {
-  globalScope['requestAnimationFrame'] = (cb: FrameRequestCallback): number =>
+if (typeof globalScope["requestAnimationFrame"] !== "function") {
+  globalScope["requestAnimationFrame"] = (cb: FrameRequestCallback): number =>
     setTimeout(() => cb(Date.now()), 16) as unknown as number;
-  globalScope['cancelAnimationFrame'] = (handle: number): void => {
+  globalScope["cancelAnimationFrame"] = (handle: number): void => {
     clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
   };
 }
@@ -19,7 +19,7 @@ if (typeof globalScope['requestAnimationFrame'] !== 'function') {
 // localStorage/sessionStorage as a global before Angular DI runs. Services must
 // inject LOCAL_STORAGE (storage.tokens.ts) which is provided per-request in
 // server.ts — each render gets an isolated store so no cross-request leakage.
-if (typeof localStorage === 'undefined') {
+if (typeof localStorage === "undefined") {
   const noopStorage = (): Storage => ({
     getItem: () => null,
     setItem: () => {},
@@ -28,14 +28,17 @@ if (typeof localStorage === 'undefined') {
     key: () => null,
     length: 0,
   });
-  globalScope['localStorage'] = noopStorage();
-  globalScope['sessionStorage'] = noopStorage();
+  globalScope["localStorage"] = noopStorage();
+  globalScope["sessionStorage"] = noopStorage();
 }
 
-import { provideZoneChangeDetection } from '@angular/core';
-import { bootstrapApplication, BootstrapContext } from '@angular/platform-browser';
-import { AppComponent } from './app/app.component';
-import { config } from './app/app.config.server';
+import { provideZoneChangeDetection } from "@angular/core";
+import {
+  bootstrapApplication,
+  BootstrapContext,
+} from "@angular/platform-browser";
+import { AppComponent } from "./app/app.component";
+import { config } from "./app/app.config.server";
 
 const bootstrap = (context: BootstrapContext) =>
   bootstrapApplication(

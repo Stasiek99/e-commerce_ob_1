@@ -1,12 +1,12 @@
-import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
-import { Router, provideRouter } from '@angular/router';
-import { signal } from '@angular/core';
-import { WishlistComponent } from '../wishlist.component';
-import { WishlistService } from '../../../core/services/wishlist.service';
-import { CartService } from '../../../core/services/cart.service';
-import { ToastService } from '../../../core/services/toast.service';
-import { AuthService } from '../../../core/services/auth.service';
+import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA } from "@angular/core";
+import { TestBed } from "@angular/core/testing";
+import { Router, provideRouter } from "@angular/router";
+import { signal } from "@angular/core";
+import { WishlistComponent } from "../wishlist.component";
+import { WishlistService } from "../../../core/services/wishlist.service";
+import { CartService } from "../../../core/services/cart.service";
+import { ToastService } from "../../../core/services/toast.service";
+import { AuthService } from "../../../core/services/auth.service";
 
 function setup(wishlistItems: unknown[] = [], loading = false) {
   const mockToast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
@@ -40,15 +40,15 @@ function setup(wishlistItems: unknown[] = [], loading = false) {
 
   const fixture = TestBed.createComponent(WishlistComponent);
   const router = TestBed.inject(Router);
-  const navigateSpy = jest.spyOn(router, 'navigate').mockResolvedValue(true);
+  const navigateSpy = jest.spyOn(router, "navigate").mockResolvedValue(true);
 
   return { fixture, navigateSpy, mockToast, loadingSignal, itemsSignal };
 }
 
-describe('WishlistComponent — empty wishlist keeps empty-state visible (no redirect)', () => {
+describe("WishlistComponent — empty wishlist keeps empty-state visible (no redirect)", () => {
   afterEach(() => jest.clearAllMocks());
 
-  it('does NOT navigate away when wishlist is empty and not loading', () => {
+  it("does NOT navigate away when wishlist is empty and not loading", () => {
     const { fixture, navigateSpy } = setup([], false);
 
     fixture.detectChanges();
@@ -57,7 +57,7 @@ describe('WishlistComponent — empty wishlist keeps empty-state visible (no red
     expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('does NOT navigate away while wishlist is still loading', () => {
+  it("does NOT navigate away while wishlist is still loading", () => {
     const { fixture, navigateSpy } = setup([], true);
 
     fixture.detectChanges();
@@ -66,7 +66,7 @@ describe('WishlistComponent — empty wishlist keeps empty-state visible (no red
     expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('does NOT navigate away when loading finishes with an empty list', () => {
+  it("does NOT navigate away when loading finishes with an empty list", () => {
     const { fixture, navigateSpy, loadingSignal } = setup([], true);
 
     fixture.detectChanges();
@@ -78,8 +78,13 @@ describe('WishlistComponent — empty wishlist keeps empty-state visible (no red
     expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('does NOT navigate away when wishlist has items', () => {
-    const product = { id: 'p1', name: 'Wildman', slug: 'wildman', variants: [{ id: 'v1', stock: 5 }] };
+  it("does NOT navigate away when wishlist has items", () => {
+    const product = {
+      id: "p1",
+      name: "Wildman",
+      slug: "wildman",
+      variants: [{ id: "v1", stock: 5 }],
+    };
     const { fixture, navigateSpy } = setup([product], false);
 
     fixture.detectChanges();
@@ -88,7 +93,7 @@ describe('WishlistComponent — empty wishlist keeps empty-state visible (no red
     expect(navigateSpy).not.toHaveBeenCalled();
   });
 
-  it('does NOT call the info toast on empty wishlist — empty-state UI handles messaging', () => {
+  it("does NOT call the info toast on empty wishlist — empty-state UI handles messaging", () => {
     const { fixture, mockToast } = setup([], false);
 
     fixture.detectChanges();
@@ -97,8 +102,13 @@ describe('WishlistComponent — empty wishlist keeps empty-state visible (no red
     expect(mockToast.info).not.toHaveBeenCalled();
   });
 
-  it('does NOT navigate away when items signal transitions from non-empty to empty', () => {
-    const product = { id: 'p1', name: 'Wildman', slug: 'wildman', variants: [{ id: 'v1', stock: 5 }] };
+  it("does NOT navigate away when items signal transitions from non-empty to empty", () => {
+    const product = {
+      id: "p1",
+      name: "Wildman",
+      slug: "wildman",
+      variants: [{ id: "v1", stock: 5 }],
+    };
     const { fixture, navigateSpy, itemsSignal } = setup([product], false);
 
     fixture.detectChanges();

@@ -1,8 +1,8 @@
-import { randomBytes } from 'node:crypto';
-import type { Request, Response, NextFunction } from 'express';
+import { randomBytes } from "node:crypto";
+import type { Request, Response, NextFunction } from "express";
 
 export function generateNonce(): string {
-  return randomBytes(16).toString('base64');
+  return randomBytes(16).toString("base64");
 }
 
 // Angular's withEventReplay() emits two inline bootstrap scripts
@@ -43,11 +43,15 @@ export function buildCsp(nonce: string): string {
   );
 }
 
-export function ssrSecurityHeaders(_req: Request, res: Response, next: NextFunction): void {
+export function ssrSecurityHeaders(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
   const nonce = generateNonce();
-  res.locals['cspNonce'] = nonce;
-  res.setHeader('Content-Security-Policy', buildCsp(nonce));
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.locals["cspNonce"] = nonce;
+  res.setHeader("Content-Security-Policy", buildCsp(nonce));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 }

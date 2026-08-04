@@ -1,13 +1,12 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { RouterLink } from '@angular/router';
-import { Location, LowerCasePipe, DatePipe } from '@angular/common';
-import { TuiButton, TuiTitle, TuiIcon } from '@taiga-ui/core';
-import { TuiCell } from '@taiga-ui/layout';
-import { TuiPagination } from '@taiga-ui/kit';
-import { TuiSkeleton } from '@taiga-ui/kit/directives/skeleton';
-import { environment } from '../../../../environments/environment';
-import { PricePipe } from '../../../shared/pipes/price.pipe';
+import { Component, OnInit, inject, signal } from "@angular/core";
+import { HttpClient } from "@angular/common/http";
+import { RouterLink } from "@angular/router";
+import { Location, LowerCasePipe, DatePipe } from "@angular/common";
+import { TuiButton, TuiTitle, TuiIcon, TuiCell } from "@taiga-ui/core";
+import { TuiPagination } from "@taiga-ui/kit";
+import { TuiSkeleton } from "@taiga-ui/kit/directives/skeleton";
+import { environment } from "../../../../environments/environment";
+import { PricePipe } from "../../../shared/pipes/price.pipe";
 
 interface OrderSummary {
   id: string;
@@ -18,28 +17,46 @@ interface OrderSummary {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  PENDING_PAYMENT:     'Oczekuje na płatność',
-  FRAUD_REVIEW:        'Weryfikacja',
-  PAID:                'Opłacone',
-  PROCESSING:          'W realizacji',
-  SHIPPED:             'Wysłane',
-  DELIVERED:           'Dostarczone',
-  CANCELLED:           'Anulowane',
-  REFUNDED:            'Zwrócone',
-  PARTIALLY_REFUNDED:  'Częściowo zwrócone',
-  DISPUTE_HOLD:        'Spór płatniczy',
-  DISPUTE_LOST_REVIEW: 'Weryfikacja zwrotu',
+  PENDING_PAYMENT: "Oczekuje na płatność",
+  FRAUD_REVIEW: "Weryfikacja",
+  PAID: "Opłacone",
+  PROCESSING: "W realizacji",
+  SHIPPED: "Wysłane",
+  DELIVERED: "Dostarczone",
+  CANCELLED: "Anulowane",
+  REFUNDED: "Zwrócone",
+  PARTIALLY_REFUNDED: "Częściowo zwrócone",
+  DISPUTE_HOLD: "Spór płatniczy",
+  DISPUTE_LOST_REVIEW: "Weryfikacja zwrotu",
 };
 
 const PAGE_SIZE = 20;
 
 @Component({
-  selector: 'app-order-list',
+  selector: "app-order-list",
   standalone: true,
-  imports: [RouterLink, PricePipe, LowerCasePipe, DatePipe, TuiButton, TuiTitle, TuiIcon, TuiCell, TuiPagination, TuiSkeleton],
+  imports: [
+    RouterLink,
+    PricePipe,
+    LowerCasePipe,
+    DatePipe,
+    TuiButton,
+    TuiTitle,
+    TuiIcon,
+    TuiCell,
+    TuiPagination,
+    TuiSkeleton,
+  ],
   template: `
     <div class="page">
-      <button tuiButton appearance="flat" size="s" type="button" class="back-btn" (click)="back()">
+      <button
+        tuiButton
+        appearance="flat"
+        size="s"
+        type="button"
+        class="back-btn"
+        (click)="back()"
+      >
         <tui-icon icon="@tui.chevron-left" />
         Wróć
       </button>
@@ -50,11 +67,19 @@ const PAGE_SIZE = 20;
           @for (_ of skeletonRows; track $index) {
             <div tuiCell class="order-cell">
               <div tuiTitle>
-                <span tuiSkeleton>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
-                <div tuiSubtitle tuiSkeleton>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+                <span tuiSkeleton
+                  >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span
+                >
+                <div tuiSubtitle tuiSkeleton>
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                </div>
               </div>
-              <span tuiSkeleton class="skeleton-status">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
-              <strong tuiSkeleton class="order-total">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</strong>
+              <span tuiSkeleton class="skeleton-status"
+                >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span
+              >
+              <strong tuiSkeleton class="order-total"
+                >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</strong
+              >
             </div>
           }
         }
@@ -62,10 +87,14 @@ const PAGE_SIZE = 20;
           <div tuiCell class="order-cell">
             <div tuiTitle>
               <span>#{{ order.orderNumber }}</span>
-              <div tuiSubtitle>{{ order.createdAt | date:'dd.MM.yyyy' }}</div>
+              <div tuiSubtitle>{{ order.createdAt | date: "dd.MM.yyyy" }}</div>
             </div>
-            <span class="status status--{{ order.status | lowercase }}">{{ statusLabel(order.status) }}</span>
-            <strong class="order-total">{{ order.totalInCents | price }}</strong>
+            <span class="status status--{{ order.status | lowercase }}">{{
+              statusLabel(order.status)
+            }}</span>
+            <strong class="order-total">{{
+              order.totalInCents | price
+            }}</strong>
             <a
               tuiButton
               appearance="secondary"
@@ -91,27 +120,57 @@ const PAGE_SIZE = 20;
       }
     </div>
   `,
-  styles: [`
-    .page { padding: 32px 0; max-width: 560px; margin: 0 auto; }
-    .back-btn { margin-bottom: 8px; }
-    h1 { font-size: 24px; font-weight: 700; margin-bottom: 24px; }
+  styles: [
+    `
+      .page {
+        padding: 32px 0;
+        max-width: 560px;
+        margin: 0 auto;
+      }
+      .back-btn {
+        margin-bottom: 8px;
+      }
+      h1 {
+        font-size: 24px;
+        font-weight: 700;
+        margin-bottom: 24px;
+      }
 
-    .orders-list {
-      background: var(--color-surface);
-      border-radius: var(--border-radius-md);
-      box-shadow: var(--shadow-sm);
-      border: 1px solid var(--color-border);
-      overflow: hidden;
-    }
+      .orders-list {
+        background: var(--color-surface);
+        border-radius: var(--border-radius-md);
+        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--color-border);
+        overflow: hidden;
+      }
 
-    .order-cell { border-bottom: 1px solid var(--color-border); }
-    .order-cell:last-child { border-bottom: none; }
+      .order-cell {
+        border-bottom: 1px solid var(--color-border);
+      }
+      .order-cell:last-child {
+        border-bottom: none;
+      }
 
-    .skeleton-status { display: inline-block; border-radius: 999px; }
-    .order-total { font-size: 14px; white-space: nowrap; }
-    .empty { padding: 32px; color: var(--color-secondary); text-align: center; }
-    .pagination { display: flex; justify-content: center; margin-top: 32px; }
-  `],
+      .skeleton-status {
+        display: inline-block;
+        border-radius: 999px;
+      }
+      .order-total {
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .empty {
+        padding: 32px;
+        color: var(--color-secondary);
+        text-align: center;
+      }
+      .pagination {
+        display: flex;
+        justify-content: center;
+        margin-top: 32px;
+      }
+    `,
+  ],
 })
 export class OrderListComponent implements OnInit {
   private readonly http = inject(HttpClient);
@@ -130,10 +189,12 @@ export class OrderListComponent implements OnInit {
   goToPage(index: number): void {
     this.pageIndex.set(index);
     this.loadOrders(index + 1);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  back(): void { this.location.back(); }
+  back(): void {
+    this.location.back();
+  }
 
   statusLabel(status: string): string {
     return STATUS_LABELS[status] ?? status;
