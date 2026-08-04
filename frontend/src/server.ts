@@ -59,7 +59,7 @@ export function app(opts: AppOptions = {}): express.Express {
 
   // Serve static files (local dev and Railway; Vercel CDN handles this in production)
   server.get(
-    '**',
+    '*splat',
     express.static(browserDistFolder, {
       maxAge: '1y',
       index: 'index.html',
@@ -71,7 +71,7 @@ export function app(opts: AppOptions = {}): express.Express {
   // A 10s Promise.race guards against Railway cold-start cascades: if the
   // backend is slow to respond during SSR ngOnInit calls, we fall back to the
   // CSR shell so the Lambda doesn't reach Vercel's 30s hard cut and return 504.
-  server.get('**', (req, res, next) => {
+  server.get('*splat', (req, res, next) => {
     const { protocol, originalUrl, headers } = req;
 
     let timeoutHandle: ReturnType<typeof setTimeout>;
