@@ -477,8 +477,8 @@ importers:
         specifier: ~30.3.0
         version: 30.3.0
       jest-preset-angular:
-        specifier: ^16.2.0
-        version: 16.2.0(4c462cc5ee1e21c6f7ac3ba039e26f53)
+        specifier: ^17.0.0
+        version: 17.0.0(@angular/compiler-cli@21.2.19(@angular/compiler@21.2.19)(typescript@5.9.3))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@21.2.19(@angular/animations@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))(@babel/core@8.0.1)(@jest/transform@30.4.1)(@jest/types@30.4.1)(babel-jest@30.4.1(@babel/core@8.0.1))(jest@30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0))(jsdom@29.0.2(@noble/hashes@1.8.0))(typescript@5.9.3)
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
@@ -6534,14 +6534,13 @@ packages:
       jest-resolve:
         optional: true
 
-  jest-preset-angular@16.2.0:
-    resolution: {integrity: sha512-8LW2Ljp6RKJu4B2PLloWX8na0ropo6yRFr89L+aiUGuvQ86PrzgkzHdZQ7lmjJJtZasVLDWY8pUvbNVmM1AEGw==}
-    engines: {node: ^18.19.1 || ^20.11.1 || >=22.0.0}
+  jest-preset-angular@17.0.0:
+    resolution: {integrity: sha512-2yAHkA1c5rSICGJVtLYYqPC5RDsvo4+i4CwWFHVXwv41cHNX7gCWeh074IuZ5mFw7Vwsr+i25EowCnGtKkxNWw==}
+    engines: {node: ^20.11.1 || >=22.0.0}
     peerDependencies:
-      '@angular/compiler-cli': '>=19.0.0 <23.0.0'
-      '@angular/core': '>=19.0.0 <23.0.0'
-      '@angular/platform-browser': '>=19.0.0 <23.0.0'
-      '@angular/platform-browser-dynamic': '>=19.0.0 <23.0.0'
+      '@angular/compiler-cli': '>=20.0.0 <23.0.0'
+      '@angular/core': '>=20.0.0 <23.0.0'
+      '@angular/platform-browser': '>=20.0.0 <23.0.0'
       jest: ^30.0.0
       jsdom: '>=26.0.0'
       typescript: ~5.9.3
@@ -16630,12 +16629,11 @@ snapshots:
     optionalDependencies:
       jest-resolve: 30.3.0
 
-  jest-preset-angular@16.2.0(4c462cc5ee1e21c6f7ac3ba039e26f53):
+  jest-preset-angular@17.0.0(@angular/compiler-cli@21.2.19(@angular/compiler@21.2.19)(typescript@5.9.3))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@21.2.19(@angular/animations@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))(@babel/core@8.0.1)(@jest/transform@30.4.1)(@jest/types@30.4.1)(babel-jest@30.4.1(@babel/core@8.0.1))(jest@30.3.0(@types/node@22.20.1)(babel-plugin-macros@3.1.0))(jsdom@29.0.2(@noble/hashes@1.8.0))(typescript@5.9.3):
     dependencies:
       '@angular/compiler-cli': 21.2.19(@angular/compiler@21.2.19)(typescript@5.9.3)
       '@angular/core': 21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)
       '@angular/platform-browser': 21.2.19(@angular/animations@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))
-      '@angular/platform-browser-dynamic': 21.2.19(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/compiler@21.2.19)(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(@angular/platform-browser@21.2.19(@angular/animations@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))(@angular/common@21.2.19(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1))(rxjs@7.8.2))(@angular/core@21.2.19(@angular/compiler@21.2.19)(rxjs@7.8.2)(zone.js@0.15.1)))
       '@jest/environment-jsdom-abstract': 30.4.1(jsdom@29.0.2(@noble/hashes@1.8.0))
       bs-logger: 0.2.6
       esbuild-wasm: 0.28.1
