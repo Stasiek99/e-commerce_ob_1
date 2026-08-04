@@ -1,14 +1,21 @@
-import { CUSTOM_ELEMENTS_SCHEMA, NO_ERRORS_SCHEMA, PLATFORM_ID } from '@angular/core';
-import { fakeAsync, TestBed, tick } from '@angular/core/testing';
-import { ActivatedRoute, Router } from '@angular/router';
+import {
+  CUSTOM_ELEMENTS_SCHEMA,
+  NO_ERRORS_SCHEMA,
+  PLATFORM_ID,
+} from "@angular/core";
+import { fakeAsync, TestBed, tick } from "@angular/core/testing";
+import { ActivatedRoute, Router } from "@angular/router";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type RouterMock = { navigate: jest.Mock };
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideHttpClient } from '@angular/common/http';
-import { EMPTY, of } from 'rxjs';
-import { ParamMap } from '@angular/router';
-import { ProductListComponent } from '../product-list.component';
-import { SeoService } from '../../../../core/services/seo.service';
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from "@angular/common/http/testing";
+import { provideHttpClient } from "@angular/common/http";
+import { EMPTY, of } from "rxjs";
+import { ParamMap } from "@angular/router";
+import { ProductListComponent } from "../product-list.component";
+import { SeoService } from "../../../../core/services/seo.service";
 
 const makeParamMap = (params: Record<string, string | null>): ParamMap => ({
   has: (key: string) => key in params,
@@ -24,7 +31,11 @@ function setup() {
   };
 
   const mockRouter = { navigate: jest.fn() };
-  const mockSeo = { setProductListMeta: jest.fn(), setCategoryMeta: jest.fn(), updateMeta: jest.fn() };
+  const mockSeo = {
+    setProductListMeta: jest.fn(),
+    setCategoryMeta: jest.fn(),
+    updateMeta: jest.fn(),
+  };
 
   TestBed.configureTestingModule({
     imports: [ProductListComponent],
@@ -34,7 +45,7 @@ function setup() {
       { provide: ActivatedRoute, useValue: mockRoute },
       { provide: Router, useValue: mockRouter },
       { provide: SeoService, useValue: mockSeo },
-      { provide: PLATFORM_ID, useValue: 'browser' },
+      { provide: PLATFORM_ID, useValue: "browser" },
     ],
     schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
   });
@@ -56,16 +67,18 @@ function setup() {
 // Invariant: SORT_OPTIONS includes a 'relevance' entry with the correct label,
 // and the component's default sort is 'relevance' with label 'Polecane'.
 
-describe('ProductListComponent — Omnibus ranking disclosure', () => {
+describe("ProductListComponent — Omnibus ranking disclosure", () => {
   afterEach(() => jest.clearAllMocks());
 
   it('exposes a sort option with value "relevance" and label "Polecane"', () => {
     const { component } = setup();
 
-    const relevanceOption = component.sortOptions.find(o => o.value === 'relevance');
+    const relevanceOption = component.sortOptions.find(
+      (o) => o.value === "relevance",
+    );
 
     expect(relevanceOption).toBeDefined();
-    expect(relevanceOption!.label).toBe('Polecane');
+    expect(relevanceOption!.label).toBe("Polecane");
   });
 
   it('defaults sortBy to "relevance" so the disclosure tooltip is visible on first load', () => {
@@ -73,7 +86,7 @@ describe('ProductListComponent — Omnibus ranking disclosure', () => {
 
     fixture.detectChanges();
 
-    expect(component.sortBy()).toBe('relevance');
+    expect(component.sortBy()).toBe("relevance");
   });
 
   it('sortLabel returns "Polecane" by default — matches the disclosed sort option', () => {
@@ -81,17 +94,17 @@ describe('ProductListComponent — Omnibus ranking disclosure', () => {
 
     fixture.detectChanges();
 
-    expect(component.sortLabel()).toBe('Polecane');
+    expect(component.sortLabel()).toBe("Polecane");
   });
 
-  it('SORT_OPTIONS has exactly 3 entries — relevance, price_asc, price_desc', () => {
+  it("SORT_OPTIONS has exactly 3 entries — relevance, price_asc, price_desc", () => {
     const { component } = setup();
 
     expect(component.sortOptions).toHaveLength(3);
-    expect(component.sortOptions.map(o => o.value)).toEqual([
-      'relevance',
-      'price_asc',
-      'price_desc',
+    expect(component.sortOptions.map((o) => o.value)).toEqual([
+      "relevance",
+      "price_asc",
+      "price_desc",
     ]);
   });
 
@@ -99,28 +112,28 @@ describe('ProductListComponent — Omnibus ranking disclosure', () => {
     const { fixture, component } = setup();
 
     fixture.detectChanges();
-    component.sortBy.set('price_asc');
+    component.sortBy.set("price_asc");
 
-    expect(component.sortLabel()).toBe('Cena: rosnąco');
+    expect(component.sortLabel()).toBe("Cena: rosnąco");
   });
 
   it('sortLabel returns "Cena: malejąco" when sortBy is price_desc', () => {
     const { fixture, component } = setup();
 
     fixture.detectChanges();
-    component.sortBy.set('price_desc');
+    component.sortBy.set("price_desc");
 
-    expect(component.sortLabel()).toBe('Cena: malejąco');
+    expect(component.sortLabel()).toBe("Cena: malejąco");
   });
 
   it('sortLabel returns "Polecane" when sortBy is reset to relevance', () => {
     const { fixture, component } = setup();
 
     fixture.detectChanges();
-    component.sortBy.set('price_asc');
-    component.sortBy.set('relevance');
+    component.sortBy.set("price_asc");
+    component.sortBy.set("relevance");
 
-    expect(component.sortLabel()).toBe('Polecane');
+    expect(component.sortLabel()).toBe("Polecane");
   });
 });
 
@@ -130,16 +143,16 @@ describe('ProductListComponent — Omnibus ranking disclosure', () => {
 // Invariant: stagedInStock defaults to false; openDrawer syncs appliedInStock
 // into stagedInStock; applyFilters encodes the staged value in the URL.
 
-describe('ProductListComponent — in-stock filter', () => {
+describe("ProductListComponent — in-stock filter", () => {
   afterEach(() => jest.clearAllMocks());
 
-  it('stagedInStock defaults to false — checkbox is unchecked when drawer first opens', () => {
+  it("stagedInStock defaults to false — checkbox is unchecked when drawer first opens", () => {
     const { component } = setup();
 
     expect(component.stagedInStock()).toBe(false);
   });
 
-  it('openDrawer syncs appliedInStock=true into stagedInStock', () => {
+  it("openDrawer syncs appliedInStock=true into stagedInStock", () => {
     const { component } = setup();
 
     component.appliedInStock.set(true);
@@ -149,7 +162,7 @@ describe('ProductListComponent — in-stock filter', () => {
     expect(component.drawerOpen()).toBe(true);
   });
 
-  it('openDrawer syncs appliedInStock=false into stagedInStock', () => {
+  it("openDrawer syncs appliedInStock=false into stagedInStock", () => {
     const { component } = setup();
 
     component.appliedInStock.set(false);
@@ -159,7 +172,7 @@ describe('ProductListComponent — in-stock filter', () => {
     expect(component.drawerOpen()).toBe(true);
   });
 
-  it('closeDrawer sets drawerOpen to false and preserves the staged value', () => {
+  it("closeDrawer sets drawerOpen to false and preserves the staged value", () => {
     const { component } = setup();
 
     component.drawerOpen.set(true);
@@ -180,12 +193,12 @@ describe('ProductListComponent — in-stock filter', () => {
     expect(router.navigate).toHaveBeenCalledWith(
       [],
       expect.objectContaining({
-        queryParams: expect.objectContaining({ inStock: 'true' }),
+        queryParams: expect.objectContaining({ inStock: "true" }),
       }),
     );
   });
 
-  it('applyFilters navigates with inStock=null when stagedInStock is false — clears the filter', () => {
+  it("applyFilters navigates with inStock=null when stagedInStock is false — clears the filter", () => {
     const { component } = setup();
     const router = TestBed.inject(Router) as unknown as RouterMock;
 
@@ -207,7 +220,7 @@ describe('ProductListComponent — in-stock filter', () => {
 // /category/:slug. Google sees two URLs both claiming the other as canonical and
 // may decline to index either. The fix emits `/category/${slug}` for slug routes.
 
-describe('ProductListComponent — canonical URL (updateSeo)', () => {
+describe("ProductListComponent — canonical URL (updateSeo)", () => {
   function setupForCanonical(slug: string | null) {
     const mockRoute = {
       paramMap: of(makeParamMap(slug ? { slug } : {})),
@@ -224,7 +237,7 @@ describe('ProductListComponent — canonical URL (updateSeo)', () => {
         { provide: ActivatedRoute, useValue: mockRoute },
         { provide: Router, useValue: mockRouter },
         { provide: SeoService, useValue: mockSeo },
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
       ],
       schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
     });
@@ -242,60 +255,86 @@ describe('ProductListComponent — canonical URL (updateSeo)', () => {
   afterEach(() => jest.clearAllMocks());
 
   it('calls updatePageMeta with path=/category/perfume when slug is "perfume"', fakeAsync(() => {
-    const { fixture, httpMock, mockSeo } = setupForCanonical('perfume');
+    const { fixture, httpMock, mockSeo } = setupForCanonical("perfume");
 
     fixture.detectChanges();
     tick(0);
 
     expect(mockSeo.updatePageMeta).toHaveBeenCalledWith(
-      expect.objectContaining({ path: '/category/perfume' }),
+      expect.objectContaining({ path: "/category/perfume" }),
     );
 
-    httpMock.expectOne(req => req.url.includes('/products/facets')).flush({ scentFamilies: [], genders: [] });
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets')).flush({ data: [], meta: { totalPages: 1 } });
+    httpMock
+      .expectOne((req) => req.url.includes("/products/facets"))
+      .flush({ scentFamilies: [], genders: [] });
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
+      .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('does not emit canonical pointing at the non-existent /products/perfume path', fakeAsync(() => {
-    const { fixture, httpMock, mockSeo } = setupForCanonical('perfume');
+  it("does not emit canonical pointing at the non-existent /products/perfume path", fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupForCanonical("perfume");
 
     fixture.detectChanges();
     tick(0);
 
     const calledPath: string = mockSeo.updatePageMeta.mock.calls[0][0].path;
-    expect(calledPath).not.toContain('/products/');
+    expect(calledPath).not.toContain("/products/");
 
-    httpMock.expectOne(req => req.url.includes('/products/facets')).flush({ scentFamilies: [], genders: [] });
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets')).flush({ data: [], meta: { totalPages: 1 } });
+    httpMock
+      .expectOne((req) => req.url.includes("/products/facets"))
+      .flush({ scentFamilies: [], genders: [] });
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
+      .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
   it('calls updatePageMeta with path=/category/diffusers when slug is "diffusers"', fakeAsync(() => {
-    const { fixture, httpMock, mockSeo } = setupForCanonical('diffusers');
+    const { fixture, httpMock, mockSeo } = setupForCanonical("diffusers");
 
     fixture.detectChanges();
     tick(0);
 
     expect(mockSeo.updatePageMeta).toHaveBeenCalledWith(
-      expect.objectContaining({ path: '/category/diffusers' }),
+      expect.objectContaining({ path: "/category/diffusers" }),
     );
 
-    httpMock.expectOne(req => req.url.includes('/products/facets')).flush({ scentFamilies: [], genders: [] });
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets')).flush({ data: [], meta: { totalPages: 1 } });
+    httpMock
+      .expectOne((req) => req.url.includes("/products/facets"))
+      .flush({ scentFamilies: [], genders: [] });
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
+      .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('calls updatePageMeta with path=/products when no slug is present (all-products view)', fakeAsync(() => {
+  it("calls updatePageMeta with path=/products when no slug is present (all-products view)", fakeAsync(() => {
     const { fixture, httpMock, mockSeo } = setupForCanonical(null);
 
     fixture.detectChanges();
     tick(0);
 
     expect(mockSeo.updatePageMeta).toHaveBeenCalledWith(
-      expect.objectContaining({ path: '/products' }),
+      expect.objectContaining({ path: "/products" }),
     );
 
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets')).flush({ data: [], meta: { totalPages: 1 } });
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
+      .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 });
@@ -305,7 +344,7 @@ describe('ProductListComponent — canonical URL (updateSeo)', () => {
 // was indexable as a separate page despite having the same canonical as /products.
 // The fix treats any non-default sort value as a filtering condition.
 
-describe('ProductListComponent — hasFilters includes sort', () => {
+describe("ProductListComponent — hasFilters includes sort", () => {
   function setupWithQueryParams(params: Record<string, string | null>) {
     const mockRoute = {
       paramMap: of(makeParamMap({})),
@@ -322,7 +361,7 @@ describe('ProductListComponent — hasFilters includes sort', () => {
         { provide: ActivatedRoute, useValue: mockRoute },
         { provide: Router, useValue: mockRouter },
         { provide: SeoService, useValue: mockSeo },
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
       ],
       schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
     });
@@ -339,46 +378,64 @@ describe('ProductListComponent — hasFilters includes sort', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('calls setRobotsTag noindex,follow when sort=price_asc', fakeAsync(() => {
-    const { fixture, httpMock, mockSeo } = setupWithQueryParams({ sort: 'price_asc' });
+  it("calls setRobotsTag noindex,follow when sort=price_asc", fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({
+      sort: "price_asc",
+    });
 
     fixture.detectChanges();
     tick(0);
 
-    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,follow');
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith("noindex,follow");
 
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
       .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('calls setRobotsTag noindex,follow when sort=price_desc', fakeAsync(() => {
-    const { fixture, httpMock, mockSeo } = setupWithQueryParams({ sort: 'price_desc' });
+  it("calls setRobotsTag noindex,follow when sort=price_desc", fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({
+      sort: "price_desc",
+    });
 
     fixture.detectChanges();
     tick(0);
 
-    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith('noindex,follow');
+    expect(mockSeo.setRobotsTag).toHaveBeenCalledWith("noindex,follow");
 
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
       .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('does not call setRobotsTag when sort=relevance with no other filters', fakeAsync(() => {
-    const { fixture, httpMock, mockSeo } = setupWithQueryParams({ sort: 'relevance' });
+  it("does not call setRobotsTag when sort=relevance with no other filters", fakeAsync(() => {
+    const { fixture, httpMock, mockSeo } = setupWithQueryParams({
+      sort: "relevance",
+    });
 
     fixture.detectChanges();
     tick(0);
 
     expect(mockSeo.setRobotsTag).not.toHaveBeenCalled();
 
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
       .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('does not call setRobotsTag when no sort param is present (defaults to relevance)', fakeAsync(() => {
+  it("does not call setRobotsTag when no sort param is present (defaults to relevance)", fakeAsync(() => {
     const { fixture, httpMock, mockSeo } = setupWithQueryParams({});
 
     fixture.detectChanges();
@@ -386,7 +443,11 @@ describe('ProductListComponent — hasFilters includes sort', () => {
 
     expect(mockSeo.setRobotsTag).not.toHaveBeenCalled();
 
-    httpMock.expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+    httpMock
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
       .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
@@ -397,8 +458,8 @@ describe('ProductListComponent — hasFilters includes sort', () => {
 // when the component is destroyed, so facets.set(res) never executes on a dead
 // component instance.
 
-describe('ProductListComponent — loadFacets subscription lifecycle', () => {
-  const PERFUME_FACETS = { scentFamilies: ['woody'], genders: ['unisex'] };
+describe("ProductListComponent — loadFacets subscription lifecycle", () => {
+  const PERFUME_FACETS = { scentFamilies: ["woody"], genders: ["unisex"] };
 
   function setupWithSlug(slug: string | null) {
     const mockRoute = {
@@ -416,7 +477,7 @@ describe('ProductListComponent — loadFacets subscription lifecycle', () => {
         { provide: ActivatedRoute, useValue: mockRoute },
         { provide: Router, useValue: mockRouter },
         { provide: SeoService, useValue: mockSeo },
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
       ],
       schemas: [NO_ERRORS_SCHEMA, CUSTOM_ELEMENTS_SCHEMA],
     });
@@ -434,43 +495,51 @@ describe('ProductListComponent — loadFacets subscription lifecycle', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('sets facets to null and makes no HTTP request when slug is null', fakeAsync(() => {
+  it("sets facets to null and makes no HTTP request when slug is null", fakeAsync(() => {
     const { fixture, component, httpMock } = setupWithSlug(null);
 
     fixture.detectChanges();
     tick(0); // advance past debounceTime(0) in ngOnInit
 
-    httpMock.expectNone(req => req.url.includes('/products/facets'));
+    httpMock.expectNone((req) => req.url.includes("/products/facets"));
     expect(component.facets()).toBeNull();
 
-    httpMock.expectOne(req => req.url.includes('/api/products'))
+    httpMock
+      .expectOne((req) => req.url.includes("/api/products"))
       .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('updates the facets signal with the HTTP response when the component is alive', fakeAsync(() => {
-    const { fixture, component, httpMock } = setupWithSlug('perfume');
+  it("updates the facets signal with the HTTP response when the component is alive", fakeAsync(() => {
+    const { fixture, component, httpMock } = setupWithSlug("perfume");
 
     fixture.detectChanges();
     tick(0); // advance past debounceTime(0) in ngOnInit
 
-    httpMock.expectOne(req => req.url.includes('/products/facets')).flush(PERFUME_FACETS);
+    httpMock
+      .expectOne((req) => req.url.includes("/products/facets"))
+      .flush(PERFUME_FACETS);
 
     expect(component.facets()).toEqual(PERFUME_FACETS);
 
     httpMock
-      .expectOne(req => req.url.includes('/api/products') && !req.url.includes('/facets'))
+      .expectOne(
+        (req) =>
+          req.url.includes("/api/products") && !req.url.includes("/facets"),
+      )
       .flush({ data: [], meta: { totalPages: 1 } });
     httpMock.verify();
   }));
 
-  it('cancels the in-flight facets HTTP request when the component is destroyed mid-flight', fakeAsync(() => {
-    const { fixture, component, httpMock } = setupWithSlug('perfume');
+  it("cancels the in-flight facets HTTP request when the component is destroyed mid-flight", fakeAsync(() => {
+    const { fixture, component, httpMock } = setupWithSlug("perfume");
 
     fixture.detectChanges();
     tick(0); // advance past debounceTime(0) in ngOnInit
 
-    const facetsReq = httpMock.expectOne(req => req.url.includes('/products/facets'));
+    const facetsReq = httpMock.expectOne((req) =>
+      req.url.includes("/products/facets"),
+    );
     expect(facetsReq.cancelled).toBe(false); // request is pending before destruction
 
     // Destroy triggers DestroyRef → takeUntilDestroyed unsubscribes the facets observable

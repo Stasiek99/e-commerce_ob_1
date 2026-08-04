@@ -1,47 +1,105 @@
-import { Component, DestroyRef, OnInit, computed, effect, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { catchError, debounceTime, distinctUntilChanged, filter, finalize, map, merge, of, switchMap, tap } from 'rxjs';
-import { tuiMarkControlAsTouchedAndValidate } from '@taiga-ui/cdk';
-import { CdkTrapFocus } from '@angular/cdk/a11y';
-import { TuiButton, TuiIcon, TuiLabel, TuiTextfield, TuiTitle } from '@taiga-ui/core';
-import { TuiCheckbox, TuiChip, tuiInputPhoneInternationalOptionsProvider, TuiSlides, TuiStepper, TuiElasticContainer, TuiStep } from '@taiga-ui/kit';
-import { TuiInputPhoneInternational } from '@taiga-ui/experimental';
-import { TuiCard, TuiForm, TuiHeader } from '@taiga-ui/layout';
-import { type TuiCountryIsoCode } from '@taiga-ui/i18n/types';
-import { getCountries } from 'libphonenumber-js/min';
-import { parsePhoneNumber } from 'libphonenumber-js';
-import { nameValidator, phoneValidator, streetValidator } from '../../../shared/validators/form.validators';
-import { CURRENT_TERMS_VERSION } from '@fragrance-store/shared-types';
+import {
+  Component,
+  DestroyRef,
+  OnInit,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+  PLATFORM_ID,
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { ReactiveFormsModule, FormBuilder, Validators } from "@angular/forms";
+import { HttpClient, HttpHeaders } from "@angular/common/http";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
+import { DomSanitizer, SafeResourceUrl } from "@angular/platform-browser";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
+import {
+  catchError,
+  debounceTime,
+  distinctUntilChanged,
+  filter,
+  finalize,
+  map,
+  merge,
+  of,
+  switchMap,
+  tap,
+} from "rxjs";
+import { tuiMarkControlAsTouchedAndValidate } from "@taiga-ui/cdk";
+import { CdkTrapFocus } from "@angular/cdk/a11y";
+import {
+  TuiButton,
+  TuiIcon,
+  TuiLabel,
+  TuiTitle,
+  TuiInput,
+  TuiCheckbox,
+} from "@taiga-ui/core";
+import {
+  TuiChip,
+  tuiInputPhoneInternationalOptionsProvider,
+  TuiStepper,
+  TuiStep,
+  TuiInputPhoneInternational,
+} from "@taiga-ui/kit";
+import {
+  TuiCard,
+  TuiForm,
+  TuiHeader,
+  TuiSlides,
+  TuiElasticContainer,
+} from "@taiga-ui/layout";
+import { type TuiCountryIsoCode } from "@taiga-ui/i18n/types";
+import { getCountries } from "libphonenumber-js/min";
+import { parsePhoneNumber } from "libphonenumber-js";
+import {
+  nameValidator,
+  phoneValidator,
+  streetValidator,
+} from "../../../shared/validators/form.validators";
+import { CURRENT_TERMS_VERSION } from "@fragrance-store/shared-types";
 
-import { CartService } from '../../../core/services/cart.service';
-import { AuthService } from '../../../core/services/auth.service';
-import { ToastService } from '../../../core/services/toast.service';
-import { AnalyticsService } from '../../../core/services/analytics.service';
-import { TurnstileService } from '../../../core/services/turnstile.service';
-import { ScriptLoaderService } from '../../../core/services/script-loader.service';
-import { PricePipe } from '../../../shared/pipes/price.pipe';
-import { environment } from '../../../../environments/environment';
+import { CartService } from "../../../core/services/cart.service";
+import { AuthService } from "../../../core/services/auth.service";
+import { ToastService } from "../../../core/services/toast.service";
+import { AnalyticsService } from "../../../core/services/analytics.service";
+import { TurnstileService } from "../../../core/services/turnstile.service";
+import { ScriptLoaderService } from "../../../core/services/script-loader.service";
+import { PricePipe } from "../../../shared/pipes/price.pipe";
+import { environment } from "../../../../environments/environment";
 
-const GEOWIDGET_CSS_URL = 'https://geowidget.easypack24.net/css/easypack.css';
-const GEOWIDGET_SDK_URL = 'https://geowidget.easypack24.net/js/sdk-for-javascript.js';
+const GEOWIDGET_CSS_URL = "https://geowidget.easypack24.net/css/easypack.css";
+const GEOWIDGET_SDK_URL =
+  "https://geowidget.easypack24.net/js/sdk-for-javascript.js";
 
 declare const easyPack: {
   init: (config: Record<string, unknown>) => void;
   modalMap: (
     callback: (
-      point: { name: string; address_details: { street: string; building_number: string; city: string; post_code: string } },
-      modal: { closeModal: () => void }
+      point: {
+        name: string;
+        address_details: {
+          street: string;
+          building_number: string;
+          city: string;
+          post_code: string;
+        };
+      },
+      modal: { closeModal: () => void },
     ) => void,
-    options?: Record<string, unknown>
+    options?: Record<string, unknown>,
   ) => void;
 };
 
-const enum CarrierCode { INPOST = 'INPOST', DPD = 'DPD', DPD_COURIER = 'DPD_COURIER', DHL = 'DHL', GLS = 'GLS' }
+const enum CarrierCode {
+  INPOST = "INPOST",
+  DPD = "DPD",
+  DPD_COURIER = "DPD_COURIER",
+  DHL = "DHL",
+  GLS = "GLS",
+}
 
 interface Carrier {
   code: CarrierCode;
@@ -54,11 +112,36 @@ interface Carrier {
 // (or if it fails). The live, admin-editable price always takes precedence;
 // see ngOnInit's rates fetch below.
 const CARRIERS: Carrier[] = [
-  { code: CarrierCode.INPOST,      name: 'InPost Paczkomat', price: 1499, desc: 'Dostawa do paczkomatu 1-2 dni' },
-  { code: CarrierCode.DPD,         name: 'DPD Pickup',       price: 1599, desc: 'Odbiór w punkcie DPD 1-2 dni' },
-  { code: CarrierCode.DPD_COURIER, name: 'DPD Kurier',       price: 1699, desc: 'Dostawa pod drzwi 1-2 dni' },
-  { code: CarrierCode.DHL,         name: 'DHL Kurier',        price: 1999, desc: 'Dostawa pod drzwi 1-2 dni' },
-  { code: CarrierCode.GLS,         name: 'GLS Kurier',        price: 1799, desc: 'Dostawa pod drzwi 2-3 dni' },
+  {
+    code: CarrierCode.INPOST,
+    name: "InPost Paczkomat",
+    price: 1499,
+    desc: "Dostawa do paczkomatu 1-2 dni",
+  },
+  {
+    code: CarrierCode.DPD,
+    name: "DPD Pickup",
+    price: 1599,
+    desc: "Odbiór w punkcie DPD 1-2 dni",
+  },
+  {
+    code: CarrierCode.DPD_COURIER,
+    name: "DPD Kurier",
+    price: 1699,
+    desc: "Dostawa pod drzwi 1-2 dni",
+  },
+  {
+    code: CarrierCode.DHL,
+    name: "DHL Kurier",
+    price: 1999,
+    desc: "Dostawa pod drzwi 1-2 dni",
+  },
+  {
+    code: CarrierCode.GLS,
+    name: "GLS Kurier",
+    price: 1799,
+    desc: "Dostawa pod drzwi 2-3 dni",
+  },
 ];
 
 interface AppliedCoupon {
@@ -69,14 +152,19 @@ interface AppliedCoupon {
 }
 
 @Component({
-  selector: 'app-checkout-page',
+  selector: "app-checkout-page",
   standalone: true,
   imports: [
     ReactiveFormsModule,
     RouterLink,
     PricePipe,
-    TuiButton, TuiIcon, TuiLabel, TuiTextfield,
-    TuiTitle, TuiCheckbox, TuiChip,
+    TuiButton,
+    TuiIcon,
+    TuiLabel,
+    TuiInput,
+    TuiTitle,
+    TuiCheckbox,
+    TuiChip,
     TuiStepper,
     TuiCard,
     TuiElasticContainer,
@@ -89,7 +177,7 @@ interface AppliedCoupon {
   ],
   providers: [
     tuiInputPhoneInternationalOptionsProvider({
-      metadata: import('libphonenumber-js/min/metadata').then((m) => m.default),
+      metadata: import("libphonenumber-js/min/metadata").then((m) => m.default),
     }),
   ],
   template: `
@@ -110,7 +198,6 @@ interface AppliedCoupon {
       <!-- ── Step content ───────────────────────────────────────── -->
       <tui-elastic-container>
         <section [tuiSlides]="direction" class="checkout__slides">
-
           <!-- Step 0: Address -->
           @if (index === 0) {
             <form
@@ -131,19 +218,36 @@ interface AppliedCoupon {
                       type="button"
                       class="addr-pill"
                       [class.addr-pill--active]="selectedSavedId() === addr.id"
-                      [attr.aria-label]="addr.firstName + ' ' + addr.lastName + ', ' + addr.city + (addr.isDefault ? ' (domyślny)' : '')"
+                      [attr.aria-label]="
+                        addr.firstName +
+                        ' ' +
+                        addr.lastName +
+                        ', ' +
+                        addr.city +
+                        (addr.isDefault ? ' (domyślny)' : '')
+                      "
                       [attr.aria-pressed]="selectedSavedId() === addr.id"
-                      (click)="selectSavedAddress(addr)">
-                      <span class="addr-pill__name" aria-hidden="true">{{ addr.firstName }} {{ addr.lastName }}</span>
-                      <span class="addr-pill__city" aria-hidden="true">{{ addr.city }}</span>
-                      @if (addr.isDefault) { <span class="addr-pill__badge" aria-hidden="true">★</span> }
+                      (click)="selectSavedAddress(addr)"
+                    >
+                      <span class="addr-pill__name" aria-hidden="true"
+                        >{{ addr.firstName }} {{ addr.lastName }}</span
+                      >
+                      <span class="addr-pill__city" aria-hidden="true">{{
+                        addr.city
+                      }}</span>
+                      @if (addr.isDefault) {
+                        <span class="addr-pill__badge" aria-hidden="true"
+                          >★</span
+                        >
+                      }
                     </button>
                   }
                   <button
                     type="button"
                     class="addr-pill addr-pill--new"
                     [class.addr-pill--active]="selectedSavedId() === null"
-                    (click)="useNewAddress()">
+                    (click)="useNewAddress()"
+                  >
                     + Nowy adres
                   </button>
                 </div>
@@ -154,39 +258,75 @@ interface AppliedCoupon {
                 <div class="name-col">
                   <tui-textfield>
                     <label tuiLabel>Imię *</label>
-                    <input tuiTextfield type="text" formControlName="firstName" autocomplete="given-name" />
+                    <input
+                      tuiInput
+                      type="text"
+                      formControlName="firstName"
+                      autocomplete="given-name"
+                    />
                   </tui-textfield>
-                  @if (errorMsg('firstName'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
+                  @if (errorMsg("firstName"); as msg) {
+                    <p class="field-error" role="alert">{{ msg }}</p>
+                  }
                 </div>
                 <div class="name-col">
                   <tui-textfield>
                     <label tuiLabel>Nazwisko *</label>
-                    <input tuiTextfield type="text" formControlName="lastName" autocomplete="family-name" />
+                    <input
+                      tuiInput
+                      type="text"
+                      formControlName="lastName"
+                      autocomplete="family-name"
+                    />
                   </tui-textfield>
-                  @if (errorMsg('lastName'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
+                  @if (errorMsg("lastName"); as msg) {
+                    <p class="field-error" role="alert">{{ msg }}</p>
+                  }
                 </div>
               </div>
 
               <!-- Company -->
               <tui-textfield>
                 <label tuiLabel>Firma</label>
-                <input tuiTextfield type="text" formControlName="company" autocomplete="organization" />
+                <input
+                  tuiInput
+                  type="text"
+                  formControlName="company"
+                  autocomplete="organization"
+                />
               </tui-textfield>
 
               <!-- Street -->
               <div>
                 <tui-textfield>
                   <label tuiLabel>Ulica i numer budynku *</label>
-                  <input tuiTextfield type="text" formControlName="street" autocomplete="street-address"
-                    placeholder="np. ul. Marszałkowska 12/4" />
+                  <input
+                    tuiInput
+                    type="text"
+                    formControlName="street"
+                    autocomplete="street-address"
+                    placeholder="np. ul. Marszałkowska 12/4"
+                  />
                 </tui-textfield>
-                @if (errorMsg('street'); as msg) {
+                @if (errorMsg("street"); as msg) {
                   <p class="field-error" role="alert">{{ msg }}</p>
                 } @else {
                   @switch (streetStatus()) {
-                    @case ('checking')  { <p class="street-hint street-hint--checking">Weryfikuję adres…</p> }
-                    @case ('found')     { <p class="street-hint street-hint--found">✓ Adres potwierdzony</p> }
-                    @case ('not-found') { <p class="street-hint street-hint--warning">⚠ Nie znaleziono adresu — sprawdź poprawność danych</p> }
+                    @case ("checking") {
+                      <p class="street-hint street-hint--checking">
+                        Weryfikuję adres…
+                      </p>
+                    }
+                    @case ("found") {
+                      <p class="street-hint street-hint--found">
+                        ✓ Adres potwierdzony
+                      </p>
+                    }
+                    @case ("not-found") {
+                      <p class="street-hint street-hint--warning">
+                        ⚠ Nie znaleziono adresu — sprawdź poprawność danych
+                      </p>
+                    }
                   }
                 }
               </div>
@@ -196,37 +336,67 @@ interface AppliedCoupon {
                 <div>
                   <tui-textfield>
                     <label tuiLabel>Kod pocztowy *</label>
-                    <input tuiTextfield type="text" formControlName="postalCode" placeholder="00-000"
-                      autocomplete="postal-code" />
+                    <input
+                      tuiInput
+                      type="text"
+                      formControlName="postalCode"
+                      placeholder="00-000"
+                      autocomplete="postal-code"
+                    />
                   </tui-textfield>
-                  @if (errorMsg('postalCode'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
+                  @if (errorMsg("postalCode"); as msg) {
+                    <p class="field-error" role="alert">{{ msg }}</p>
+                  }
                 </div>
                 <div class="name-col">
                   <tui-textfield>
                     <label tuiLabel>Miasto *</label>
-                    <input tuiTextfield type="text" formControlName="city" autocomplete="address-level2" />
+                    <input
+                      tuiInput
+                      type="text"
+                      formControlName="city"
+                      autocomplete="address-level2"
+                    />
                   </tui-textfield>
-                  @if (cityLoading()) { <p class="city-hint">Szukam miejscowości…</p> }
+                  @if (cityLoading()) {
+                    <p class="city-hint">Szukam miejscowości…</p>
+                  }
                   @if (cityList.length > 1) {
                     <div class="city-suggestions">
                       @for (city of cityList; track city) {
-                        <button type="button" tuiChip size="s" (click)="selectCity(city)">{{ city }}</button>
+                        <button
+                          type="button"
+                          tuiChip
+                          size="s"
+                          (click)="selectCity(city)"
+                        >
+                          {{ city }}
+                        </button>
                       }
                     </div>
                   }
-                  @if (errorMsg('city'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
+                  @if (errorMsg("city"); as msg) {
+                    <p class="field-error" role="alert">{{ msg }}</p>
+                  }
                 </div>
                 <div>
                   <tui-textfield class="field-disabled">
                     <label tuiLabel>Kraj</label>
-                    <input tuiTextfield value="Polska" [attr.disabled]="true" tabindex="-1" />
+                    <input
+                      tuiInput
+                      value="Polska"
+                      [attr.disabled]="true"
+                      tabindex="-1"
+                    />
                   </tui-textfield>
                 </div>
               </div>
 
               <!-- DG shipping restriction notice -->
               <p class="shipping-restriction-notice">
-                🇵🇱 Dostawa wyłącznie na terytorium Polski. Perfumy klasyfikowane są jako materiały niebezpieczne UN 1266 i nie mogą być wysyłane za granicę drogą lotniczą.
+                🇵🇱 Dostawa wyłącznie na terytorium Polski. Perfumy klasyfikowane
+                są jako materiały niebezpieczne UN 1266 i nie mogą być wysyłane
+                za granicę drogą lotniczą.
               </p>
 
               <!-- Phone + email (2-column) -->
@@ -234,28 +404,48 @@ interface AppliedCoupon {
                 <div>
                   <tui-textfield>
                     <label tuiLabel>Telefon *</label>
-                    <input tuiInputPhoneInternational
-                           formControlName="phone"
-                           [countries]="countries"
-                           [countryIsoCode]="countryIsoCode"
-                           [countrySearch]="true"
-                           (countryIsoCodeChange)="countryIsoCode = $event" />
+                    <input
+                      tuiInputPhoneInternational
+                      formControlName="phone"
+                      [countries]="countries"
+                      [countryIsoCode]="countryIsoCode"
+                      [countrySearch]="true"
+                      (countryIsoCodeChange)="countryIsoCode = $event"
+                    />
                   </tui-textfield>
-                  @if (errorMsg('phone'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
+                  @if (errorMsg("phone"); as msg) {
+                    <p class="field-error" role="alert">{{ msg }}</p>
+                  }
                 </div>
                 <div>
                   <tui-textfield>
                     <label tuiLabel>Email *</label>
-                    <input tuiTextfield type="email" formControlName="email" autocomplete="email" />
+                    <input
+                      tuiInput
+                      type="email"
+                      formControlName="email"
+                      autocomplete="email"
+                    />
                   </tui-textfield>
-                  @if (errorMsg('email'); as msg) { <p class="field-error" role="alert">{{ msg }}</p> }
+                  @if (errorMsg("email"); as msg) {
+                    <p class="field-error" role="alert">{{ msg }}</p>
+                  }
                 </div>
               </div>
 
               @if (auth.currentUser() && selectedSavedId() === null) {
                 <label class="save-addr-label">
-                  <input type="checkbox" tuiCheckbox [checked]="saveAddress()" (change)="saveAddress.set($any($event.target).checked)" />
-                  {{ savedAddresses().length === 0 ? 'Zapisz jako domyślny adres dostawy' : 'Zapisz adres w adresach dostawy' }}
+                  <input
+                    type="checkbox"
+                    tuiCheckbox
+                    [checked]="saveAddress()"
+                    (change)="saveAddress.set($any($event.target).checked)"
+                  />
+                  {{
+                    savedAddresses().length === 0
+                      ? "Zapisz jako domyślny adres dostawy"
+                      : "Zapisz adres w adresach dostawy"
+                  }}
                 </label>
               }
             </form>
@@ -272,7 +462,10 @@ interface AppliedCoupon {
                 @for (c of carrierList; track c.code) {
                   <label
                     class="carrier-option"
-                    [class.carrier-option--selected]="selectedCarrier()?.code === c.code">
+                    [class.carrier-option--selected]="
+                      selectedCarrier()?.code === c.code
+                    "
+                  >
                     <input
                       type="radio"
                       name="carrier"
@@ -284,50 +477,86 @@ interface AppliedCoupon {
                     />
                     <div class="carrier-option__name">{{ c.name }}</div>
                     <div class="carrier-option__desc">{{ c.desc }}</div>
-                    <div class="carrier-option__price">{{ c.price | price }}</div>
+                    <div class="carrier-option__price">
+                      {{ c.price | price }}
+                    </div>
                   </label>
                 }
               </fieldset>
-              @if (selectedCarrier()?.code === 'INPOST') {
+              @if (selectedCarrier()?.code === "INPOST") {
                 <div class="inpost-section">
                   @if (selectedLocker()) {
                     <div class="locker-selected">
                       <div class="locker-selected__info">
-                        <span class="locker-selected__code">{{ selectedLocker()!.code }}</span>
-                        <span class="locker-selected__address">{{ selectedLocker()!.address }}</span>
+                        <span class="locker-selected__code">{{
+                          selectedLocker()!.code
+                        }}</span>
+                        <span class="locker-selected__address">{{
+                          selectedLocker()!.address
+                        }}</span>
                       </div>
-                      <button type="button" tuiButton appearance="secondary" size="s" (click)="openLockerPicker()">
+                      <button
+                        type="button"
+                        tuiButton
+                        appearance="secondary"
+                        size="s"
+                        (click)="openLockerPicker()"
+                      >
                         Zmień
                       </button>
                     </div>
                   } @else {
-                    <button type="button" tuiButton appearance="secondary" (click)="openLockerPicker()">
+                    <button
+                      type="button"
+                      tuiButton
+                      appearance="secondary"
+                      (click)="openLockerPicker()"
+                    >
                       Wybierz paczkomat
                     </button>
                     @if (lockerPickerTouched()) {
-                      <p class="field-error" role="alert">Wybierz paczkomat, aby kontynuować.</p>
+                      <p class="field-error" role="alert">
+                        Wybierz paczkomat, aby kontynuować.
+                      </p>
                     }
                   }
                 </div>
               }
-              @if (selectedCarrier()?.code === 'DPD') {
+              @if (selectedCarrier()?.code === "DPD") {
                 <div class="inpost-section">
                   @if (selectedDpdPoint()) {
                     <div class="locker-selected">
                       <div class="locker-selected__info">
-                        <span class="locker-selected__code">{{ selectedDpdPoint()!.code }}</span>
-                        <span class="locker-selected__address">{{ selectedDpdPoint()!.address }}</span>
+                        <span class="locker-selected__code">{{
+                          selectedDpdPoint()!.code
+                        }}</span>
+                        <span class="locker-selected__address">{{
+                          selectedDpdPoint()!.address
+                        }}</span>
                       </div>
-                      <button type="button" tuiButton appearance="secondary" size="s" (click)="openDpdPicker()">
+                      <button
+                        type="button"
+                        tuiButton
+                        appearance="secondary"
+                        size="s"
+                        (click)="openDpdPicker()"
+                      >
                         Zmień
                       </button>
                     </div>
                   } @else {
-                    <button type="button" tuiButton appearance="secondary" (click)="openDpdPicker()">
+                    <button
+                      type="button"
+                      tuiButton
+                      appearance="secondary"
+                      (click)="openDpdPicker()"
+                    >
                       Wybierz punkt DPD
                     </button>
                     @if (dpdPickerTouched()) {
-                      <p class="field-error" role="alert">Wybierz punkt odbioru DPD, aby kontynuować.</p>
+                      <p class="field-error" role="alert">
+                        Wybierz punkt odbioru DPD, aby kontynuować.
+                      </p>
                     }
                   }
                 </div>
@@ -344,25 +573,45 @@ interface AppliedCoupon {
 
               <div class="summary-section">
                 <h3>Adres</h3>
-                <p>{{ addressForm.value.firstName }} {{ addressForm.value.lastName }}</p>
+                <p>
+                  {{ addressForm.value.firstName }}
+                  {{ addressForm.value.lastName }}
+                </p>
                 <p>{{ addressForm.value.street }}</p>
-                <p>{{ addressForm.value.postalCode }} {{ addressForm.value.city }}</p>
+                <p>
+                  {{ addressForm.value.postalCode }}
+                  {{ addressForm.value.city }}
+                </p>
                 <p>Tel: {{ addressForm.value.phone }}</p>
               </div>
 
               <div class="summary-section">
                 <h3>Dostawa</h3>
-                <p>{{ selectedCarrier()?.name }} — {{ selectedCarrier()?.price | price }}</p>
-                @if (lockerCode()) { <p>Paczkomat: {{ lockerCode() }}</p> }
-                @if (selectedDpdPoint()) { <p>Punkt DPD: {{ selectedDpdPoint()!.code }}</p> }
-                @if (deliveryEstimate()) { <p class="summary-delivery-est">Szacowany czas dostawy: {{ deliveryEstimate() }}</p> }
+                <p>
+                  {{ selectedCarrier()?.name }} —
+                  {{ selectedCarrier()?.price | price }}
+                </p>
+                @if (lockerCode()) {
+                  <p>Paczkomat: {{ lockerCode() }}</p>
+                }
+                @if (selectedDpdPoint()) {
+                  <p>Punkt DPD: {{ selectedDpdPoint()!.code }}</p>
+                }
+                @if (deliveryEstimate()) {
+                  <p class="summary-delivery-est">
+                    Szacowany czas dostawy: {{ deliveryEstimate() }}
+                  </p>
+                }
               </div>
 
               <div class="summary-section">
                 <h3>Produkty</h3>
                 @for (item of cartItems; track item.productVariantId) {
                   <div class="order-item">
-                    <span>{{ item.productName }} {{ item.variantLabel }} × {{ item.quantity }}</span>
+                    <span
+                      >{{ item.productName }} {{ item.variantLabel }} ×
+                      {{ item.quantity }}</span
+                    >
                     <span>{{ item.priceInCents * item.quantity | price }}</span>
                   </div>
                 }
@@ -372,24 +621,37 @@ interface AppliedCoupon {
               <div class="coupon-section">
                 @if (!appliedCoupon()) {
                   @if (!couponExpanded()) {
-                    <button type="button" tuiButton appearance="flat" size="s" class="coupon-toggle" (click)="couponExpanded.set(true)">
+                    <button
+                      type="button"
+                      tuiButton
+                      appearance="flat"
+                      size="s"
+                      class="coupon-toggle"
+                      (click)="couponExpanded.set(true)"
+                    >
                       Masz kod promocyjny?
                     </button>
                   } @else {
                     <tui-textfield>
                       <label tuiLabel>Kod rabatowy</label>
                       <input
-                        tuiTextfield
+                        tuiInput
                         type="text"
                         [value]="couponCodeInput()"
-                        (input)="couponCodeInput.set($any($event.target).value.toUpperCase())"
+                        (input)="
+                          couponCodeInput.set(
+                            $any($event.target).value.toUpperCase()
+                          )
+                        "
                         (keydown.enter)="applyCoupon()"
                         placeholder="np. WELCOME15"
                         autocomplete="off"
                       />
                     </tui-textfield>
                     @if (couponError()) {
-                      <p class="field-error" role="alert">{{ couponError() }}</p>
+                      <p class="field-error" role="alert">
+                        {{ couponError() }}
+                      </p>
                     }
                     <div class="coupon-actions">
                       <button
@@ -400,17 +662,29 @@ interface AppliedCoupon {
                         [disabled]="couponValidating() || !couponCodeInput()"
                         (click)="applyCoupon()"
                       >
-                        {{ couponValidating() ? 'Sprawdzam…' : 'Zastosuj' }}
+                        {{ couponValidating() ? "Sprawdzam…" : "Zastosuj" }}
                       </button>
                     </div>
                   }
                 } @else {
                   <div class="coupon-applied">
-                    <span class="coupon-applied__badge">✓ {{ appliedCoupon()!.code }}</span>
-                    <button type="button" tuiButton appearance="ghost" size="s" (click)="removeCoupon()">Usuń</button>
+                    <span class="coupon-applied__badge"
+                      >✓ {{ appliedCoupon()!.code }}</span
+                    >
+                    <button
+                      type="button"
+                      tuiButton
+                      appearance="ghost"
+                      size="s"
+                      (click)="removeCoupon()"
+                    >
+                      Usuń
+                    </button>
                   </div>
                   @if (appliedCoupon()!.appliesToItemsOnly) {
-                    <p class="coupon-items-only-note">Rabat nie obejmuje kosztu dostawy</p>
+                    <p class="coupon-items-only-note">
+                      Rabat nie obejmuje kosztu dostawy
+                    </p>
                   }
                 }
               </div>
@@ -431,7 +705,11 @@ interface AppliedCoupon {
                 @if (appliedCoupon() && !appliedCoupon()!.isFreeShipping) {
                   <div class="total-row total-row--discount">
                     <span>Rabat ({{ appliedCoupon()!.code }})</span>
-                    <span class="discount-value">−{{ appliedCoupon()!.discountAmountInCents | price }}</span>
+                    <span class="discount-value"
+                      >−{{
+                        appliedCoupon()!.discountAmountInCents | price
+                      }}</span
+                    >
                   </div>
                 }
                 <div class="total-row total-row--final">
@@ -447,9 +725,13 @@ interface AppliedCoupon {
 
               <p class="odr-notice">
                 Spory konsumenckie możesz rozwiązać za pomocą
-                <a href="https://ec.europa.eu/consumers/odr" target="_blank" rel="noopener">
-                  Platformy ODR (rozwiązywanie sporów online)
-                </a>.
+                <a
+                  href="https://ec.europa.eu/consumers/odr"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Platformy ODR (rozwiązywanie sporów online) </a
+                >.
               </p>
 
               <label class="consent-label">
@@ -457,15 +739,20 @@ interface AppliedCoupon {
                   type="checkbox"
                   tuiCheckbox
                   [checked]="termsAccepted()"
-                  (change)="termsAccepted.set($any($event.target).checked)" />
+                  (change)="termsAccepted.set($any($event.target).checked)"
+                />
                 <span>
-                  Akceptuję <a routerLink="/legal/terms" target="_blank">regulamin sklepu</a>
-                  i&nbsp;<a routerLink="/legal/privacy" target="_blank">politykę prywatności</a>. *
+                  Akceptuję
+                  <a routerLink="/legal/terms" target="_blank"
+                    >regulamin sklepu</a
+                  >
+                  i&nbsp;<a routerLink="/legal/privacy" target="_blank"
+                    >politykę prywatności</a
+                  >. *
                 </span>
               </label>
             </div>
           }
-
         </section>
       </tui-elastic-container>
 
@@ -481,7 +768,15 @@ interface AppliedCoupon {
             cdkTrapFocusAutoCapture
             (click)="$event.stopPropagation()"
           >
-            <button type="button" tuiButton appearance="ghost" size="s" class="dpd-modal-close" (click)="closeDpdModal()" aria-label="Zamknij">
+            <button
+              type="button"
+              tuiButton
+              appearance="ghost"
+              size="s"
+              class="dpd-modal-close"
+              (click)="closeDpdModal()"
+              aria-label="Zamknij"
+            >
               <tui-icon icon="@tui.x" />
             </button>
             @if (dpdWidgetError()) {
@@ -491,7 +786,9 @@ interface AppliedCoupon {
               </div>
             } @else {
               @if (dpdWidgetLoading()) {
-                <div class="dpd-modal-loader" aria-live="polite">Ładowanie mapy…</div>
+                <div class="dpd-modal-loader" aria-live="polite">
+                  Ładowanie mapy…
+                </div>
               }
               <iframe
                 class="dpd-modal-iframe"
@@ -515,7 +812,7 @@ interface AppliedCoupon {
           type="button"
           (click)="goBack()"
         >
-          {{ index === 0 ? 'Koszyk' : 'Wróć' }}
+          {{ index === 0 ? "Koszyk" : "Wróć" }}
         </button>
         <button
           tuiButton
@@ -523,124 +820,464 @@ interface AppliedCoupon {
           [disabled]="placing() || (index === 2 && !termsAccepted())"
           (click)="onNext()"
         >
-          {{ index === 2 ? (placing() ? 'Przekierowanie...' : 'Przejdź do płatności') : 'Dalej' }}
+          {{
+            index === 2
+              ? placing()
+                ? "Przekierowanie..."
+                : "Przejdź do płatności"
+              : "Dalej"
+          }}
         </button>
       </footer>
     </div>
-
   `,
-  styles: [`
-    .checkout { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
-    h1 { font-size: clamp(22px, 5vw, 28px); font-weight: 700; margin-bottom: 32px; }
+  styles: [
+    `
+      .checkout {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 32px 16px;
+      }
+      h1 {
+        font-size: clamp(22px, 5vw, 28px);
+        font-weight: 700;
+        margin-bottom: 32px;
+      }
 
-    .checkout__stepper { margin-bottom: 32px; }
-    .checkout__slides { display: block; }
+      .checkout__stepper {
+        margin-bottom: 32px;
+      }
+      .checkout__slides {
+        display: block;
+      }
 
-    /* Form / card content */
-    h2 { font-size: 20px; font-weight: 700; margin: 0; }
-    h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-secondary); margin: 0 0 8px; }
-    .step-card { display: block; }
+      /* Form / card content */
+      h2 {
+        font-size: 20px;
+        font-weight: 700;
+        margin: 0;
+      }
+      h3 {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-secondary);
+        margin: 0 0 8px;
+      }
+      .step-card {
+        display: block;
+      }
 
-    /* Address form — Taiga UI style matching /account/addresses */
-    .checkout-card { border: 1px solid var(--color-border) !important; }
-    .addr-form { display: flex; flex-direction: column; gap: 1rem; }
-    .addr-form [tuiHeader] { margin-bottom: 0; }
-    .name-row  { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-    .addr-row-3 { display: grid; grid-template-columns: 9rem 1fr 7rem; gap: 12px; align-items: start; }
-    .addr-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-    .name-col { display: flex; flex-direction: column; }
-    .field-disabled { opacity: 0.6; pointer-events: none; }
+      /* Address form — Taiga UI style matching /account/addresses */
+      .checkout-card {
+        border: 1px solid var(--color-border) !important;
+      }
+      .addr-form {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      .addr-form [tuiHeader] {
+        margin-bottom: 0;
+      }
+      .name-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        align-items: start;
+      }
+      .addr-row-3 {
+        display: grid;
+        grid-template-columns: 9rem 1fr 7rem;
+        gap: 12px;
+        align-items: start;
+      }
+      .addr-row-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        align-items: start;
+      }
+      .name-col {
+        display: flex;
+        flex-direction: column;
+      }
+      .field-disabled {
+        opacity: 0.6;
+        pointer-events: none;
+      }
 
-    .field-error { font-size: 12px; color: var(--tui-status-negative); margin-top: 4px; }
-    .city-hint { font-size: 12px; color: var(--color-secondary); margin-top: 4px; }
-    .city-suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-    .street-hint { font-size: 12px; margin-top: 4px; }
-    .street-hint--checking { color: var(--color-primary); }
-    .street-hint--found    { color: #2a9d4e; }
-    .street-hint--warning  { color: #9a5e00; }
+      .field-error {
+        font-size: 12px;
+        color: var(--tui-status-negative);
+        margin-top: 4px;
+      }
+      .city-hint {
+        font-size: 12px;
+        color: var(--color-secondary);
+        margin-top: 4px;
+      }
+      .city-suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .street-hint {
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .street-hint--checking {
+        color: var(--color-primary);
+      }
+      .street-hint--found {
+        color: #2a9d4e;
+      }
+      .street-hint--warning {
+        color: #9a5e00;
+      }
 
-    .shipping-restriction-notice { font-size: 12px; color: var(--color-secondary); margin: -4px 0 0; line-height: 1.5; }
+      .shipping-restriction-notice {
+        font-size: 12px;
+        color: var(--color-secondary);
+        margin: -4px 0 0;
+        line-height: 1.5;
+      }
 
-    /* Carrier */
-    .carrier-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; border: none; padding: 0; }
-    .carrier-option { border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 16px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 12px; }
-    .carrier-option:hover { border-color: var(--color-primary); }
-    .carrier-option:has(input:focus-visible) { outline: 3px solid var(--color-accent); outline-offset: 1px; }
-    .carrier-option--selected { border-color: var(--color-primary); background: #f8f8f8; }
-    .carrier-option__name { font-weight: 600; flex: 1; }
-    .carrier-option__desc { font-size: 12px; color: var(--color-secondary); }
-    .carrier-option__price { font-weight: 600; }
-    .inpost-section { padding: 16px 0 0; display: flex; flex-direction: column; gap: 8px; }
-    .locker-selected { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #f8f8f8; border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 12px 16px; }
-    .locker-selected__info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .locker-selected__code { font-weight: 700; font-size: 15px; }
-    .locker-selected__address { font-size: 12px; color: var(--color-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* Carrier */
+      .carrier-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 20px;
+        border: none;
+        padding: 0;
+      }
+      .carrier-option {
+        border: 1px solid var(--color-border);
+        border-radius: var(--border-radius-md);
+        padding: 16px;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .carrier-option:hover {
+        border-color: var(--color-primary);
+      }
+      .carrier-option:has(input:focus-visible) {
+        outline: 3px solid var(--color-accent);
+        outline-offset: 1px;
+      }
+      .carrier-option--selected {
+        border-color: var(--color-primary);
+        background: #f8f8f8;
+      }
+      .carrier-option__name {
+        font-weight: 600;
+        flex: 1;
+      }
+      .carrier-option__desc {
+        font-size: 12px;
+        color: var(--color-secondary);
+      }
+      .carrier-option__price {
+        font-weight: 600;
+      }
+      .inpost-section {
+        padding: 16px 0 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .locker-selected {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: #f8f8f8;
+        border: 1px solid var(--color-border);
+        border-radius: var(--border-radius-md);
+        padding: 12px 16px;
+      }
+      .locker-selected__info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .locker-selected__code {
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .locker-selected__address {
+        font-size: 12px;
+        color: var(--color-secondary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
 
+      /* Summary */
+      .summary-section {
+        margin-bottom: 24px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--color-border);
+      }
+      .summary-section p {
+        font-size: 14px;
+        margin: 2px 0;
+      }
+      .summary-delivery-est {
+        color: var(--color-secondary);
+        font-size: 13px;
+      }
+      .order-item {
+        display: flex;
+        justify-content: space-between;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+      .summary-total {
+        padding-top: 8px;
+        margin-bottom: 24px;
+      }
+      .total-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 14px;
+        margin-bottom: 8px;
+      }
+      .total-row--final {
+        font-size: 18px;
+        font-weight: 700;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 2px solid var(--color-primary);
+      }
 
-    /* Summary */
-    .summary-section { margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--color-border); }
-    .summary-section p { font-size: 14px; margin: 2px 0; }
-    .summary-delivery-est { color: var(--color-secondary); font-size: 13px; }
-    .order-item { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 4px; }
-    .summary-total { padding-top: 8px; margin-bottom: 24px; }
-    .total-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 8px; }
-    .total-row--final { font-size: 18px; font-weight: 700; margin-top: 12px; padding-top: 12px; border-top: 2px solid var(--color-primary); }
+      /* Return cost notice (Art. 34 ust. 2 UoK) */
+      .return-cost-notice {
+        font-size: 13px;
+        color: var(--color-secondary);
+        margin: 0 0 12px;
+        line-height: 1.5;
+      }
+      /* ODR notice (EU Reg. 524/2013 Art. 14 + UoK Art. 37a) */
+      .odr-notice {
+        font-size: 13px;
+        color: var(--color-secondary);
+        margin: 0 0 16px;
+        line-height: 1.5;
+      }
+      .odr-notice a {
+        color: var(--color-primary);
+        text-decoration: underline;
+      }
 
-    /* Return cost notice (Art. 34 ust. 2 UoK) */
-    .return-cost-notice { font-size: 13px; color: var(--color-secondary); margin: 0 0 12px; line-height: 1.5; }
-    /* ODR notice (EU Reg. 524/2013 Art. 14 + UoK Art. 37a) */
-    .odr-notice { font-size: 13px; color: var(--color-secondary); margin: 0 0 16px; line-height: 1.5; }
-    .odr-notice a { color: var(--color-primary); text-decoration: underline; }
+      /* Consent */
+      .consent-label {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        cursor: pointer;
+      }
+      .consent-label span {
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--color-primary);
+      }
+      .consent-label a {
+        color: var(--color-primary);
+        text-decoration: underline;
+      }
+      .consent-label--marketing span {
+        color: var(--color-secondary);
+      }
 
-    /* Consent */
-    .consent-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-    .consent-label span { font-size: 13px; line-height: 1.5; color: var(--color-primary); }
-    .consent-label a { color: var(--color-primary); text-decoration: underline; }
-    .consent-label--marketing span { color: var(--color-secondary); }
+      /* Save address */
+      .save-addr-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--color-secondary);
+        margin-bottom: 0;
+        cursor: pointer;
+      }
 
-    /* Save address */
-    .save-addr-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-secondary); margin-bottom: 0; cursor: pointer; }
+      /* Address picker */
+      .addr-picker {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 0;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--color-border);
+      }
+      .addr-pill {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--border-radius-md);
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: border-color 0.15s;
+      }
+      .addr-pill:hover {
+        border-color: var(--color-primary);
+      }
+      .addr-pill--active {
+        border-color: var(--color-primary);
+        background: #f0f0ff;
+      }
+      .addr-pill--new {
+        color: var(--color-primary);
+        font-weight: 600;
+        justify-content: center;
+      }
+      .addr-pill__name {
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .addr-pill__city {
+        color: var(--color-secondary);
+      }
+      .addr-pill__badge {
+        color: var(--color-primary);
+        font-size: 10px;
+      }
 
-    /* Address picker */
-    .addr-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 0; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
-    .addr-pill { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--border-radius-md); padding: 8px 12px; cursor: pointer; font-size: 12px; transition: border-color 0.15s; }
-    .addr-pill:hover { border-color: var(--color-primary); }
-    .addr-pill--active { border-color: var(--color-primary); background: #f0f0ff; }
-    .addr-pill--new { color: var(--color-primary); font-weight: 600; justify-content: center; }
-    .addr-pill__name { font-weight: 600; font-size: 13px; }
-    .addr-pill__city { color: var(--color-secondary); }
-    .addr-pill__badge { color: var(--color-primary); font-size: 10px; }
+      /* Coupon — follows the same column+gap pattern as .inpost-section and .form-actions */
+      .coupon-section {
+        margin-bottom: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .coupon-toggle {
+        align-self: flex-start;
+      }
+      .coupon-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      .coupon-applied {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .coupon-applied__badge {
+        background: #e8f5e9;
+        color: #2a9d4e;
+        border: 1px solid #a5d6a7;
+        border-radius: 999px;
+        padding: 4px 12px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .coupon-items-only-note {
+        margin: 0;
+        font-size: 12px;
+        color: var(--color-secondary);
+      }
+      .total-row--discount {
+        color: #2a9d4e;
+      }
+      .discount-value {
+        font-weight: 600;
+        color: #2a9d4e;
+      }
 
-    /* Coupon — follows the same column+gap pattern as .inpost-section and .form-actions */
-    .coupon-section { margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
-    .coupon-toggle { align-self: flex-start; }
-    .coupon-actions { display: flex; justify-content: flex-end; }
-    .coupon-applied { display: flex; align-items: center; gap: 12px; }
-    .coupon-applied__badge { background: #e8f5e9; color: #2a9d4e; border: 1px solid #a5d6a7; border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
-    .coupon-items-only-note { margin: 0; font-size: 12px; color: var(--color-secondary); }
-    .total-row--discount { color: #2a9d4e; }
-    .discount-value { font-weight: 600; color: #2a9d4e; }
+      /* DPD modal */
+      .dpd-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .dpd-modal-content {
+        position: relative;
+        width: min(560px, 96vw);
+        height: min(640px, 90vh);
+        background: #fff;
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .dpd-modal-close {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 1;
+      }
+      .dpd-modal-iframe {
+        flex: 1;
+        width: 100%;
+        border: none;
+      }
+      .dpd-modal-loader {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        color: var(--color-secondary);
+      }
+      .dpd-modal-error {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 24px;
+        text-align: center;
+        font-size: 14px;
+        color: var(--color-error);
+        background: #fff0f0;
+      }
 
-    /* DPD modal */
-    .dpd-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
-    .dpd-modal-content { position: relative; width: min(560px, 96vw); height: min(640px, 90vh); background: #fff; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
-    .dpd-modal-close { position: absolute; top: 8px; right: 8px; z-index: 1; }
-    .dpd-modal-iframe { flex: 1; width: 100%; border: none; }
-    .dpd-modal-loader { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--color-secondary); }
-    .dpd-modal-error { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; font-size: 14px; color: var(--color-error); background: #fff0f0; }
+      /* Footer nav */
+      .checkout__nav {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 24px;
+      }
 
-    /* Footer nav */
-    .checkout__nav { display: flex; justify-content: space-between; margin-top: 24px; }
-
-    @media (max-width: 540px) {
-      .name-row  { grid-template-columns: 1fr; }
-      .addr-row-2 { grid-template-columns: 1fr; }
-      .addr-row-3 { grid-template-columns: 1fr 1fr; }
-      .addr-row-3 > div:last-child { grid-column: 1 / -1; }
-      .carrier-option { flex-wrap: wrap; }
-      .carrier-option__desc { width: 100%; order: 3; }
-    }
-  `],
+      @media (max-width: 540px) {
+        .name-row {
+          grid-template-columns: 1fr;
+        }
+        .addr-row-2 {
+          grid-template-columns: 1fr;
+        }
+        .addr-row-3 {
+          grid-template-columns: 1fr 1fr;
+        }
+        .addr-row-3 > div:last-child {
+          grid-column: 1 / -1;
+        }
+        .carrier-option {
+          flex-wrap: wrap;
+        }
+        .carrier-option__desc {
+          width: 100%;
+          order: 3;
+        }
+      }
+    `,
+  ],
 })
 export class CheckoutPageComponent implements OnInit {
   private readonly http = inject(HttpClient);
@@ -665,17 +1302,20 @@ export class CheckoutPageComponent implements OnInit {
 
   readonly selectedCarrier = signal<Carrier | null>(null);
   readonly lockerCode = signal<string | null>(null);
-  readonly selectedLocker = signal<{ code: string; address: string } | null>(null);
+  readonly selectedLocker = signal<{ code: string; address: string } | null>(
+    null,
+  );
   readonly lockerPickerTouched = signal(false);
   private easyPackInitialized = false;
   private lockerPickerObserver: MutationObserver | null = null;
 
-  readonly selectedDpdPoint = signal<{ code: string; address: string } | null>(null);
+  readonly selectedDpdPoint = signal<{ code: string; address: string } | null>(
+    null,
+  );
   readonly dpdPickerTouched = signal(false);
   readonly dpdModalOpen = signal(false);
-  readonly dpdWidgetUrl: SafeResourceUrl = this.sanitizer.bypassSecurityTrustResourceUrl(
-    environment.dpdWidgetUrl,
-  );
+  readonly dpdWidgetUrl: SafeResourceUrl =
+    this.sanitizer.bypassSecurityTrustResourceUrl(environment.dpdWidgetUrl);
   readonly dpdWidgetLoading = signal(false);
   readonly dpdWidgetError = signal(false);
   private dpdMessageListener: ((e: MessageEvent) => void) | null = null;
@@ -688,13 +1328,19 @@ export class CheckoutPageComponent implements OnInit {
   readonly selectedSavedId = signal<string | null>(null);
   readonly citySuggestions = signal<string[]>([]);
   readonly cityLoading = signal(false);
-  readonly streetStatus = signal<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+  readonly streetStatus = signal<"idle" | "checking" | "found" | "not-found">(
+    "idle",
+  );
 
-  get cityList(): string[] { return this.citySuggestions(); }
-  get savedAddressList(): any[] { return this.savedAddresses(); }
+  get cityList(): string[] {
+    return this.citySuggestions();
+  }
+  get savedAddressList(): any[] {
+    return this.savedAddresses();
+  }
 
   readonly couponExpanded = signal(false);
-  readonly couponCodeInput = signal('');
+  readonly couponCodeInput = signal("");
   readonly couponValidating = signal(false);
   readonly couponError = signal<string | null>(null);
   readonly appliedCoupon = signal<AppliedCoupon | null>(null);
@@ -706,7 +1352,10 @@ export class CheckoutPageComponent implements OnInit {
     const carrier = this.selectedCarrier();
     const coupon = untracked(() => this.appliedCoupon());
     if (coupon?.isFreeShipping) {
-      this.appliedCoupon.set({ ...coupon, discountAmountInCents: carrier?.price ?? 0 });
+      this.appliedCoupon.set({
+        ...coupon,
+        discountAmountInCents: carrier?.price ?? 0,
+      });
     }
   });
 
@@ -723,34 +1372,56 @@ export class CheckoutPageComponent implements OnInit {
     const carrier = this.selectedCarrier();
     if (!carrier) return null;
     const map: Record<string, string> = {
-      INPOST:      'następny dzień roboczy',
-      DPD:         '1–2 dni robocze',
-      DPD_COURIER: '1–2 dni robocze',
-      DHL:         '1–2 dni robocze',
-      GLS:         '2–3 dni robocze',
+      INPOST: "następny dzień roboczy",
+      DPD: "1–2 dni robocze",
+      DPD_COURIER: "1–2 dni robocze",
+      DHL: "1–2 dni robocze",
+      GLS: "2–3 dni robocze",
     };
     return map[carrier.code] ?? null;
   });
 
   readonly carriers = signal<Carrier[]>(CARRIERS.map((c) => ({ ...c })));
-  get carrierList(): Carrier[] { return this.carriers(); }
-  get cartItems() { return this.cart.items(); }
+  get carrierList(): Carrier[] {
+    return this.carriers();
+  }
+  get cartItems() {
+    return this.cart.items();
+  }
 
   readonly countries: readonly TuiCountryIsoCode[] = [
-    'PL',
-    ...getCountries().filter((c) => c !== 'PL'),
+    "PL",
+    ...getCountries().filter((c) => c !== "PL"),
   ];
-  countryIsoCode: TuiCountryIsoCode = 'PL';
+  countryIsoCode: TuiCountryIsoCode = "PL";
 
   readonly addressForm = this.fb.group({
-    firstName: ['', [Validators.required, Validators.maxLength(50), nameValidator]],
-    lastName: ['', [Validators.required, Validators.maxLength(50), nameValidator]],
-    company: [''],
-    street: ['', [Validators.required, Validators.maxLength(100), streetValidator]],
-    postalCode: ['', [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)]],
-    city: ['', [Validators.required, Validators.minLength(2), Validators.maxLength(60)]],
-    phone: ['', [Validators.required, phoneValidator]],
-    email: [this.auth.currentUser()?.email ?? '', [Validators.required, Validators.email]],
+    firstName: [
+      "",
+      [Validators.required, Validators.maxLength(50), nameValidator],
+    ],
+    lastName: [
+      "",
+      [Validators.required, Validators.maxLength(50), nameValidator],
+    ],
+    company: [""],
+    street: [
+      "",
+      [Validators.required, Validators.maxLength(100), streetValidator],
+    ],
+    postalCode: [
+      "",
+      [Validators.required, Validators.pattern(/^\d{2}-\d{3}$/)],
+    ],
+    city: [
+      "",
+      [Validators.required, Validators.minLength(2), Validators.maxLength(60)],
+    ],
+    phone: ["", [Validators.required, phoneValidator]],
+    email: [
+      this.auth.currentUser()?.email ?? "",
+      [Validators.required, Validators.email],
+    ],
   });
 
   ngOnInit(): void {
@@ -759,72 +1430,101 @@ export class CheckoutPageComponent implements OnInit {
     // Live, admin-editable rates (GET /shipping/rates is @Public()) — replaces
     // the hardcoded CARRIERS prices so the pre-payment total shown here can't
     // silently diverge from what orders.service.ts charges server-side.
-    this.http.get<{ carrier: string; priceInCents: number }[]>(`${environment.apiUrl}/shipping/rates`).pipe(
-      catchError(() => of(null)),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe((rates) => {
-      if (!rates?.length) return;
-      const priceByCode = new Map(rates.map((r) => [r.carrier, r.priceInCents]));
-      // Only carriers present in the live response stay selectable — a carrier
-      // an admin deactivated has no active ShippingRate row and is absent here,
-      // so it must drop out of the list rather than linger at its stale fallback price.
-      const updated = this.carriers()
-        .filter((c) => priceByCode.has(c.code))
-        .map((c) => ({ ...c, price: priceByCode.get(c.code)! }));
-      this.carriers.set(updated);
-      const sel = this.selectedCarrier();
-      if (sel) {
-        this.selectedCarrier.set(updated.find((c) => c.code === sel.code) ?? null);
-      }
-    });
+    this.http
+      .get<{ carrier: string; priceInCents: number }[]>(
+        `${environment.apiUrl}/shipping/rates`,
+      )
+      .pipe(
+        catchError(() => of(null)),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((rates) => {
+        if (!rates?.length) return;
+        const priceByCode = new Map(
+          rates.map((r) => [r.carrier, r.priceInCents]),
+        );
+        // Only carriers present in the live response stay selectable — a carrier
+        // an admin deactivated has no active ShippingRate row and is absent here,
+        // so it must drop out of the list rather than linger at its stale fallback price.
+        const updated = this.carriers()
+          .filter((c) => priceByCode.has(c.code))
+          .map((c) => ({ ...c, price: priceByCode.get(c.code)! }));
+        this.carriers.set(updated);
+        const sel = this.selectedCarrier();
+        if (sel) {
+          this.selectedCarrier.set(
+            updated.find((c) => c.code === sel.code) ?? null,
+          );
+        }
+      });
 
-    this.addressForm.controls.postalCode.valueChanges.pipe(
-      tap((val) => { if (!/^\d{2}-\d{3}$/.test(val ?? '')) this.citySuggestions.set([]); }),
-      debounceTime(500),
-      distinctUntilChanged(),
-      filter((val) => /^\d{2}-\d{3}$/.test(val ?? '')),
-      tap(() => this.cityLoading.set(true)),
-      switchMap((code) =>
-        this.http.get<string[]>(`${environment.apiUrl}/location/postal-code/${code}`).pipe(
-          catchError(() => of(null)),
-          finalize(() => this.cityLoading.set(false)),
+    this.addressForm.controls.postalCode.valueChanges
+      .pipe(
+        tap((val) => {
+          if (!/^\d{2}-\d{3}$/.test(val ?? "")) this.citySuggestions.set([]);
+        }),
+        debounceTime(500),
+        distinctUntilChanged(),
+        filter((val) => /^\d{2}-\d{3}$/.test(val ?? "")),
+        tap(() => this.cityLoading.set(true)),
+        switchMap((code) =>
+          this.http
+            .get<string[]>(`${environment.apiUrl}/location/postal-code/${code}`)
+            .pipe(
+              catchError(() => of(null)),
+              finalize(() => this.cityLoading.set(false)),
+            ),
         ),
-      ),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe((cities) => {
-      if (!cities?.length) return;
-      this.citySuggestions.set(cities);
-      if (cities.length === 1) {
-        this.addressForm.patchValue({ city: cities[0] }, { emitEvent: false });
-        this.addressForm.controls.city.markAsDirty();
-        this.citySuggestions.set([]);
-      }
-    });
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((cities) => {
+        if (!cities?.length) return;
+        this.citySuggestions.set(cities);
+        if (cities.length === 1) {
+          this.addressForm.patchValue(
+            { city: cities[0] },
+            { emitEvent: false },
+          );
+          this.addressForm.controls.city.markAsDirty();
+          this.citySuggestions.set([]);
+        }
+      });
 
     merge(
       this.addressForm.controls.street.valueChanges,
       this.addressForm.controls.city.valueChanges,
-    ).pipe(
-      tap(() => this.streetStatus.set('idle')),
-      debounceTime(1200),
-      map(() => ({
-        street: this.addressForm.controls.street.value?.trim() ?? '',
-        city: this.addressForm.controls.city.value?.trim() ?? '',
-      })),
-      filter(({ street, city }) => !!street && !!city && this.addressForm.controls.street.valid),
-      distinctUntilChanged((a, b) => a.street === b.street && a.city === b.city),
-      tap(() => this.streetStatus.set('checking')),
-      switchMap(({ street, city }) =>
-        this.http.get<{ exists: boolean }>(
-          `${environment.apiUrl}/location/street-check`,
-          { params: { street, city } },
-        ).pipe(catchError(() => of({ exists: false }))),
-      ),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe(({ exists }) => this.streetStatus.set(exists ? 'found' : 'not-found'));
+    )
+      .pipe(
+        tap(() => this.streetStatus.set("idle")),
+        debounceTime(1200),
+        map(() => ({
+          street: this.addressForm.controls.street.value?.trim() ?? "",
+          city: this.addressForm.controls.city.value?.trim() ?? "",
+        })),
+        filter(
+          ({ street, city }) =>
+            !!street && !!city && this.addressForm.controls.street.valid,
+        ),
+        distinctUntilChanged(
+          (a, b) => a.street === b.street && a.city === b.city,
+        ),
+        tap(() => this.streetStatus.set("checking")),
+        switchMap(({ street, city }) =>
+          this.http
+            .get<{ exists: boolean }>(
+              `${environment.apiUrl}/location/street-check`,
+              { params: { street, city } },
+            )
+            .pipe(catchError(() => of({ exists: false }))),
+        ),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(({ exists }) =>
+        this.streetStatus.set(exists ? "found" : "not-found"),
+      );
 
     // Auto-apply coupon from URL param (?coupon=CODE) for email/influencer links
-    const urlCoupon = this.route.snapshot.queryParamMap.get('coupon');
+    const urlCoupon = this.route.snapshot.queryParamMap.get("coupon");
     if (urlCoupon) {
       this.couponCodeInput.set(urlCoupon.toUpperCase());
       this.couponExpanded.set(true);
@@ -848,36 +1548,40 @@ export class CheckoutPageComponent implements OnInit {
 
     const variantIds = this.cart.items().map((i) => i.productVariantId);
 
-    this.http.post<any>(`${environment.apiUrl}/coupons/validate`, {
-      code,
-      cartTotalInCents: this.cart.totalInCents(),
-      variantIds,
-    }).subscribe({
-      next: (res) => {
-        this.couponValidating.set(false);
-        if (!res.valid) {
-          this.couponError.set(res.message ?? 'Nieprawidłowy kod rabatowy.');
-          return;
-        }
-        const isFreeShipping = res.discountType === 'FREE_SHIPPING';
-        this.appliedCoupon.set({
-          code,
-          discountAmountInCents: isFreeShipping ? (this.selectedCarrier()?.price ?? 0) : (res.discountAmountInCents ?? 0),
-          isFreeShipping,
-          appliesToItemsOnly: res.appliesToItemsOnly ?? false,
-        });
-        this.couponExpanded.set(false);
-      },
-      error: () => {
-        this.couponValidating.set(false);
-        this.couponError.set('Błąd podczas weryfikacji kodu.');
-      },
-    });
+    this.http
+      .post<any>(`${environment.apiUrl}/coupons/validate`, {
+        code,
+        cartTotalInCents: this.cart.totalInCents(),
+        variantIds,
+      })
+      .subscribe({
+        next: (res) => {
+          this.couponValidating.set(false);
+          if (!res.valid) {
+            this.couponError.set(res.message ?? "Nieprawidłowy kod rabatowy.");
+            return;
+          }
+          const isFreeShipping = res.discountType === "FREE_SHIPPING";
+          this.appliedCoupon.set({
+            code,
+            discountAmountInCents: isFreeShipping
+              ? (this.selectedCarrier()?.price ?? 0)
+              : (res.discountAmountInCents ?? 0),
+            isFreeShipping,
+            appliesToItemsOnly: res.appliesToItemsOnly ?? false,
+          });
+          this.couponExpanded.set(false);
+        },
+        error: () => {
+          this.couponValidating.set(false);
+          this.couponError.set("Błąd podczas weryfikacji kodu.");
+        },
+      });
   }
 
   removeCoupon(): void {
     this.appliedCoupon.set(null);
-    this.couponCodeInput.set('');
+    this.couponCodeInput.set("");
     this.couponError.set(null);
     this.couponExpanded.set(false);
   }
@@ -888,10 +1592,11 @@ export class CheckoutPageComponent implements OnInit {
     this.citySuggestions.set([]);
   }
 
-  stepState(i: number): 'pass' | 'normal' | 'error' {
-    if (i < this.index) return 'pass';
-    if (i === 0 && this.addressForm.invalid && this.addressForm.touched) return 'error';
-    return 'normal';
+  stepState(i: number): "pass" | "normal" | "error" {
+    if (i < this.index) return "pass";
+    if (i === 0 && this.addressForm.invalid && this.addressForm.touched)
+      return "error";
+    return "normal";
   }
 
   onStep(newIndex: number): void {
@@ -905,7 +1610,7 @@ export class CheckoutPageComponent implements OnInit {
 
   goBack(): void {
     if (this.index === 0) {
-      this.router.navigate(['/cart']);
+      this.router.navigate(["/cart"]);
       return;
     }
     this.direction = -1;
@@ -919,11 +1624,17 @@ export class CheckoutPageComponent implements OnInit {
     }
     if (this.index === 1) {
       if (!this.selectedCarrier()) return;
-      if (this.selectedCarrier()!.code === CarrierCode.INPOST && !this.lockerCode()) {
+      if (
+        this.selectedCarrier()!.code === CarrierCode.INPOST &&
+        !this.lockerCode()
+      ) {
         this.lockerPickerTouched.set(true);
         return;
       }
-      if (this.selectedCarrier()!.code === CarrierCode.DPD && !this.selectedDpdPoint()) {
+      if (
+        this.selectedCarrier()!.code === CarrierCode.DPD &&
+        !this.selectedDpdPoint()
+      ) {
         this.dpdPickerTouched.set(true);
         return;
       }
@@ -952,16 +1663,17 @@ export class CheckoutPageComponent implements OnInit {
     const ctrl = this.addressForm.get(field);
     if (!ctrl?.touched || ctrl.valid) return null;
     const e = ctrl.errors!;
-    if (e['required']) return 'To pole jest wymagane';
-    if (e['nameTooShort']) return 'Minimum 2 znaki';
-    if (e['nameInvalid']) return 'Tylko litery, myślniki i apostrofy';
-    if (e['streetInvalid']) return 'Podaj ulicę i numer budynku';
-    if (e['invalidPhone']) return 'Wprowadź poprawny numer telefonu';
-    if (e['email']) return 'Podaj prawidłowy adres e-mail';
-    if (e['pattern']) return 'Wymagany format: 00-000';
-    if (e['minlength']) return `Minimum ${e['minlength'].requiredLength} znaki`;
-    if (e['maxlength']) return `Maksymalnie ${e['maxlength'].requiredLength} znaków`;
-    return 'Nieprawidłowa wartość';
+    if (e["required"]) return "To pole jest wymagane";
+    if (e["nameTooShort"]) return "Minimum 2 znaki";
+    if (e["nameInvalid"]) return "Tylko litery, myślniki i apostrofy";
+    if (e["streetInvalid"]) return "Podaj ulicę i numer budynku";
+    if (e["invalidPhone"]) return "Wprowadź poprawny numer telefonu";
+    if (e["email"]) return "Podaj prawidłowy adres e-mail";
+    if (e["pattern"]) return "Wymagany format: 00-000";
+    if (e["minlength"]) return `Minimum ${e["minlength"].requiredLength} znaki`;
+    if (e["maxlength"])
+      return `Maksymalnie ${e["maxlength"].requiredLength} znaków`;
+    return "Nieprawidłowa wartość";
   }
 
   selectSavedAddress(addr: any): void {
@@ -970,27 +1682,33 @@ export class CheckoutPageComponent implements OnInit {
     if (addr.phone) {
       try {
         const parsed = parsePhoneNumber(addr.phone);
-        if (parsed?.country) this.countryIsoCode = parsed.country as TuiCountryIsoCode;
-      } catch { /* ignore */ }
+        if (parsed?.country)
+          this.countryIsoCode = parsed.country as TuiCountryIsoCode;
+      } catch {
+        /* ignore */
+      }
     }
     // emitEvent: false — prevents postal lookup from firing on a pre-filled address
-    this.addressForm.patchValue({
-      firstName: addr.firstName,
-      lastName: addr.lastName,
-      company: addr.company ?? '',
-      street: addr.street,
-      postalCode: addr.postalCode,
-      city: addr.city,
-      phone: addr.phone,
-    }, { emitEvent: false });
+    this.addressForm.patchValue(
+      {
+        firstName: addr.firstName,
+        lastName: addr.lastName,
+        company: addr.company ?? "",
+        street: addr.street,
+        postalCode: addr.postalCode,
+        city: addr.city,
+        phone: addr.phone,
+      },
+      { emitEvent: false },
+    );
   }
 
   useNewAddress(): void {
     this.selectedSavedId.set(null);
-    this.countryIsoCode = 'PL';
+    this.countryIsoCode = "PL";
     this.citySuggestions.set([]);
-    this.streetStatus.set('idle');
-    this.addressForm.reset({ email: this.auth.currentUser()?.email ?? '' });
+    this.streetStatus.set("idle");
+    this.addressForm.reset({ email: this.auth.currentUser()?.email ?? "" });
   }
 
   selectCarrier(c: Carrier): void {
@@ -1008,21 +1726,30 @@ export class CheckoutPageComponent implements OnInit {
 
   openDpdPicker(): void {
     if (!isPlatformBrowser(this.platformId)) return;
-    this.dpdOpenerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    this.dpdOpenerEl =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     this.dpdWidgetLoading.set(true);
     this.dpdWidgetError.set(false);
     this.dpdModalOpen.set(true);
     this.dpdMessageListener = (e: MessageEvent) => {
-      if (e.origin !== 'https://api.dpd.cz') return;
+      if (e.origin !== "https://api.dpd.cz") return;
       if (!e.data?.dpdWidget) return;
-      const p = e.data.dpdWidget as { id?: string; company?: string; street?: string; city?: string; zip_code?: string };
-      const code = p.id ?? '';
-      const address = [p.street, p.zip_code, p.city].filter(Boolean).join(', ');
+      const p = e.data.dpdWidget as {
+        id?: string;
+        company?: string;
+        street?: string;
+        city?: string;
+        zip_code?: string;
+      };
+      const code = p.id ?? "";
+      const address = [p.street, p.zip_code, p.city].filter(Boolean).join(", ");
       this.selectedDpdPoint.set({ code, address });
       this.dpdPickerTouched.set(false);
       this.closeDpdModal();
     };
-    window.addEventListener('message', this.dpdMessageListener);
+    window.addEventListener("message", this.dpdMessageListener);
   }
 
   onDpdWidgetLoad(): void {
@@ -1039,7 +1766,7 @@ export class CheckoutPageComponent implements OnInit {
     this.dpdWidgetLoading.set(false);
     this.dpdWidgetError.set(false);
     if (this.dpdMessageListener) {
-      window.removeEventListener('message', this.dpdMessageListener);
+      window.removeEventListener("message", this.dpdMessageListener);
       this.dpdMessageListener = null;
     }
     this.dpdOpenerEl?.focus();
@@ -1058,17 +1785,19 @@ export class CheckoutPageComponent implements OnInit {
       this.scriptLoader.loadScript(GEOWIDGET_SDK_URL),
     ]).catch(() => undefined);
 
-    if (typeof easyPack === 'undefined') {
-      this.toast.error('Nie udało się załadować mapy paczkomatów. Odśwież stronę.');
+    if (typeof easyPack === "undefined") {
+      this.toast.error(
+        "Nie udało się załadować mapy paczkomatów. Odśwież stronę.",
+      );
       return;
     }
     if (!this.easyPackInitialized) {
       easyPack.init({
-        defaultLocale: 'pl',
-        mapType: 'osm',
-        searchType: 'osm',
-        points: { types: ['parcel_locker_only'] },
-        map: { initialTypes: ['parcel_locker_only'] },
+        defaultLocale: "pl",
+        mapType: "osm",
+        searchType: "osm",
+        points: { types: ["parcel_locker_only"] },
+        map: { initialTypes: ["parcel_locker_only"] },
       });
       this.easyPackInitialized = true;
     }
@@ -1076,15 +1805,17 @@ export class CheckoutPageComponent implements OnInit {
     // Watch for the modal backdrop easyPack injects into <body>, then add click-outside.
     this.lockerPickerObserver = new MutationObserver(() => {
       const backdrop = Array.from(document.body.children).find(
-        (el) => el instanceof HTMLElement && el.querySelector('.close-modal'),
+        (el) => el instanceof HTMLElement && el.querySelector(".close-modal"),
       ) as HTMLElement | undefined;
       if (!backdrop) return;
       this.lockerPickerObserver?.disconnect();
-      backdrop.addEventListener('click', (e: Event) => {
+      backdrop.addEventListener("click", (e: Event) => {
         if (!(e.target instanceof Node)) return;
-        const content = backdrop.querySelector('.modal-content') as HTMLElement | null;
+        const content = backdrop.querySelector(
+          ".modal-content",
+        ) as HTMLElement | null;
         if (content?.contains(e.target)) return;
-        (backdrop.querySelector('.close-modal') as HTMLElement | null)?.click();
+        (backdrop.querySelector(".close-modal") as HTMLElement | null)?.click();
       });
     });
     this.lockerPickerObserver.observe(document.body, { childList: true });
@@ -1093,7 +1824,8 @@ export class CheckoutPageComponent implements OnInit {
       (point, modal) => {
         this.lockerPickerObserver?.disconnect();
         modal.closeModal();
-        const { street, building_number, city, post_code } = point.address_details;
+        const { street, building_number, city, post_code } =
+          point.address_details;
         const address = `${street} ${building_number}, ${post_code} ${city}`;
         this.selectedLocker.set({ code: point.name, address });
         this.lockerCode.set(point.name);
@@ -1106,72 +1838,91 @@ export class CheckoutPageComponent implements OnInit {
   placeOrder(): void {
     this.placing.set(true);
     this.turnstile.getToken().then((turnstileToken) => {
-    const a = this.addressForm.getRawValue();
-    const carrier = this.selectedCarrier()!;
-    const addrPayload = {
-      firstName: a.firstName!,
-      lastName: a.lastName!,
-      company: a.company || undefined,
-      street: a.street!,
-      city: a.city!,
-      postalCode: a.postalCode!,
-      phone: a.phone!,
-    };
+      const a = this.addressForm.getRawValue();
+      const carrier = this.selectedCarrier()!;
+      const addrPayload = {
+        firstName: a.firstName!,
+        lastName: a.lastName!,
+        company: a.company || undefined,
+        street: a.street!,
+        city: a.city!,
+        postalCode: a.postalCode!,
+        phone: a.phone!,
+      };
 
-    const headers: Record<string, string> = { 'x-session-id': this.cart.getSessionId() };
-    if (turnstileToken) headers['cf-turnstile-response'] = turnstileToken;
+      const headers: Record<string, string> = {
+        "x-session-id": this.cart.getSessionId(),
+      };
+      if (turnstileToken) headers["cf-turnstile-response"] = turnstileToken;
 
-    const savedId = this.selectedSavedId();
-    const savedAddr = savedId ? this.savedAddresses().find((a: any) => a.id === savedId) : null;
-    const formDiverged = savedAddr && (
-      savedAddr.firstName  !== addrPayload.firstName  ||
-      savedAddr.lastName   !== addrPayload.lastName   ||
-      savedAddr.street     !== addrPayload.street     ||
-      savedAddr.postalCode !== addrPayload.postalCode ||
-      savedAddr.city       !== addrPayload.city       ||
-      savedAddr.phone      !== addrPayload.phone
-    );
-    const addressPayload = (savedId && !formDiverged)
-      ? { addressId: savedId }
-      : { newAddress: addrPayload };
+      const savedId = this.selectedSavedId();
+      const savedAddr = savedId
+        ? this.savedAddresses().find((a: any) => a.id === savedId)
+        : null;
+      const formDiverged =
+        savedAddr &&
+        (savedAddr.firstName !== addrPayload.firstName ||
+          savedAddr.lastName !== addrPayload.lastName ||
+          savedAddr.street !== addrPayload.street ||
+          savedAddr.postalCode !== addrPayload.postalCode ||
+          savedAddr.city !== addrPayload.city ||
+          savedAddr.phone !== addrPayload.phone);
+      const addressPayload =
+        savedId && !formDiverged
+          ? { addressId: savedId }
+          : { newAddress: addrPayload };
 
-    this.http.post<any>(
-      `${environment.apiUrl}/orders`,
-      {
-        ...addressPayload,
-        carrierCode: carrier.code,
-        inpostLockerCode: this.lockerCode() ?? undefined,
-        dpdPickupPointCode: this.selectedDpdPoint()?.code ?? undefined,
-        guestEmail: a.email,
-        termsVersion: CURRENT_TERMS_VERSION,
-        termsAcceptedAt: new Date().toISOString(),
-        couponCode: this.appliedCoupon()?.code ?? undefined,
-        idempotencyKey: this.checkoutIdempotencyKey,
-      },
-      { headers: new HttpHeaders(headers) },
-    ).subscribe({
-      next: (res) => {
-        if (this.saveAddress() && this.auth.currentUser() && this.selectedSavedId() === null) {
-          const isDefault = this.savedAddresses().length === 0;
-          this.http.post(`${environment.apiUrl}/users/me/addresses`, { ...addrPayload, isDefault }).subscribe();
-        }
-        this.toast.success('Zamówienie złożone! Przekierowujemy do płatności…');
-        this.cart.clear();
-        window.location.href = res.paymentUrl;
-      },
-      error: (err) => {
-        const message: string = err.error?.message ?? 'Błąd tworzenia zamówienia.';
-        this.toast.error(message);
-        // Coupon was rejected server-side (expired or limit hit between validate and submit).
-        // Surface the error in the coupon field so the user knows to re-check the code.
-        if (message.toLowerCase().includes('kod')) {
-          this.appliedCoupon.set(null);
-          this.couponError.set(message);
-          this.couponExpanded.set(true);
-        }
-        this.placing.set(false);
-      },
-    });
+      this.http
+        .post<any>(
+          `${environment.apiUrl}/orders`,
+          {
+            ...addressPayload,
+            carrierCode: carrier.code,
+            inpostLockerCode: this.lockerCode() ?? undefined,
+            dpdPickupPointCode: this.selectedDpdPoint()?.code ?? undefined,
+            guestEmail: a.email,
+            termsVersion: CURRENT_TERMS_VERSION,
+            termsAcceptedAt: new Date().toISOString(),
+            couponCode: this.appliedCoupon()?.code ?? undefined,
+            idempotencyKey: this.checkoutIdempotencyKey,
+          },
+          { headers: new HttpHeaders(headers) },
+        )
+        .subscribe({
+          next: (res) => {
+            if (
+              this.saveAddress() &&
+              this.auth.currentUser() &&
+              this.selectedSavedId() === null
+            ) {
+              const isDefault = this.savedAddresses().length === 0;
+              this.http
+                .post(`${environment.apiUrl}/users/me/addresses`, {
+                  ...addrPayload,
+                  isDefault,
+                })
+                .subscribe();
+            }
+            this.toast.success(
+              "Zamówienie złożone! Przekierowujemy do płatności…",
+            );
+            this.cart.clear();
+            window.location.href = res.paymentUrl;
+          },
+          error: (err) => {
+            const message: string =
+              err.error?.message ?? "Błąd tworzenia zamówienia.";
+            this.toast.error(message);
+            // Coupon was rejected server-side (expired or limit hit between validate and submit).
+            // Surface the error in the coupon field so the user knows to re-check the code.
+            if (message.toLowerCase().includes("kod")) {
+              this.appliedCoupon.set(null);
+              this.couponError.set(message);
+              this.couponExpanded.set(true);
+            }
+            this.placing.set(false);
+          },
+        });
     });
   }
 }

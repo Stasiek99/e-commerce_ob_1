@@ -71,7 +71,6 @@ describe('CorrelationMiddleware', () => {
 
     const collect = () => {
       middleware.use(makeReq(), makeRes() as unknown as Response, (() => {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         ids.push(getCorrelationId()!);
         if (++completed === 2) {
           expect(ids[0]).not.toBe(ids[1]);

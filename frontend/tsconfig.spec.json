@@ -9,5 +9,10 @@
       "@shared/*": ["../packages/shared-types/src/*"]
     }
   },
-  "include": ["src/**/*.spec.ts", "src/**/*.d.ts", "setup-jest.ts", "scripts/**/*.spec.ts"]
+  "include": [
+    "src/**/*.spec.ts",
+    "src/**/*.d.ts",
+    "setup-jest.ts",
+    "scripts/**/*.spec.ts"
+  ]
 }

@@ -1,21 +1,21 @@
-import { Injectable, PLATFORM_ID, inject } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { Observable, EMPTY } from 'rxjs';
-import { environment } from '../../../environments/environment';
+import { Injectable, PLATFORM_ID, inject } from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { Observable, EMPTY } from "rxjs";
+import { environment } from "../../../environments/environment";
 
 export interface StockUpdate {
   id: string;
   stock: number;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class StockStreamService {
   private readonly platformId = inject(PLATFORM_ID);
 
   connect(variantIds: string[]): Observable<StockUpdate[]> {
     if (!isPlatformBrowser(this.platformId)) return EMPTY;
 
-    const url = `${environment.apiUrl}/products/variants/stock-stream?ids=${variantIds.join(',')}`;
+    const url = `${environment.apiUrl}/products/variants/stock-stream?ids=${variantIds.join(",")}`;
 
     return new Observable<StockUpdate[]>((subscriber) => {
       let source: EventSource;
@@ -35,7 +35,12 @@ export class StockStreamService {
           // to free server resources. EventSource only auto-reconnects on transient
           // network drops, not on a response the server closed deliberately — so we
           // have to open a fresh connection ourselves rather than forward this as data.
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'reconnect' in parsed) {
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            !Array.isArray(parsed) &&
+            "reconnect" in parsed
+          ) {
             source.close();
             open();
             return;
@@ -45,7 +50,9 @@ export class StockStreamService {
         };
 
         // EventSource reconnects automatically per SSE spec for transient drops — don't error here
-        source.onerror = () => { /* reconnecting… */ };
+        source.onerror = () => {
+          /* reconnecting… */
+        };
       };
 
       open();

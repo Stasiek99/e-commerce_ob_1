@@ -1,11 +1,17 @@
-import { Injectable, signal, computed, inject, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Router } from '@angular/router';
-import { Observable, throwError, timer } from 'rxjs';
-import { catchError, finalize, retry, shareReplay, tap } from 'rxjs/operators';
-import { environment } from '../../../environments/environment';
-import { Role } from '@fragrance-store/shared-types';
+import {
+  Injectable,
+  signal,
+  computed,
+  inject,
+  PLATFORM_ID,
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import { HttpClient, HttpErrorResponse } from "@angular/common/http";
+import { Router } from "@angular/router";
+import { Observable, throwError, timer } from "rxjs";
+import { catchError, finalize, retry, shareReplay, tap } from "rxjs/operators";
+import { environment } from "../../../environments/environment";
+import { Role } from "@fragrance-store/shared-types";
 
 interface User {
   id: string;
@@ -24,7 +30,7 @@ interface TokensResponse {
   accessToken: string;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
@@ -34,14 +40,19 @@ export class AuthService {
   private readonly _user = signal<User | null>(null);
 
   // Syncs explicit logouts across open tabs. Only created in browser — SSR has no BroadcastChannel.
-  private readonly _logoutChannel: BroadcastChannel | null = isPlatformBrowser(this.platformId)
-    ? new BroadcastChannel('fragrance-auth')
+  private readonly _logoutChannel: BroadcastChannel | null = isPlatformBrowser(
+    this.platformId,
+  )
+    ? new BroadcastChannel("fragrance-auth")
     : null;
 
   constructor() {
-    this._logoutChannel?.addEventListener('message', (e: MessageEvent<string>) => {
-      if (e.data === 'logout') this.clearSession();
-    });
+    this._logoutChannel?.addEventListener(
+      "message",
+      (e: MessageEvent<string>) => {
+        if (e.data === "logout") this.clearSession();
+      },
+    );
   }
 
   // Shared in-flight refresh observable. Concurrent calls during the same refresh
@@ -57,7 +68,12 @@ export class AuthService {
     return this._accessToken();
   }
 
-  register(email: string, password: string, firstName?: string, lastName?: string) {
+  register(
+    email: string,
+    password: string,
+    firstName?: string,
+    lastName?: string,
+  ) {
     return this.http
       .post<TokensResponse>(
         `${environment.apiUrl}/auth/register`,
@@ -85,8 +101,9 @@ export class AuthService {
     // The backend embeds a one-time nonce in the redirect fragment (#state=<nonce>).
     // We read it here (never sent to the server as a URL param) and POST it with
     // the exchange request so the backend can verify + consume it atomically.
-    const hash = typeof window !== 'undefined' ? window.location.hash : '';
-    const nonce = new URLSearchParams(hash.replace(/^#/, '')).get('state') ?? '';
+    const hash = typeof window !== "undefined" ? window.location.hash : "";
+    const nonce =
+      new URLSearchParams(hash.replace(/^#/, "")).get("state") ?? "";
     return this.http
       .post<TokensResponse>(
         `${environment.apiUrl}/auth/token/exchange`,
@@ -99,19 +116,26 @@ export class AuthService {
   refresh(): Observable<TokensResponse> {
     if (!this._refresh$) {
       this._refresh$ = this.http
-        .post<TokensResponse>(`${environment.apiUrl}/auth/refresh`, {}, { withCredentials: true })
+        .post<TokensResponse>(
+          `${environment.apiUrl}/auth/refresh`,
+          {},
+          { withCredentials: true },
+        )
         .pipe(
           // Retry once on pure network drops (status 0). Don't retry 401 — the
           // backend's 30-second grace window handles the server-side recovery.
           retry({
             count: 1,
             delay: (err: unknown) => {
-              if (err instanceof HttpErrorResponse && err.status === 0) return timer(1000);
+              if (err instanceof HttpErrorResponse && err.status === 0)
+                return timer(1000);
               return throwError(() => err);
             },
           }),
           tap((res) => this.setToken(res.accessToken)),
-          finalize(() => { this._refresh$ = null; }),
+          finalize(() => {
+            this._refresh$ = null;
+          }),
           shareReplay({ bufferSize: 1, refCount: false }),
         );
     }
@@ -132,22 +156,22 @@ export class AuthService {
       .post(`${environment.apiUrl}/auth/logout`, {}, { withCredentials: true })
       .pipe(
         tap(() => {
-          this._logoutChannel?.postMessage('logout');
+          this._logoutChannel?.postMessage("logout");
           this.clearSession();
-          this.router.navigate(['/']);
+          this.router.navigate(["/"]);
         }),
         catchError(() => {
           // Best-effort: clear local state even if the server call fails
-          this._logoutChannel?.postMessage('logout');
+          this._logoutChannel?.postMessage("logout");
           this.clearSession();
-          this.router.navigate(['/']);
-          return throwError(() => new Error('Logout failed'));
+          this.router.navigate(["/"]);
+          return throwError(() => new Error("Logout failed"));
         }),
       );
   }
 
   verifyEmail(token: string) {
-    return this.http.post<{ type: 'email_change' | 'email_verification' }>(
+    return this.http.post<{ type: "email_change" | "email_verification" }>(
       `${environment.apiUrl}/auth/verify-email`,
       { token },
       { withCredentials: true },

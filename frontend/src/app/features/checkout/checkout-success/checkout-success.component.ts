@@ -1,14 +1,22 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, PLATFORM_ID, inject, signal } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { isPlatformBrowser } from '@angular/common';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
-import { timer, switchMap, takeWhile, take } from 'rxjs';
-import { TuiButton, TuiIcon, TuiLoader } from '@taiga-ui/core';
-import { environment } from '../../../../environments/environment';
-import { AnalyticsService } from '../../../core/services/analytics.service';
-import { CartService } from '../../../core/services/cart.service';
-import { SeoService } from '../../../core/services/seo.service';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  OnInit,
+  PLATFORM_ID,
+  inject,
+  signal,
+} from "@angular/core";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
+import { isPlatformBrowser } from "@angular/common";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
+import { HttpClient } from "@angular/common/http";
+import { timer, switchMap, takeWhile, take } from "rxjs";
+import { TuiButton, TuiIcon, TuiLoader } from "@taiga-ui/core";
+import { environment } from "../../../../environments/environment";
+import { AnalyticsService } from "../../../core/services/analytics.service";
+import { CartService } from "../../../core/services/cart.service";
+import { SeoService } from "../../../core/services/seo.service";
 
 interface PaymentStatusItem {
   productVariantId: string;
@@ -27,18 +35,20 @@ interface PaymentStatusResponse {
 }
 
 @Component({
-  selector: 'app-checkout-success',
+  selector: "app-checkout-success",
   standalone: true,
   imports: [RouterLink, TuiButton, TuiIcon, TuiLoader],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="page">
-
       @if (loading()) {
-        <tui-loader [showLoader]="true" class="page__loader" />
+        <tui-loader [loading]="true" class="page__loader" />
         <p class="page__loading-text">Sprawdzamy status płatności…</p>
       } @else if (paid()) {
-        <tui-icon icon="@tui.circle-check" class="page__icon page__icon--success" />
+        <tui-icon
+          icon="@tui.circle-check"
+          class="page__icon page__icon--success"
+        />
         <h1>Dziękujemy za zamówienie!</h1>
         <p>Potwierdzenie zostało wysłane na Twój adres e-mail.</p>
 
@@ -57,15 +67,29 @@ interface PaymentStatusResponse {
         }
 
         <div class="page__actions">
-          <a routerLink="/account/orders" tuiButton appearance="primary" size="l" type="button">
+          <a
+            routerLink="/account/orders"
+            tuiButton
+            appearance="primary"
+            size="l"
+            type="button"
+          >
             Moje zamówienia
           </a>
-          <a routerLink="/" tuiButton appearance="outline" size="l" type="button">
+          <a
+            routerLink="/"
+            tuiButton
+            appearance="outline"
+            size="l"
+            type="button"
+          >
             Strona główna
           </a>
         </div>
         <p class="page__track-hint">
-          Gość? <a routerLink="/orders/track">Sprawdź status zamówienia</a> podając email i numer zamówienia.
+          Gość?
+          <a routerLink="/orders/track">Sprawdź status zamówienia</a> podając
+          email i numer zamówienia.
         </p>
       } @else {
         <tui-icon icon="@tui.clock" class="page__icon page__icon--pending" />
@@ -75,100 +99,115 @@ interface PaymentStatusResponse {
           Strona główna
         </a>
       }
-
     </div>
   `,
-  styles: [`
-    .page {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      padding: 96px 16px;
-      gap: 16px;
-    }
+  styles: [
+    `
+      .page {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 96px 16px;
+        gap: 16px;
+      }
 
-    .page__loader {
-      font-size: 48px;
-      margin-bottom: 8px;
-    }
+      .page__loader {
+        font-size: 48px;
+        margin-bottom: 8px;
+      }
 
-    .page__loading-text {
-      color: var(--tui-text-secondary);
-      font-size: 15px;
-      margin: 0;
-    }
+      .page__loading-text {
+        color: var(--tui-text-secondary);
+        font-size: 15px;
+        margin: 0;
+      }
 
-    .page__icon {
-      font-size: 72px;
-      margin-bottom: 8px;
-    }
+      .page__icon {
+        font-size: 72px;
+        margin-bottom: 8px;
+      }
 
-    .page__icon--success { color: var(--tui-status-positive); }
-    .page__icon--pending { color: var(--tui-status-warning); }
+      .page__icon--success {
+        color: var(--tui-status-positive);
+      }
+      .page__icon--pending {
+        color: var(--tui-status-warning);
+      }
 
-    h1 {
-      font-size: clamp(22px, 5vw, 28px);
-      font-weight: 700;
-      margin: 0;
-    }
+      h1 {
+        font-size: clamp(22px, 5vw, 28px);
+        font-weight: 700;
+        margin: 0;
+      }
 
-    p {
-      color: var(--tui-text-secondary);
-      font-size: 15px;
-      margin: 0 0 8px;
-      max-width: 420px;
-    }
+      p {
+        color: var(--tui-text-secondary);
+        font-size: 15px;
+        margin: 0 0 8px;
+        max-width: 420px;
+      }
 
-    .page__details {
-      background: var(--color-surface);
-      border: 1px solid var(--color-border);
-      border-radius: var(--border-radius-md);
-      padding: 20px 28px;
-      min-width: 320px;
-      margin: 8px 0;
-    }
+      .page__details {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--border-radius-md);
+        padding: 20px 28px;
+        min-width: 320px;
+        margin: 8px 0;
+      }
 
-    h2 {
-      font-size: 13px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--tui-text-secondary);
-      margin: 0 0 14px;
-    }
+      h2 {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--tui-text-secondary);
+        margin: 0 0 14px;
+      }
 
-    .page__detail-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 14px;
-      padding: 6px 0;
-      border-bottom: 1px solid var(--color-border);
-      gap: 24px;
-    }
+      .page__detail-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 14px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--color-border);
+        gap: 24px;
+      }
 
-    .page__detail-row:last-child { border-bottom: none; }
+      .page__detail-row:last-child {
+        border-bottom: none;
+      }
 
-    .page__detail-row span { color: var(--tui-text-secondary); }
+      .page__detail-row span {
+        color: var(--tui-text-secondary);
+      }
 
-    .page__status--paid { color: var(--tui-status-positive); }
+      .page__status--paid {
+        color: var(--tui-status-positive);
+      }
 
-    .page__actions {
-      display: flex;
-      gap: 12px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
+      .page__actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
 
-    .page__track-hint {
-      font-size: 13px;
-      color: var(--color-secondary);
-      margin: 0;
-    }
-    .page__track-hint a { color: var(--color-primary); font-weight: 500; text-decoration: underline; }
-  `],
+      .page__track-hint {
+        font-size: 13px;
+        color: var(--color-secondary);
+        margin: 0;
+      }
+      .page__track-hint a {
+        color: var(--color-primary);
+        font-weight: 500;
+        text-decoration: underline;
+      }
+    `,
+  ],
 })
 export class CheckoutSuccessComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
@@ -187,7 +226,7 @@ export class CheckoutSuccessComponent implements OnInit {
   readonly orderNumber = signal<string | null>(null);
 
   ngOnInit(): void {
-    this.seo.setRobotsTag('noindex,nofollow');
+    this.seo.setRobotsTag("noindex,nofollow");
 
     // The payment-status poll, URL cleanup, cart clear, and analytics fire below are
     // browser-only: Stripe redirects every real payment here, so running this server-side
@@ -196,13 +235,14 @@ export class CheckoutSuccessComponent implements OnInit {
     // the client and then potentially fire again on hydration.
     if (!isPlatformBrowser(this.platformId)) return;
 
-    const id = this.route.snapshot.queryParamMap.get('orderId');
-    const urlToken = this.route.snapshot.queryParamMap.get('token');
+    const id = this.route.snapshot.queryParamMap.get("orderId");
+    const urlToken = this.route.snapshot.queryParamMap.get("token");
     const sessionKey = id ? `guest_token_${id}` : null;
 
     // Persist the guest token before stripping the URL so a page refresh still works.
     if (urlToken && sessionKey) sessionStorage.setItem(sessionKey, urlToken);
-    const token = urlToken ?? (sessionKey ? sessionStorage.getItem(sessionKey) : null);
+    const token =
+      urlToken ?? (sessionKey ? sessionStorage.getItem(sessionKey) : null);
 
     this.orderId.set(id);
 
@@ -224,32 +264,36 @@ export class CheckoutSuccessComponent implements OnInit {
 
     // Poll every 3 s for up to 30 s (10 ticks) so a slow webhook race
     // doesn't leave the user stuck on "Płatność w toku" forever.
-    timer(0, 3000).pipe(
-      switchMap(() =>
-        this.http.get<PaymentStatusResponse>(statusUrl),
-      ),
-      takeWhile((res) => res.status !== 'COMPLETED', true),
-      take(10),
-      takeUntilDestroyed(this.destroyRef),
-    ).subscribe({
-      next: (res) => {
-        if (res.status === 'COMPLETED') {
-          this.paid.set(true);
-          this.orderNumber.set(res.orderNumber ?? null);
-          this.cart.clear();
-          this.firePurchaseEvent(id, res);
-          this.loading.set(false);
-        }
-      },
-      error: () => this.loading.set(false),
-      complete: () => this.loading.set(false),
-    });
+    timer(0, 3000)
+      .pipe(
+        switchMap(() => this.http.get<PaymentStatusResponse>(statusUrl)),
+        takeWhile((res) => res.status !== "COMPLETED", true),
+        take(10),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe({
+        next: (res) => {
+          if (res.status === "COMPLETED") {
+            this.paid.set(true);
+            this.orderNumber.set(res.orderNumber ?? null);
+            this.cart.clear();
+            this.firePurchaseEvent(id, res);
+            this.loading.set(false);
+          }
+        },
+        error: () => this.loading.set(false),
+        complete: () => this.loading.set(false),
+      });
   }
 
   private firePurchaseEvent(orderId: string, res: PaymentStatusResponse): void {
     // totalInCents is the order's authoritative post-discount total — summing
     // item gross + shipping would silently overstate revenue on coupon orders.
-    if (res.items?.length && res.shippingInCents !== undefined && res.totalInCents !== undefined) {
+    if (
+      res.items?.length &&
+      res.shippingInCents !== undefined &&
+      res.totalInCents !== undefined
+    ) {
       this.analytics.trackPurchase({
         transactionId: orderId,
         totalInCents: res.totalInCents,
@@ -257,7 +301,10 @@ export class CheckoutSuccessComponent implements OnInit {
         items: res.items,
       });
     } else {
-      this.analytics.push({ event: 'purchase', ecommerce: { transaction_id: orderId, currency: 'PLN' } });
+      this.analytics.push({
+        event: "purchase",
+        ecommerce: { transaction_id: orderId, currency: "PLN" },
+      });
     }
   }
 }

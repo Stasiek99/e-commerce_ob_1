@@ -1,38 +1,49 @@
-import { TestBed } from '@angular/core/testing';
-import { PLATFORM_ID, signal } from '@angular/core';
-import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
-import { WishlistService, WishlistItemData } from './wishlist.service';
-import { AuthService } from './auth.service';
-import { LOCAL_STORAGE } from '../tokens/storage.tokens';
+import { TestBed } from "@angular/core/testing";
+import { PLATFORM_ID, signal } from "@angular/core";
+import { provideHttpClient } from "@angular/common/http";
+import {
+  provideHttpClientTesting,
+  HttpTestingController,
+} from "@angular/common/http/testing";
+import { WishlistService, WishlistItemData } from "./wishlist.service";
+import { AuthService } from "./auth.service";
+import { LOCAL_STORAGE } from "../tokens/storage.tokens";
 
-const STORAGE_KEY = 'wishlist_v1';
+const STORAGE_KEY = "wishlist_v1";
 
 const MOCK_ITEM: WishlistItemData = {
-  id: 'product-1',
-  name: 'Rose Oud 50ml',
-  slug: 'rose-oud',
+  id: "product-1",
+  name: "Rose Oud 50ml",
+  slug: "rose-oud",
   notifyOnRestock: false,
 };
 
-function createMockStorage(initial: Record<string, string> = {}): Storage & jest.Mocked<Storage> {
+function createMockStorage(
+  initial: Record<string, string> = {},
+): Storage & jest.Mocked<Storage> {
   const store: Record<string, string> = { ...initial };
   return {
-    getItem:    jest.fn((k: string)         => store[k] ?? null),
-    setItem:    jest.fn((k: string, v: string) => { store[k] = String(v); }),
-    removeItem: jest.fn((k: string)         => { delete store[k]; }),
-    clear:      jest.fn(()                  => Object.keys(store).forEach(k => delete store[k])),
-    key:        jest.fn((i: number)         => Object.keys(store)[i] ?? null),
-    get length() { return Object.keys(store).length; },
+    getItem: jest.fn((k: string) => store[k] ?? null),
+    setItem: jest.fn((k: string, v: string) => {
+      store[k] = String(v);
+    }),
+    removeItem: jest.fn((k: string) => {
+      delete store[k];
+    }),
+    clear: jest.fn(() => Object.keys(store).forEach((k) => delete store[k])),
+    key: jest.fn((i: number) => Object.keys(store)[i] ?? null),
+    get length() {
+      return Object.keys(store).length;
+    },
   } as Storage & jest.Mocked<Storage>;
 }
 
-describe('WishlistService', () => {
+describe("WishlistService", () => {
   let service: WishlistService;
   let mockStorage: ReturnType<typeof createMockStorage>;
 
   function setup(
-    platform: 'browser' | 'server' = 'browser',
+    platform: "browser" | "server" = "browser",
     storageInitial: Record<string, string> = {},
   ): WishlistService {
     mockStorage = createMockStorage(storageInitial);
@@ -42,7 +53,10 @@ describe('WishlistService', () => {
         WishlistService,
         { provide: PLATFORM_ID, useValue: platform },
         { provide: LOCAL_STORAGE, useValue: mockStorage },
-        { provide: AuthService, useValue: { isAuthenticated: jest.fn().mockReturnValue(false) } },
+        {
+          provide: AuthService,
+          useValue: { isAuthenticated: jest.fn().mockReturnValue(false) },
+        },
         provideHttpClient(),
         provideHttpClientTesting(),
       ],
@@ -61,7 +75,7 @@ describe('WishlistService', () => {
     TestBed.configureTestingModule({
       providers: [
         WishlistService,
-        { provide: PLATFORM_ID, useValue: 'browser' },
+        { provide: PLATFORM_ID, useValue: "browser" },
         { provide: LOCAL_STORAGE, useValue: mockStorage },
         { provide: AuthService, useValue: { isAuthenticated: signal(true) } },
         provideHttpClient(),
@@ -79,31 +93,31 @@ describe('WishlistService', () => {
   // Guards the fix: loadFromStorage() must never access the injected storage on
   // the server so a shared global cannot leak cross-request wishlist state.
 
-  describe('server platform (SSR)', () => {
-    it('items signal starts empty even when injected storage contains wishlist data', () => {
-      setup('server', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+  describe("server platform (SSR)", () => {
+    it("items signal starts empty even when injected storage contains wishlist data", () => {
+      setup("server", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
 
       expect(service.items()).toEqual([]);
     });
 
-    it('never calls storage.getItem during service initialization', () => {
-      setup('server', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("never calls storage.getItem during service initialization", () => {
+      setup("server", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
 
       expect(mockStorage.getItem).not.toHaveBeenCalled();
     });
 
-    it('does not call storage.setItem when toggle() adds an item in guest mode', () => {
-      setup('server');
+    it("does not call storage.setItem when toggle() adds an item in guest mode", () => {
+      setup("server");
 
       service.toggle(MOCK_ITEM);
 
       expect(mockStorage.setItem).not.toHaveBeenCalled();
     });
 
-    it('does not call storage.setItem when toggle() removes an item in guest mode', () => {
-      setup('server');
+    it("does not call storage.setItem when toggle() removes an item in guest mode", () => {
+      setup("server");
       service.toggle(MOCK_ITEM); // add
-      jest.clearAllMocks();      // clear the first toggle call
+      jest.clearAllMocks(); // clear the first toggle call
 
       service.toggle(MOCK_ITEM); // remove
 
@@ -116,23 +130,23 @@ describe('WishlistService', () => {
   // In jsdom, globalThis.localStorage exists but is empty. If the service falls
   // back to it, items() would be [] regardless of what the token provides.
 
-  describe('browser platform', () => {
-    it('loads items from the injected LOCAL_STORAGE token on initialization', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+  describe("browser platform", () => {
+    it("loads items from the injected LOCAL_STORAGE token on initialization", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
 
       expect(service.items()).toEqual([MOCK_ITEM]);
     });
 
-    it('does NOT fall back to globalThis.localStorage — uses the injected token', () => {
+    it("does NOT fall back to globalThis.localStorage — uses the injected token", () => {
       // globalThis.localStorage (jsdom) is empty; injected token has data.
       // A revert to globalThis would yield [] — this assertion proves the token is used.
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
 
       expect(service.items().length).toBe(1);
     });
 
-    it('writes to the injected token when toggle() adds an item in guest mode', () => {
-      setup('browser');
+    it("writes to the injected token when toggle() adds an item in guest mode", () => {
+      setup("browser");
 
       service.toggle(MOCK_ITEM);
 
@@ -142,29 +156,29 @@ describe('WishlistService', () => {
       );
     });
 
-    it('writes empty array to the injected token when toggle() removes the last item', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("writes empty array to the injected token when toggle() removes the last item", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
 
       service.toggle(MOCK_ITEM); // item is already in list — this removes it
 
-      expect(mockStorage.setItem).toHaveBeenCalledWith(STORAGE_KEY, '[]');
+      expect(mockStorage.setItem).toHaveBeenCalledWith(STORAGE_KEY, "[]");
     });
 
-    it('returns empty array when storage contains malformed JSON', () => {
-      setup('browser', { [STORAGE_KEY]: 'not-valid-json{{{' });
+    it("returns empty array when storage contains malformed JSON", () => {
+      setup("browser", { [STORAGE_KEY]: "not-valid-json{{{" });
 
       expect(service.items()).toEqual([]);
     });
 
-    it('returns empty array when storage has no wishlist entry', () => {
-      setup('browser', {});
+    it("returns empty array when storage has no wishlist entry", () => {
+      setup("browser", {});
 
       expect(service.items()).toEqual([]);
     });
 
-    it('defaults notifyOnRestock to false for items stored without that field', () => {
-      const legacy = [{ id: 'p-1', name: 'Perfume', slug: 'perfume' }];
-      setup('browser', { [STORAGE_KEY]: JSON.stringify(legacy) });
+    it("defaults notifyOnRestock to false for items stored without that field", () => {
+      const legacy = [{ id: "p-1", name: "Perfume", slug: "perfume" }];
+      setup("browser", { [STORAGE_KEY]: JSON.stringify(legacy) });
 
       expect(service.items()[0].notifyOnRestock).toBe(false);
     });
@@ -174,9 +188,9 @@ describe('WishlistService', () => {
   // Before the fix, both instances shared globalThis.localStorage (or the
   // global singleton from main.server.ts), causing cross-request PII leakage.
 
-  describe('storage isolation between instances', () => {
-    it('a second instance with a separate storage mock does not see data from the first', () => {
-      setup('browser');
+  describe("storage isolation between instances", () => {
+    it("a second instance with a separate storage mock does not see data from the first", () => {
+      setup("browser");
       service.toggle(MOCK_ITEM); // writes product-1 into mockStorage A
       TestBed.resetTestingModule();
 
@@ -185,9 +199,12 @@ describe('WishlistService', () => {
       TestBed.configureTestingModule({
         providers: [
           WishlistService,
-          { provide: PLATFORM_ID, useValue: 'browser' },
+          { provide: PLATFORM_ID, useValue: "browser" },
           { provide: LOCAL_STORAGE, useValue: storageB },
-          { provide: AuthService, useValue: { isAuthenticated: jest.fn().mockReturnValue(false) } },
+          {
+            provide: AuthService,
+            useValue: { isAuthenticated: jest.fn().mockReturnValue(false) },
+          },
           provideHttpClient(),
           provideHttpClientTesting(),
         ],
@@ -203,107 +220,117 @@ describe('WishlistService', () => {
   // ground truth for purchasability — each guest item is re-fetched by slug
   // from the public products endpoint, which 404s for inactive products.
 
-  describe('guest wishlist revalidation', () => {
+  describe("guest wishlist revalidation", () => {
     let httpMock: HttpTestingController;
 
     afterEach(() => httpMock.verify());
 
-    it('replaces the stale snapshot with fresh data from the products endpoint', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("replaces the stale snapshot with fresh data from the products endpoint", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
       const freshProduct = {
-        id: 'product-1',
-        name: 'Rose Oud 50ml (Updated)',
-        slug: 'rose-oud',
-        brand: 'Aromaterie',
-        gender: 'unisex',
-        catalogNumber: 'RO-50',
-        images: [{ url: 'https://cdn.example.com/rose-oud.jpg' }],
-        variants: [{ id: 'v-1', label: '50ml', priceInCents: 19900, stock: 3 }],
-        description: 'internal-only field that must not leak into the wishlist cache',
+        id: "product-1",
+        name: "Rose Oud 50ml (Updated)",
+        slug: "rose-oud",
+        brand: "Aromaterie",
+        gender: "unisex",
+        catalogNumber: "RO-50",
+        images: [{ url: "https://cdn.example.com/rose-oud.jpg" }],
+        variants: [{ id: "v-1", label: "50ml", priceInCents: 19900, stock: 3 }],
+        description:
+          "internal-only field that must not leak into the wishlist cache",
       };
-      httpMock.expectOne('/api/products/rose-oud').flush(freshProduct);
+      httpMock.expectOne("/api/products/rose-oud").flush(freshProduct);
 
       expect(service.items()).toEqual([
         {
-          id: 'product-1',
-          name: 'Rose Oud 50ml (Updated)',
-          slug: 'rose-oud',
-          brand: 'Aromaterie',
-          gender: 'unisex',
-          catalogNumber: 'RO-50',
-          images: [{ url: 'https://cdn.example.com/rose-oud.jpg' }],
-          variants: [{ id: 'v-1', label: '50ml', priceInCents: 19900, stock: 3 }],
+          id: "product-1",
+          name: "Rose Oud 50ml (Updated)",
+          slug: "rose-oud",
+          brand: "Aromaterie",
+          gender: "unisex",
+          catalogNumber: "RO-50",
+          images: [{ url: "https://cdn.example.com/rose-oud.jpg" }],
+          variants: [
+            { id: "v-1", label: "50ml", priceInCents: 19900, stock: 3 },
+          ],
           notifyOnRestock: false,
         },
       ]);
     });
 
-    it('drops an item whose product has been deactivated (404 from backend)', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("drops an item whose product has been deactivated (404 from backend)", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectOne('/api/products/rose-oud').flush(null, {
+      httpMock.expectOne("/api/products/rose-oud").flush(null, {
         status: 404,
-        statusText: 'Not Found',
+        statusText: "Not Found",
       });
 
       expect(service.items()).toEqual([]);
     });
 
-    it('persists the revalidated items back to the injected storage token', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("persists the revalidated items back to the injected storage token", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectOne('/api/products/rose-oud').flush(null, {
+      httpMock.expectOne("/api/products/rose-oud").flush(null, {
         status: 404,
-        statusText: 'Not Found',
+        statusText: "Not Found",
       });
 
-      expect(mockStorage.setItem).toHaveBeenCalledWith(STORAGE_KEY, '[]');
+      expect(mockStorage.setItem).toHaveBeenCalledWith(STORAGE_KEY, "[]");
     });
 
-    it('revalidates every guest item independently — one 404 does not drop the others', () => {
+    it("revalidates every guest item independently — one 404 does not drop the others", () => {
       const second: WishlistItemData = {
-        id: 'product-2',
-        name: 'Amber Oud',
-        slug: 'amber-oud',
+        id: "product-2",
+        name: "Amber Oud",
+        slug: "amber-oud",
         notifyOnRestock: false,
       };
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM, second]) });
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM, second]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectOne('/api/products/rose-oud').flush(null, { status: 404, statusText: 'Not Found' });
-      httpMock.expectOne('/api/products/amber-oud').flush({
-        id: 'product-2',
-        name: 'Amber Oud',
-        slug: 'amber-oud',
+      httpMock
+        .expectOne("/api/products/rose-oud")
+        .flush(null, { status: 404, statusText: "Not Found" });
+      httpMock.expectOne("/api/products/amber-oud").flush({
+        id: "product-2",
+        name: "Amber Oud",
+        slug: "amber-oud",
       });
 
       expect(service.items()).toEqual([
-        { id: 'product-2', name: 'Amber Oud', slug: 'amber-oud', notifyOnRestock: false },
+        {
+          id: "product-2",
+          name: "Amber Oud",
+          slug: "amber-oud",
+          notifyOnRestock: false,
+        },
       ]);
     });
 
-    it('makes no HTTP request when the guest wishlist is empty', () => {
-      setup('browser', {});
+    it("makes no HTTP request when the guest wishlist is empty", () => {
+      setup("browser", {});
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectNone('/api/products/rose-oud');
+      httpMock.expectNone("/api/products/rose-oud");
     });
 
-    it('makes no HTTP request on the server platform (SSR)', () => {
-      setup('server', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("makes no HTTP request on the server platform (SSR)", () => {
+      setup("server", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectNone('/api/products/rose-oud');
+      httpMock.expectNone("/api/products/rose-oud");
     });
   });
 
@@ -312,19 +339,21 @@ describe('WishlistService', () => {
   // replace `_items` once the in-flight forkJoin resolves, since auth state or a
   // user toggle() can have changed `_items` underneath it in the meantime.
 
-  describe('revalidation overwrite races', () => {
+  describe("revalidation overwrite races", () => {
     let httpMock: HttpTestingController;
 
     afterEach(() => httpMock.verify());
 
-    it('does not overwrite the authenticated wishlist when guest revalidation resolves after login', () => {
+    it("does not overwrite the authenticated wishlist when guest revalidation resolves after login", () => {
       const authState = signal(false);
-      mockStorage = createMockStorage({ [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+      mockStorage = createMockStorage({
+        [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]),
+      });
 
       TestBed.configureTestingModule({
         providers: [
           WishlistService,
-          { provide: PLATFORM_ID, useValue: 'browser' },
+          { provide: PLATFORM_ID, useValue: "browser" },
           { provide: LOCAL_STORAGE, useValue: mockStorage },
           { provide: AuthService, useValue: { isAuthenticated: authState } },
           provideHttpClient(),
@@ -336,64 +365,84 @@ describe('WishlistService', () => {
       TestBed.tick();
 
       // Guest revalidation request is now in flight — do not resolve it yet.
-      const revalidateReq = httpMock.expectOne('/api/products/rose-oud');
+      const revalidateReq = httpMock.expectOne("/api/products/rose-oud");
 
       // User logs in while that request is still pending.
       authState.set(true);
       TestBed.tick();
 
       const backendItems: WishlistItemData[] = [
-        { id: 'backend-item', name: 'Backend Item', slug: 'backend-item', notifyOnRestock: true },
+        {
+          id: "backend-item",
+          name: "Backend Item",
+          slug: "backend-item",
+          notifyOnRestock: true,
+        },
       ];
-      httpMock.expectOne('/api/wishlist/merge').flush({});
-      httpMock.expectOne('/api/wishlist').flush(backendItems);
+      httpMock.expectOne("/api/wishlist/merge").flush({});
+      httpMock.expectOne("/api/wishlist").flush(backendItems);
 
       expect(service.items()).toEqual(backendItems);
 
       // The slow guest revalidation resolves after login finished syncing — it must
       // not clobber the now-authenticated state.
-      revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml', slug: 'rose-oud' });
+      revalidateReq.flush({
+        id: "product-1",
+        name: "Rose Oud 50ml",
+        slug: "rose-oud",
+      });
 
       expect(service.items()).toEqual(backendItems);
       expect(mockStorage.setItem).not.toHaveBeenCalled();
     });
 
-    it('preserves an item added by toggle() while guest revalidation is still in flight', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("preserves an item added by toggle() while guest revalidation is still in flight", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      const revalidateReq = httpMock.expectOne('/api/products/rose-oud');
+      const revalidateReq = httpMock.expectOne("/api/products/rose-oud");
 
       const newItem: WishlistItemData = {
-        id: 'product-2',
-        name: 'Amber Oud',
-        slug: 'amber-oud',
+        id: "product-2",
+        name: "Amber Oud",
+        slug: "amber-oud",
         notifyOnRestock: false,
       };
       service.toggle(newItem);
 
-      revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml (Updated)', slug: 'rose-oud' });
+      revalidateReq.flush({
+        id: "product-1",
+        name: "Rose Oud 50ml (Updated)",
+        slug: "rose-oud",
+      });
 
       expect(service.items()).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: 'product-2' }),
-          expect.objectContaining({ id: 'product-1', name: 'Rose Oud 50ml (Updated)' }),
+          expect.objectContaining({ id: "product-2" }),
+          expect.objectContaining({
+            id: "product-1",
+            name: "Rose Oud 50ml (Updated)",
+          }),
         ]),
       );
       expect(service.items().length).toBe(2);
     });
 
-    it('does not resurrect an item removed by toggle() while its revalidation request is still in flight', () => {
-      setup('browser', { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
+    it("does not resurrect an item removed by toggle() while its revalidation request is still in flight", () => {
+      setup("browser", { [STORAGE_KEY]: JSON.stringify([MOCK_ITEM]) });
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      const revalidateReq = httpMock.expectOne('/api/products/rose-oud');
+      const revalidateReq = httpMock.expectOne("/api/products/rose-oud");
 
       service.toggle(MOCK_ITEM); // removes product-1 before revalidation resolves
 
-      revalidateReq.flush({ id: 'product-1', name: 'Rose Oud 50ml', slug: 'rose-oud' });
+      revalidateReq.flush({
+        id: "product-1",
+        name: "Rose Oud 50ml",
+        slug: "rose-oud",
+      });
 
       expect(service.items()).toEqual([]);
     });
@@ -404,7 +453,7 @@ describe('WishlistService', () => {
   // larger than that must be chunked into sequential batches, not sent in one
   // request that the backend rejects wholesale.
 
-  describe('guest wishlist merge batching', () => {
+  describe("guest wishlist merge batching", () => {
     let httpMock: HttpTestingController;
 
     afterEach(() => httpMock.verify());
@@ -418,60 +467,66 @@ describe('WishlistService', () => {
       }));
     }
 
-    it('splits a 150-item guest wishlist into two merge batches of 100 and 50 ids', () => {
+    it("splits a 150-item guest wishlist into two merge batches of 100 and 50 ids", () => {
       setupAuthenticated(makeGuestItems(150));
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      const firstBatch = httpMock.expectOne('/api/wishlist/merge');
-      expect((firstBatch.request.body as { productIds: string[] }).productIds).toHaveLength(100);
+      const firstBatch = httpMock.expectOne("/api/wishlist/merge");
+      expect(
+        (firstBatch.request.body as { productIds: string[] }).productIds,
+      ).toHaveLength(100);
       firstBatch.flush({});
 
-      const secondBatch = httpMock.expectOne('/api/wishlist/merge');
-      expect((secondBatch.request.body as { productIds: string[] }).productIds).toHaveLength(50);
+      const secondBatch = httpMock.expectOne("/api/wishlist/merge");
+      expect(
+        (secondBatch.request.body as { productIds: string[] }).productIds,
+      ).toHaveLength(50);
       secondBatch.flush({});
 
-      httpMock.expectOne('/api/wishlist').flush([]);
+      httpMock.expectOne("/api/wishlist").flush([]);
     });
 
-    it('does not issue the second batch until the first batch resolves', () => {
+    it("does not issue the second batch until the first batch resolves", () => {
       setupAuthenticated(makeGuestItems(150));
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      const firstPending = httpMock.match('/api/wishlist/merge');
+      const firstPending = httpMock.match("/api/wishlist/merge");
       expect(firstPending).toHaveLength(1);
       firstPending[0].flush({});
 
-      const secondPending = httpMock.match('/api/wishlist/merge');
+      const secondPending = httpMock.match("/api/wishlist/merge");
       expect(secondPending).toHaveLength(1);
       secondPending[0].flush({});
 
-      httpMock.expectOne('/api/wishlist').flush([]);
+      httpMock.expectOne("/api/wishlist").flush([]);
     });
 
-    it('clears localStorage only after every batch and the final fetch succeed', () => {
+    it("clears localStorage only after every batch and the final fetch succeed", () => {
       setupAuthenticated(makeGuestItems(150));
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectOne('/api/wishlist/merge').flush({});
-      httpMock.expectOne('/api/wishlist/merge').flush({});
-      httpMock.expectOne('/api/wishlist').flush([]);
+      httpMock.expectOne("/api/wishlist/merge").flush({});
+      httpMock.expectOne("/api/wishlist/merge").flush({});
+      httpMock.expectOne("/api/wishlist").flush([]);
 
       expect(mockStorage.removeItem).toHaveBeenCalledWith(STORAGE_KEY);
     });
 
-    it('sends a single batch for a wishlist of exactly 100 items', () => {
+    it("sends a single batch for a wishlist of exactly 100 items", () => {
       setupAuthenticated(makeGuestItems(100));
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      const batch = httpMock.expectOne('/api/wishlist/merge');
-      expect((batch.request.body as { productIds: string[] }).productIds).toHaveLength(100);
+      const batch = httpMock.expectOne("/api/wishlist/merge");
+      expect(
+        (batch.request.body as { productIds: string[] }).productIds,
+      ).toHaveLength(100);
       batch.flush({});
 
-      httpMock.expectOne('/api/wishlist').flush([]);
+      httpMock.expectOne("/api/wishlist").flush([]);
     });
   });
 
@@ -481,30 +536,35 @@ describe('WishlistService', () => {
   // next sync attempt (e.g. on the next page load) can retry — mergeGuestItems()
   // on the backend is idempotent (skipDuplicates), so a retry is always safe.
 
-  describe('merge failure handling', () => {
+  describe("merge failure handling", () => {
     let httpMock: HttpTestingController;
 
     afterEach(() => httpMock.verify());
 
-    it('does not clear localStorage when the merge request fails, and falls back to the current backend wishlist', () => {
+    it("does not clear localStorage when the merge request fails, and falls back to the current backend wishlist", () => {
       setupAuthenticated([MOCK_ITEM]);
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
       httpMock
-        .expectOne('/api/wishlist/merge')
-        .flush('merge failed', { status: 500, statusText: 'Server Error' });
+        .expectOne("/api/wishlist/merge")
+        .flush("merge failed", { status: 500, statusText: "Server Error" });
 
       const backendItems: WishlistItemData[] = [
-        { id: 'backend-item', name: 'Backend Item', slug: 'backend-item', notifyOnRestock: true },
+        {
+          id: "backend-item",
+          name: "Backend Item",
+          slug: "backend-item",
+          notifyOnRestock: true,
+        },
       ];
-      httpMock.expectOne('/api/wishlist').flush(backendItems);
+      httpMock.expectOne("/api/wishlist").flush(backendItems);
 
       expect(service.items()).toEqual(backendItems);
       expect(mockStorage.removeItem).not.toHaveBeenCalled();
     });
 
-    it('does not clear localStorage when a later batch fails partway through a multi-batch sync', () => {
+    it("does not clear localStorage when a later batch fails partway through a multi-batch sync", () => {
       setupAuthenticated(
         Array.from({ length: 150 }, (_, i) => ({
           id: `product-${i}`,
@@ -516,12 +576,12 @@ describe('WishlistService', () => {
       httpMock = TestBed.inject(HttpTestingController);
       TestBed.tick();
 
-      httpMock.expectOne('/api/wishlist/merge').flush({}); // first batch (100) succeeds
+      httpMock.expectOne("/api/wishlist/merge").flush({}); // first batch (100) succeeds
       httpMock
-        .expectOne('/api/wishlist/merge')
-        .flush('boom', { status: 500, statusText: 'Server Error' }); // second batch (50) fails
+        .expectOne("/api/wishlist/merge")
+        .flush("boom", { status: 500, statusText: "Server Error" }); // second batch (50) fails
 
-      httpMock.expectOne('/api/wishlist').flush([]);
+      httpMock.expectOne("/api/wishlist").flush([]);
 
       expect(mockStorage.removeItem).not.toHaveBeenCalled();
     });

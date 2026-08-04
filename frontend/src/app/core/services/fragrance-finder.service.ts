@@ -1,8 +1,8 @@
-import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
-import { catchError, map, shareReplay } from 'rxjs/operators';
-import { environment } from '../../../environments/environment';
+import { Injectable, inject } from "@angular/core";
+import { HttpClient, HttpParams } from "@angular/common/http";
+import { Observable, of } from "rxjs";
+import { catchError, map, shareReplay } from "rxjs/operators";
+import { environment } from "../../../environments/environment";
 
 /** One selectable olfactory note, as served by `GET /products/finder/notes`. */
 export interface FinderNote {
@@ -62,7 +62,7 @@ export interface FinderMatchQuery {
   limit?: number;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable({ providedIn: "root" })
 export class FragranceFinderService {
   private readonly http = inject(HttpClient);
 
@@ -94,40 +94,51 @@ export class FragranceFinderService {
     limit?: number;
   }): Observable<FinderMatchResponse> {
     let params = new HttpParams()
-      .set('search', query.term)
-      .set('limit', String(query.limit ?? 8));
+      .set("search", query.term)
+      .set("limit", String(query.limit ?? 8));
     for (const gender of query.gender ?? []) {
-      params = params.append('gender', gender);
+      params = params.append("gender", gender);
     }
-    if (query.category) params = params.set('category', query.category);
+    if (query.category) params = params.set("category", query.category);
 
     return this.http
-      .get<{ data: FinderProduct[]; meta: { total: number } }>(`${environment.apiUrl}/products`, {
-        params,
-      })
+      .get<{ data: FinderProduct[]; meta: { total: number } }>(
+        `${environment.apiUrl}/products`,
+        {
+          params,
+        },
+      )
       .pipe(
         map((response) => ({
           data: response.data.map((p) => ({ ...p, matchedNotes: [] })),
           meta: { total: response.meta.total, limit: query.limit ?? 8 },
         })),
-        catchError(() => of({ data: [], meta: { total: 0, limit: query.limit ?? 8 } })),
+        catchError(() =>
+          of({ data: [], meta: { total: 0, limit: query.limit ?? 8 } }),
+        ),
       );
   }
 
   match(query: FinderMatchQuery): Observable<FinderMatchResponse> {
     let params = new HttpParams();
     for (const note of query.notes) {
-      params = params.append('notes', note);
+      params = params.append("notes", note);
     }
     for (const gender of query.gender ?? []) {
-      params = params.append('gender', gender);
+      params = params.append("gender", gender);
     }
-    if (query.category) params = params.set('category', query.category);
-    if (query.exclude) params = params.set('exclude', query.exclude);
-    if (query.limit) params = params.set('limit', String(query.limit));
+    if (query.category) params = params.set("category", query.category);
+    if (query.exclude) params = params.set("exclude", query.exclude);
+    if (query.limit) params = params.set("limit", String(query.limit));
 
     return this.http
-      .get<FinderMatchResponse>(`${environment.apiUrl}/products/finder/match`, { params })
-      .pipe(catchError(() => of({ data: [], meta: { total: 0, limit: query.limit ?? 12 } })));
+      .get<FinderMatchResponse>(`${environment.apiUrl}/products/finder/match`, {
+        params,
+      })
+      .pipe(
+        catchError(() =>
+          of({ data: [], meta: { total: 0, limit: query.limit ?? 12 } }),
+        ),
+      );
   }
 }

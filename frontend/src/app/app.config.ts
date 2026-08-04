@@ -1,3 +1,4 @@
+import { provideTaiga, TUI_DARK_MODE } from "@taiga-ui/core";
 import {
   ApplicationConfig,
   ErrorHandler,
@@ -6,14 +7,19 @@ import {
   isDevMode,
   provideAppInitializer,
   provideZoneChangeDetection,
-} from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
-import { provideClientHydration, withEventReplay, withHttpTransferCacheOptions } from '@angular/platform-browser';
-import { provideServiceWorker } from '@angular/service-worker';
-import { firstValueFrom, of } from 'rxjs';
-import { catchError } from 'rxjs/operators';
-import { AuthService } from './core/services/auth.service';
-import { AnalyticsService } from './core/services/analytics.service';
+  signal,
+} from "@angular/core";
+import { isPlatformBrowser } from "@angular/common";
+import {
+  provideClientHydration,
+  withEventReplay,
+  withHttpTransferCacheOptions,
+} from "@angular/platform-browser";
+import { provideServiceWorker } from "@angular/service-worker";
+import { firstValueFrom, of } from "rxjs";
+import { catchError } from "rxjs/operators";
+import { AuthService } from "./core/services/auth.service";
+import { AnalyticsService } from "./core/services/analytics.service";
 import {
   NavigationEnd,
   NavigationStart,
@@ -24,24 +30,23 @@ import {
   withInMemoryScrolling,
   withPreloading,
   withViewTransitions,
-} from '@angular/router';
-import { SelectivePreloadStrategy } from './core/strategies/selective-preload.strategy';
-import { AppTitleStrategy } from './core/strategies/title.strategy';
+} from "@angular/router";
+import { SelectivePreloadStrategy } from "./core/strategies/selective-preload.strategy";
+import { AppTitleStrategy } from "./core/strategies/title.strategy";
 import {
   provideHttpClient,
   withInterceptors,
   withFetch,
-} from '@angular/common/http';
-import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
-import { NG_EVENT_PLUGINS } from '@taiga-ui/event-plugins';
-import { LazySentryErrorHandler, scheduleSentryLoad } from './core/sentry';
-import { routes } from './app.routes';
-import { authInterceptor } from './core/interceptors/auth.interceptor';
-import { errorInterceptor } from './core/interceptors/error.interceptor';
-import { ssrTimeoutInterceptor } from './core/interceptors/ssr-timeout.interceptor';
-import { environment } from '../environments/environment';
-import { LOCAL_STORAGE } from './core/tokens/storage.tokens';
-import { RESPONSE } from './core/tokens/ssr.tokens';
+} from "@angular/common/http";
+import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
+import { LazySentryErrorHandler, scheduleSentryLoad } from "./core/sentry";
+import { routes } from "./app.routes";
+import { authInterceptor } from "./core/interceptors/auth.interceptor";
+import { errorInterceptor } from "./core/interceptors/error.interceptor";
+import { ssrTimeoutInterceptor } from "./core/interceptors/ssr-timeout.interceptor";
+import { environment } from "../environments/environment";
+import { LOCAL_STORAGE } from "./core/tokens/storage.tokens";
+import { RESPONSE } from "./core/tokens/ssr.tokens";
 
 // Angular Universal doesn't turn a guard-returned UrlTree into a real HTTP
 // redirect — it silently renders the redirect target's component tree under
@@ -65,7 +70,11 @@ export function bridgeGuardRedirectsToHttp(): void {
     }
     if (!(event instanceof NavigationEnd)) return;
 
-    if (!response.headersSent && requestedUrl !== null && event.urlAfterRedirects !== requestedUrl) {
+    if (
+      !response.headersSent &&
+      requestedUrl !== null &&
+      event.urlAfterRedirects !== requestedUrl
+    ) {
       response.redirect(302, event.urlAfterRedirects);
     }
     subscription.unsubscribe();
@@ -86,21 +95,39 @@ const sentryProviders = environment.sentryDsn
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideClientHydration(withEventReplay(), withHttpTransferCacheOptions({ includePostRequests: false })),
+    provideClientHydration(
+      withEventReplay(),
+      withHttpTransferCacheOptions({ includePostRequests: false }),
+    ),
     provideZoneChangeDetection({ eventCoalescing: true }),
     provideRouter(
       routes,
       withComponentInputBinding(),
       withViewTransitions(),
-      withInMemoryScrolling({ scrollPositionRestoration: 'enabled' }),
+      withInMemoryScrolling({ scrollPositionRestoration: "enabled" }),
       withPreloading(SelectivePreloadStrategy),
     ),
     provideHttpClient(
       withFetch(),
-      withInterceptors([authInterceptor, errorInterceptor, ssrTimeoutInterceptor]),
+      withInterceptors([
+        authInterceptor,
+        errorInterceptor,
+        ssrTimeoutInterceptor,
+      ]),
     ),
     provideAnimationsAsync(),
-    NG_EVENT_PLUGINS,
+    provideTaiga(),
+    // Taiga UI 5 added TUI_DARK_MODE, which follows the OS/browser
+    // prefers-color-scheme by default. The site's design tokens and
+    // hand-written component styles (header, footer, product cards, ...)
+    // only define a light palette, so letting Taiga's own components
+    // auto-switch to dark produced a mismatched, half-dark UI for anyone
+    // with a dark system theme. Pin the app to light until a real dark
+    // theme is designed.
+    {
+      provide: TUI_DARK_MODE,
+      useFactory: () => Object.assign(signal(false), { reset: () => {} }),
+    },
     provideAppInitializer(() => {
       inject(AnalyticsService).init(environment.gtmId);
     }),
@@ -133,9 +160,9 @@ export const appConfig: ApplicationConfig = {
     },
     { provide: TitleStrategy, useClass: AppTitleStrategy },
     ...sentryProviders,
-    provideServiceWorker('ngsw-worker.js', {
+    provideServiceWorker("ngsw-worker.js", {
       enabled: !isDevMode(),
-      registrationStrategy: 'registerWhenStable:30000',
+      registrationStrategy: "registerWhenStable:30000",
     }),
   ],
 };

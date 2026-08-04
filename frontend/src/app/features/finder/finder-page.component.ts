@@ -1,9 +1,12 @@
-import { Component, OnInit, inject } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { TuiButton } from '@taiga-ui/core';
-import { FragranceFinderComponent } from '../../shared/components/fragrance-finder/fragrance-finder.component';
-import { Breadcrumb, BreadcrumbComponent } from '../../shared/components/breadcrumb/breadcrumb.component';
-import { SeoService } from '../../core/services/seo.service';
+import { Component, OnInit, inject } from "@angular/core";
+import { RouterLink } from "@angular/router";
+import { TuiButton } from "@taiga-ui/core";
+import { FragranceFinderComponent } from "../../shared/components/fragrance-finder/fragrance-finder.component";
+import {
+  Breadcrumb,
+  BreadcrumbComponent,
+} from "../../shared/components/breadcrumb/breadcrumb.component";
+import { SeoService } from "../../core/services/seo.service";
 
 /**
  * Standalone landing page for the fragrance picker.
@@ -15,9 +18,14 @@ import { SeoService } from '../../core/services/seo.service';
  * interactive picker hydrates on top.
  */
 @Component({
-  selector: 'app-finder-page',
+  selector: "app-finder-page",
   standalone: true,
-  imports: [RouterLink, TuiButton, FragranceFinderComponent, BreadcrumbComponent],
+  imports: [
+    RouterLink,
+    TuiButton,
+    FragranceFinderComponent,
+    BreadcrumbComponent,
+  ],
   template: `
     <div class="page">
       <app-breadcrumb [crumbs]="breadcrumbs" />
@@ -25,9 +33,9 @@ import { SeoService } from '../../core/services/seo.service';
       <header class="page__header">
         <h1 class="page__title">Dobierz zapach dla siebie</h1>
         <p class="page__lead">
-          Nasze zapachy noszą własne nazwy, więc sama nazwa niewiele mówi. Powiedz nam, co lubisz —
-          wpisz perfumy, które znasz, albo zaznacz nuty zapachowe, a pokażemy Ci dopasowane
-          propozycje z katalogu.
+          Nasze zapachy noszą własne nazwy, więc sama nazwa niewiele mówi.
+          Powiedz nam, co lubisz — wpisz perfumy, które znasz, albo zaznacz nuty
+          zapachowe, a pokażemy Ci dopasowane propozycje z katalogu.
         </p>
       </header>
 
@@ -36,7 +44,13 @@ import { SeoService } from '../../core/services/seo.service';
            screens. Kept out of the page shell on purpose: positioning it from
            here would mean hard-coding the height of the copy above. -->
       <app-fragrance-finder [limit]="12">
-        <a finderAside routerLink="/products" tuiButton appearance="outline" size="m">
+        <a
+          finderAside
+          routerLink="/products"
+          tuiButton
+          appearance="outline"
+          size="m"
+        >
           Albo przeglądaj cały katalog
         </a>
       </app-fragrance-finder>
@@ -52,7 +66,11 @@ import { SeoService } from '../../core/services/seo.service';
         flex-direction: column;
         gap: var(--spacing-lg);
       }
-      .page__header { display: flex; flex-direction: column; gap: 12px; }
+      .page__header {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
       .page__title {
         margin: 0;
         font-size: clamp(28px, 4vw, 44px);
@@ -66,7 +84,9 @@ import { SeoService } from '../../core/services/seo.service';
         line-height: 1.7;
       }
       @media (max-width: 768px) {
-        .page { padding-inline: 16px; }
+        .page {
+          padding-inline: 16px;
+        }
       }
     `,
   ],
@@ -75,16 +95,16 @@ export class FinderPageComponent implements OnInit {
   private readonly seo = inject(SeoService);
 
   readonly breadcrumbs: Breadcrumb[] = [
-    { label: 'Strona główna', link: '/' },
-    { label: 'Dobierz zapach' },
+    { label: "Strona główna", link: "/" },
+    { label: "Dobierz zapach" },
   ];
 
   ngOnInit(): void {
     this.seo.updatePageMeta({
-      title: 'Dobierz zapach dla siebie — asystent wyboru perfum',
+      title: "Dobierz zapach dla siebie — asystent wyboru perfum",
       description:
-        'Nie wiesz, jakie perfumy wybrać? Wpisz zapach, który znasz, albo zaznacz ulubione nuty zapachowe — dobierzemy dopasowane propozycje z naszego katalogu.',
-      path: '/dobierz-zapach',
+        "Nie wiesz, jakie perfumy wybrać? Wpisz zapach, który znasz, albo zaznacz ulubione nuty zapachowe — dobierzemy dopasowane propozycje z naszego katalogu.",
+      path: "/dobierz-zapach",
     });
   }
 }
