@@ -11,8 +11,8 @@
     "audit:home": "node visual/home-sections.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0",
-    "@types/node": "^22.0.0",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.20.1",
     "axe-core": "^4.12.1",
     "ts-node": "^10.9.2"
   }
