@@ -88,7 +88,6 @@ describe('ProductsModule — Redis DI wiring', () => {
     });
 
     it('completes the stockUpdates$ Subject before quitting', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const subject = (service as any).stockUpdates$;
       const completeSpy = jest.spyOn(subject, 'complete');
 
@@ -102,7 +101,6 @@ describe('ProductsModule — Redis DI wiring', () => {
 
   describe('cache operations use the global REDIS_CLIENT, not the SSE subscriber', () => {
     it('calls incr on the main redis client when invalidating product caches', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (service as any).invalidateProductCaches();
 
       expect(mockRedisClient.incr).toHaveBeenCalledWith('product_cache_v');
@@ -110,12 +108,10 @@ describe('ProductsModule — Redis DI wiring', () => {
     });
 
     it('injects exactly the provided REDIS_CLIENT instance for cache reads', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((service as any).redis).toBe(mockRedisClient);
     });
 
     it('injects exactly the provided STOCK_SSE_REDIS_SUBSCRIBER for pub/sub', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((service as any).redisSubscriber).toBe(mockSseSubscriber);
     });
   });
