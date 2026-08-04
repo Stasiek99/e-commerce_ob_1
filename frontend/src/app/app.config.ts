@@ -1,4 +1,4 @@
-import { provideTaiga } from "@taiga-ui/core";
+import { provideTaiga, TUI_DARK_MODE } from "@taiga-ui/core";
 import {
   ApplicationConfig,
   ErrorHandler,
@@ -7,6 +7,7 @@ import {
   isDevMode,
   provideAppInitializer,
   provideZoneChangeDetection,
+  signal,
 } from "@angular/core";
 import { isPlatformBrowser } from "@angular/common";
 import {
@@ -116,6 +117,17 @@ export const appConfig: ApplicationConfig = {
     ),
     provideAnimationsAsync(),
     provideTaiga(),
+    // Taiga UI 5 added TUI_DARK_MODE, which follows the OS/browser
+    // prefers-color-scheme by default. The site's design tokens and
+    // hand-written component styles (header, footer, product cards, ...)
+    // only define a light palette, so letting Taiga's own components
+    // auto-switch to dark produced a mismatched, half-dark UI for anyone
+    // with a dark system theme. Pin the app to light until a real dark
+    // theme is designed.
+    {
+      provide: TUI_DARK_MODE,
+      useFactory: () => Object.assign(signal(false), { reset: () => {} }),
+    },
     provideAppInitializer(() => {
       inject(AnalyticsService).init(environment.gtmId);
     }),
