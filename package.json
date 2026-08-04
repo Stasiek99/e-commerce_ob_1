@@ -73,7 +73,8 @@
       "@opentelemetry/core": "^2.8.0",
       "immutable": "^4.3.9",
       "linkify-it": "^5.0.2",
-      "postcss": "^8.5.23"
+      "postcss": "^8.5.23",
+      "undici@>=7.0.0 <7.29.0": "^7.29.0"
     },
     "auditConfig": {
       "ignoreCves": [
