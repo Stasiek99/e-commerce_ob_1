@@ -44,7 +44,7 @@ describe('Helmet middleware — targeted CSP-only bypass for /admin', () => {
   beforeAll(
     () =>
       new Promise<void>((resolve) => {
-        server = buildApp().listen(0, '127.0.0.1', resolve);
+        server = buildApp().listen(0, '127.0.0.1', () => resolve());
       }),
   );
 
