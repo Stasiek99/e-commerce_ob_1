@@ -1,10 +1,10 @@
-# Research: Opisy produktów w sklepie z perfumami — widoczność (SEO) vs. wartość dla użytkownika
+# Opisy produktów w sklepie z perfumami — widoczność (SEO) vs. wartość dla użytkownika
 
 *5 równoległych sub-badań, ~30 źródeł łącznie — 2026-08-04*
 
 ## TL;DR
 
-Tak, opisy nadal mają sens — ale **nie konkurują z danymi o nutach/rodzinach zapachowych, tylko pełnią inną funkcję**. Dane strukturalne (nuty, rodzina zapachowa, `notesNormalized`) to warstwa skanowalna/filtrowalna — do tego służy wasz fragrance finder. Opis narracyjny to warstwa "symulacji wyobrażeniowej" — kompensuje tzw. "olfactory gap" (zapachu nie da się opisać równie precyzyjnie jak obrazu czy dźwięku), czyli odpowiada na pytanie "jak to będzie pachnieć na mnie/jak się będę czuć", którego żadna tabela atrybutów nie odda. Sephora, Notino i inni liderzy branży trzymają obie warstwy jednocześnie na karcie produktu, nie zamiast siebie.
+Tak, opisy nadal mają sens — ale **nie konkurują z danymi o nutach/rodzinach zapachowych, tylko pełnią inną funkcję**. Dane strukturalne (nuty, rodzina zapachowa, `notesNormalized`) to warstwa skanowalna/filtrowalna — do tego służy fragrance finder. Opis narracyjny to warstwa "symulacji wyobrażeniowej" — kompensuje tzw. "olfactory gap" (zapachu nie da się opisać równie precyzyjnie jak obrazu czy dźwięku), czyli odpowiada na pytanie "jak to będzie pachnieć na mnie/jak się będę czuć", którego żadna tabela atrybutów nie odda. Sephora, Notino i inni liderzy branży trzymają obie warstwy jednocześnie na karcie produktu, nie zamiast siebie.
 
 Pod kątem SEO: unikalny opis nie daje formalnego bonusu rankingowego ani nie jest wymagany do rich snippetu (Google wymaga `offers`/`review`/`aggregateRating`, nie `description`) — ale kopiowanie opisu producenta to **problem selekcji, nie kary**: gdy wiele stron ma identyczny tekst, Google i tak pokaże tylko jedną (zwykle markę lub większego gracza), a wy przegrywacie ten "tie-break". Oryginalny opis to też jedyny sposób złapania długiego ogona zapytań ("perfumy na lato zapach wanilii"), którego surowe tagi nut nie pokryją.
 
@@ -47,16 +47,16 @@ Pod kątem SEO: unikalny opis nie daje formalnego bonusu rankingowego ani nie je
 | Struktura (Sephora/Notino) = dane + narracja jednocześnie, nie zamiennie | Obserwacja bezpośrednia stron + wtórne | MEDIUM-HIGH |
 | Konkretne % konwersji z case studies agencyjnych (Kiehl's, ASOS, Sure Oak 42%) | Blogi marketingowe, brak izolowanej zmiennej | LOW |
 
-## Rekomendacja dla waszego sklepu
+## Rekomendacja dla tego sklepu
 
-Macie już infrastrukturę pod warstwę strukturalną (`searchText`, `notesNormalized`, fragrance finder) — to zgodne z tym, co robią liderzy rynku. Brakującym elementem jest krótki opis narracyjny **osobno od danych o notach**, nie zamiast nich:
+Sklep ma już infrastrukturę pod warstwę strukturalną (`searchText`, `notesNormalized`, fragrance finder) — to zgodne z tym, co robią liderzy rynku. Brakującym elementem jest krótki opis narracyjny **osobno od danych o notach**, nie zamiast nich:
 
-1. **Struktura**: zostawcie notes/scentFamily jako warstwę filtrowalną/porównywalną — to działa, potwierdzone przez badania i wasz własny finder.
-2. **Dodajcie 100–250 słów oryginalnego opisu na produkt**, pierwsze 1-2 zdania samodzielnie sensowne dla skanujących, reszta w formacie "highlights" (krótkie akapity/call-outy, nie ściana tekstu).
+1. **Struktura**: zostawić notes/scentFamily jako warstwę filtrowalną/porównywalną — to działa, potwierdzone przez badania i istniejący finder.
+2. **Dodać 100–250 słów oryginalnego opisu na produkt**, pierwsze 1-2 zdania samodzielnie sensowne dla skanujących, reszta w formacie "highlights" (krótkie akapity/call-outy, nie ściana tekstu).
 3. **Język konkretny, nie generyczny** — nie "drzewny, świeży", tylko odniesienie do faktycznych nut produktu (np. "spalona, ziemista nuta wetiwerii" zamiast "drzewny"). Musi być spójny z listą nut, żeby nie zawyżać oczekiwań (efekt Wansinka o powtórnych zakupach).
 4. **Framing okazja/nastrój** jako trzecia, krótka warstwa (wzorzec Notino) — dobrze łapie długi ogon zapytań SEO.
-5. **Nie kopiujcie opisu producenta 1:1** — to nie kara algorytmiczna, ale przegrywacie selekcję najlepszej strony z marką/większym sklepem; oryginalny tekst to też jedyne źródło danych do `searchText` poza samymi nutami (dopisuje się do `shortDescription` w denormalizowanej kolumnie wyszukiwania — czyli lepszy opis realnie poprawia też wasze własne wyszukiwanie, nie tylko SEO Google).
-6. **Nie inwestujcie w długość opisu pod kątem rich snippetów** — to nie jest wymagane pole; jeśli zależy wam na rich results, priorytet to `Review`/`AggregateRating` schema, nie długość `description`.
+5. **Nie kopiować opisu producenta 1:1** — to nie kara algorytmiczna, ale przegrywa się selekcję najlepszej strony z marką/większym sklepem; oryginalny tekst to też jedyne źródło danych do `searchText` poza samymi nutami (dopisuje się do `shortDescription` w denormalizowanej kolumnie wyszukiwania — czyli lepszy opis realnie poprawia też własne wyszukiwanie, nie tylko SEO Google).
+6. **Nie inwestować w długość opisu pod kątem rich snippetów** — to nie jest wymagane pole; jeśli zależy na rich results, priorytet to `Review`/`AggregateRating` schema, nie długość `description`.
 
 ## Źródła (wybrane, pełna lista w wynikach sub-agentów)
 

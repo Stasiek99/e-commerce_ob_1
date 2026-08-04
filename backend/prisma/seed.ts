@@ -509,6 +509,7 @@ async function main() {
           luxuryReferenceId: p.inspiration ? (luxRefMap.get(p.inspiration) ?? null) : null,
           scentFamily: SCENT_BY_CODE[p.base_code] ?? inferScentFamily(p.olfactory_pyramid),
           sortOrder: p.is_best_seller ? 1 : 10,
+          description: p.description_full,
           shortDescription: shortDescription(p),
           pyramidTop: p.olfactory_pyramid?.top ?? null,
           pyramidHeart: p.olfactory_pyramid?.heart ?? null,
