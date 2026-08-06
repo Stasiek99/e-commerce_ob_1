@@ -2,7 +2,12 @@
  * Regression harness for HomeComponent accessibility fixes:
  *  1. prefers-reduced-motion: skip scroll animation, show content immediately
  *  2. expandHero(): keyboard/click trigger that fully expands the hero
- *  3. [attr.inert] on .expand-content: hidden content unreachable via Tab
+ *  3. .expand-content renders visible and non-inert unconditionally,
+ *     including under SSR/prerender (platformId "server") — it used to stay
+ *     opacity: 0 + inert until a showContent flag flipped true from the
+ *     scroll-hijack handlers, which meant the prerendered HTML for "/"
+ *     shipped with the entire shop invisible and inert to any user whose JS
+ *     failed and to any crawler that doesn't execute it.
  *  4. button.expand-hint: keyboard-accessible trigger; removed when expanded
  */
 
@@ -61,10 +66,6 @@ describe("HomeComponent — prefers-reduced-motion: reduce → instant expansion
     expect(component.scrollProgress).toBe(1);
   });
 
-  it("sets showContent to true immediately", () => {
-    expect(component.showContent).toBe(true);
-  });
-
   it("sets mediaFullyExpanded to true immediately", () => {
     expect(component.mediaFullyExpanded).toBe(true);
   });
@@ -111,10 +112,6 @@ describe("HomeComponent — no prefers-reduced-motion → animation setup", () =
     expect(component.scrollProgress).toBe(0);
   });
 
-  it("starts with showContent=false", () => {
-    expect(component.showContent).toBe(false);
-  });
-
   it("starts with mediaFullyExpanded=false", () => {
     expect(component.mediaFullyExpanded).toBe(false);
   });
@@ -146,11 +143,6 @@ describe("HomeComponent — expandHero()", () => {
     expect(component.scrollProgress).toBe(1);
   });
 
-  it("sets showContent to true", () => {
-    component.expandHero();
-    expect(component.showContent).toBe(true);
-  });
-
   it("sets mediaFullyExpanded to true", () => {
     component.expandHero();
     expect(component.mediaFullyExpanded).toBe(true);
@@ -160,37 +152,25 @@ describe("HomeComponent — expandHero()", () => {
     component.expandHero();
     component.expandHero();
     expect(component.scrollProgress).toBe(1);
-    expect(component.showContent).toBe(true);
     expect(component.mediaFullyExpanded).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Suite 4 — [inert] on .expand-content
+// Suite 4 — .expand-content is always visible, never inert
 // ---------------------------------------------------------------------------
 
-describe("HomeComponent — expand-content [inert] attribute", () => {
-  let component: HomeComponent;
-  let fixture: ComponentFixture<HomeComponent>;
-
-  beforeEach(async () => {
-    fixture = await buildModule(false);
-    component = fixture.componentInstance;
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-    TestBed.resetTestingModule();
-  });
-
-  it("has inert attribute when showContent is false", () => {
+describe("HomeComponent — .expand-content visibility", () => {
+  it("has no inert attribute before the hero animation starts", async () => {
+    const fixture = await buildModule(false);
     const el: HTMLElement =
       fixture.nativeElement.querySelector(".expand-content");
-    expect(el.hasAttribute("inert")).toBe(true);
+    expect(el.hasAttribute("inert")).toBe(false);
   });
 
-  it("removes inert attribute when showContent is true", () => {
-    component.showContent = true;
+  it("has no inert attribute once the hero is fully expanded", async () => {
+    const fixture = await buildModule(false);
+    fixture.componentInstance.expandHero();
     fixture.detectChanges();
 
     const el: HTMLElement =
@@ -198,16 +178,13 @@ describe("HomeComponent — expand-content [inert] attribute", () => {
     expect(el.hasAttribute("inert")).toBe(false);
   });
 
-  it("restores inert attribute when showContent goes back to false", () => {
-    component.showContent = true;
-    fixture.detectChanges();
-
-    component.showContent = false;
-    fixture.detectChanges();
-
+  it("has no inert attribute under SSR (platformId: server)", async () => {
+    // Pins the prerender regression: "/" is a static-prerendered route, so
+    // this is what actually ships in the CDN-served HTML before any JS runs.
+    const fixture = await buildModule(false, "server");
     const el: HTMLElement =
       fixture.nativeElement.querySelector(".expand-content");
-    expect(el.hasAttribute("inert")).toBe(true);
+    expect(el.hasAttribute("inert")).toBe(false);
   });
 });
 
@@ -249,13 +226,6 @@ describe("HomeComponent — keyboard trigger button (.expand-hint)", () => {
       fixture.nativeElement.querySelector("button.expand-hint");
     btn.click();
     expect(component.scrollProgress).toBe(1);
-  });
-
-  it("clicking the button sets showContent to true", () => {
-    const btn: HTMLButtonElement =
-      fixture.nativeElement.querySelector("button.expand-hint");
-    btn.click();
-    expect(component.showContent).toBe(true);
   });
 
   it("clicking the button sets mediaFullyExpanded to true", () => {
