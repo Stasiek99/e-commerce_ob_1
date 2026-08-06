@@ -467,7 +467,10 @@ import { TuiButton } from "@taiga-ui/core";
       .showcase {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        height: 72vh;
+        /* min-height, not height: on shorter viewports (e.g. 14" laptops) a
+         fixed 72vh clipped the image/copy against overflow: hidden instead of
+         letting the row grow to fit them. */
+        min-height: 72vh;
         overflow: hidden;
       }
       .showcase--diffusers {
@@ -576,7 +579,9 @@ import { TuiButton } from "@taiga-ui/core";
         grid-template-columns: 1fr 1fr;
       }
       .category-card {
-        height: 72vh;
+        /* min-height, not height: same reasoning as .showcase above — a fixed
+         72vh clipped the bottle/copy on shorter viewports instead of growing. */
+        min-height: 72vh;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -767,6 +772,42 @@ import { TuiButton } from "@taiga-ui/core";
       @media (max-width: 600px) {
         :host {
           --section-pad-y: 36px;
+        }
+      }
+
+      /* ── SHORT VIEWPORTS (e.g. 14" laptops) ───────────────────────────────
+       Width alone doesn't catch this: a 14" laptop is well above the 900px
+       layout breakpoint but has far less viewport height than the desktop
+       this was tuned on, so the 72vh/60vh/32vh figures above left too little
+       room for their own padding and got clipped by overflow: hidden. Gated
+       to min-width: 901px so it never fights the stacked mobile layout,
+       which already replaced these with height: auto. */
+      @media (max-height: 860px) and (min-width: 901px) {
+        .showcase,
+        .category-card {
+          min-height: 60vh;
+        }
+        .showcase__media,
+        .showcase__content {
+          padding-top: 36px;
+          padding-bottom: 36px;
+        }
+        .category-card {
+          /* .category-card's box grows to fit its content exactly (no extra
+           centering slack, unlike .showcase's content column), so this
+           padding is the entire top/bottom gap — 28px read as flush against
+           the button. */
+          padding-top: 36px;
+          padding-bottom: 36px;
+        }
+        .showcase__image {
+          max-height: 48vh;
+        }
+        .category-card__media {
+          flex-basis: 26vh;
+        }
+        .category-card__image {
+          max-height: clamp(150px, 26vh, 260px);
         }
       }
 
