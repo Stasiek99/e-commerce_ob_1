@@ -18,20 +18,20 @@ import { TuiButton } from "@taiga-ui/core";
     <!-- ── SCROLL EXPAND HERO ───────────────────────────────────────────── -->
     <div class="expand-wrap">
       <div class="expand-stage">
-        <div class="expand-title">
+        <h1 class="expand-title">
           <span
             class="expand-title__word"
             [style.transform]="'translateX(-' + textTranslateX + 'vw)'"
           >
-            Zapach,
+            Twój zapach.
           </span>
           <span
             class="expand-title__word"
             [style.transform]="'translateX(' + textTranslateX + 'vw)'"
           >
-            który mówi wszystko.
+            Twoja historia.
           </span>
-        </div>
+        </h1>
 
         <div
           class="expand-media"
@@ -67,12 +67,16 @@ import { TuiButton } from "@taiga-ui/core";
       </div>
     </div>
 
-    <!-- ── CONTENT (fades in after full expansion) ───────────────────────── -->
-    <div
-      class="expand-content"
-      [class.expand-content--visible]="showContent"
-      [attr.inert]="showContent ? null : ''"
-    >
+    <!-- ── CONTENT ──────────────────────────────────────────────────────────
+         Always rendered visible: this used to stay opacity: 0 + inert until
+         showContent flipped true from the scroll-hijack handlers below, which
+         meant the prerendered HTML for "/" — the exact bytes Vercel's CDN
+         serves before any JS runs — shipped with the entire shop inert and
+         invisible. A user whose JS fails, and any crawler that doesn't
+         execute it, saw only the hero and nothing else. The hero's own
+         scroll-driven expand animation is untouched; only the gate on the
+         content below it is gone. -->
+    <div class="expand-content">
       <!-- FOR HER + FOR HIM side by side -->
       <div class="feature-duo">
         <section class="category-card category-card--women">
@@ -348,6 +352,13 @@ import { TuiButton } from "@taiga-ui/core";
       }
 
       .expand-title {
+        /* Semantic h1 now (was a div) — the page's only heading, needed for
+         SEO on the one route that had none. Reset because the UA stylesheet's
+         default h1 margin/font-size would otherwise throw off the flex
+         centering below; the actual type scale lives on .expand-title__word. */
+        margin: 0;
+        font-size: inherit;
+        font-weight: inherit;
         position: relative;
         z-index: 20;
         display: flex;
@@ -360,10 +371,10 @@ import { TuiButton } from "@taiga-ui/core";
       }
       .expand-title__word {
         display: block;
-        /* The 42px floor made "który mówi wszystko." 886px wide inside a 360px
-         viewport — silently cut off by .expand-wrap's overflow-x, so the page's
-         opening sentence was unreadable on a phone. The words stay nowrap
-         because the reveal slides them apart horizontally. */
+        /* The 42px floor made the longer of the two words 886px wide inside a
+         360px viewport — silently cut off by .expand-wrap's overflow-x, so the
+         page's opening sentence was unreadable on a phone. The words stay
+         nowrap because the reveal slides them apart horizontally. */
         font-size: clamp(26px, 7vw, 100px);
         font-weight: 700;
         line-height: 1.05;
@@ -436,18 +447,11 @@ import { TuiButton } from "@taiga-ui/core";
         border-radius: 2px;
       }
 
-      /* ── CONTENT REVEAL ─────────────────────────────────────────────────── */
+      /* ── CONTENT ────────────────────────────────────────────────────────── */
       .expand-content {
         width: 100vw;
         margin-left: calc(-50vw + 50%);
         background: #fff;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.7s ease;
-      }
-      .expand-content--visible {
-        opacity: 1;
-        pointer-events: auto;
       }
 
       /* ── FEATURE SECTIONS ──────────────────────────────────────────────── */
@@ -467,7 +471,10 @@ import { TuiButton } from "@taiga-ui/core";
       .showcase {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        height: 72vh;
+        /* min-height, not height: on shorter viewports (e.g. 14" laptops) a
+         fixed 72vh clipped the image/copy against overflow: hidden instead of
+         letting the row grow to fit them. */
+        min-height: 72vh;
         overflow: hidden;
       }
       .showcase--diffusers {
@@ -494,8 +501,11 @@ import { TuiButton } from "@taiga-ui/core";
         /* 60vh (not 55vh) is what puts the image's top edge the same ~56px from
          the section edge as .category-card--c's bottle — at 55vh the extra
          centering slack inside the 72vh row left a ~76px gap, noticeably
-         airier than the two-up cards below it. */
-        max-height: 60vh;
+         airier than the two-up cards below it. Capped at 560px (60vh's value
+         at the ~940px-tall viewport this was tuned on) so a very tall or
+         portrait-rotated screen doesn't blow the bottle up disproportionately
+         large — vh alone has no ceiling. */
+        max-height: min(60vh, 560px);
         max-width: 100%;
         width: auto;
         object-fit: contain;
@@ -576,7 +586,9 @@ import { TuiButton } from "@taiga-ui/core";
         grid-template-columns: 1fr 1fr;
       }
       .category-card {
-        height: 72vh;
+        /* min-height, not height: same reasoning as .showcase above — a fixed
+         72vh clipped the bottle/copy on shorter viewports instead of growing. */
+        min-height: 72vh;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -616,7 +628,11 @@ import { TuiButton } from "@taiga-ui/core";
       }
 
       .category-card__media {
-        flex: 0 0 32vh;
+        /* Capped to match .category-card__image's own 300px ceiling below —
+         otherwise on a very tall/portrait viewport the wrapper keeps growing
+         with 32vh while the image inside stays clamped, opening up a large
+         empty gap around it. */
+        flex: 0 0 min(32vh, 300px);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -770,10 +786,45 @@ import { TuiButton } from "@taiga-ui/core";
         }
       }
 
+      /* ── SHORT VIEWPORTS (e.g. 14" laptops) ───────────────────────────────
+       Width alone doesn't catch this: a 14" laptop is well above the 900px
+       layout breakpoint but has far less viewport height than the desktop
+       this was tuned on, so the 72vh/60vh/32vh figures above left too little
+       room for their own padding and got clipped by overflow: hidden. Gated
+       to min-width: 901px so it never fights the stacked mobile layout,
+       which already replaced these with height: auto. */
+      @media (max-height: 860px) and (min-width: 901px) {
+        .showcase,
+        .category-card {
+          min-height: 60vh;
+        }
+        .showcase__media,
+        .showcase__content {
+          padding-top: 36px;
+          padding-bottom: 36px;
+        }
+        .category-card {
+          /* .category-card's box grows to fit its content exactly (no extra
+           centering slack, unlike .showcase's content column), so this
+           padding is the entire top/bottom gap — 28px read as flush against
+           the button. */
+          padding-top: 36px;
+          padding-bottom: 36px;
+        }
+        .showcase__image {
+          max-height: 48vh;
+        }
+        .category-card__media {
+          flex-basis: 26vh;
+        }
+        .category-card__image {
+          max-height: clamp(150px, 26vh, 260px);
+        }
+      }
+
       /* ── REDUCED MOTION ────────────────────────────────────────────────── */
       @media (prefers-reduced-motion: reduce) {
         .expand-media__overlay,
-        .expand-content,
         .showcase__image,
         .category-card__image {
           transition: none !important;
@@ -805,7 +856,6 @@ export class HomeComponent implements OnInit, OnDestroy {
   private isBrowser = isPlatformBrowser(this.platformId);
 
   scrollProgress = 0;
-  showContent = false;
   mediaFullyExpanded = false;
   private touchStartY = 0;
   private isMobile = false;
@@ -847,9 +897,6 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.scrollProgress = next;
         if (next >= 1) {
           this.mediaFullyExpanded = true;
-          this.showContent = true;
-        } else if (next < 0.75) {
-          this.showContent = false;
         }
       });
     }
@@ -883,9 +930,6 @@ export class HomeComponent implements OnInit, OnDestroy {
         this.scrollProgress = next;
         if (next >= 1) {
           this.mediaFullyExpanded = true;
-          this.showContent = true;
-        } else if (next < 0.75) {
-          this.showContent = false;
         }
         this.touchStartY = touchY;
       });
@@ -904,7 +948,6 @@ export class HomeComponent implements OnInit, OnDestroy {
   expandHero() {
     this.ngZone.run(() => {
       this.scrollProgress = 1;
-      this.showContent = true;
       this.mediaFullyExpanded = true;
     });
   }
@@ -914,7 +957,6 @@ export class HomeComponent implements OnInit, OnDestroy {
     this.isMobile = window.innerWidth < 768;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       this.scrollProgress = 1;
-      this.showContent = true;
       this.mediaFullyExpanded = true;
       return;
     }
