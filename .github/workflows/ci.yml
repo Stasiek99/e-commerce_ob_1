@@ -44,6 +44,9 @@ jobs:
       - name: Security audit
         # CVE-2026-47759/60/61/62 are explicitly ignored via pnpm.auditConfig.ignoreCves in package.json —
         # see that file and docs/audit-round-12.md for why (TinyMCE fix needs an upstream AdminJS release).
+        # CVE-2025-71329/71330 (image-size DoS, no patched version exists) are also ignored — pulled in
+        # transitively via frontend>@angular-devkit/build-angular>less>image-size, but the project has no
+        # .less files, so `less` (and therefore image-size) is never invoked at build or runtime.
         # Any other high/critical CVE still fails the build.
         run: pnpm audit --audit-level=high
 
