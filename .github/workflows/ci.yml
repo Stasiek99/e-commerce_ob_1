@@ -47,6 +47,11 @@ jobs:
         # CVE-2025-71329/71330 (image-size DoS, no patched version exists) are also ignored — pulled in
         # transitively via frontend>@angular-devkit/build-angular>less>image-size, but the project has no
         # .less files, so `less` (and therefore image-size) is never invoked at build or runtime.
+        # CVE-2026-40345 (deepmerge-ts stack exhaustion, fixed upstream only in a deepmerge-ts v8 major
+        # bump) is also ignored — pulled in transitively via backend>prisma>@prisma/config, used only for
+        # Prisma's own internal config merging at build/CLI time, never fed attacker-controlled request
+        # data. Forcing an override to v8 would risk breaking Prisma's internal usage of an API it doesn't
+        # own; revisit once Prisma bumps its own dependency.
         # Any other high/critical CVE still fails the build.
         run: pnpm audit --audit-level=high
 

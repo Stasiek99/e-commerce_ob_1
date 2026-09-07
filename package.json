@@ -49,7 +49,7 @@
       "ioredis": "5.11.1",
       "serialize-javascript": "^7.0.5",
       "hono": "^4.12.25",
-      "fast-uri": "^3.1.5",
+      "fast-uri": "^3.1.7",
       "i18next-http-backend": "^3.0.5",
       "ip-address": "^10.2.0",
       "webpack-dev-server": "^5.2.5",
@@ -83,7 +83,8 @@
         "CVE-2026-47761",
         "CVE-2026-47762",
         "CVE-2025-71329",
-        "CVE-2025-71330"
+        "CVE-2025-71330",
+        "CVE-2026-40345"
       ]
     }
   },

@@ -419,7 +419,7 @@ interface Address {
               <input
                 tuiInput
                 value="Polska"
-                readonly
+                [readonly]="true"
                 tabindex="-1"
                 class="readonly-input"
               />
