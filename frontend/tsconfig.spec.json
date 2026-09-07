@@ -3,7 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist/out-tsc",
     "module": "CommonJS",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "types": ["jest", "node"],
     "paths": {
       "@shared/*": ["../packages/shared-types/src/*"]
